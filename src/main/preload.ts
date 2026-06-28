@@ -52,6 +52,10 @@ const api = {
   gitCheckout: (params: { repoPath: string; branch: string }) =>
     ipcRenderer.invoke('git:checkout', params),
 
+  // Settings
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  setSettings: (updates: Record<string, unknown>) => ipcRenderer.invoke('settings:set', updates),
+
   // App
   getPlatform: () => ipcRenderer.invoke('app:getPlatform'),
 };

@@ -4,12 +4,14 @@ import { TerminalManager } from './terminal';
 import { SSHManager } from './ssh';
 import { FileSystemManager } from './filesystem';
 import { GitManager } from './git';
+import { SettingsManager } from './settings';
 
 let mainWindow: BrowserWindow | null = null;
 let terminalManager: TerminalManager;
 let sshManager: SSHManager;
 let fsManager: FileSystemManager;
 let gitManager: GitManager;
+let settingsManager: SettingsManager;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -45,6 +47,7 @@ app.whenReady().then(() => {
   sshManager = new SSHManager();
   fsManager = new FileSystemManager();
   gitManager = new GitManager();
+  settingsManager = new SettingsManager();
 
   registerIpcHandlers();
   createWindow();
@@ -160,6 +163,15 @@ function registerIpcHandlers() {
 
   ipcMain.handle('git:checkout', async (event, { repoPath, branch }) => {
     return await gitManager.checkout(repoPath, branch);
+  });
+
+  // === Settings IPC ===
+  ipcMain.handle('settings:get', () => {
+    return settingsManager.get();
+  });
+
+  ipcMain.handle('settings:set', (event, updates) => {
+    return settingsManager.set(updates);
   });
 
   ipcMain.handle('app:getPlatform', () => {

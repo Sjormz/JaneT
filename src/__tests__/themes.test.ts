@@ -1,0 +1,50 @@
+import { describe, it, expect } from 'vitest';
+import { getTheme, themeNames, applyCssTheme } from '../renderer/themes';
+
+describe('themes', () => {
+  it('has all expected themes', () => {
+    expect(themeNames).toContain('tokyo-night');
+    expect(themeNames).toContain('dracula');
+    expect(themeNames).toContain('one-dark');
+    expect(themeNames).toContain('solarized-light');
+    expect(themeNames).toContain('gruvbox');
+  });
+
+  it('returns tokyo-night by default for unknown themes', () => {
+    const theme = getTheme('nonexistent' as any);
+    expect(theme.name).toBe('tokyo-night');
+  });
+
+  it('each theme has required fields', () => {
+    for (const name of themeNames) {
+      const theme = getTheme(name);
+      expect(theme.name).toBe(name);
+      expect(theme.label).toBeTruthy();
+      expect(theme.css).toBeTruthy();
+      expect(theme.css['bg-primary']).toBeTruthy();
+      expect(theme.css['text-primary']).toBeTruthy();
+      expect(theme.xterm).toBeTruthy();
+      expect(theme.xterm.background).toBeTruthy();
+      expect(theme.xterm.foreground).toBeTruthy();
+    }
+  });
+
+  it('dracula theme has correct label', () => {
+    const theme = getTheme('dracula');
+    expect(theme.label).toBe('Dracula');
+  });
+
+  it('applyCssTheme sets CSS variables on root', () => {
+    // Setup: create a document root mock
+    const root = document.documentElement;
+    const originalStyle = root.style.cssText;
+
+    applyCssTheme({ 'bg-primary': '#ff0000', 'text-primary': '#00ff00' });
+
+    expect(root.style.getPropertyValue('--bg-primary')).toBe('#ff0000');
+    expect(root.style.getPropertyValue('--text-primary')).toBe('#00ff00');
+
+    // Cleanup
+    root.style.cssText = originalStyle;
+  });
+});

@@ -13,6 +13,8 @@ interface SplitPaneProps {
   onTerminalRemoved: (termId: string) => void;
   onSplitPane: (leafId: string, direction: 'horizontal' | 'vertical') => void;
   onClosePane: (leafId: string) => void;
+  themeName?: string;
+  fontSize?: number;
 }
 
 /** Wraps a TerminalLeaf with split/close action buttons */
@@ -25,6 +27,8 @@ function TerminalPaneLeaf({
   onSplitRight,
   onSplitDown,
   onClose,
+  themeName,
+  fontSize,
 }: {
   leaf: TerminalLeaf;
   tabType: 'local' | 'ssh';
@@ -34,6 +38,8 @@ function TerminalPaneLeaf({
   onSplitRight: () => void;
   onSplitDown: () => void;
   onClose: () => void;
+  themeName?: string;
+  fontSize?: number;
 }) {
   return (
     <div className="terminal-leaf">
@@ -58,6 +64,8 @@ function TerminalPaneLeaf({
           sshSessionId={sshSessionId}
           onReady={onTerminalReady}
           onRemoved={onTerminalRemoved}
+          themeName={themeName}
+          fontSize={fontSize}
         />
       </div>
     </div>
@@ -163,7 +171,7 @@ function SplitDivider({
 
 /** Recursive split pane renderer */
 export default function SplitPane(props: SplitPaneProps) {
-  const { node, tabType, sshSessionId, onTerminalReady, onTerminalRemoved, onSplitPane, onClosePane } = props;
+  const { node, tabType, sshSessionId, onTerminalReady, onTerminalRemoved, onSplitPane, onClosePane, themeName, fontSize } = props;
 
   if (node.type === 'leaf') {
     return (
@@ -176,6 +184,8 @@ export default function SplitPane(props: SplitPaneProps) {
         onSplitRight={() => onSplitPane(node.id, 'vertical')}
         onSplitDown={() => onSplitPane(node.id, 'horizontal')}
         onClose={() => onClosePane(node.id)}
+        themeName={themeName}
+        fontSize={fontSize}
       />
     );
   }
@@ -201,6 +211,8 @@ export default function SplitPane(props: SplitPaneProps) {
               onTerminalRemoved={onTerminalRemoved}
               onSplitPane={onSplitPane}
               onClosePane={onClosePane}
+              themeName={themeName}
+              fontSize={fontSize}
             />
           </div>
         </React.Fragment>
