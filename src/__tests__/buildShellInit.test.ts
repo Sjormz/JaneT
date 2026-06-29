@@ -15,8 +15,14 @@ describe('buildShellInit', () => {
 
     it('handles shell paths with directories', () => {
       const init = buildShellInit('C:\\Program Files\\PowerShell\\7\\pwsh.exe');
-      expect(init).toBeTruthy();
-      expect(init).toContain('function global:prompt');
+      if (process.platform === 'win32') {
+        expect(init).toBeTruthy();
+        expect(init).toContain('function global:prompt');
+      } else {
+        // On non-Windows, backslashes aren't path separators so the
+        // whole Windows path is treated as the basename and won't match.
+        expect(init).toBe('');
+      }
     });
 
     it('saves the original prompt before redefining it', () => {
