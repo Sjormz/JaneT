@@ -31,7 +31,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci --ignore-scripts --omit=optional
+        run: npm ci
         env:
           NODE_ENV: development
 
@@ -67,7 +67,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci --ignore-scripts --omit=optional
+        run: npm ci
         env:
           NODE_ENV: development
 
@@ -106,7 +106,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci --ignore-scripts --omit=optional
+        run: npm ci
         env:
           NODE_ENV: development
 
