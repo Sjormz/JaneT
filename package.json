@@ -149,7 +149,7 @@
     "file-explorer",
     "git"
   ],
-  "author": "pckpr",
+  "author": "pckpr <pckpr@users.noreply.github.com>",
   "license": "MIT",
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
