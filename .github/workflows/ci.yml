@@ -42,12 +42,11 @@ jobs:
         run: npm test
 
   # ─────────────────────────────────────────────────────────
-  # 2. Build (all platforms, no publish — runs on every push/PR)
+  # 2. Build (all platforms, no publish — runs on every push/PR/tag)
   # ─────────────────────────────────────────────────────────
   build:
     name: Build (${{ matrix.os }})
     needs: [test]
-    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
     strategy:
       matrix:
         include:
@@ -71,48 +70,9 @@ jobs:
         env:
           NODE_ENV: development
 
-      - name: Build app
-        run: npm run build
-
-      - name: Package installer
-        run: npx electron-builder ${{ matrix.build-args }} --publish never
-
-  # ─────────────────────────────────────────────────────────
-  # 3. Release — build + publish on tag push (v*)
-  # ─────────────────────────────────────────────────────────
-  release:
-    name: Release (${{ matrix.os }})
-    needs: [test]
-    if: startsWith(github.ref, 'refs/tags/v')
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            build-args: --linux
-          - os: macos-latest
-            build-args: --mac
-          - os: windows-latest
-            build-args: --win
-    runs-on: ${{ matrix.os }}
-    # Grant the built-in GITHUB_TOKEN write access to create releases
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-        env:
-          NODE_ENV: development
-
-      # Sync version from git tag (e.g. "v0.2.0" -> "0.2.0") into package.json
-      # so electron-builder packages with the correct version number.
+      # Keep the packaged version aligned with the git tag on release runs.
       - name: Set app version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -122,15 +82,43 @@ jobs:
       - name: Build app
         run: npm run build
 
-      - name: Package & publish to GitHub Releases
-        run: npx electron-builder ${{ matrix.build-args }} --publish always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package installer
+        run: npx electron-builder ${{ matrix.build-args }} --publish never
 
-      # Upload installer artifacts so they're also visible in the run summary
+      # Only tag builds need to be uploaded for the release job.
       - name: Upload installer artifacts
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: installer-${{ matrix.os }}-${{ github.ref_name }}
           path: release/
-          if-no-files-found: ignore
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────
+  # 3. Release — publish only after all builds are green
+  # ─────────────────────────────────────────────────────────
+  release:
+    name: Publish release
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: installer-*
+          merge-multiple: false
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          overwrite_files: true
+          files: release-artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
