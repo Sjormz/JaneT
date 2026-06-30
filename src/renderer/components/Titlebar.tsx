@@ -2,8 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   FilesIcon, SSHIcon, SourceControlIcon, SettingsIconCmp,
   MinimizeIcon, MaximizeIcon, RestoreIcon, CloseIcon,
-  CommandIcon, PlusIcon, ChevronDownIcon, TerminalTabIcon, LockIcon,
-  CircleDotIcon,
+  CommandIcon, PlusIcon,
 } from '../icons';
 
 export type SidebarSection = 'files' | 'ssh' | 'git' | 'settings';
@@ -27,29 +26,20 @@ interface TitlebarProps {
   section: SidebarSection;
   onSectionChange: (s: SidebarSection) => void;
   sidebarOpen: boolean;
-  // tabs (compact horizontal chips next to the nav)
-  tabs: Array<{ id: string; title: string; type: 'local' | 'ssh' }>;
-  activeTabId: string;
-  onSelectTab: (id: string) => void;
-  onCloseTab: (id: string) => void;
   onNewTab: () => void;
   // palette
   onOpenPalette: () => void;
 }
 
 /**
- * Top-of-window chrome: app brand, section nav (left), tab chips + new tab
- * (middle), palette hint, and window controls (right). The whole bar is a
- * drag region except for the interactive buttons.
+ * Top-of-window chrome: app brand, section nav (left), new-tab button,
+ * palette hint, and window controls (right). The whole bar is a drag region
+ * except for the interactive buttons.
  */
 export default function Titlebar({
   section,
   onSectionChange,
   sidebarOpen,
-  tabs,
-  activeTabId,
-  onSelectTab,
-  onCloseTab,
   onNewTab,
   onOpenPalette,
 }: TitlebarProps) {
@@ -105,44 +95,8 @@ export default function Titlebar({
         })}
       </nav>
 
-      {/* Tab strip */}
-      <div className="titlebar-tabs" role="tablist" aria-label="Open terminals">
-        {tabs.map((tab) => {
-          const isActive = tab.id === activeTabId;
-          const TabIcon = tab.type === 'ssh' ? LockIcon : TerminalTabIcon;
-          return (
-            <button
-              key={tab.id}
-              role="tab"
-              aria-selected={isActive}
-              className={`titlebar-tab ${isActive ? 'active' : ''} ${tab.type === 'ssh' ? 'ssh' : ''}`}
-              onClick={() => onSelectTab(tab.id)}
-              title={tab.title}
-            >
-              {isActive && <CircleDotIcon size="xs" className="titlebar-tab-dot" />}
-              <TabIcon size="sm" />
-              <span className="titlebar-tab-title">{tab.title}</span>
-              {tabs.length > 1 && (
-                <span
-                  role="button"
-                  tabIndex={0}
-                  className="titlebar-tab-close"
-                  title="Close"
-                  onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onCloseTab(tab.id);
-                    }
-                  }}
-                >
-                  <CloseIcon size="xs" />
-                </span>
-              )}
-            </button>
-          );
-        })}
+      {/* Right cluster: palette + window controls */}
+      <div className="titlebar-right">
         <button
           className="titlebar-tab-new"
           onClick={onNewTab}
@@ -151,10 +105,7 @@ export default function Titlebar({
         >
           <PlusIcon size="sm" />
         </button>
-      </div>
 
-      {/* Right cluster: palette + window controls */}
-      <div className="titlebar-right">
         <button
           className="titlebar-palette-btn"
           onClick={onOpenPalette}

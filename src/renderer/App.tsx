@@ -435,10 +435,6 @@ function AppInner() {
           }
         }}
         sidebarOpen={sidebarOpen}
-        tabs={tabs.map((t) => ({ id: t.id, title: t.title, type: t.type }))}
-        activeTabId={activeTabId}
-        onSelectTab={setActiveTabId}
-        onCloseTab={closeTab}
         onNewTab={() => addTab('local')}
         onOpenPalette={() => setPaletteVisible(true)}
       />
