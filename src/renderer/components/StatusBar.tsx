@@ -1,6 +1,7 @@
-import React from 'react';
-import { SessionInfo } from '../types';
-import { CircleDotIcon, TerminalTabIcon, FolderIcon } from '../icons';
+import React from "react";
+import { SessionInfo } from "../types";
+import { CircleDotIcon, TerminalTabIcon, FolderIcon } from "../icons";
+import packageJson from "../../../package.json";
 
 interface StatusBarProps {
   sshSessions: SessionInfo[];
@@ -24,7 +25,7 @@ export default function StatusBar({
     <div className="status-bar">
       <div className="status-left">
         <span className="status-item">
-          <TerminalTabIcon size="xs" /> JaneT v0.1.0
+          <TerminalTabIcon size="xs" /> v{packageJson.version}
         </span>
         {sshSessions.length > 0 && (
           <span className="status-item">
@@ -36,7 +37,9 @@ export default function StatusBar({
           <span className="status-item status-cwd" title={cwd}>
             <FolderIcon size="xs" />
             {isRemote && remoteHost ? (
-              <span className="status-cwd-remote">{remoteHost}: {cwd}</span>
+              <span className="status-cwd-remote">
+                {remoteHost}: {cwd}
+              </span>
             ) : (
               <span className="status-cwd-local">{cwd}</span>
             )}
@@ -45,7 +48,7 @@ export default function StatusBar({
       </div>
       <div className="status-right">
         <span className="status-item">
-          {activeTerminalsCount} terminal{activeTerminalsCount !== 1 ? 's' : ''}
+          {activeTerminalsCount} terminal{activeTerminalsCount !== 1 ? "s" : ""}
         </span>
         <span className="status-item platform">{navigator.platform}</span>
       </div>

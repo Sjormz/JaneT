@@ -39,12 +39,22 @@ jobs:
         env:
           NODE_ENV: development
 
-      - name: Sync package version to release tag
+      - name: Read package version
+        id: package_version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release tag matches package.json
         shell: bash
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          echo "Setting package version to: $TAG_VERSION"
-          npm version "$TAG_VERSION" --no-git-tag-version --allow-same-version
+          PACKAGE_VERSION="${{ steps.package_version.outputs.version }}"
+          if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $PACKAGE_VERSION"
+            exit 1
+          fi
 
       - name: Build app
         run: npm run build
