@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  package:
+    name: Package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            build-args: --linux
+          - os: macos-latest
+            build-args: --mac
+          - os: windows-latest
+            build-args: --win
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          NODE_ENV: development
+
+      - name: Sync package version to release tag
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "Setting package version to: $TAG_VERSION"
+          npm version "$TAG_VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Build app
+        run: npm run build
+
+      - name: Package installer
+        run: npx electron-builder ${{ matrix.build-args }} --publish never
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}-${{ github.ref_name }}
+          path: release/
+          if-no-files-found: error
+
+  publish:
+    name: Update GitHub release
+    needs: [package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: installer-*
+          merge-multiple: false
+
+      - name: Upload assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          overwrite_files: true
+          files: |
+            release-artifacts/*/JaneT-Setup-*.exe
+            release-artifacts/*/JaneT-Setup-*.exe.blockmap
+            release-artifacts/*/JaneT-Portable-*.exe
+            release-artifacts/*/JaneT-*-mac-*.dmg
+            release-artifacts/*/JaneT-*-mac-*.zip
+            release-artifacts/*/JaneT-*-linux-*.AppImage
+            release-artifacts/*/JaneT-*-linux-*.deb
+            release-artifacts/*/latest*.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

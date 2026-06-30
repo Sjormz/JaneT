@@ -1,13 +1,11 @@
-name: CI / Release
+name: CI
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
     branches: [main]
 
-# Only one release workflow at a time to avoid race conditions on the same GitHub Release
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -16,11 +14,8 @@ env:
   NODE_VERSION: '22'
 
 jobs:
-  # ─────────────────────────────────────────────────────────
-  # 1. Test & Lint (fast, runs first)
-  # ─────────────────────────────────────────────────────────
-  test:
-    name: Test
+  verify:
+    name: Verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,92 +36,5 @@ jobs:
       - name: Run tests
         run: npm test
 
-  # ─────────────────────────────────────────────────────────
-  # 2. Build (all platforms, no publish — runs on every push/PR/tag)
-  # ─────────────────────────────────────────────────────────
-  build:
-    name: Build (${{ matrix.os }})
-    needs: [test]
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            build-args: --linux
-          - os: macos-latest
-            build-args: --mac
-          - os: windows-latest
-            build-args: --win
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-        env:
-          NODE_ENV: development
-
-      # Keep the packaged version aligned with the git tag on release runs.
-      - name: Set app version from tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          echo "Setting package version to: $TAG_VERSION"
-          npm version "$TAG_VERSION" --no-git-tag-version --allow-same-version
-
       - name: Build app
         run: npm run build
-
-      - name: Package installer
-        run: npx electron-builder ${{ matrix.build-args }} --publish never
-
-      # Only tag builds need to be uploaded for the release job.
-      - name: Upload installer artifacts
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
-        with:
-          name: installer-${{ matrix.os }}-${{ github.ref_name }}
-          path: release/
-          if-no-files-found: error
-
-  # ─────────────────────────────────────────────────────────
-  # 3. Release — publish only after all builds are green
-  # ─────────────────────────────────────────────────────────
-  release:
-    name: Publish release
-    needs: [build]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-artifacts
-          pattern: installer-*
-          merge-multiple: false
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          generate_release_notes: true
-          overwrite_files: true
-          files: |
-            release-artifacts/*/JaneT-Setup-*.exe
-            release-artifacts/*/JaneT-Setup-*.exe.blockmap
-            release-artifacts/*/JaneT-Portable-*.exe
-            release-artifacts/*/JaneT-*-mac-*.dmg
-            release-artifacts/*/JaneT-*-mac-*.zip
-            release-artifacts/*/JaneT-*-linux-*.AppImage
-            release-artifacts/*/JaneT-*-linux-*.deb
-            release-artifacts/*/latest*.yml
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
