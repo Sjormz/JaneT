@@ -120,13 +120,13 @@ jobs:
           generate_release_notes: true
           overwrite_files: true
           files: |
-            release-artifacts/*/release/JaneT-Setup-*.exe
-            release-artifacts/*/release/JaneT-Setup-*.exe.blockmap
-            release-artifacts/*/release/JaneT-Portable-*.exe
-            release-artifacts/*/release/JaneT-*-mac-*.dmg
-            release-artifacts/*/release/JaneT-*-mac-*.zip
-            release-artifacts/*/release/JaneT-*-linux-*.AppImage
-            release-artifacts/*/release/JaneT-*-linux-*.deb
-            release-artifacts/*/release/latest*.yml
+            release-artifacts/*/JaneT-Setup-*.exe
+            release-artifacts/*/JaneT-Setup-*.exe.blockmap
+            release-artifacts/*/JaneT-Portable-*.exe
+            release-artifacts/*/JaneT-*-mac-*.dmg
+            release-artifacts/*/JaneT-*-mac-*.zip
+            release-artifacts/*/JaneT-*-linux-*.AppImage
+            release-artifacts/*/JaneT-*-linux-*.deb
+            release-artifacts/*/latest*.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
