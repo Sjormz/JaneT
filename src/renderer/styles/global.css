@@ -129,7 +129,7 @@ html, body, #root {
 /* === Titlebar (custom, fully themed, glassy) === */
 .titlebar {
   display: grid;
-  grid-template-columns: auto auto 1fr auto;
+  grid-template-columns: auto auto 1fr;
   align-items: center;
   gap: 12px;
   height: var(--titlebar-height);
@@ -149,19 +149,15 @@ html, body, #root {
 }
 
 /* Interactive children opt out of the drag region so they remain clickable.
-   IMPORTANT: we set no-drag on the interactive elements (buttons, chips)
-   ONLY, not on the containers around them. The containers inherit drag
-   from the titlebar root, so the empty space inside them (gaps, padding,
-   the empty middle of the tab strip) still drags the window. A child with
-   no-drag re-enables pointer events even when its parent is drag, so the
-   buttons stay clickable. */
+   IMPORTANT: we set no-drag on the interactive elements (buttons) ONLY,
+   not on the containers around them. The containers inherit drag from the
+   titlebar root, so the empty space inside them (gaps, padding) still drags
+   the window. A child with no-drag re-enables pointer events even when its
+   parent is drag, so the buttons stay clickable. */
 .titlebar-nav-btn,
-.titlebar-tab,
 .titlebar-tab-new,
-.titlebar-tab-close,
 .titlebar-palette-btn,
-.titlebar-control-btn,
-.titlebar-tab > * {
+.titlebar-control-btn {
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
@@ -197,8 +193,8 @@ html, body, #root {
 
 /* Subtle affordance: the empty area in the titlebar is a drag handle.
    We give the parent app-region: drag (above) and use a `cursor: grab`
-   on the brand cluster. The tab strip and right-side buttons opt out
-   via the consolidated no-drag rule. */
+   on the brand cluster. The right-side buttons opt out via the
+   consolidated no-drag rule. */
 .titlebar::before {
   content: '';
   position: absolute;
@@ -239,79 +235,6 @@ html, body, #root {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-accent) 30%, transparent);
 }
 
-/* Tab strip */
-.titlebar-tabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  padding: 0 4px;
-}
-.titlebar-tabs::-webkit-scrollbar { display: none; }
-
-.titlebar-tab {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 8px 0 10px;
-  border: 1px solid transparent;
-  background: transparent;
-  border-radius: var(--radius-md);
-  color: var(--text-muted);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all var(--transition-fast);
-  flex-shrink: 0;
-  max-width: 200px;
-}
-.titlebar-tab:hover {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.05);
-}
-.titlebar-tab.active {
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--text-accent) 12%, transparent);
-  border-color: color-mix(in srgb, var(--text-accent) 28%, transparent);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--text-accent) 18%, transparent);
-}
-.titlebar-tab.ssh.active {
-  background: color-mix(in srgb, var(--yellow) 12%, transparent);
-  border-color: color-mix(in srgb, var(--yellow) 28%, transparent);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--yellow) 18%, transparent);
-}
-.titlebar-tab-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 140px;
-}
-.titlebar-tab-dot {
-  color: var(--green);
-  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--green) 60%, transparent));
-}
-.titlebar-tab-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  color: var(--text-muted);
-  opacity: 0;
-  transition: all var(--transition-fast);
-  margin-left: 2px;
-}
-.titlebar-tab:hover .titlebar-tab-close { opacity: 1; }
-.titlebar-tab-close:hover {
-  background: color-mix(in srgb, var(--red) 20%, transparent);
-  color: var(--red);
-}
 .titlebar-tab-new {
   display: flex;
   align-items: center;
@@ -336,6 +259,7 @@ html, body, #root {
 .titlebar-right {
   display: flex;
   align-items: center;
+  justify-self: end;
   gap: 8px;
 }
 
