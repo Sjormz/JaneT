@@ -79,12 +79,40 @@ export function splitPane(
   ) {
     return {
       ...tree,
+      direction,
       children: [
         tree.children[0],
         { id: genId('term'), type: 'leaf', title: 'terminal' },
       ],
       sizes: [1, 1],
     };
+  }
+
+  // If the target leaf is already a direct child of a split running in the
+  // requested direction, insert the new pane beside it instead of wrapping the
+  // existing leaf in a nested split. Keeping the leaf at the same React tree
+  // level preserves the mounted TerminalPane/xterm DOM and avoids the visual
+  // flicker that looked like a terminal restart.
+  if (tree.direction === direction) {
+    const targetIndex = tree.children.findIndex(
+      (child) => child.type === 'leaf' && child.id === targetLeafId,
+    );
+    if (targetIndex >= 0) {
+      const newLeaf: TerminalLeaf = { id: genId('term'), type: 'leaf', title: 'terminal' };
+      return {
+        ...tree,
+        children: [
+          ...tree.children.slice(0, targetIndex + 1),
+          newLeaf,
+          ...tree.children.slice(targetIndex + 1),
+        ],
+        sizes: [
+          ...tree.sizes.slice(0, targetIndex + 1),
+          1,
+          ...tree.sizes.slice(targetIndex + 1),
+        ],
+      };
+    }
   }
 
   // It's a SplitNode — recurse into children

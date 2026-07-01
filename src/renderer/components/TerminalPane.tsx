@@ -56,6 +56,38 @@ interface TerminalPaneProps {
   hasSession?: boolean;
 }
 
+const REMOUNT_DISPOSE_DELAY_MS = 250;
+
+interface CachedTerminalPane {
+  term: Terminal;
+  fitAddon: FitAddon;
+  searchAddon: SearchAddon;
+  cleanup: unknown[];
+  tabType: 'local' | 'ssh';
+  sshSessionId?: string;
+  disposeTimer: ReturnType<typeof setTimeout> | null;
+}
+
+const terminalPaneCache = new Map<string, CachedTerminalPane>();
+
+function disposeCachedTerminal(termId: string): void {
+  const cached = terminalPaneCache.get(termId);
+  if (!cached) return;
+  if (cached.disposeTimer) clearTimeout(cached.disposeTimer);
+  runCleanup(cached.cleanup);
+  cached.cleanup = [];
+  cached.term.dispose();
+  terminalPaneCache.delete(termId);
+}
+
+function scheduleCachedTerminalDispose(termId: string): void {
+  const cached = terminalPaneCache.get(termId);
+  if (!cached || cached.disposeTimer) return;
+  cached.disposeTimer = setTimeout(() => {
+    disposeCachedTerminal(termId);
+  }, REMOUNT_DISPOSE_DELAY_MS);
+}
+
 export default function TerminalPane({
   termId,
   tabType,
@@ -117,6 +149,85 @@ export default function TerminalPane({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
+    const cached = terminalPaneCache.get(termId);
+    if (cached && cached.tabType === tabType && cached.sshSessionId === sshSessionId) {
+      if (cached.disposeTimer) {
+        clearTimeout(cached.disposeTimer);
+        cached.disposeTimer = null;
+      }
+
+      const mountCleanup: unknown[] = [];
+      const { term, fitAddon, searchAddon } = cached;
+
+      if (term.element && term.element.parentElement !== container) {
+        container.appendChild(term.element);
+      } else if (!term.element) {
+        term.open(container);
+      }
+
+      try { fitAddon.fit(); } catch {}
+
+      const resultsDisposable = searchAddon.onDidChangeResults((results) => {
+        setSearchResults(results);
+      });
+      mountCleanup.push(resultsDisposable);
+
+      const resizeObserver = new ResizeObserver(() => {
+        try { fitAddon.fit(); } catch {}
+      });
+      resizeObserver.observe(container);
+      mountCleanup.push(() => resizeObserver.disconnect());
+
+      let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+      const notifyResize = () => {
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          try {
+            fitAddon.fit();
+            const dims = fitAddon.proposeDimensions();
+            if (dims) {
+              if (tabType === 'local') {
+                window.janet.terminalResize({ id: termId, cols: dims.cols, rows: dims.rows });
+              } else if (tabType === 'ssh') {
+                window.janet.sshResizeShell({ termId, cols: dims.cols, rows: dims.rows });
+              }
+            }
+          } catch {}
+        }, 150);
+      };
+
+      const initialResizeTimer = setTimeout(notifyResize, 0);
+      mountCleanup.push(() => clearTimeout(initialResizeTimer));
+      mountCleanup.push(() => { if (resizeTimer) clearTimeout(resizeTimer); });
+
+      window.addEventListener('resize', notifyResize);
+      mountCleanup.push(() => window.removeEventListener('resize', notifyResize));
+
+      const clickListener = () => term.focus();
+      container.addEventListener('click', clickListener);
+      mountCleanup.push(() => container.removeEventListener('click', clickListener));
+
+      const focusListener = () => onFocus?.(termId);
+      container.addEventListener('focusin', focusListener);
+      mountCleanup.push(() => container.removeEventListener('focusin', focusListener));
+
+      termRef.current = term;
+      fitAddonRef.current = fitAddon;
+      searchAddonRef.current = searchAddon;
+      onReady(termId);
+
+      return () => {
+        runCleanup(mountCleanup);
+        onRemoved(termId);
+        scheduleCachedTerminalDispose(termId);
+        termRef.current = null;
+        fitAddonRef.current = null;
+        searchAddonRef.current = null;
+      };
+    }
+
+    if (cached) disposeCachedTerminal(termId);
 
     const resolvedTheme = themeName ? getTheme(themeName as ThemeName).xterm : undefined;
 
@@ -234,7 +345,9 @@ export default function TerminalPane({
     cleanupRef.current.push(() => window.removeEventListener('resize', notifyResize));
 
     // Focus terminal on click
-    container.addEventListener('click', () => term.focus());
+    const clickListener = () => term.focus();
+    container.addEventListener('click', clickListener);
+    cleanupRef.current.push(() => container.removeEventListener('click', clickListener));
 
     // Track focus so App can route sidebar cwd to the currently-focused
     // terminal. xterm.js doesn't expose an onFocus event on the Terminal
@@ -301,6 +414,16 @@ export default function TerminalPane({
     });
     cleanupRef.current.push(cleanupListener);
 
+    terminalPaneCache.set(termId, {
+      term,
+      fitAddon,
+      searchAddon,
+      cleanup: cleanupRef.current,
+      tabType,
+      sshSessionId,
+      disposeTimer: null,
+    });
+
     // Intercept keyboard shortcuts before xterm processes them
 
     term.attachCustomKeyEventHandler((e) => {
@@ -320,10 +443,8 @@ export default function TerminalPane({
     });
 
     return () => {
-      runCleanup(cleanupRef.current);
-      cleanupRef.current = [];
       onRemoved(termId);
-      term.dispose();
+      scheduleCachedTerminalDispose(termId);
       termRef.current = null;
       fitAddonRef.current = null;
       searchAddonRef.current = null;

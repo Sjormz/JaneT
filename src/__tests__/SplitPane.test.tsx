@@ -100,6 +100,7 @@ describe('split panes in the app', () => {
 
     await waitFor(() => {
       expect(screen.getAllByTestId(/terminal-/)).toHaveLength(3);
+      expect(mountedTermIds).toHaveLength(3);
       expect(window.janet.terminalCreate).toHaveBeenCalledTimes(3);
       expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
     });

@@ -21,7 +21,10 @@ class MockAddonSearch {
 }
 
 class MockTerminal {
+  static instances: MockTerminal[] = [];
+
   options: Record<string, unknown> = {};
+  element: HTMLElement | undefined;
   parser = {
     registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })),
   };
@@ -35,6 +38,7 @@ class MockTerminal {
 
   constructor(options: Record<string, unknown>) {
     this.options = options;
+    MockTerminal.instances.push(this);
   }
 }
 
@@ -77,6 +81,12 @@ vi.mock('../renderer/osc7', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  MockTerminal.instances = [];
+  MockTerminal.prototype.open = vi.fn(function open(this: MockTerminal, parent: HTMLElement) {
+    if (!this.element) this.element = document.createElement('div');
+    this.element.dataset.testid = 'xterm-dom';
+    parent.appendChild(this.element);
+  });
   vi.stubGlobal('ResizeObserver', MockResizeObserver as unknown as typeof ResizeObserver);
   Object.defineProperty(window, 'janet', {
     configurable: true,
@@ -141,5 +151,54 @@ describe('TerminalPane SSH reinitialization', () => {
       cols: 80,
       rows: 24,
     });
+  });
+
+  it('reuses the xterm instance when the same pane remounts during a split reshape', async () => {
+    vi.useFakeTimers();
+    const { default: TerminalPane } = await loadTerminalPane();
+    const onReady = vi.fn();
+    const onRemoved = vi.fn();
+
+    const { unmount } = render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-reused"
+          tabType="local"
+          onReady={onReady}
+          onRemoved={onRemoved}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    expect(MockTerminal.instances).toHaveLength(1);
+    expect(terminalCreate).toHaveBeenCalledTimes(1);
+    expect(MockTerminal.instances[0].dispose).not.toHaveBeenCalled();
+
+    unmount();
+
+    expect(onRemoved).toHaveBeenCalledWith('term-reused');
+    expect(MockTerminal.instances[0].dispose).not.toHaveBeenCalled();
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-reused"
+          tabType="local"
+          hasSession
+          onReady={onReady}
+          onRemoved={onRemoved}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    expect(MockTerminal.instances).toHaveLength(1);
+    expect(terminalCreate).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(250);
+
+    expect(MockTerminal.instances[0].dispose).not.toHaveBeenCalled();
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
   });
 });
