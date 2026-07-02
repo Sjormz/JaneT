@@ -55,6 +55,7 @@ function AppInner() {
   const [tabsOpen, setTabsOpen] = useState(true);
   const [sidebarSection, setSidebarSection] = useState<'files' | 'ssh' | 'git' | 'settings'>('files');
   const [sshSessions, setSshSessions] = useState<SessionInfo[]>([]);
+  const [readySshSessionIds, setReadySshSessionIds] = useState<Set<string>>(new Set());
   const [sshProfiles, setSshProfiles] = useState<SavedSSHProfile[]>([]);
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>([]);
   const [activeTerminals, setActiveTerminals] = useState<Set<string>>(new Set());
@@ -132,6 +133,7 @@ function AppInner() {
                 sshSessionId: saved.type === 'ssh' && saved.sshProfileId
                   ? `ssh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
                   : undefined,
+                sshShellReady: saved.type !== 'ssh',
                 root: tree,
               };
               restored.push(tab);
@@ -203,8 +205,13 @@ function AppInner() {
           host: profile.host,
           port: profile.port,
           ...(profile.username ? { username: profile.username } : {}),
+          sshProfileId: profile.id,
         };
         setSshSessions((prev) => prev.some((s) => s.id === sessionId) ? prev : [...prev, session]);
+        setReadySshSessionIds((prev) => new Set(prev).add(sessionId));
+        setTabs((prev) => prev.map((existing) => (
+          existing.id === tab.id ? { ...existing, sshShellReady: true } : existing
+        )));
       }).catch((err) => {
         console.error('Failed to reconnect saved SSH tab:', err);
         // Drop the session id so the TerminalPane's error path (or
@@ -330,12 +337,19 @@ function AppInner() {
   // === Tab management ===
 
   const addTab = useCallback(
-    (type: 'local' | 'ssh' = 'local', sshSessionId?: string) => {
+    (
+      type: 'local' | 'ssh' = 'local',
+      sshSessionId?: string,
+      sshShellReady = type !== 'ssh',
+      sshProfileId?: string,
+    ) => {
       const tab: TabInfo = {
         id: genId('tab'),
         title: type === 'local' ? `terminal ${tabs.length + 1}` : `ssh-${sshSessionId?.slice(0, 6)}`,
         type,
         sshSessionId,
+        sshProfileId,
+        sshShellReady,
         root: createTabRoot(type),
       };
       setTabs((prev) => [...prev, tab]);
@@ -406,7 +420,8 @@ function AppInner() {
       setSshSessions((prev) => (
         prev.some((s) => s.id === session.id) ? prev : [...prev, session]
       ));
-      addTab('ssh', session.id);
+      setReadySshSessionIds((prev) => new Set(prev).add(session.id));
+      addTab('ssh', session.id, true, session.sshProfileId);
     },
     [addTab],
   );
@@ -452,6 +467,7 @@ function AppInner() {
           password: profile.auth === 'password' ? profile.password : undefined,
           privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
         });
+        setReadySshSessionIds((prev) => new Set(prev).add(tab.sshSessionId!));
         await window.janet.sshCreateShell({ id: tab.sshSessionId, termId, ...dims });
       } catch (reconnectErr) {
         console.error('SSH retry failed:', reconnectErr);
@@ -475,6 +491,7 @@ function AppInner() {
     type: preset.type,
     sshSessionId,
     sshProfileId: preset.sshProfileId,
+    sshShellReady: preset.type !== 'ssh',
     cwd: preset.type === 'local' ? preset.cwd : undefined,
     root: createPaneRoot(preset.type, preset.terminalCount, preset.splitDirection),
   }), []);
@@ -506,9 +523,12 @@ function AppInner() {
         host: profile.host,
         port: profile.port,
         ...(profile.username ? { username: profile.username } : {}),
+        sshProfileId: profile.id,
       };
       setSshSessions((prev) => [...prev, session]);
+      setReadySshSessionIds((prev) => new Set(prev).add(sessionId));
       const tab = createTabFromPreset(preset, sessionId);
+      tab.sshShellReady = true;
       setTabs((prev) => [...prev, tab]);
       setActiveTabId(tab.id);
     } catch (err) {
@@ -802,6 +822,7 @@ function AppInner() {
             tabId={activeTab.id}
             tabType={activeTab.type}
             sshSessionId={activeTab.sshSessionId}
+            sshShellReady={activeTab.type !== 'ssh' || activeTab.sshShellReady === true}
             onTerminalReady={handleTerminalReady}
             onTerminalRemoved={handleTerminalRemoved}
             onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}

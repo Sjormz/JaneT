@@ -70,6 +70,7 @@ export default function SSHManager({
 
     const parsedPort = parseInt(port) || 22;
     const sessionId = `ssh-${Date.now()}`;
+    const newProfileId = profileId(trimmedHost, parsedPort, trimmedUsername || undefined, auth);
 
     try {
       await window.janet.sshConnect({
@@ -83,7 +84,7 @@ export default function SSHManager({
       });
 
       saveProfile({
-        id: profileId(trimmedHost, parsedPort, trimmedUsername || undefined, auth),
+        id: newProfileId,
         host: trimmedHost,
         port: parsedPort,
         username: trimmedUsername || undefined,
@@ -91,7 +92,13 @@ export default function SSHManager({
         password: auth === 'password' && password ? password : undefined,
         privateKey: auth === 'key' && privateKey ? privateKey : undefined,
       });
-      onConnected({ id: sessionId, host: trimmedHost, port: parsedPort, ...(trimmedUsername ? { username: trimmedUsername } : {}) });
+      onConnected({
+        id: sessionId,
+        host: trimmedHost,
+        port: parsedPort,
+        ...(trimmedUsername ? { username: trimmedUsername } : {}),
+        sshProfileId: newProfileId,
+      });
       setShowForm(false);
       resetForm();
     } catch (err: any) {
@@ -132,6 +139,7 @@ export default function SSHManager({
         host: profile.host,
         port: profile.port,
         ...(profile.username ? { username: profile.username } : {}),
+        sshProfileId: profile.id,
       });
     } catch (err: any) {
       setError(err.message || 'Connection failed');

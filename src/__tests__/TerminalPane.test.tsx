@@ -158,6 +158,38 @@ describe('TerminalPane SSH reinitialization', () => {
     });
   });
 
+  it('opens the SSH shell after a restored pane switches from pending to ready', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const props = {
+      termId: 'term-restored-ssh',
+      tabType: 'ssh' as const,
+      sshSessionId: 'ssh-restored',
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      themeName: 'tokyo-night',
+    };
+
+    const { rerender } = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} sshShellReady={false} />
+      </KeybindingsProvider>,
+    );
+
+    expect(sshCreateShell).not.toHaveBeenCalled();
+
+    rerender(
+      <KeybindingsProvider>
+        <TerminalPane {...props} sshShellReady />
+      </KeybindingsProvider>,
+    );
+
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(1));
+    expect(sshCreateShell).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'ssh-restored',
+      termId: 'term-restored-ssh',
+    }));
+  });
+
   it('reuses the xterm instance when the same pane remounts during a split reshape', async () => {
     vi.useFakeTimers();
     const { default: TerminalPane } = await loadTerminalPane();

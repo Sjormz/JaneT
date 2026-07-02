@@ -20,6 +20,7 @@ export interface TabInfo {
   type: 'local' | 'ssh';
   sshSessionId?: string;
   sshProfileId?: string;
+  sshShellReady?: boolean;
   cwd?: string;
   root: PaneNode;
 }
@@ -29,6 +30,7 @@ export interface SessionInfo {
   host: string;
   port: number;
   username?: string;
+  sshProfileId?: string;
 }
 
 export interface SavedSSHProfile {

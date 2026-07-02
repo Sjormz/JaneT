@@ -57,6 +57,7 @@ describe('SSHManager', () => {
         host: 'box.local',
         port: 22,
         username: 'pckpr',
+        sshProfileId: 'pckpr@box.local:22:password',
       }));
       expect(onProfilesChange).toHaveBeenCalledWith([
         {
@@ -91,6 +92,7 @@ describe('SSHManager', () => {
       expect(onConnected).toHaveBeenCalledWith(expect.objectContaining({
         host: 'terminal.shop',
         port: 22,
+        sshProfileId: 'terminal.shop:22:password',
       }));
       expect(onConnected.mock.calls[0][0]).not.toHaveProperty('username');
       expect(onProfilesChange).toHaveBeenCalledWith([
@@ -135,6 +137,7 @@ describe('SSHManager', () => {
         host: 'box.local',
         port: 22,
         username: 'pckpr',
+        sshProfileId: 'pckpr@box.local:22:password',
       }));
     });
   });
@@ -164,6 +167,7 @@ describe('SSHManager', () => {
       expect(onConnected).toHaveBeenCalledWith(expect.objectContaining({
         host: 'terminal.shop',
         port: 22,
+        sshProfileId: 'terminal.shop:22:password',
       }));
       expect(onConnected.mock.calls[0][0]).not.toHaveProperty('username');
     });

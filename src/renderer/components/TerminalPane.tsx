@@ -36,6 +36,7 @@ interface TerminalPaneProps {
   onFocus?: (termId: string) => void;
   initialCwd?: string;
   hasSession?: boolean;
+  sshShellReady?: boolean;
   onSshRetry?: (termId: string) => void;
 }
 
@@ -61,6 +62,7 @@ interface CachedTerminalPane {
   cleanup: unknown[];
   tabType: 'local' | 'ssh';
   sshSessionId?: string;
+  sshShellReady: boolean;
   disposeTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -98,6 +100,7 @@ export default function TerminalPane({
   onFocus,
   initialCwd,
   hasSession,
+  sshShellReady = true,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -148,7 +151,12 @@ export default function TerminalPane({
     if (!container) return;
 
     const cached = terminalPaneCache.get(termId);
-    if (cached && cached.tabType === tabType && cached.sshSessionId === sshSessionId) {
+    if (
+      cached &&
+      cached.tabType === tabType &&
+      cached.sshSessionId === sshSessionId &&
+      cached.sshShellReady === sshShellReady
+    ) {
       if (cached.disposeTimer) {
         clearTimeout(cached.disposeTimer);
         cached.disposeTimer = null;
@@ -292,7 +300,7 @@ export default function TerminalPane({
     });
     cleanupRef.current.push(cleanupListener);
 
-    if (tabType === 'ssh' && sshSessionId) {
+    if (tabType === 'ssh' && sshSessionId && sshShellReady) {
       const dims = sshDimensions(fitAddon.proposeDimensions());
       const openShell = window.janet.sshCreateShell({
         id: sshSessionId,
@@ -388,6 +396,7 @@ export default function TerminalPane({
       cleanup: cleanupRef.current,
       tabType,
       sshSessionId,
+      sshShellReady,
       disposeTimer: null,
     });
 
@@ -413,7 +422,7 @@ export default function TerminalPane({
       fitAddonRef.current = null;
       searchAddonRef.current = null;
     };
-  }, [termId, tabType, sshSessionId, initialCwd, onReady, onRemoved, onFocus, onCwdChange]);
+  }, [termId, tabType, sshSessionId, sshShellReady, initialCwd, onReady, onRemoved, onFocus, onCwdChange]);
 
   useEffect(() => {
     if (termRef.current && themeName) {
