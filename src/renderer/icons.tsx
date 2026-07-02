@@ -146,6 +146,7 @@ export const ChevronsLeftIcon = make(ChevronsLeft);
 export const PlugIcon = make(Plug);
 export const UnplugIcon = make(Unplug);
 export const ServerIcon = make(Server);
+export const MoreIcon = make(MoreHorizontal);
 
 // Command palette
 export const CommandIcon = make(Command);
@@ -158,7 +159,6 @@ export const MoonIcon = make(Moon);
 export const MonitorIcon = make(Monitor);
 
 // Misc
-export const MoreIcon = make(MoreHorizontal);
 export const SpinnerIcon = make(Loader2);
 export const AlertIcon = make(AlertCircle);
 export const CheckIcon = make(Check);

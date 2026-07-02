@@ -59,6 +59,29 @@ beforeEach(() => {
 });
 
 describe('SSHManager', () => {
+  it('uses the local OS username at the ssh2 boundary when the UI omits username', async () => {
+    mocks.connectMock.mockImplementation(() => {
+      queueMicrotask(() => mocks.lastClient?.emit('ready'));
+    });
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('host-only', {
+      host: 'terminal.shop',
+      port: 22,
+      username: undefined,
+      auth: 'password',
+    });
+
+    expect(mocks.connectMock).toHaveBeenCalledWith(expect.objectContaining({
+      host: 'terminal.shop',
+      port: 22,
+      username: expect.any(String),
+      tryKeyboard: true,
+    }));
+    expect(mocks.connectMock.mock.calls[0][0].username.length).toBeGreaterThan(0);
+  });
+
   it('buffers early shell output until the renderer registers onData', async () => {
     mocks.shellMock.mockImplementation((opts: unknown, cb: (err: Error | undefined, stream?: MockShellStream) => void) => {
       const stream = new MockShellStream();

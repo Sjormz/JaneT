@@ -2,16 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 
-/**
- * Run a list of cleanup entries. Each entry is either a function (called
- * with no args) or an object with a `.dispose()` method (called). Errors
- * are swallowed because a failing cleanup shouldn't mask the real reason
- * the component is unmounting.
- *
- * Exported for testing. We can't easily test the TerminalPane unmount
- * path because it requires a real xterm.js instance, but the cleanup
- * contract itself is simple and worth pinning down.
- */
 export function runCleanup(entries: unknown[]): void {
   for (const entry of entries) {
     try {
@@ -27,7 +17,6 @@ export function runCleanup(entries: unknown[]): void {
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import SearchOverlay from './SearchOverlay';
-import SSHConnectionNotice from './SSHConnectionNotice';
 import { getTheme, ThemeName } from '../themes';
 import { useKeybindings } from '../KeybindingsContext';
 import { matchesShortcut } from '../keybindings';
@@ -43,24 +32,66 @@ interface TerminalPaneProps {
   onRemoved: (termId: string) => void;
   themeName?: string;
   fontSize?: number;
-  /** Called when this terminal reports a new working directory (via OSC 7). */
   onCwdChange?: (termId: string, cwd: string) => void;
-  /** Called when this terminal gains focus (so App can route cwd lookups here). */
   onFocus?: (termId: string) => void;
-  /**
-   * The initial working directory of this terminal. Used as a fallback
-   * so the sidebar has something to show before the first OSC 7 arrives.
-   */
   initialCwd?: string;
-  /** True when this termId already has a live PTY/session to reuse. */
   hasSession?: boolean;
+  sshShellReady?: boolean;
+  onSshRetry?: (termId: string) => void;
+}
+
+const MIN_SSH_COLS = 120;
+const MIN_SSH_ROWS = 40;
+
+function sshDimensions(dims: { cols: number; rows: number } | undefined | null) {
+  return {
+    cols: Math.max(dims?.cols || 80, MIN_SSH_COLS),
+    rows: Math.max(dims?.rows || 24, MIN_SSH_ROWS),
+  };
+}
+
+function repaintTerminal(term: Terminal, fitAddon: FitAddon): void {
+  try { fitAddon.fit(); } catch {}
+  try { term.refresh(0, Math.max(term.rows - 1, 0)); } catch {}
+}
+
+interface CachedTerminalPane {
+  term: Terminal;
+  fitAddon: FitAddon;
+  searchAddon: SearchAddon;
+  cleanup: unknown[];
+  tabType: 'local' | 'ssh';
+  sshSessionId?: string;
+  sshShellReady: boolean;
+  disposeTimer: ReturnType<typeof setTimeout> | null;
+}
+
+const terminalPaneCache = new Map<string, CachedTerminalPane>();
+
+export function disposeCachedTerminal(termId: string): void {
+  const cached = terminalPaneCache.get(termId);
+  if (!cached) return;
+  if (cached.disposeTimer) clearTimeout(cached.disposeTimer);
+  runCleanup(cached.cleanup);
+  cached.cleanup = [];
+  cached.term.dispose();
+  terminalPaneCache.delete(termId);
+}
+
+function scheduleCachedTerminalDispose(termId: string): void {
+  const cached = terminalPaneCache.get(termId);
+  if (!cached || cached.disposeTimer) return;
+  // A TerminalPane unmount can mean "hidden because another tab is active",
+  // not "closed". Disposing the frontend xterm here drops the visible buffer
+  // while the backend SSH/local session keeps running, so switching back shows
+  // a blank pane until fresh output arrives. App.tsx explicitly disposes the
+  // cache when the leaf is actually removed from the tab tree.
 }
 
 export default function TerminalPane({
   termId,
   tabType,
   sshSessionId,
-  sshSessionLabel,
   onReady,
   onRemoved,
   themeName,
@@ -69,6 +100,7 @@ export default function TerminalPane({
   onFocus,
   initialCwd,
   hasSession,
+  sshShellReady = true,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -80,7 +112,6 @@ export default function TerminalPane({
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState({ resultIndex: 0, resultCount: 0 });
-  const [showSshNotice, setShowSshNotice] = useState(tabType === 'ssh');
   const searchVisibleRef = useRef(false);
   searchVisibleRef.current = searchVisible;
 
@@ -98,6 +129,7 @@ export default function TerminalPane({
     }
     termRef.current?.focus();
   };
+
 
   const doSearch = (query: string, dir: 'next' | 'prev' = 'next') => {
     if (!query || !searchAddonRef.current) {
@@ -117,6 +149,92 @@ export default function TerminalPane({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
+    const cached = terminalPaneCache.get(termId);
+    if (
+      cached &&
+      cached.tabType === tabType &&
+      cached.sshSessionId === sshSessionId &&
+      cached.sshShellReady === sshShellReady
+    ) {
+      if (cached.disposeTimer) {
+        clearTimeout(cached.disposeTimer);
+        cached.disposeTimer = null;
+      }
+
+      const mountCleanup: unknown[] = [];
+      const { term, fitAddon, searchAddon } = cached;
+
+      if (term.element && term.element.parentElement !== container) {
+        container.appendChild(term.element);
+      } else if (!term.element) {
+        term.open(container);
+      }
+
+      repaintTerminal(term, fitAddon);
+      const repaintTimer = setTimeout(() => repaintTerminal(term, fitAddon), 0);
+      mountCleanup.push(() => clearTimeout(repaintTimer));
+
+      const resultsDisposable = searchAddon.onDidChangeResults((results) => {
+        setSearchResults(results);
+      });
+      mountCleanup.push(resultsDisposable);
+
+      const resizeObserver = new ResizeObserver(() => {
+        try { fitAddon.fit(); } catch {}
+      });
+      resizeObserver.observe(container);
+      mountCleanup.push(() => resizeObserver.disconnect());
+
+      let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+      const notifyResize = () => {
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          try {
+            fitAddon.fit();
+            const dims = fitAddon.proposeDimensions();
+            if (dims) {
+              if (tabType === 'local') {
+                window.janet.terminalResize({ id: termId, cols: dims.cols, rows: dims.rows });
+              } else if (tabType === 'ssh') {
+                window.janet.sshResizeShell({ termId, ...sshDimensions(dims) });
+              }
+            }
+          } catch {}
+        }, 150);
+      };
+
+      const initialResizeTimer = setTimeout(notifyResize, 0);
+      mountCleanup.push(() => clearTimeout(initialResizeTimer));
+      mountCleanup.push(() => { if (resizeTimer) clearTimeout(resizeTimer); });
+
+      window.addEventListener('resize', notifyResize);
+      mountCleanup.push(() => window.removeEventListener('resize', notifyResize));
+
+      const clickListener = () => term.focus();
+      container.addEventListener('click', clickListener);
+      mountCleanup.push(() => container.removeEventListener('click', clickListener));
+
+      const focusListener = () => onFocus?.(termId);
+      container.addEventListener('focusin', focusListener);
+      mountCleanup.push(() => container.removeEventListener('focusin', focusListener));
+
+      termRef.current = term;
+      fitAddonRef.current = fitAddon;
+      searchAddonRef.current = searchAddon;
+      onReady(termId);
+
+      return () => {
+        runCleanup(mountCleanup);
+        onRemoved(termId);
+        scheduleCachedTerminalDispose(termId);
+        termRef.current = null;
+        fitAddonRef.current = null;
+        searchAddonRef.current = null;
+      };
+    }
+
+    if (cached) disposeCachedTerminal(termId);
 
     const resolvedTheme = themeName ? getTheme(themeName as ThemeName).xterm : undefined;
 
@@ -159,7 +277,6 @@ export default function TerminalPane({
     term.loadAddon(webLinksAddon);
     term.loadAddon(searchAddon);
 
-    // Track search results
     searchAddon.onDidChangeResults((results) => {
       setSearchResults(results);
     });
@@ -167,29 +284,6 @@ export default function TerminalPane({
     term.open(container);
     fitAddon.fit();
 
-    // Create terminal session only when this termId doesn't already have one.
-    // Split operations can remount an existing pane; in that case the PTY must
-    // stay alive and only the new sibling terminal should be created.
-    if (hasSession) {
-      onReady(termId);
-    } else if (tabType === 'local') {
-      window.janet.terminalCreate({ id: termId }).then(() => {
-        onReady(termId);
-      }).catch(console.error);
-    } else if (tabType === 'ssh' && sshSessionId) {
-      const dims = fitAddon.proposeDimensions();
-      window.janet.sshCreateShell({
-        id: sshSessionId,
-        termId,
-        cols: dims?.cols || 80,
-        rows: dims?.rows || 24,
-      }).then(() => {
-        onReady(termId);
-        term.focus();
-      }).catch(console.error);
-    }
-
-    // Terminal input -> PTY
     const disposable = term.onData((data) => {
       if (tabType === 'local') {
         window.janet.terminalWrite({ id: termId, data });
@@ -199,16 +293,44 @@ export default function TerminalPane({
     });
     cleanupRef.current.push(() => disposable.dispose());
 
-    // PTY output -> Terminal  (handled below with OSC 7 stripping)
+    const cleanupListener = window.janet.onTerminalData(({ id, data }) => {
+      if (id === termId) {
+        term.write(data);
+      }
+    });
+    cleanupRef.current.push(cleanupListener);
 
-    // Handle resize via ResizeObserver
+    if (tabType === 'ssh' && sshSessionId && sshShellReady) {
+      const dims = sshDimensions(fitAddon.proposeDimensions());
+      const openShell = window.janet.sshCreateShell({
+        id: sshSessionId,
+        termId,
+        cols: dims.cols,
+        rows: dims.rows,
+      });
+      openShell.then(() => {
+        onReady(termId);
+        term.focus();
+      }).catch((err: any) => {
+        onReady(termId);
+        const message = err?.message || 'connection may have dropped';
+        term.write('\r\n\x1b[31mSSH shell failed to open: ' + message + '\x1b[0m\r\n');
+      });
+    } else if (hasSession) {
+      onReady(termId);
+    } else if (tabType === 'local') {
+      window.janet.terminalCreate({ id: termId, cwd: initialCwd }).then(() => {
+        onReady(termId);
+      }).catch(console.error);
+    }
+
+
     const resizeObserver = new ResizeObserver(() => {
       try { fitAddon.fit(); } catch {}
     });
     resizeObserver.observe(container);
     cleanupRef.current.push(() => resizeObserver.disconnect());
 
-    // Debounced resize notification to main process
     let resizeTimer: any;
     const notifyResize = () => {
       clearTimeout(resizeTimer);
@@ -220,7 +342,7 @@ export default function TerminalPane({
             if (tabType === 'local') {
               window.janet.terminalResize({ id: termId, cols: dims.cols, rows: dims.rows });
             } else if (tabType === 'ssh') {
-              window.janet.sshResizeShell({ termId, cols: dims.cols, rows: dims.rows });
+              window.janet.sshResizeShell({ termId, ...sshDimensions(dims) });
             }
           }
         } catch {}
@@ -229,19 +351,13 @@ export default function TerminalPane({
 
     setTimeout(notifyResize, 100);
 
-    // Listen for window resize
     window.addEventListener('resize', notifyResize);
     cleanupRef.current.push(() => window.removeEventListener('resize', notifyResize));
 
-    // Focus terminal on click
-    container.addEventListener('click', () => term.focus());
+    const clickListener = () => term.focus();
+    container.addEventListener('click', clickListener);
+    cleanupRef.current.push(() => container.removeEventListener('click', clickListener));
 
-    // Track focus so App can route sidebar cwd to the currently-focused
-    // terminal. xterm.js doesn't expose an onFocus event on the Terminal
-    // class — we listen to DOM focus events on the container instead.
-    // xterm renders a hidden <textarea> inside the container; the
-    // focusin event fires on the container when the textarea (or any
-    // child) gains focus.
     const focusListener = () => onFocus?.(termId);
     container.addEventListener('focusin', focusListener);
     cleanupRef.current.push(() => container.removeEventListener('focusin', focusListener));
@@ -250,25 +366,9 @@ export default function TerminalPane({
     fitAddonRef.current = fitAddon;
     searchAddonRef.current = searchAddon;
 
-    // OSC 7 cwd tracking. xterm.js has a built-in OSC parser
-    // (term.parser) that detects sequences for us, reassembles them
-    // across PTY chunk boundaries, and strips them from the visible
-    // output. We just register a handler for OSC 7 and react to the
-    // payload.
-    //
-    // Reference:
-    //   https://xtermjs.org/docs/api/terminal/interfaces/iparser/#registeroschandler
-    //
-    // The "initialCwd" prop is what node-pty was launched with
-    // (typically the user's home dir). We report it eagerly so the
-    // sidebar has something to show before the first prompt emits an
-    // OSC 7 sequence.
     let lastReportedCwd: string | null = initialCwd || null;
     if (initialCwd) onCwdChange?.(termId, initialCwd);
 
-    // Debounce so a burst of OSC 7 sequences (e.g. a script that cd's
-    // many times, or a tab completion that paints a path) doesn't
-    // thrash the file tree.
     let cwdDebounce: ReturnType<typeof setTimeout> | null = null;
     const reportCwd = (newCwd: string) => {
       if (newCwd === lastReportedCwd) return;
@@ -282,30 +382,26 @@ export default function TerminalPane({
     const oscDisposable = term.parser.registerOscHandler(7, (data) => {
       const path = fileUrlToPath(data);
       if (path) reportCwd(path);
-      return true; // consumed — don't let xterm render the payload
+      return true;
     });
     cleanupRef.current.push(() => oscDisposable.dispose());
     cleanupRef.current.push(() => {
       if (cwdDebounce) clearTimeout(cwdDebounce);
     });
 
-    // PTY output -> xterm (no longer needs to strip OSC 7 — xterm
-    // consumes it before it ever reaches the visible buffer).
-    const cleanupListener = window.janet.onTerminalData(({ id, data }) => {
-      if (id === termId) {
-        if (tabType === 'ssh') {
-          setShowSshNotice(false);
-        }
-        term.write(data);
-      }
+    terminalPaneCache.set(termId, {
+      term,
+      fitAddon,
+      searchAddon,
+      cleanup: cleanupRef.current,
+      tabType,
+      sshSessionId,
+      sshShellReady,
+      disposeTimer: null,
     });
-    cleanupRef.current.push(cleanupListener);
-
-    // Intercept keyboard shortcuts before xterm processes them
 
     term.attachCustomKeyEventHandler((e) => {
       const currentBindings = kbBindingsRef.current;
-      // Check search-toggle shortcut (default Ctrl+F)
       if (matchesShortcut(e, currentBindings['search-toggle'])) {
         e.preventDefault();
         setSearchVisible((v) => !v);
@@ -320,17 +416,14 @@ export default function TerminalPane({
     });
 
     return () => {
-      runCleanup(cleanupRef.current);
-      cleanupRef.current = [];
       onRemoved(termId);
-      term.dispose();
+      scheduleCachedTerminalDispose(termId);
       termRef.current = null;
       fitAddonRef.current = null;
       searchAddonRef.current = null;
     };
-  }, [termId, tabType, sshSessionId, initialCwd, onReady, onRemoved, onFocus, onCwdChange]);
+  }, [termId, tabType, sshSessionId, sshShellReady, initialCwd, onReady, onRemoved, onFocus, onCwdChange]);
 
-  // Update xterm theme when themeName changes
   useEffect(() => {
     if (termRef.current && themeName) {
       const themeDef = getTheme(themeName as ThemeName);
@@ -338,18 +431,15 @@ export default function TerminalPane({
     }
   }, [themeName]);
 
-  // Update xterm font size when fontSize changes
   useEffect(() => {
     if (termRef.current && fontSize) {
       termRef.current.options.fontSize = fontSize;
-      // Re-fit after font size change
       setTimeout(() => {
         try { fitAddonRef.current?.fit(); } catch {}
       }, 10);
     }
   }, [fontSize]);
 
-  // Re-fit when the parent container becomes visible
   useEffect(() => {
     const timer = setTimeout(() => {
       if (fitAddonRef.current) {
@@ -380,7 +470,6 @@ export default function TerminalPane({
         onPrev={() => doSearch(searchQuery, 'prev')}
         onClose={closeSearch}
       />
-      <SSHConnectionNotice visible={showSshNotice} label={sshSessionLabel} />
     </div>
   );
 }

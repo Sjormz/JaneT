@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { TabInfo } from '../types';
-import { TerminalTabIcon, LockIcon, XCloseIcon } from '../icons';
+import { TerminalTabIcon, LockIcon, XCloseIcon, PlusIcon, PencilIcon, CheckIcon, ChevronsLeftIcon } from '../icons';
 
 interface VerticalTabBarProps {
   tabs: TabInfo[];
@@ -8,11 +8,12 @@ interface VerticalTabBarProps {
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onNewTab: () => void;
+  onRenameTab: (id: string, title: string) => void;
+  onCollapse: () => void;
 }
 
 function formatRelativeTime(date: Date): string {
-  const now = Date.now();
-  const diff = now - date.getTime();
+  const diff = Date.now() - date.getTime();
   const seconds = Math.floor(diff / 1000);
   if (seconds < 30) return 'just now';
   if (seconds < 60) return `${seconds}s ago`;
@@ -23,19 +24,18 @@ function formatRelativeTime(date: Date): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-/**
- * Side panel listing the active terminals. The primary tab switcher now
- * lives in the titlebar; this view is a richer secondary list with
- * timestamps, shell info, and quick actions.
- */
 export default function VerticalTabBar({
   tabs,
   activeTabId,
   onSelectTab,
   onCloseTab,
   onNewTab,
+  onRenameTab,
+  onCollapse,
 }: VerticalTabBarProps) {
-  const [now, setNow] = useState(Date.now());
+  const [, setNow] = useState(Date.now());
+  const [editingTabId, setEditingTabId] = useState<string | null>(null);
+  const [draftTitle, setDraftTitle] = useState('');
   const [tabTimestamps, setTabTimestamps] = useState<Record<string, Date>>(() => {
     const map: Record<string, Date> = {};
     for (const tab of tabs) map[tab.id] = new Date();
@@ -55,11 +55,33 @@ export default function VerticalTabBar({
     });
   }, [tabs]);
 
+  const startRename = (tab: TabInfo) => {
+    setEditingTabId(tab.id);
+    setDraftTitle(tab.title);
+  };
+
+  const saveRename = () => {
+    if (!editingTabId) return;
+    onRenameTab(editingTabId, draftTitle.trim());
+    setEditingTabId(null);
+    setDraftTitle('');
+  };
+
   return (
-    <div className="vtab-bar" aria-label="Terminal list">
+    <div className="vtab-bar" aria-label="Tab list">
       <div className="vtab-header">
-        <span className="vtab-title">Terminals</span>
-        <span className="vtab-count">{tabs.length}</span>
+        <div className="vtab-heading">
+          <span className="vtab-title">Tabs</span>
+          <span className="vtab-count">{tabs.length}</span>
+        </div>
+        <div className="vtab-header-actions">
+          <button className="vtab-header-btn" onClick={onNewTab} title="New tab" aria-label="New tab">
+            <PlusIcon size="sm" />
+          </button>
+          <button className="vtab-header-btn" onClick={onCollapse} title="Collapse tabs" aria-label="Collapse tabs">
+            <ChevronsLeftIcon size="sm" />
+          </button>
+        </div>
       </div>
 
       <div className="vtab-list">
@@ -67,9 +89,8 @@ export default function VerticalTabBar({
           const isActive = tab.id === activeTabId;
           const isSSH = tab.type === 'ssh';
           const TabIcon = isSSH ? LockIcon : TerminalTabIcon;
-          const relTime = tabTimestamps[tab.id]
-            ? formatRelativeTime(tabTimestamps[tab.id])
-            : 'now';
+          const relTime = tabTimestamps[tab.id] ? formatRelativeTime(tabTimestamps[tab.id]) : 'now';
+          const editing = editingTabId === tab.id;
 
           return (
             <div
@@ -77,9 +98,9 @@ export default function VerticalTabBar({
               role="button"
               tabIndex={0}
               className={`vtab-item ${isActive ? 'active' : ''} ${isSSH ? 'ssh' : ''}`}
-              onClick={() => onSelectTab(tab.id)}
+              onClick={() => !editing && onSelectTab(tab.id)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
+                if (!editing && (e.key === 'Enter' || e.key === ' ')) {
                   e.preventDefault();
                   onSelectTab(tab.id);
                 }
@@ -87,19 +108,53 @@ export default function VerticalTabBar({
             >
               <TabIcon size="sm" className="vtab-icon" />
               <div className="vtab-text">
-                <div className="vtab-name" title={tab.title}>{tab.title}</div>
+                {editing ? (
+                  <input
+                    className="vtab-name-input"
+                    value={draftTitle}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => setDraftTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') saveRename();
+                      if (e.key === 'Escape') setEditingTabId(null);
+                    }}
+                    autoFocus
+                    aria-label="Tab name"
+                  />
+                ) : (
+                  <div className="vtab-name" title={tab.title}>{tab.title}</div>
+                )}
                 <div className="vtab-sub">
-                  {isSSH ? `SSH · ${tab.sshSessionId?.slice(0, 6) ?? ''}` : 'local · pwsh'}
+                  {isSSH ? `SSH · ${tab.sshSessionId?.slice(0, 6) ?? ''}` : tab.cwd || 'local · pwsh'}
                 </div>
               </div>
               <div className="vtab-meta">
                 <span className="vtab-time">{relTime}</span>
+                {editing ? (
+                  <button
+                    className="vtab-action"
+                    onClick={(e) => { e.stopPropagation(); saveRename(); }}
+                    title="Save tab name"
+                    aria-label="Save tab name"
+                  >
+                    <CheckIcon size="xs" />
+                  </button>
+                ) : (
+                  <button
+                    className="vtab-action"
+                    onClick={(e) => { e.stopPropagation(); startRename(tab); }}
+                    title="Rename tab"
+                    aria-label="Rename tab"
+                  >
+                    <PencilIcon size="xs" />
+                  </button>
+                )}
                 {tabs.length > 1 && (
                   <button
                     className="vtab-close"
                     onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
-                    title="Close terminal"
-                    aria-label="Close terminal"
+                    title="Close tab"
+                    aria-label="Close tab"
                   >
                     <XCloseIcon size="xs" />
                   </button>

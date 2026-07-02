@@ -2,6 +2,7 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import Titlebar from './components/Titlebar';
 import VerticalTabBar from './components/VerticalTabBar';
 import SplitPane from './components/SplitPane';
+import { disposeCachedTerminal } from './components/TerminalPane';
 import Sidebar from './components/Sidebar';
 import StatusBar from './components/StatusBar';
 import CommandPalette, { CommandAction } from './components/CommandPalette';
@@ -10,21 +11,18 @@ import ShellIntegrationHint from './components/ShellIntegrationHint';
 import UpdateBanner from './components/UpdateBanner';
 import {
   TabInfo, SessionInfo,
+  SavedSSHProfile,
+  WorkspaceTabPreset,
   PaneNode,
-  createLeaf, splitPane, removePane, getAllLeafIds, genId,
+  createPaneRoot, splitPane, removePane, getAllLeafIds, genId,
 } from './types';
 import { ThemeName, applyCssTheme, getTheme } from './themes';
 import { KeybindingsProvider, useKeybindings } from './KeybindingsContext';
 import { KeybindingAction } from './keybindings';
+import { serializePaneTree, restorePaneTree, normalizeSession, SavedSession } from './sessionRestore';
 
 function createTabRoot(type: 'local' | 'ssh'): PaneNode {
-  return {
-    id: genId('split'),
-    type: 'split',
-    direction: 'vertical',
-    children: [createLeaf(type)],
-    sizes: [1],
-  };
+  return createPaneRoot(type, 1, 'vertical');
 }
 
 function ensureSplitRoot(root: PaneNode): PaneNode {
@@ -41,20 +39,29 @@ function ensureSplitRoot(root: PaneNode): PaneNode {
 }
 
 function AppInner() {
-  const [tabs, setTabs] = useState<TabInfo[]>([{
+  // Default starter tab — used only when no session has been restored.
+  const starterTab: TabInfo = useMemo(() => ({
     id: genId('tab'),
     title: 'terminal',
     type: 'local',
     root: createTabRoot('local'),
-  }]);
+  }), []);
+
+  const [tabs, setTabs] = useState<TabInfo[]>([starterTab]);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
-  const [activeTabId, setActiveTabId] = useState(tabs[0].id);
+  const [activeTabId, setActiveTabId] = useState(starterTab.id);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [tabsOpen, setTabsOpen] = useState(true);
   const [sidebarSection, setSidebarSection] = useState<'files' | 'ssh' | 'git' | 'settings'>('files');
   const [sshSessions, setSshSessions] = useState<SessionInfo[]>([]);
+  const [readySshSessionIds, setReadySshSessionIds] = useState<Set<string>>(new Set());
+  const [sshProfiles, setSshProfiles] = useState<SavedSSHProfile[]>([]);
+  const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>([]);
   const [activeTerminals, setActiveTerminals] = useState<Set<string>>(new Set());
   const liveTerminalIdsRef = useRef<Set<string>>(new Set());
+  const workspaceTabsRestoredRef = useRef(false);
+  const sessionRestoredRef = useRef(false);
   const [paletteVisible, setPaletteVisible] = useState(false);
 
   // === CWD tracking ===
@@ -77,6 +84,7 @@ function AppInner() {
   // Settings state
   const [currentTheme, setCurrentTheme] = useState<ThemeName>('tokyo-night');
   const [fontSize, setFontSize] = useState(14);
+  const [sidebarSide, setSidebarSide] = useState<'left' | 'right'>('left');
   const settingsLoadedRef = useRef(false);
 
   const { bindings, setBinding, matches, on } = useKeybindings();
@@ -90,7 +98,57 @@ function AppInner() {
       window.janet.getSettings().then((s: any) => {
         setCurrentTheme(s.theme || 'tokyo-night');
         setFontSize(s.fontSize || 14);
+        setSidebarSide(s.sidebarSide === 'right' ? 'right' : 'left');
+        setSshProfiles(Array.isArray(s.sshProfiles) ? s.sshProfiles : []);
+        setWorkspaceTabs(Array.isArray(s.workspaceTabs) ? s.workspaceTabs : []);
         applyCssTheme(getTheme(s.theme || 'tokyo-night').css);
+
+        // Restore the last open workspace (tabs + active tab + sidebar UI).
+        // We do this in the same effect as the rest of settings so a single
+        // round-trip handles everything; both the first paint and the
+        // session shape are available here.
+        if (!sessionRestoredRef.current) {
+          sessionRestoredRef.current = true;
+          const session = normalizeSession(s.session);
+          if (session.tabs.length > 0) {
+            const restored: TabInfo[] = [];
+            let restoredActiveId: string | null = null;
+            for (const saved of session.tabs) {
+              const tree = restorePaneTree(saved.root);
+              if (!tree) continue;
+              const tab: TabInfo = {
+                id: genId('tab'),
+                title: saved.title,
+                type: saved.type,
+                cwd: saved.cwd,
+                sshProfileId: saved.sshProfileId,
+                // For SSH tabs, pre-allocate a session id so the
+                // TerminalPane mounts with a stable `sshSessionId` prop.
+                // Otherwise the pane would mount with `undefined`,
+                // create a dangling xterm with no shell bound, and
+                // then have to be torn down + rebuilt when the
+                // reconnect effect eventually fills in the id —
+                // leaving the user with a blank pane for a beat (or
+                // permanently, if any data arrived in between).
+                sshSessionId: saved.type === 'ssh' && saved.sshProfileId
+                  ? `ssh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+                  : undefined,
+                sshShellReady: saved.type !== 'ssh',
+                root: tree,
+              };
+              restored.push(tab);
+              if (saved.id === session.activeTabId) restoredActiveId = tab.id;
+            }
+            if (restored.length > 0) {
+              setTabs(restored);
+              setActiveTabId(restoredActiveId ?? restored[0].id);
+            }
+          }
+          setSidebarOpen(session.sidebarOpen);
+          setTabsOpen(session.tabsOpen);
+          setSidebarSection(session.sidebarSection);
+        }
+
         // Apply saved keybindings
         if (s.keybindings) {
           for (const [action, shortcut] of Object.entries(s.keybindings)) {
@@ -103,6 +161,98 @@ function AppInner() {
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Reconnect SSH tabs that were restored from the saved session.
+  // The tree is rebuilt with fresh leaf ids during restore, and the
+  // session id is pre-allocated so the TerminalPane mounts with a
+  // stable `sshSessionId` prop. The transport is still dead though
+  // (it's a fresh app start) — so this effect kicks off `ssh:connect`
+  // on the pre-allocated id, registers the session for the sidebar
+  // status, and surfaces any connect error to the user.
+  useEffect(() => {
+    if (!sessionRestoredRef.current) return;
+    if (tabsRef.current.length === 0) return;
+
+    const reconnectable = tabsRef.current.filter(
+      (tab) => tab.type === 'ssh' && tab.sshSessionId && tab.sshProfileId,
+    );
+    if (reconnectable.length === 0) return;
+
+    for (const tab of reconnectable) {
+      const profile = sshProfiles.find((candidate) => candidate.id === tab.sshProfileId);
+      if (!profile) {
+        // Profile was deleted — demote the tab to a plain local tab so
+        // the user isn't stuck staring at a dead "Reconnect" panel.
+        setTabs((prev) => prev.map((existing) =>
+          existing.id === tab.id
+            ? { ...existing, type: 'local' as const, sshSessionId: undefined, sshProfileId: undefined }
+            : existing,
+        ));
+        continue;
+      }
+      const sessionId = tab.sshSessionId!;
+      window.janet.sshConnect({
+        id: sessionId,
+        host: profile.host,
+        port: profile.port,
+        ...(profile.username ? { username: profile.username } : {}),
+        auth: profile.auth,
+        password: profile.auth === 'password' ? profile.password : undefined,
+        privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+      }).then(() => {
+        const session: SessionInfo = {
+          id: sessionId,
+          host: profile.host,
+          port: profile.port,
+          ...(profile.username ? { username: profile.username } : {}),
+          sshProfileId: profile.id,
+        };
+        setSshSessions((prev) => prev.some((s) => s.id === sessionId) ? prev : [...prev, session]);
+        setReadySshSessionIds((prev) => new Set(prev).add(sessionId));
+        setTabs((prev) => prev.map((existing) => (
+          existing.id === tab.id ? { ...existing, sshShellReady: true } : existing
+        )));
+      }).catch((err) => {
+        console.error('Failed to reconnect saved SSH tab:', err);
+        // Drop the session id so the TerminalPane's error path (or
+        // user's manual retry) can re-allocate a fresh one if they
+        // choose to recover. Demote to local so the user at least
+        // sees content (a local shell) rather than a permanently
+        // blank pane with a dead SSH banner.
+        setTabs((prev) => prev.map((existing) =>
+          existing.id === tab.id
+            ? { ...existing, type: 'local' as const, sshSessionId: undefined, sshProfileId: undefined }
+            : existing,
+        ));
+      });
+    }
+  }, [sshProfiles]);
+
+  // === Persist session state on changes (debounced) ===
+  // We debounce so a burst of splits/renames doesn't hammer disk. Saves
+  // only fire after the user settles for ~500ms.
+  useEffect(() => {
+    if (!settingsLoadedRef.current) return;
+    const timer = setTimeout(() => {
+      const savedTabs = tabsRef.current.map((tab) => ({
+        id: tab.id,
+        title: tab.title,
+        type: tab.type,
+        cwd: tab.cwd,
+        sshProfileId: tab.sshProfileId,
+        root: serializePaneTree(tab.root),
+      }));
+      const session: SavedSession = {
+        tabs: savedTabs,
+        activeTabId,
+        sidebarOpen,
+        tabsOpen,
+        sidebarSection,
+      };
+      try { window.janet.setSettings({ session }).catch(() => {}); } catch {}
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [tabs, activeTabId, sidebarOpen, tabsOpen, sidebarSection]);
 
   // Apply CSS theme whenever it changes
   useEffect(() => {
@@ -119,6 +269,11 @@ function AppInner() {
   const persistFontSize = useCallback((size: number) => {
     setFontSize(size);
     try { window.janet.setSettings({ fontSize: size }).catch(() => {}); } catch {}
+  }, []);
+
+  const persistSidebarSide = useCallback((side: 'left' | 'right') => {
+    setSidebarSide(side);
+    try { window.janet.setSettings({ sidebarSide: side }).catch(() => {}); } catch {}
   }, []);
 
   // Persist keybindings when they change
@@ -172,6 +327,7 @@ function AppInner() {
 
         liveTerminalIdsRef.current.delete(termId);
         setActiveTerminals(new Set(liveTerminalIdsRef.current));
+        disposeCachedTerminal(termId);
         window.janet.terminalDestroy({ id: termId }).catch(() => {});
       }, 0);
     },
@@ -181,12 +337,19 @@ function AppInner() {
   // === Tab management ===
 
   const addTab = useCallback(
-    (type: 'local' | 'ssh' = 'local', sshSessionId?: string) => {
+    (
+      type: 'local' | 'ssh' = 'local',
+      sshSessionId?: string,
+      sshShellReady = type !== 'ssh',
+      sshProfileId?: string,
+    ) => {
       const tab: TabInfo = {
         id: genId('tab'),
         title: type === 'local' ? `terminal ${tabs.length + 1}` : `ssh-${sshSessionId?.slice(0, 6)}`,
         type,
         sshSessionId,
+        sshProfileId,
+        sshShellReady,
         root: createTabRoot(type),
       };
       setTabs((prev) => [...prev, tab]);
@@ -219,6 +382,11 @@ function AppInner() {
     [activeTabId],
   );
 
+  const renameTab = useCallback((tabId: string, title: string) => {
+    if (!title) return;
+    updateTab(tabId, (tab) => ({ ...tab, title }));
+  }, [updateTab]);
+
   // === Split / close pane ===
 
   const handleSplitPane = useCallback(
@@ -249,11 +417,149 @@ function AppInner() {
 
   const handleSSHConnected = useCallback(
     (session: SessionInfo) => {
-      setSshSessions((prev) => [...prev, session]);
-      addTab('ssh', session.id);
+      setSshSessions((prev) => (
+        prev.some((s) => s.id === session.id) ? prev : [...prev, session]
+      ));
+      setReadySshSessionIds((prev) => new Set(prev).add(session.id));
+      addTab('ssh', session.id, true, session.sshProfileId);
     },
     [addTab],
   );
+
+  // Re-open the SSH shell for a single term. Triggered by the
+  // "Reconnect" button on the SSH notice. If the underlying SSH
+  // session is gone (server closed the connection), reconnect the
+  // session first using the tab's saved profile.
+  const handleSshRetry = useCallback(async (termId: string) => {
+    const tab = tabsRef.current.find(
+      (candidate) => candidate.type === 'ssh' && getAllLeafIds(candidate.root).includes(termId),
+    );
+    if (!tab || !tab.sshSessionId) return;
+
+    const dims = (() => {
+      // Best-effort — falls back to 80x24 if the term isn't measured yet.
+      const el = document.querySelector(`[data-terminal-id="${termId}"]`);
+      if (!el) return { cols: 80, rows: 24 };
+      return { cols: 80, rows: 24 };
+    })();
+
+    try {
+      await window.janet.sshCreateShell({ id: tab.sshSessionId, termId, ...dims });
+    } catch (shellErr) {
+      // Shell open failed — the session itself may be dead. Try
+      // re-establishing the SSH connection from the saved profile,
+      // then re-open the shell. If the profile is missing the user
+      // will see the original error and can dismiss the tab.
+      const profile = tab.sshProfileId
+        ? sshProfiles.find((candidate) => candidate.id === tab.sshProfileId)
+        : undefined;
+      if (!profile) {
+        console.error('SSH retry failed and no saved profile to reconnect from:', shellErr);
+        return;
+      }
+      try {
+        await window.janet.sshConnect({
+          id: tab.sshSessionId,
+          host: profile.host,
+          port: profile.port,
+          ...(profile.username ? { username: profile.username } : {}),
+          auth: profile.auth,
+          password: profile.auth === 'password' ? profile.password : undefined,
+          privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+        });
+        setReadySshSessionIds((prev) => new Set(prev).add(tab.sshSessionId!));
+        await window.janet.sshCreateShell({ id: tab.sshSessionId, termId, ...dims });
+      } catch (reconnectErr) {
+        console.error('SSH retry failed:', reconnectErr);
+      }
+    }
+  }, [sshProfiles]);
+
+  const handleSSHProfilesChange = useCallback((profiles: SavedSSHProfile[]) => {
+    setSshProfiles(profiles);
+    try { window.janet.setSettings({ sshProfiles: profiles }).catch(() => {}); } catch {}
+  }, []);
+
+  const handleWorkspaceTabsChange = useCallback((presets: WorkspaceTabPreset[]) => {
+    setWorkspaceTabs(presets);
+    try { window.janet.setSettings({ workspaceTabs: presets }).catch(() => {}); } catch {}
+  }, []);
+
+  const createTabFromPreset = useCallback((preset: WorkspaceTabPreset, sshSessionId?: string): TabInfo => ({
+    id: genId('tab'),
+    title: preset.name,
+    type: preset.type,
+    sshSessionId,
+    sshProfileId: preset.sshProfileId,
+    sshShellReady: preset.type !== 'ssh',
+    cwd: preset.type === 'local' ? preset.cwd : undefined,
+    root: createPaneRoot(preset.type, preset.terminalCount, preset.splitDirection),
+  }), []);
+
+  const openWorkspaceTab = useCallback(async (preset: WorkspaceTabPreset) => {
+    if (preset.type === 'local') {
+      const tab = createTabFromPreset(preset);
+      setTabs((prev) => [...prev, tab]);
+      setActiveTabId(tab.id);
+      return;
+    }
+
+    const profile = sshProfiles.find((candidate) => candidate.id === preset.sshProfileId);
+    if (!profile) return;
+
+    const sessionId = `ssh-${Date.now()}`;
+    try {
+      await window.janet.sshConnect({
+        id: sessionId,
+        host: profile.host,
+        port: profile.port,
+        ...(profile.username ? { username: profile.username } : {}),
+        auth: profile.auth,
+        password: profile.auth === 'password' ? profile.password : undefined,
+        privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+      });
+      const session = {
+        id: sessionId,
+        host: profile.host,
+        port: profile.port,
+        ...(profile.username ? { username: profile.username } : {}),
+        sshProfileId: profile.id,
+      };
+      setSshSessions((prev) => [...prev, session]);
+      setReadySshSessionIds((prev) => new Set(prev).add(sessionId));
+      const tab = createTabFromPreset(preset, sessionId);
+      tab.sshShellReady = true;
+      setTabs((prev) => [...prev, tab]);
+      setActiveTabId(tab.id);
+    } catch (err) {
+      console.error('Failed to open workspace SSH tab:', err);
+    }
+  }, [createTabFromPreset, sshProfiles]);
+
+  useEffect(() => {
+    if (workspaceTabsRestoredRef.current) return;
+    // If a session restore is in flight or already happened, defer to it —
+    // the session wins because it represents the user's actual open tabs.
+    if (!sessionRestoredRef.current) return;
+    if (workspaceTabs.length === 0) {
+      workspaceTabsRestoredRef.current = true;
+      return;
+    }
+    workspaceTabsRestoredRef.current = true;
+
+    const localTabs = workspaceTabs
+      .filter((preset) => preset.type === 'local')
+      .map((preset) => createTabFromPreset(preset));
+
+    if (localTabs.length > 0) {
+      setTabs(localTabs);
+      setActiveTabId(localTabs[0].id);
+    }
+
+    for (const preset of workspaceTabs.filter((candidate) => candidate.type === 'ssh')) {
+      openWorkspaceTab(preset);
+    }
+  }, [createTabFromPreset, openWorkspaceTab, workspaceTabs]);
 
   const handleSSHDisconnected = useCallback(
     (sessionId: string) => {
@@ -464,21 +770,25 @@ function AppInner() {
           }
         }}
         sidebarOpen={sidebarOpen}
-        onNewTab={() => addTab('local')}
         onOpenPalette={() => setPaletteVisible(true)}
       />
-      <div className="app-body">
+      <div className={`app-body sidebar-${sidebarSide}`}>
         {sidebarOpen && (
           <Sidebar
             section={sidebarSection}
             onSectionChange={setSidebarSection}
-            sshSessions={sshSessions}
+            sshProfiles={sshProfiles}
+            workspaceTabs={workspaceTabs}
             onSSHConnected={handleSSHConnected}
-            onSSHDisconnected={handleSSHDisconnected}
+            onSSHProfilesChange={handleSSHProfilesChange}
+            onWorkspaceTabsChange={handleWorkspaceTabsChange}
+            onWorkspaceTabLaunch={openWorkspaceTab}
             currentTheme={currentTheme}
             onThemeChange={persistTheme}
             fontSize={fontSize}
             onFontSizeChange={persistFontSize}
+            sidebarSide={sidebarSide}
+            onSidebarSideChange={persistSidebarSide}
             shortcutEditor={<ShortcutEditor />}
             cwd={effectiveCwd}
             cwdReady={Boolean(effectiveCwd)}
@@ -486,19 +796,33 @@ function AppInner() {
             shellIntegrationHint={<ShellIntegrationHint />}
           />
         )}
-        <VerticalTabBar
-          tabs={tabs}
-          activeTabId={activeTabId}
-          onSelectTab={setActiveTabId}
-          onCloseTab={closeTab}
-          onNewTab={() => addTab('local')}
-        />
+        {tabsOpen ? (
+          <VerticalTabBar
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onSelectTab={setActiveTabId}
+            onCloseTab={closeTab}
+            onNewTab={() => addTab('local')}
+            onRenameTab={renameTab}
+            onCollapse={() => setTabsOpen(false)}
+          />
+        ) : (
+          <button
+            className="tabs-rail"
+            onClick={() => setTabsOpen(true)}
+            title="Show tabs"
+            aria-label="Show tabs"
+          >
+            Tabs
+          </button>
+        )}
         <div className="terminal-area">
           <SplitPane
             node={activeTab.root}
             tabId={activeTab.id}
             tabType={activeTab.type}
             sshSessionId={activeTab.sshSessionId}
+            sshShellReady={activeTab.type !== 'ssh' || activeTab.sshShellReady === true}
             onTerminalReady={handleTerminalReady}
             onTerminalRemoved={handleTerminalRemoved}
             onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}
@@ -507,8 +831,9 @@ function AppInner() {
             fontSize={fontSize}
             onCwdChange={handleCwdChange}
             onTerminalFocus={handleTerminalFocus}
-            initialCwd={homeDir || undefined}
+            initialCwd={activeTab.cwd || homeDir || undefined}
             hasSessionForLeaf={(leafId) => liveTerminalIdsRef.current.has(leafId)}
+            onSshRetry={handleSshRetry}
           />
         </div>
       </div>

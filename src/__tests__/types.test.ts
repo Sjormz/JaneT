@@ -67,9 +67,31 @@ describe('splitPane', () => {
     expect(result.type).toBe('split');
     if (result.type === 'split') {
       expect(result.children).toHaveLength(2);
+      expect(result.direction).toBe('horizontal');
       expect(result.children[0].id).toBe(leaf.id);
       expect(result.children[1].type).toBe('leaf');
       expect(result.sizes).toEqual([1, 1]);
+    }
+  });
+
+  it('splits a direct child on the same axis without wrapping the existing leaf', () => {
+    const leafA = createLeaf();
+    const leafB = createLeaf();
+    const tree: PaneNode = {
+      id: 'split1', type: 'split', direction: 'vertical',
+      children: [leafA, leafB], sizes: [1, 1],
+    };
+
+    const result = splitPane(tree, leafB.id, 'vertical');
+
+    expect(result.type).toBe('split');
+    if (result.type === 'split') {
+      expect(result.children).toHaveLength(3);
+      expect(result.children[0]).toBe(leafA);
+      expect(result.children[1]).toBe(leafB);
+      expect(result.children[2].type).toBe('leaf');
+      expect(result.children[2].id).not.toBe(leafB.id);
+      expect(result.sizes).toEqual([1, 1, 1]);
     }
   });
 

@@ -24,6 +24,10 @@ interface SplitPaneProps {
   initialCwd?: string;
   /** Returns true when the given leafId already has a live PTY/session. */
   hasSessionForLeaf?: (leafId: string) => boolean;
+  /** True once an SSH tab's transport exists and panes may open shells. */
+  sshShellReady?: boolean;
+  /** User clicked "Reconnect" on the SSH notice for this term. */
+  onSshRetry?: (termId: string) => void;
 }
 
 /** Wraps a TerminalLeaf with split/close action buttons */
@@ -42,6 +46,8 @@ function TerminalPaneLeaf({
   onTerminalFocus,
   initialCwd,
   hasSessionForLeaf,
+  sshShellReady,
+  onSshRetry,
 }: {
   leaf: TerminalLeaf;
   tabType: 'local' | 'ssh';
@@ -57,6 +63,8 @@ function TerminalPaneLeaf({
   onTerminalFocus?: (termId: string) => void;
   initialCwd?: string;
   hasSessionForLeaf?: (leafId: string) => boolean;
+  sshShellReady?: boolean;
+  onSshRetry?: (termId: string) => void;
 }) {
   return (
     <div className="terminal-leaf">
@@ -87,6 +95,8 @@ function TerminalPaneLeaf({
           onFocus={onTerminalFocus}
           initialCwd={initialCwd}
           hasSession={hasSessionForLeaf?.(leaf.id)}
+          sshShellReady={sshShellReady}
+          onSshRetry={onSshRetry}
         />
       </div>
     </div>
@@ -196,7 +206,7 @@ export default function SplitPane(props: SplitPaneProps) {
     node, tabId, tabType, sshSessionId, onTerminalReady, onTerminalRemoved,
     onSplitPane, onClosePane, themeName, fontSize,
     onCwdChange, onTerminalFocus, initialCwd,
-    hasSessionForLeaf,
+    hasSessionForLeaf, sshShellReady, onSshRetry,
   } = props;
 
   if (node.type === 'leaf') {
@@ -216,6 +226,8 @@ export default function SplitPane(props: SplitPaneProps) {
         onTerminalFocus={onTerminalFocus}
         initialCwd={initialCwd}
         hasSessionForLeaf={hasSessionForLeaf}
+        sshShellReady={sshShellReady}
+        onSshRetry={onSshRetry}
       />
     );
   }
@@ -248,6 +260,8 @@ export default function SplitPane(props: SplitPaneProps) {
               onTerminalFocus={onTerminalFocus}
               initialCwd={initialCwd}
               hasSessionForLeaf={hasSessionForLeaf}
+              sshShellReady={sshShellReady}
+              onSshRetry={onSshRetry}
             />
           </div>
         </React.Fragment>

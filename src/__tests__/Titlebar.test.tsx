@@ -6,7 +6,6 @@ const baseProps = {
   section: 'files' as SidebarSection,
   onSectionChange: vi.fn(),
   sidebarOpen: true,
-  onNewTab: vi.fn(),
   onOpenPalette: vi.fn(),
 };
 
@@ -15,7 +14,7 @@ describe('Titlebar', () => {
     render(<Titlebar {...baseProps} />);
 
     expect(screen.queryByRole('tablist', { name: /open terminals/i })).toBeNull();
-    expect(screen.getByRole('button', { name: /new terminal/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /new terminal/i })).toBeNull();
     expect(screen.getByRole('button', { name: /search/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /minimize/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /maximize/i })).toBeInTheDocument();

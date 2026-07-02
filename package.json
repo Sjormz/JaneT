@@ -1,6 +1,6 @@
 {
   "name": "janet",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "JaneT - A powerful cross-platform terminal with file explorer, SSH, and git tree",
   "main": "dist/main/index.js",
   "scripts": {
@@ -10,6 +10,8 @@
     "build:renderer": "npx vite build --config vite.config.ts",
     "build": "npm run build:main && npm run build:preload && npm run build:renderer",
     "test": "vitest run",
+    "test:e2e": "playwright test --config playwright.config.ts",
+    "test:e2e:ssh-real-ls": "playwright test --config playwright.config.ts tests/e2e/ssh-real-ls.spec.ts",
     "test:watch": "vitest",
     "start": "npx electron dist/main/index.js",
     "dist": "npm run build && npx electron-builder",
@@ -168,6 +170,7 @@
     "ssh2-sftp-client": "^11.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^22.0.0",

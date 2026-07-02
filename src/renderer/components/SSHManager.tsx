@@ -1,14 +1,40 @@
 import React, { useState } from 'react';
-import { SessionInfo } from '../types';
-import { PlusIcon, XCloseIcon, ServerIcon, UnplugIcon, AlertIcon } from '../icons';
+import { SavedSSHProfile, SessionInfo } from '../types';
+import { PlusIcon, XCloseIcon, ServerIcon, AlertIcon, PlugIcon } from '../icons';
 
 interface SSHManagerProps {
-  sshSessions: SessionInfo[];
+  sshProfiles: SavedSSHProfile[];
   onConnected: (session: SessionInfo) => void;
-  onDisconnected: (sessionId: string) => void;
+  onProfilesChange: (profiles: SavedSSHProfile[]) => void;
 }
 
-export default function SSHManager({ sshSessions, onConnected, onDisconnected }: SSHManagerProps) {
+function profileId(host: string, port: number, username: string | undefined, auth: 'password' | 'key') {
+  const userPrefix = username ? `${username}@` : '';
+  return `${userPrefix}${host}:${port}:${auth}`.toLowerCase();
+}
+
+function connectionLabel(profile: SavedSSHProfile) {
+  return `${profile.username ? `${profile.username}@` : ''}${profile.host}:${profile.port}`;
+}
+
+function usernamePayload(username: string) {
+  const trimmed = username.trim();
+  return trimmed ? { username: trimmed } : {};
+}
+
+function passwordPayload(auth: 'password' | 'key', password: string) {
+  return auth === 'password' && password ? { password } : {};
+}
+
+function privateKeyPayload(auth: 'password' | 'key', privateKey: string) {
+  return auth === 'key' && privateKey ? { privateKey } : {};
+}
+
+export default function SSHManager({
+  sshProfiles,
+  onConnected,
+  onProfilesChange,
+}: SSHManagerProps) {
   const [showForm, setShowForm] = useState(false);
   const [host, setHost] = useState('');
   const [port, setPort] = useState('22');
@@ -19,25 +45,62 @@ export default function SSHManager({ sshSessions, onConnected, onDisconnected }:
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const resetForm = () => {
+    setHost('');
+    setPort('22');
+    setUsername('');
+    setAuth('password');
+    setPassword('');
+    setPrivateKey('');
+    setError(null);
+  };
+
+  const saveProfile = (profile: SavedSSHProfile) => {
+    const next = [profile, ...sshProfiles.filter((p) => p.id !== profile.id)];
+    onProfilesChange(next);
+  };
+
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!host || !username) return;
+    const trimmedHost = host.trim();
+    const trimmedUsername = username.trim();
+    if (!trimmedHost) return;
     setConnecting(true);
     setError(null);
+
+    const parsedPort = parseInt(port) || 22;
     const sessionId = `ssh-${Date.now()}`;
+    const newProfileId = profileId(trimmedHost, parsedPort, trimmedUsername || undefined, auth);
+
     try {
       await window.janet.sshConnect({
         id: sessionId,
-        host,
-        port: parseInt(port) || 22,
-        username,
+        host: trimmedHost,
+        port: parsedPort,
+        ...usernamePayload(trimmedUsername),
         auth,
-        password: auth === 'password' ? password : undefined,
-        privateKey: auth === 'key' ? privateKey : undefined,
+        ...passwordPayload(auth, password),
+        ...privateKeyPayload(auth, privateKey),
       });
-      onConnected({ id: sessionId, host, port: parseInt(port) || 22, username });
+
+      saveProfile({
+        id: newProfileId,
+        host: trimmedHost,
+        port: parsedPort,
+        username: trimmedUsername || undefined,
+        auth,
+        password: auth === 'password' && password ? password : undefined,
+        privateKey: auth === 'key' && privateKey ? privateKey : undefined,
+      });
+      onConnected({
+        id: sessionId,
+        host: trimmedHost,
+        port: parsedPort,
+        ...(trimmedUsername ? { username: trimmedUsername } : {}),
+        sshProfileId: newProfileId,
+      });
       setShowForm(false);
-      setHost(''); setPort('22'); setUsername(''); setPassword(''); setPrivateKey('');
+      resetForm();
     } catch (err: any) {
       setError(err.message || 'Connection failed');
     } finally {
@@ -45,12 +108,56 @@ export default function SSHManager({ sshSessions, onConnected, onDisconnected }:
     }
   };
 
-  const handleDisconnect = async (sessionId: string) => {
-    try {
-      await window.janet.sshDisconnect({ id: sessionId });
-      onDisconnected(sessionId);
-    } catch {}
+  const editProfile = (profile: SavedSSHProfile) => {
+    setHost(profile.host);
+    setPort(String(profile.port));
+    setUsername(profile.username ?? '');
+    setAuth(profile.auth);
+    setPassword(profile.password ?? '');
+    setPrivateKey(profile.privateKey ?? '');
+    setError(null);
+    setShowForm(true);
   };
+
+  const connectProfile = async (profile: SavedSSHProfile) => {
+    setConnecting(true);
+    setError(null);
+    const sessionId = `ssh-${Date.now()}`;
+
+    try {
+      await window.janet.sshConnect({
+        id: sessionId,
+        host: profile.host,
+        port: profile.port,
+        ...(profile.username ? { username: profile.username } : {}),
+        auth: profile.auth,
+        ...(profile.auth === 'password' && profile.password ? { password: profile.password } : {}),
+        ...(profile.auth === 'key' && profile.privateKey ? { privateKey: profile.privateKey } : {}),
+      });
+      onConnected({
+        id: sessionId,
+        host: profile.host,
+        port: profile.port,
+        ...(profile.username ? { username: profile.username } : {}),
+        sshProfileId: profile.id,
+      });
+    } catch (err: any) {
+      setError(err.message || 'Connection failed');
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const forgetProfile = (profileIdToRemove: string) => {
+    onProfilesChange(sshProfiles.filter((profile) => profile.id !== profileIdToRemove));
+  };
+
+  const handleProfileAction = (profile: SavedSSHProfile, action: string) => {
+    if (action === 'edit') editProfile(profile);
+    if (action === 'delete') forgetProfile(profile.id);
+  };
+
+  const hasSavedProfiles = sshProfiles.length > 0;
 
   return (
     <div className="ssh-manager">
@@ -138,28 +245,49 @@ export default function SSHManager({ sshSessions, onConnected, onDisconnected }:
       )}
 
       <div className="ssh-sessions">
-        {sshSessions.length === 0 ? (
-          <div className="ssh-empty">No active connections</div>
-        ) : (
-          sshSessions.map((session) => (
-            <div key={session.id} className="ssh-session-item">
-              <div className="session-info">
-                <ServerIcon size="md" className="session-icon" />
-                <div className="session-details">
-                  <span className="session-user">{session.username}</span>
-                  <span className="session-host">@{session.host}:{session.port}</span>
+        {hasSavedProfiles && (
+          <div className="ssh-list-group">
+            <div className="ssh-list-title">Saved</div>
+            {sshProfiles.map((profile) => (
+              <div key={profile.id} className="ssh-session-item">
+                <div className="session-info">
+                  <ServerIcon size="md" className="session-icon saved" />
+                  <div className="session-details">
+                    <span className="session-user">{profile.username || profile.host}</span>
+                    <span className="session-host">{profile.username ? `@${profile.host}:${profile.port}` : `:${profile.port}`}</span>
+                  </div>
+                </div>
+                <div className="session-actions">
+                  <button
+                    className="session-action-btn"
+                    onClick={() => connectProfile(profile)}
+                    disabled={connecting}
+                    title="Connect"
+                    aria-label={`Connect to ${connectionLabel(profile)}`}
+                  >
+                    <PlugIcon size="sm" />
+                  </button>
+                  <select
+                    className="session-action-select"
+                    value=""
+                    aria-label={`Actions for ${connectionLabel(profile)}`}
+                    onChange={(e) => {
+                      handleProfileAction(profile, e.target.value);
+                      e.currentTarget.value = '';
+                    }}
+                  >
+                    <option value="" disabled>More</option>
+                    <option value="edit">Edit</option>
+                    <option value="delete">Delete</option>
+                  </select>
                 </div>
               </div>
-              <button
-                className="disconnect-btn"
-                onClick={() => handleDisconnect(session.id)}
-                title="Disconnect"
-                aria-label="Disconnect"
-              >
-                <UnplugIcon size="sm" />
-              </button>
-            </div>
-          ))
+            ))}
+          </div>
+        )}
+
+        {!hasSavedProfiles && (
+          <div className="ssh-empty">No SSH connections saved</div>
         )}
       </div>
     </div>

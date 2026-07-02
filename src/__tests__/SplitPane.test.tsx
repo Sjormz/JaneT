@@ -35,45 +35,70 @@ vi.mock('../renderer/components/TerminalPane', async () => {
   function MockTerminalPane({
     termId,
     hasSession,
+    initialCwd,
+    tabType,
+    sshSessionId,
+    sshShellReady = true,
     onReady,
     onRemoved,
   }: {
     termId: string;
     hasSession?: boolean;
+    initialCwd?: string;
+    tabType?: 'local' | 'ssh';
+    sshSessionId?: string;
+    sshShellReady?: boolean;
     onReady?: (id: string) => void;
     onRemoved?: (id: string) => void;
   }) {
     React.useEffect(() => {
       mountedTermIds.push(termId);
-      if (!hasSession) {
-        window.janet.terminalCreate({ id: termId });
-      }
-      onReady?.(termId);
       return () => {
         onRemoved?.(termId);
       };
-    }, []);
+    }, [termId, onRemoved]);
+
+    React.useEffect(() => {
+      if (!hasSession) {
+        if (tabType === 'ssh') {
+          if (sshSessionId && sshShellReady) {
+            window.janet.sshCreateShell({ id: sshSessionId, termId, cols: 80, rows: 24 });
+            onReady?.(termId);
+          }
+        } else if (tabType === 'local') {
+          window.janet.terminalCreate({ id: termId, cwd: initialCwd });
+          onReady?.(termId);
+        } else {
+          onReady?.(termId);
+          return;
+        }
+      } else {
+        onReady?.(termId);
+      }
+    }, [termId, hasSession, initialCwd, tabType, sshSessionId, sshShellReady, onReady]);
 
     return <div data-testid={`terminal-${termId}`}>{termId}</div>;
   }
 
-  return { default: MockTerminalPane };
+  return { default: MockTerminalPane, disposeCachedTerminal: vi.fn() };
 });
 
 beforeEach(() => {
   mountedTermIds.length = 0;
   (window as any).janet = {
     fsGetHome: vi.fn().mockResolvedValue('/home/test'),
-    getSettings: vi.fn().mockResolvedValue({ keybindings: {} }),
+    getSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] }),
     setSettings: vi.fn().mockResolvedValue(undefined),
     terminalCreate: vi.fn().mockResolvedValue(undefined),
     terminalDestroy: vi.fn().mockResolvedValue(undefined),
     terminalWrite: vi.fn(),
     terminalResize: vi.fn(),
     onTerminalData: vi.fn(() => ({ dispose: vi.fn() })),
+    sshConnect: vi.fn().mockResolvedValue({ connected: true }),
     sshCreateShell: vi.fn().mockResolvedValue(undefined),
     sshWriteShell: vi.fn(),
     sshResizeShell: vi.fn(),
+    sshDisconnect: vi.fn().mockResolvedValue(undefined),
     checkForUpdates: vi.fn().mockResolvedValue(undefined),
   };
 });
@@ -100,10 +125,175 @@ describe('split panes in the app', () => {
 
     await waitFor(() => {
       expect(screen.getAllByTestId(/terminal-/)).toHaveLength(3);
+      expect(mountedTermIds).toHaveLength(3);
       expect(window.janet.terminalCreate).toHaveBeenCalledTimes(3);
       expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
     });
 
     expect(new Set(mountedTermIds).size).toBe(3);
   });
+
+  it('restores saved local workspace tab layouts with their cwd', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [{
+        id: 'workspace-tab-1',
+        name: 'JaneT repo',
+        type: 'local',
+        cwd: 'C:/Users/pckpr/projects/JaneT',
+        terminalCount: 3,
+        splitDirection: 'vertical',
+      }],
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(3);
+      expect(window.janet.terminalCreate).toHaveBeenCalledWith(expect.objectContaining({
+        cwd: 'C:/Users/pckpr/projects/JaneT',
+      }));
+    });
+  });
+
+  it('restores a saved session with multiple tabs, pane tree, and active tab', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [],
+      session: {
+        tabs: [
+          {
+            id: 'tab-1',
+            title: 'project',
+            type: 'local',
+            cwd: 'C:/repo',
+            root: {
+              type: 'split',
+              direction: 'vertical',
+              sizes: [1, 1],
+              children: [{ type: 'leaf' }, { type: 'leaf' }],
+            },
+          },
+          {
+            id: 'tab-2',
+            title: 'docs',
+            type: 'local',
+            root: { type: 'leaf' },
+          },
+        ],
+        activeTabId: 'tab-1',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+
+    // Active tab is `project` (2-leaf split) — we should see 2 terminals
+    // both created with the cwd saved in the session, proving the
+    // restored tree (not the starter) is what's mounted.
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2);
+    });
+
+    const projectCreates = (window.janet.terminalCreate as any).mock.calls.filter(
+      (call: any[]) => call[0]?.cwd === 'C:/repo',
+    );
+    expect(projectCreates).toHaveLength(2);
+  });
+
+  it('restores a saved SSH tab, connects it, then binds a single shell', async () => {
+    const sshProfileId = 'pckpr@box.local:22:password';
+    let resolveConnect: ((value?: unknown) => void) | undefined;
+    let connectResolved = false;
+    window.janet.sshConnect = vi.fn().mockImplementation(() => new Promise((resolve) => {
+      resolveConnect = (value?: unknown) => {
+        connectResolved = true;
+        resolve(value);
+      };
+    }));
+    window.janet.sshCreateShell = vi.fn().mockImplementation(() => {
+      expect(connectResolved).toBe(true);
+      return Promise.resolve({ connected: true });
+    });
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId,
+        host: 'box.local',
+        port: 22,
+        username: 'pckpr',
+        auth: 'password',
+        password: 'secret',
+      }],
+      session: {
+        tabs: [
+          {
+            id: 'ssh-1',
+            title: 'box',
+            type: 'ssh',
+            sshProfileId,
+            root: { type: 'leaf' },
+          },
+        ],
+        activeTabId: 'ssh-1',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+
+    // The SSH tab should mount a single terminal...
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
+    });
+
+    // The xterm mounts first, but shell creation waits until the SSH
+    // transport exists. Otherwise restored panes race ssh:createShell
+    // against ssh:connect and can fail with "session not found".
+    await waitFor(() => expect(window.janet.sshConnect).toHaveBeenCalledTimes(1));
+
+    resolveConnect?.({ connected: true });
+
+    await waitFor(() => {
+      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1);
+    });
+
+    const connectArgs = (window.janet.sshConnect as any).mock.calls[0][0] as any;
+    const shellArgs = (window.janet.sshCreateShell as any).mock.calls[0][0] as any;
+    expect(connectArgs.id).toBeTruthy();
+    expect(shellArgs.id).toBe(connectArgs.id);
+    expect(shellArgs.id).toBe(connectArgs.id);
+  });
+
+  it('persists the open tabs to settings after a tab change', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] });
+    window.janet.setSettings = vi.fn().mockResolvedValue(undefined);
+
+    render(<App />);
+
+    // Wait for the initial terminal to mount.
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
+    });
+
+    // Split right — adds a leaf to the active tab.
+    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+
+    // Wait past the 500ms debounce window for the save to flush.
+    await new Promise((r) => setTimeout(r, 700));
+
+    const calls = (window.janet.setSettings as any).mock.calls as Array<[any]>;
+    const sessionCalls = calls.filter(([arg]) => arg && Object.prototype.hasOwnProperty.call(arg, 'session'));
+    expect(sessionCalls.length).toBeGreaterThan(0);
+    const lastSession = sessionCalls.at(-1)![0].session as any;
+    expect(Array.isArray(lastSession.tabs)).toBe(true);
+    expect(lastSession.tabs.length).toBeGreaterThan(0);
+    // The active tab was split — root should now be a split, not a leaf.
+    expect(lastSession.tabs[0].root.type).toBe('split');
+  }, 5000);
 });

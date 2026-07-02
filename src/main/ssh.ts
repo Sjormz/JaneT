@@ -1,4 +1,5 @@
 import { Client, ClientChannel } from 'ssh2';
+import * as os from 'os';
 
 interface SSHConnection {
   client: Client;
@@ -6,7 +7,7 @@ interface SSHConnection {
   config: {
     host: string;
     port: number;
-    username: string;
+    username?: string;
   };
   shells: Map<string, ClientChannel>;
   pendingWrites: Map<string, string[]>;
@@ -33,7 +34,7 @@ export class SSHManager {
   async connect(id: string, config: {
     host: string;
     port: number;
-    username: string;
+    username?: string;
     auth: string;
     password?: string;
     privateKey?: string;
@@ -60,9 +61,15 @@ export class SSHManager {
       const connectConfig: any = {
         host: config.host,
         port: config.port || 22,
-        username: config.username,
+        username: normalizeUsername(config.username),
         readyTimeout: 10000,
+        tryKeyboard: true,
       };
+
+      client.on('keyboard-interactive', (_name, _instructions, _instructionsLang, prompts, finish) => {
+        const answer = config.password ?? '';
+        finish(prompts.map(() => answer));
+      });
 
       if (config.auth === 'password' && config.password) {
         connectConfig.password = config.password;
@@ -229,8 +236,8 @@ export class SSHManager {
     }
   }
 
-  listConnections(): Array<{ id: string; host: string; port: number; username: string }> {
-    const result: Array<{ id: string; host: string; port: number; username: string }> = [];
+  listConnections(): Array<{ id: string; host: string; port: number; username?: string }> {
+    const result: Array<{ id: string; host: string; port: number; username?: string }> = [];
     this.connections.forEach((conn) => {
       result.push({
         id: conn.id,
@@ -247,4 +254,14 @@ export class SSHManager {
       this.disconnect(id);
     });
   }
+}
+
+function normalizeUsername(username: string | undefined): string {
+  const trimmed = username?.trim();
+  if (trimmed) return trimmed;
+  try {
+    const osUsername = os.userInfo().username?.trim();
+    if (osUsername) return osUsername;
+  } catch {}
+  return process.env.USERNAME || process.env.USER || 'user';
 }

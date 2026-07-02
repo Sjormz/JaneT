@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   FilesIcon, SSHIcon, SourceControlIcon, SettingsIconCmp,
   MinimizeIcon, MaximizeIcon, RestoreIcon, CloseIcon,
-  CommandIcon, PlusIcon,
+  CommandIcon,
 } from '../icons';
 
 export type SidebarSection = 'files' | 'ssh' | 'git' | 'settings';
@@ -26,7 +26,6 @@ interface TitlebarProps {
   section: SidebarSection;
   onSectionChange: (s: SidebarSection) => void;
   sidebarOpen: boolean;
-  onNewTab: () => void;
   // palette
   onOpenPalette: () => void;
 }
@@ -40,7 +39,6 @@ export default function Titlebar({
   section,
   onSectionChange,
   sidebarOpen,
-  onNewTab,
   onOpenPalette,
 }: TitlebarProps) {
   const [maximized, setMaximized] = useState(false);
@@ -97,15 +95,6 @@ export default function Titlebar({
 
       {/* Right cluster: palette + window controls */}
       <div className="titlebar-right">
-        <button
-          className="titlebar-tab-new"
-          onClick={onNewTab}
-          title="New terminal"
-          aria-label="New terminal"
-        >
-          <PlusIcon size="sm" />
-        </button>
-
         <button
           className="titlebar-palette-btn"
           onClick={onOpenPalette}

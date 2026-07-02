@@ -7,6 +7,8 @@ interface ThemeSwitcherProps {
   onThemeChange: (theme: ThemeName) => void;
   fontSize: number;
   onFontSizeChange: (size: number) => void;
+  sidebarSide: 'left' | 'right';
+  onSidebarSideChange: (side: 'left' | 'right') => void;
 }
 
 export default function ThemeSwitcher({
@@ -14,6 +16,8 @@ export default function ThemeSwitcher({
   onThemeChange,
   fontSize,
   onFontSizeChange,
+  sidebarSide,
+  onSidebarSideChange,
 }: ThemeSwitcherProps) {
   return (
     <div className="theme-switcher">
@@ -49,6 +53,24 @@ export default function ThemeSwitcher({
             className="font-size-slider"
             aria-label="Font size"
           />
+        </div>
+      </div>
+
+      <div className="theme-section">
+        <label className="theme-label">Explorer Side</label>
+        <div className="theme-options">
+          <button
+            className={`theme-option ${sidebarSide === 'left' ? 'active' : ''}`}
+            onClick={() => onSidebarSideChange('left')}
+          >
+            Left
+          </button>
+          <button
+            className={`theme-option ${sidebarSide === 'right' ? 'active' : ''}`}
+            onClick={() => onSidebarSideChange('right')}
+          >
+            Right
+          </button>
         </div>
       </div>
     </div>

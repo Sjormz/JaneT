@@ -3,7 +3,8 @@ import FileExplorer from './FileExplorer';
 import SSHManager from './SSHManager';
 import GitTree from './GitTree';
 import ThemeSwitcher from './ThemeSwitcher';
-import { SessionInfo } from '../types';
+import WorkspaceTabsManager from './WorkspaceTabsManager';
+import { SavedSSHProfile, SessionInfo, WorkspaceTabPreset } from '../types';
 import { ThemeName } from '../themes';
 
 type SidebarSection = 'files' | 'ssh' | 'git' | 'settings';
@@ -11,13 +12,18 @@ type SidebarSection = 'files' | 'ssh' | 'git' | 'settings';
 interface SidebarProps {
   section: SidebarSection;
   onSectionChange: (section: SidebarSection) => void;
-  sshSessions: SessionInfo[];
+  sshProfiles: SavedSSHProfile[];
+  workspaceTabs: WorkspaceTabPreset[];
   onSSHConnected: (session: SessionInfo) => void;
-  onSSHDisconnected: (sessionId: string) => void;
+  onSSHProfilesChange: (profiles: SavedSSHProfile[]) => void;
+  onWorkspaceTabsChange: (presets: WorkspaceTabPreset[]) => void;
+  onWorkspaceTabLaunch: (preset: WorkspaceTabPreset) => void;
   currentTheme: ThemeName;
   onThemeChange: (theme: ThemeName) => void;
   fontSize: number;
   onFontSizeChange: (size: number) => void;
+  sidebarSide: 'left' | 'right';
+  onSidebarSideChange: (side: 'left' | 'right') => void;
   shortcutEditor?: React.ReactNode;
   /** Current working directory of the focused terminal (or home if none). */
   cwd: string;
@@ -31,13 +37,18 @@ interface SidebarProps {
 
 export default function Sidebar({
   section,
-  sshSessions,
+  sshProfiles,
+  workspaceTabs,
   onSSHConnected,
-  onSSHDisconnected,
+  onSSHProfilesChange,
+  onWorkspaceTabsChange,
+  onWorkspaceTabLaunch,
   currentTheme,
   onThemeChange,
   fontSize,
   onFontSizeChange,
+  sidebarSide,
+  onSidebarSideChange,
   shortcutEditor,
   cwd,
   cwdReady,
@@ -50,9 +61,9 @@ export default function Sidebar({
         {section === 'files' && <FileExplorer cwd={cwd} cwdReady={cwdReady} isRemote={isRemote} />}
         {section === 'ssh' && (
           <SSHManager
-            sshSessions={sshSessions}
+            sshProfiles={sshProfiles}
             onConnected={onSSHConnected}
-            onDisconnected={onSSHDisconnected}
+            onProfilesChange={onSSHProfilesChange}
           />
         )}
         {section === 'git' && <GitTree cwd={cwd} cwdReady={cwdReady} isRemote={isRemote} />}
@@ -63,6 +74,14 @@ export default function Sidebar({
               onThemeChange={onThemeChange}
               fontSize={fontSize}
               onFontSizeChange={onFontSizeChange}
+              sidebarSide={sidebarSide}
+              onSidebarSideChange={onSidebarSideChange}
+            />
+            <WorkspaceTabsManager
+              presets={workspaceTabs}
+              sshProfiles={sshProfiles}
+              onChange={onWorkspaceTabsChange}
+              onLaunch={onWorkspaceTabLaunch}
             />
             {shortcutEditor}
             {shellIntegrationHint}
