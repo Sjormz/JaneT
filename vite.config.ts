@@ -9,6 +9,21 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, 'dist/renderer'),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom'],
+          xterm: [
+            '@xterm/xterm',
+            '@xterm/addon-fit',
+            '@xterm/addon-search',
+            '@xterm/addon-unicode11',
+            '@xterm/addon-web-links',
+          ],
+          icons: ['lucide-react'],
+        },
+      },
+    },
   },
   resolve: {
     alias: {
