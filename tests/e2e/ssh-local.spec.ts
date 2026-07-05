@@ -219,7 +219,8 @@ async function launchAppWithLocalSsh(port: number, options: { seedSession?: bool
     } : undefined,
   }, null, 2), 'utf-8');
 
-  const electronProcess = spawn('npx', ['electron', '.'], {
+  const electronArgs = ['electron', '.', ...(process.platform === 'linux' ? ['--no-sandbox'] : [])];
+  const electronProcess = spawn('npx', electronArgs, {
     cwd: root,
     env: electronEnv({
       NODE_ENV: 'test',
