@@ -20,6 +20,24 @@ When a `v*` tag is pushed, `.github/workflows/release.yml`:
 
 The app uses `electron-updater` with GitHub Releases, so the generated `latest*.yml` assets must stay attached to the release.
 
+## Required repository ruleset
+
+The `main-approval-gate` GitHub ruleset protects `refs/heads/main`.
+
+It should require these status checks before merge:
+
+- `Verify`
+- `Analyze JavaScript/TypeScript`
+
+It should also keep these pull request rules enabled:
+
+- one approving review
+- CODEOWNERS review
+- stale review dismissal after new pushes
+- last-pusher approval requirement
+- review thread resolution
+- squash-only merging
+
 ## Recommended PR-only release flow
 
 Use this when preparing a normal release.
