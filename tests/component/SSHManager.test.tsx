@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import SSHManager from '../renderer/components/SSHManager';
-import { SavedSSHProfile, SessionInfo } from '../renderer/types';
+import SSHManager from '../../src/renderer/components/SSHManager';
+import { SavedSSHProfile, SessionInfo } from '../../src/renderer/types';
 
 const sshConnect = vi.fn();
 const sshDisconnect = vi.fn();

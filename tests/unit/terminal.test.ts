@@ -31,7 +31,7 @@ async function loadTerminalManager() {
   vi.doMock('node-pty', () => ({
     spawn: mocks.spawnMock,
   }));
-  return import('../main/terminal');
+  return import('../../src/main/terminal');
 }
 
 beforeEach(() => {

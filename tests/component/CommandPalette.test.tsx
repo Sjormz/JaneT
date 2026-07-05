@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import CommandPalette, { CommandAction } from '../renderer/components/CommandPalette';
+import CommandPalette, { CommandAction } from '../../src/renderer/components/CommandPalette';
 
 const sampleActions: CommandAction[] = [
   { id: 'new-terminal', label: 'New Terminal', category: 'Tab', shortcut: 'Ctrl+N', handler: vi.fn() },

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
 import React from 'react';
-import { KeybindingsProvider } from '../renderer/KeybindingsContext';
+import { KeybindingsProvider } from '../../src/renderer/KeybindingsContext';
 
 class MockResizeObserver {
   observe = vi.fn();
@@ -74,11 +74,11 @@ vi.mock('@xterm/addon-search', () => ({
   SearchAddon: MockAddonSearch,
 }));
 
-vi.mock('../renderer/components/SearchOverlay', () => ({
+vi.mock('../../src/renderer/components/SearchOverlay', () => ({
   default: () => null,
 }));
 
-vi.mock('../renderer/osc7', () => ({
+vi.mock('../../src/renderer/osc7', () => ({
   fileUrlToPath: vi.fn(() => null),
 }));
 
@@ -109,7 +109,7 @@ beforeEach(() => {
 });
 
 async function loadTerminalPane() {
-  return import('../renderer/components/TerminalPane');
+  return import('../../src/renderer/components/TerminalPane');
 }
 
 describe('TerminalPane SSH reinitialization', () => {

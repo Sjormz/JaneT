@@ -48,7 +48,7 @@ async function loadSSHManager() {
     return { Client: MockClient };
   });
 
-  return import('../main/ssh');
+  return import('../../src/main/ssh');
 }
 
 beforeEach(() => {

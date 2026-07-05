@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getTheme, themeNames, applyCssTheme } from '../renderer/themes';
+import { getTheme, themeNames, applyCssTheme } from '../../src/renderer/themes';
 
 describe('themes', () => {
   it('has all expected themes', () => {

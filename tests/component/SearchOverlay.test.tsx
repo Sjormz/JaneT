@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import SearchOverlay from '../renderer/components/SearchOverlay';
+import SearchOverlay from '../../src/renderer/components/SearchOverlay';
 
 describe('SearchOverlay', () => {
   const defaultProps = {

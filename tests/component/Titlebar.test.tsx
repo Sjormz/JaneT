@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import Titlebar, { SidebarSection } from '../renderer/components/Titlebar';
+import Titlebar, { SidebarSection } from '../../src/renderer/components/Titlebar';
 
 const baseProps = {
   section: 'files' as SidebarSection,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildShellInit } from '../main/shell-init';
+import { buildShellInit } from '../../src/main/shell-init';
 
 describe('buildShellInit', () => {
   describe('PowerShell', () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import WorkspaceTabsManager from '../renderer/components/WorkspaceTabsManager';
-import { SavedSSHProfile, WorkspaceTabPreset } from '../renderer/types';
+import WorkspaceTabsManager from '../../src/renderer/components/WorkspaceTabsManager';
+import { SavedSSHProfile, WorkspaceTabPreset } from '../../src/renderer/types';
 
 const sshProfiles: SavedSSHProfile[] = [{
   id: 'pckpr@box.local:22:password',

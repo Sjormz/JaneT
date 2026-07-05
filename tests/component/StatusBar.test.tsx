@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import packageJson from '../../package.json';
-import StatusBar from '../renderer/components/StatusBar';
+import StatusBar from '../../src/renderer/components/StatusBar';
 
 const defaultProps = {
   sshSessions: [],

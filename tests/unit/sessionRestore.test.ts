@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   serializePaneTree, restorePaneTree, normalizeSession,
-} from '../renderer/sessionRestore';
+} from '../../src/renderer/sessionRestore';
 import {
   createLeaf, splitPane, getAllLeafIds, countLeaves, PaneNode,
-} from '../renderer/types';
+} from '../../src/renderer/types';
 
 describe('serializePaneTree', () => {
   it('strips leaf ids and keeps titles', () => {

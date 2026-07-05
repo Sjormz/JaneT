@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import ThemeSwitcher from '../renderer/components/ThemeSwitcher';
+import ThemeSwitcher from '../../src/renderer/components/ThemeSwitcher';
 
 function renderThemeSwitcher(overrides?: Partial<React.ComponentProps<typeof ThemeSwitcher>>) {
   return render(

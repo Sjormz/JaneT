@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import SSHConnectionNotice from '../renderer/components/SSHConnectionNotice';
+import SSHConnectionNotice from '../../src/renderer/components/SSHConnectionNotice';
 
 describe('SSHConnectionNotice', () => {
   it('renders nothing when state is hidden', () => {
