@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
-import VerticalTabBar from '../renderer/components/VerticalTabBar';
-import { TabInfo } from '../renderer/types';
+import VerticalTabBar from '../../src/renderer/components/VerticalTabBar';
+import { TabInfo } from '../../src/renderer/types';
 
 const tabs: TabInfo[] = [
   {

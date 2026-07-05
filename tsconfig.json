@@ -12,12 +12,12 @@
     "declaration": false,
     "downlevelIteration": true,
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": ".",
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
     }
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "tests/**/*", "*.config.ts"],
   "exclude": ["node_modules", "dist"]
 }

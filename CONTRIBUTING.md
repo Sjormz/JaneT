@@ -21,8 +21,10 @@ npm run dev
 Before opening a pull request, run:
 
 ```bash
+npm run typecheck
 npm test
 npm run build
+npm run test:e2e
 ```
 
 If you change Electron main-process code, preload code, or release behavior, make sure the build still succeeds after your changes.
@@ -40,9 +42,11 @@ Please include:
 ## Versioning and releases
 
 - `package.json` is the source of truth for the app version.
-- Version bumps should be made with `npm version patch|minor|major`.
+- Version bumps should be made with `npm version patch|minor|major --no-git-tag-version` in a release PR.
 - Releases are tag-driven (`vX.Y.Z`) and published from GitHub Actions.
+- Release tags must be created from the merged `main` commit after the release PR lands.
 - Do not change version numbers directly in release CI.
+- See [docs/release.md](docs/release.md) for the full release checklist.
 
 ## Style
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { runCleanup } from '../renderer/components/TerminalPane';
+import { runCleanup } from '../../src/renderer/components/TerminalPane';
 
 describe('runCleanup', () => {
   it('invokes function entries with no arguments', () => {

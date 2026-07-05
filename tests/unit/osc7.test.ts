@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fileUrlToPath } from '../renderer/osc7';
+import { fileUrlToPath } from '../../src/renderer/osc7';
 
 describe('fileUrlToPath', () => {
   it('decodes a POSIX file:// URL', () => {

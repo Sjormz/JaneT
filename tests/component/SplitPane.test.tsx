@@ -1,35 +1,35 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import App from '../renderer/App';
+import App from '../../src/renderer/App';
 
 const mountedTermIds: string[] = [];
 
-vi.mock('../renderer/components/Titlebar', () => ({
+vi.mock('../../src/renderer/components/Titlebar', () => ({
   default: () => <div data-testid="titlebar" />,
 }));
-vi.mock('../renderer/components/VerticalTabBar', () => ({
+vi.mock('../../src/renderer/components/VerticalTabBar', () => ({
   default: () => <div data-testid="vertical-tab-bar" />,
 }));
-vi.mock('../renderer/components/Sidebar', () => ({
+vi.mock('../../src/renderer/components/Sidebar', () => ({
   default: () => <div data-testid="sidebar" />,
 }));
-vi.mock('../renderer/components/StatusBar', () => ({
+vi.mock('../../src/renderer/components/StatusBar', () => ({
   default: () => <div data-testid="statusbar" />,
 }));
-vi.mock('../renderer/components/CommandPalette', () => ({
+vi.mock('../../src/renderer/components/CommandPalette', () => ({
   default: () => null,
 }));
-vi.mock('../renderer/components/ShortcutEditor', () => ({
+vi.mock('../../src/renderer/components/ShortcutEditor', () => ({
   default: () => null,
 }));
-vi.mock('../renderer/components/ShellIntegrationHint', () => ({
+vi.mock('../../src/renderer/components/ShellIntegrationHint', () => ({
   default: () => null,
 }));
-vi.mock('../renderer/components/UpdateBanner', () => ({
+vi.mock('../../src/renderer/components/UpdateBanner', () => ({
   default: () => null,
 }));
-vi.mock('../renderer/components/TerminalPane', async () => {
+vi.mock('../../src/renderer/components/TerminalPane', async () => {
   const React = await import('react');
 
   function MockTerminalPane({

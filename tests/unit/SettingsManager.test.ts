@@ -37,7 +37,7 @@ describe('SettingsManager', () => {
   });
 
   it('creates with default settings when no file exists', async () => {
-    const { SettingsManager } = await import('../main/settings');
+    const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();
     const settings = manager.get();
 
@@ -50,7 +50,7 @@ describe('SettingsManager', () => {
   });
 
   it('updates settings partially', async () => {
-    const { SettingsManager } = await import('../main/settings');
+    const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();
 
     const updated = manager.set({ fontSize: 18 });
@@ -59,7 +59,7 @@ describe('SettingsManager', () => {
   });
 
   it('returns a copy, not a reference', async () => {
-    const { SettingsManager } = await import('../main/settings');
+    const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();
 
     const settings = manager.get();
@@ -71,7 +71,7 @@ describe('SettingsManager', () => {
   });
 
   it('allows setting theme to valid values', async () => {
-    const { SettingsManager } = await import('../main/settings');
+    const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();
 
     const updated = manager.set({ theme: 'dracula' });
@@ -86,7 +86,7 @@ describe('SettingsManager', () => {
       fontSize: 16,
     }));
 
-    const { SettingsManager } = await import('../main/settings');
+    const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();
     const settings = manager.get();
 
@@ -95,7 +95,7 @@ describe('SettingsManager', () => {
   });
 
   it('persists settings to file on set', async () => {
-    const { SettingsManager } = await import('../main/settings');
+    const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();
 
     manager.set({ fontSize: 20, theme: 'gruvbox' });
@@ -110,7 +110,7 @@ describe('SettingsManager', () => {
 
   it('encrypts saved SSH credentials on disk and decrypts them when loading', async () => {
     const fsMock = await import('fs');
-    const { SettingsManager } = await import('../main/settings');
+    const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();
 
     manager.set({
@@ -135,7 +135,7 @@ describe('SettingsManager', () => {
 
   it('preserves a saved session across reload', async () => {
     const fsMock = await import('fs');
-    const { SettingsManager } = await import('../main/settings');
+    const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();
 
     manager.set({
@@ -183,7 +183,7 @@ describe('SettingsManager', () => {
       // No `session` key — simulates a settings.json written by an older build.
     }));
 
-    const { SettingsManager } = await import('../main/settings');
+    const { SettingsManager } = await import('../../src/main/settings');
     const loaded = new SettingsManager().get();
     expect(loaded.session.tabs).toEqual([]);
     expect(loaded.session.activeTabId).toBeNull();

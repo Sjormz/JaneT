@@ -1,13 +1,25 @@
-// Development script - starts Vite dev server + Electron
-import { spawn, execSync } from 'child_process';
+// Development script - starts Vite dev server + Electron with renderer HMR
+// and main/preload rebuild + restart.
+import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import net from 'net';
+import http from 'http';
+import { buildElectron } from './build-electron.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const distMain = path.join(root, 'dist/main');
+const devServerUrl = process.env.JANET_DEV_SERVER_URL || 'http://127.0.0.1:5173';
+
+let viteProcess = null;
+let electronProcess = null;
+let electronLog = null;
+let mainWatcher = null;
+let isShuttingDown = false;
+let isRestartingElectron = false;
+let rebuildTimer = null;
+let rebuildInFlight = Promise.resolve();
 
 function loadDotEnv() {
   const envPath = path.join(root, '.env');
@@ -23,19 +35,142 @@ function loadDotEnv() {
   }
 }
 
-function isPortOpen(port) {
+function isHttpReady(url) {
   return new Promise((resolve) => {
-    const socket = net.createConnection({ port, host: '127.0.0.1' });
-    socket.once('connect', () => {
-      socket.destroy();
-      resolve(true);
+    const request = http.get(url, (response) => {
+      response.resume();
+      resolve(response.statusCode >= 200 && response.statusCode < 500);
     });
-    socket.once('error', () => resolve(false));
-    socket.setTimeout(500, () => {
-      socket.destroy();
+    request.once('error', () => resolve(false));
+    request.setTimeout(500, () => {
+      request.destroy();
       resolve(false);
     });
   });
+}
+
+async function waitForHttpReady(url, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isHttpReady(url)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
+function buildMainProcess() {
+  log('Building main process...');
+  buildElectron();
+  log('Main process built OK');
+}
+
+function killProcessTree(child, name) {
+  return new Promise((resolve) => {
+    if (!child || !child.pid || child.exitCode !== null || child.signalCode !== null) {
+      resolve();
+      return;
+    }
+
+    const done = () => resolve();
+    if (process.platform === 'win32') {
+      const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      killer.once('exit', done);
+      killer.once('error', () => {
+        try { child.kill(); } catch {}
+        done();
+      });
+      return;
+    }
+
+    try { child.kill('SIGTERM'); } catch {}
+    setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        try { child.kill('SIGKILL'); } catch {}
+      }
+      done();
+    }, 1000).unref?.();
+  }).then(() => log(`Stopped ${name}`));
+}
+
+function openElectronLog() {
+  if (electronLog !== null) fs.closeSync(electronLog);
+  electronLog = fs.openSync(path.join(root, '.electron.log'), 'a');
+  return electronLog;
+}
+
+function launchElectron() {
+  log('Starting Electron...');
+  electronProcess = spawn('npx', ['electron', '.'], {
+    cwd: root,
+    stdio: ['ignore', openElectronLog(), electronLog],
+    shell: true,
+    env: {
+      ...process.env,
+      NODE_ENV: 'development',
+      JANET_DEV_SERVER_URL: devServerUrl,
+    },
+  });
+  electronProcess.on('error', (e) => log(`Electron spawn error: ${e.message}`));
+  electronProcess.on('exit', (code, signal) => {
+    log(`Electron exited with code ${code}${signal ? ` signal ${signal}` : ''}`);
+    electronProcess = null;
+    if (!isRestartingElectron && !isShuttingDown) {
+      shutdown(code || 0);
+    }
+  });
+}
+
+async function restartElectron(reason) {
+  if (isShuttingDown) return;
+  log(`Restarting Electron (${reason})...`);
+  isRestartingElectron = true;
+  await killProcessTree(electronProcess, 'Electron');
+  electronProcess = null;
+  isRestartingElectron = false;
+  launchElectron();
+}
+
+function scheduleMainRebuild(reason) {
+  if (isShuttingDown) return;
+  clearTimeout(rebuildTimer);
+  rebuildTimer = setTimeout(() => {
+    rebuildInFlight = rebuildInFlight.then(async () => {
+      try {
+        log(`Main/preload change detected: ${reason}`);
+        buildMainProcess();
+        await restartElectron(reason);
+      } catch (e) {
+        log(`Main/preload rebuild FAILED: ${e.message}`);
+      }
+    });
+  }, 150);
+}
+
+function watchMainProcess() {
+  const mainDir = path.join(root, 'src/main');
+  mainWatcher = fs.watch(mainDir, { recursive: true }, (_eventType, filename) => {
+    if (!filename || !/\.(ts|js|json)$/.test(filename)) return;
+    scheduleMainRebuild(filename.replace(/\\/g, '/'));
+  });
+  mainWatcher.on('error', (e) => log(`Main watcher error: ${e.message}`));
+  log('Watching src/main for main/preload changes');
+}
+
+async function shutdown(code = 0) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  clearTimeout(rebuildTimer);
+  mainWatcher?.close();
+  await killProcessTree(electronProcess, 'Electron');
+  await killProcessTree(viteProcess, 'Vite');
+  if (electronLog !== null) {
+    try { fs.closeSync(electronLog); } catch {}
+    electronLog = null;
+  }
+  process.exit(code);
 }
 
 // All-in-one log file so we can read it from outside.
@@ -56,29 +191,18 @@ async function main() {
   log('Starting dev run');
   loadDotEnv();
 
-  // Step 1: Build main process
-  log('Building main process...');
   try {
-    execSync(`npx esbuild src/main/index.ts --bundle --platform=node --outfile=dist/main/index.js --external:electron --external:node-pty --external:ssh2 --external:ssh2-sftp-client --external:simple-git`, {
-      cwd: root,
-      stdio: 'inherit',
-    });
-    execSync(`npx esbuild src/main/preload.ts --bundle --platform=node --outfile=dist/main/preload.js --external:electron`, {
-      cwd: root,
-      stdio: 'inherit',
-    });
-    log('Main process built OK');
+    buildMainProcess();
   } catch (e) {
     log(`Main process build FAILED: ${e.message}`);
     process.exit(1);
   }
 
   // Step 2: Start Vite dev server in background unless one is already running.
-  let viteProcess = null;
-  if (await isPortOpen(5173)) {
-    log('Reusing existing Vite dev server on port 5173');
+  if (await isHttpReady(devServerUrl)) {
+    log(`Reusing existing Vite dev server at ${devServerUrl}`);
   } else {
-    log('Starting Vite dev server...');
+    log(`Starting Vite dev server at ${devServerUrl}...`);
     const viteLog = fs.openSync(path.join(root, '.vite.log'), 'w');
     viteProcess = spawn('npx', ['vite', '--config', 'vite.config.ts', '--host', '127.0.0.1'], {
       cwd: root,
@@ -86,47 +210,28 @@ async function main() {
       shell: true,
     });
     viteProcess.on('error', (e) => log(`Vite spawn error: ${e.message}`));
-    viteProcess.on('exit', (code) => log(`Vite exited with code ${code}`));
+    viteProcess.on('exit', (code, signal) => {
+      log(`Vite exited with code ${code}${signal ? ` signal ${signal}` : ''}`);
+      viteProcess = null;
+      if (!isShuttingDown) shutdown(code || 1);
+    });
 
-    const deadline = Date.now() + 10000;
-    while (!(await isPortOpen(5173)) && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    if (!(await isPortOpen(5173))) {
-      log('Vite dev server did not become ready on port 5173');
-      viteProcess.kill();
+    if (!(await waitForHttpReady(devServerUrl))) {
+      log(`Vite dev server did not become ready at ${devServerUrl}`);
+      await killProcessTree(viteProcess, 'Vite');
       process.exit(1);
     }
   }
 
-  // Step 3: Start Electron
-  log('Starting Electron...');
-  const electronLog = fs.openSync(path.join(root, '.electron.log'), 'w');
-  const electronProcess = spawn('npx', ['electron', '.'], {
-    cwd: root,
-    stdio: ['ignore', electronLog, electronLog],
-    shell: true,
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-    },
-  });
-  electronProcess.on('error', (e) => log(`Electron spawn error: ${e.message}`));
-  electronProcess.on('exit', (code) => {
-    log(`Electron exited with code ${code}`);
-    viteProcess?.kill();
-    process.exit(code || 0);
-  });
+  fs.writeFileSync(path.join(root, '.electron.log'), '');
+  watchMainProcess();
+  launchElectron();
 
-  process.on('SIGINT', () => {
-    log('SIGINT received, killing processes');
-    electronProcess.kill();
-    viteProcess?.kill();
-    process.exit(0);
-  });
+  process.on('SIGINT', () => { log('SIGINT received'); shutdown(0); });
+  process.on('SIGTERM', () => { log('SIGTERM received'); shutdown(0); });
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error('[JaneT] Error:', err);
-  process.exit(1);
+  await shutdown(1);
 });

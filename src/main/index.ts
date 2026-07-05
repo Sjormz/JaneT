@@ -58,14 +58,27 @@ function createWindow() {
 
   // In dev, load from Vite dev server
   if (process.env.NODE_ENV === 'development') {
-    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.loadURL(process.env.JANET_DEV_SERVER_URL || 'http://127.0.0.1:5173');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
 
     // Surface renderer errors and console output to the main-process
     // stdout, so when the window is blank we can see why.
-    mainWindow.webContents.on('console-message', (_event, level, message, line, source) => {
-      const tag = ['LOG', 'WARN', 'ERROR', 'INFO'][level] || `L${level}`;
-      console.log(`[renderer ${tag}] ${source}:${line}  ${message}`);
+    (mainWindow.webContents as any).on('console-message', (detailsOrLevel: any, ...legacy: any[]) => {
+      const details = typeof detailsOrLevel === 'object' && detailsOrLevel !== null
+        ? detailsOrLevel
+        : { level: detailsOrLevel, message: legacy[0] ?? '', lineNumber: legacy[1] ?? 0, sourceId: legacy[2] ?? '' };
+      const tagByLevel: Record<string, string> = {
+        log: 'LOG',
+        warning: 'WARN',
+        error: 'ERROR',
+        info: 'INFO',
+        debug: 'DEBUG',
+      };
+      const numericTags = ['LOG', 'WARN', 'ERROR', 'INFO'];
+      const tag = typeof details.level === 'number'
+        ? numericTags[details.level] || `L${details.level}`
+        : tagByLevel[details.level] || String(details.level).toUpperCase();
+      console.log(`[renderer ${tag}] ${details.sourceId}:${details.lineNumber}  ${details.message}`);
     });
     mainWindow.webContents.on('render-process-gone', (_e, details) => {
       console.error('[renderer] CRASH:', details);

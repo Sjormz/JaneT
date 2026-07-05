@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   serializePaneTree, restorePaneTree, normalizeSession,
-} from '../renderer/sessionRestore';
+} from '../../src/renderer/sessionRestore';
 import {
   createLeaf, splitPane, getAllLeafIds, countLeaves, PaneNode,
-} from '../renderer/types';
+} from '../../src/renderer/types';
 
 describe('serializePaneTree', () => {
   it('strips leaf ids and keeps titles', () => {
@@ -41,8 +41,9 @@ describe('restorePaneTree', () => {
   it('returns a fresh single leaf for a leaf input', () => {
     const restored = restorePaneTree({ type: 'leaf', title: 'shell' });
     expect(restored).not.toBeNull();
-    expect(restored!.type).toBe('leaf');
-    if (restored!.type === 'leaf') {
+    if (!restored) throw new Error('Expected restored pane tree');
+    expect(restored.type).toBe('leaf');
+    if (restored.type === 'leaf') {
       expect(restored.title).toBe('shell');
       expect(restored.id).toBeTruthy();
     }
@@ -99,8 +100,9 @@ describe('restorePaneTree', () => {
       children: [{ type: 'leaf' }, { type: 'leaf' }],
     });
     expect(restored).not.toBeNull();
-    expect(restored!.type).toBe('split');
-    if (restored!.type === 'split') {
+    if (!restored) throw new Error('Expected restored pane tree');
+    expect(restored.type).toBe('split');
+    if (restored.type === 'split') {
       expect(restored.direction).toBe('vertical');
     }
   });

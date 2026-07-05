@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   createLeaf, splitPane, removePane, findLeaf,
   getAllLeafIds, countLeaves, genId, PaneNode,
-} from '../renderer/types';
+} from '../../src/renderer/types';
 
 // Reset the counter between tests so IDs are predictable
 beforeEach(() => {
