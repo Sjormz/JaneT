@@ -91,6 +91,9 @@ npm run dist
 
 This creates platform-specific installers in the `release/` directory.
 
+Public releases are built by GitHub Actions from `vX.Y.Z` tags. See
+[docs/release.md](docs/release.md) for the release checklist.
+
 ## Coming Soon
 
 - Split panes (multiple terminals in one tab)
