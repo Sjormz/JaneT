@@ -11,16 +11,23 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       output: {
-        manualChunks: {
-          react: ['react', 'react-dom'],
-          xterm: [
-            '@xterm/xterm',
-            '@xterm/addon-fit',
-            '@xterm/addon-search',
-            '@xterm/addon-unicode11',
-            '@xterm/addon-web-links',
-          ],
-          icons: ['lucide-react'],
+        manualChunks(id) {
+          if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) {
+            return 'react';
+          }
+          if (
+            id.includes('node_modules/@xterm/xterm/') ||
+            id.includes('node_modules/@xterm/addon-fit/') ||
+            id.includes('node_modules/@xterm/addon-search/') ||
+            id.includes('node_modules/@xterm/addon-unicode11/') ||
+            id.includes('node_modules/@xterm/addon-web-links/')
+          ) {
+            return 'xterm';
+          }
+          if (id.includes('node_modules/lucide-react/')) {
+            return 'icons';
+          }
+          return undefined;
         },
       },
     },
