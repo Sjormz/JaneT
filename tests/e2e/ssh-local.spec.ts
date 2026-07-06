@@ -100,6 +100,11 @@ async function waitForShellCreateCount(eventsPath: string, count: number) {
   ).toBeGreaterThanOrEqual(count);
 }
 
+function ignoreBenignSshFixtureError(error: unknown) {
+  if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'EPIPE') return;
+  throw error;
+}
+
 function respondToShellCommand(stream: NodeJS.WritableStream & { exit?: (code: number) => void }, command: string) {
   const normalized = command.replace(/\r/g, '\n');
   const markerMatches: RegExpExecArray[] = [];
@@ -132,6 +137,7 @@ async function startLocalSshServer(): Promise<{ port: number; close: () => Promi
   });
 
   const server = new Server({ hostKeys: [privateKey] }, (client) => {
+    client.on('error', ignoreBenignSshFixtureError);
     client.on('authentication', (ctx) => {
       if (ctx.method === 'password' && ctx.username === testUsername && ctx.password === testPassword) {
         ctx.accept();
@@ -143,9 +149,11 @@ async function startLocalSshServer(): Promise<{ port: number; close: () => Promi
     client.on('ready', () => {
       client.on('session', (accept) => {
         const session = accept();
+        session.on('error', ignoreBenignSshFixtureError);
         session.on('pty', (acceptPty) => acceptPty?.());
         session.on('shell', (acceptShell) => {
           const stream = acceptShell();
+          stream.on('error', ignoreBenignSshFixtureError);
           stream.write('Welcome to JaneT local SSH fixture\r\n$ ');
           let buffer = '';
           stream.on('data', (chunk: Buffer) => {
