@@ -108,8 +108,10 @@ describe('split panes in the app', () => {
     render(<App />);
 
     const splitButton = await screen.findByRole('button', { name: /split right/i });
-    expect(mountedTermIds).toHaveLength(1);
-    expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(mountedTermIds).toHaveLength(1);
+      expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1);
+    });
 
     fireEvent.click(splitButton);
 
