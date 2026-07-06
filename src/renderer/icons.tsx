@@ -53,8 +53,16 @@ interface IconProps {
   'aria-hidden'?: boolean;
 }
 
-function withDefaults(props: IconProps & { children: React.ReactNode }) {
-  const { size = 'sm', strokeWidth = 1.75, className, style, ...rest } = props;
+type GlyphProps = {
+  size?: string | number;
+  strokeWidth?: string | number;
+  className?: string;
+  'aria-hidden'?: boolean;
+  focusable?: boolean;
+};
+
+function withDefaults(Comp: React.ComponentType<GlyphProps>, props: IconProps) {
+  const { size = 'sm', strokeWidth = 1.75, className, style } = props;
   const px = typeof size === 'number' ? size : SIZE_PX[size];
   return (
     <span
@@ -62,19 +70,19 @@ function withDefaults(props: IconProps & { children: React.ReactNode }) {
       style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1, ...style }}
       aria-hidden={props['aria-hidden'] ?? true}
     >
-      {React.cloneElement(props.children as React.ReactElement, {
-        size: px,
-        strokeWidth,
-        'aria-hidden': true,
-        focusable: false,
-      })}
+      <Comp
+        size={px}
+        strokeWidth={strokeWidth}
+        aria-hidden={true}
+        focusable={false}
+      />
     </span>
   );
 }
 
-function make(Comp: React.ComponentType<any>) {
+function make(Comp: React.ComponentType<GlyphProps>) {
   return function Icon(props: IconProps) {
-    return withDefaults({ ...props, children: <Comp /> });
+    return withDefaults(Comp, props);
   };
 }
 
