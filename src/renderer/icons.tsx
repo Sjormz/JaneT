@@ -53,15 +53,7 @@ interface IconProps {
   'aria-hidden'?: boolean;
 }
 
-type GlyphProps = {
-  size?: string | number;
-  strokeWidth?: string | number;
-  className?: string;
-  'aria-hidden'?: boolean;
-  focusable?: boolean;
-};
-
-function withDefaults(Comp: React.ComponentType<GlyphProps>, props: IconProps) {
+function withDefaults(Comp: React.ComponentType<any>, props: IconProps) {
   const { size = 'sm', strokeWidth = 1.75, className, style } = props;
   const px = typeof size === 'number' ? size : SIZE_PX[size];
   return (
@@ -80,7 +72,7 @@ function withDefaults(Comp: React.ComponentType<GlyphProps>, props: IconProps) {
   );
 }
 
-function make(Comp: React.ComponentType<GlyphProps>) {
+function make(Comp: React.ComponentType<any>) {
   return function Icon(props: IconProps) {
     return withDefaults(Comp, props);
   };

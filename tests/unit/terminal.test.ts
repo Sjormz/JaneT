@@ -103,4 +103,24 @@ describe('TerminalManager', () => {
     expect(mocks.spawnMock).toHaveBeenCalledTimes(2);
     expect(ptys[0].killed).toBe(true);
   });
+
+  it('ignores invalid and duplicate resize requests before calling node-pty', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+
+    manager.create('term-1', undefined, undefined, () => {});
+    manager.resize('term-1', 0, 24);
+    manager.resize('term-1', Number.NaN, 24);
+    manager.resize('term-1', 80, 24);
+    expect(pty.resize).not.toHaveBeenCalled();
+
+    manager.resize('term-1', 120.8, 33.2);
+    expect(pty.resize).toHaveBeenCalledWith(120, 33);
+
+    manager.resize('term-1', 120, 33);
+    expect(pty.resize).toHaveBeenCalledTimes(1);
+  });
 });
