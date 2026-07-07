@@ -4,14 +4,28 @@ import React from 'react';
 import { KeybindingsProvider } from '../../src/renderer/KeybindingsContext';
 
 class MockResizeObserver {
+  static instances: MockResizeObserver[] = [];
   observe = vi.fn();
   disconnect = vi.fn();
   unobserve = vi.fn();
+
+  constructor(private callback: ResizeObserverCallback) {
+    MockResizeObserver.instances.push(this);
+  }
+
+  trigger() {
+    this.callback([] as unknown as ResizeObserverEntry[], this as unknown as ResizeObserver);
+  }
 }
 
 class MockAddonFit {
+  static instances: MockAddonFit[] = [];
   fit = vi.fn();
   proposeDimensions = vi.fn(() => ({ cols: 80, rows: 24 }));
+
+  constructor() {
+    MockAddonFit.instances.push(this);
+  }
 }
 
 class MockAddonSearch {
@@ -19,6 +33,8 @@ class MockAddonSearch {
   findNext = vi.fn();
   findPrevious = vi.fn();
 }
+
+class MockUnicode11Addon {}
 
 class MockTerminal {
   static instances: MockTerminal[] = [];
@@ -28,6 +44,7 @@ class MockTerminal {
   parser = {
     registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })),
   };
+  unicode = { activeVersion: '6' };
   onData = vi.fn(() => ({ dispose: vi.fn() }));
   loadAddon = vi.fn();
   open = vi.fn();
@@ -66,6 +83,10 @@ vi.mock('@xterm/addon-fit', () => ({
   FitAddon: MockAddonFit,
 }));
 
+vi.mock('@xterm/addon-unicode11', () => ({
+  Unicode11Addon: MockUnicode11Addon,
+}));
+
 vi.mock('@xterm/addon-web-links', () => ({
   WebLinksAddon: class MockWebLinksAddon {},
 }));
@@ -85,6 +106,8 @@ vi.mock('../../src/renderer/osc7', () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   MockTerminal.instances = [];
+  MockAddonFit.instances = [];
+  MockResizeObserver.instances = [];
   MockTerminal.prototype.open = vi.fn(function open(this: MockTerminal, parent: HTMLElement) {
     if (!this.element) this.element = document.createElement('div');
     this.element.dataset.testid = 'xterm-dom';
@@ -188,6 +211,61 @@ describe('TerminalPane SSH reinitialization', () => {
       id: 'ssh-restored',
       termId: 'term-restored-ssh',
     }));
+  });
+
+  it('loads Unicode 11 width data before terminal output arrives', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-unicode"
+          tabType="local"
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    const term = MockTerminal.instances[0];
+    expect(term.loadAddon.mock.calls[0][0]).toBeInstanceOf(MockUnicode11Addon);
+    expect(term.unicode.activeVersion).toBe('11');
+  });
+
+  it('propagates measured window/container resizes to the local pty and repaints', async () => {
+    vi.useFakeTimers();
+    try {
+      const { default: TerminalPane } = await loadTerminalPane();
+      render(
+        <KeybindingsProvider>
+          <TerminalPane
+            termId="term-resize"
+            tabType="local"
+            onReady={vi.fn()}
+            onRemoved={vi.fn()}
+            themeName="tokyo-night"
+          />
+        </KeybindingsProvider>,
+      );
+
+      terminalResize.mockClear();
+      const term = MockTerminal.instances[0];
+      const fit = MockAddonFit.instances[0];
+      fit.proposeDimensions.mockReturnValue({ cols: 132, rows: 37 });
+      MockResizeObserver.instances[0].trigger();
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(fit.fit).toHaveBeenCalled();
+      expect(terminalResize).toHaveBeenCalledWith({ id: 'term-resize', cols: 132, rows: 37 });
+      expect(term.refresh).toHaveBeenCalledWith(0, 23);
+
+      terminalResize.mockClear();
+      MockResizeObserver.instances[0].trigger();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(terminalResize).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reuses the xterm instance when the same pane remounts during a split reshape', async () => {

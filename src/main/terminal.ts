@@ -8,7 +8,12 @@ interface TerminalInstance {
   id: string;
   /** True once we've wired the single onData forwarder for this pty. */
   wired: boolean;
+  cols: number;
+  rows: number;
 }
+
+const DEFAULT_COLS = 80;
+const DEFAULT_ROWS = 24;
 
 export class TerminalManager {
   private terminals: Map<string, TerminalInstance> = new Map();
@@ -62,8 +67,8 @@ export class TerminalManager {
 
     const pty = spawn(defaultShell, args, {
       name: 'xterm-256color',
-      cols: 80,
-      rows: 24,
+      cols: DEFAULT_COLS,
+      rows: DEFAULT_ROWS,
       cwd: defaultCwd,
       env: {
         ...process.env,
@@ -75,16 +80,21 @@ export class TerminalManager {
       },
     });
 
-    this.terminals.set(id, { pty, id, wired: !!onData });
+    this.terminals.set(id, { pty, id, wired: !!onData, cols: DEFAULT_COLS, rows: DEFAULT_ROWS });
     if (onData) pty.onData(onData);
     return pty;
   }
 
   resize(id: string, cols: number, rows: number): void {
     const term = this.terminals.get(id);
-    if (term) {
-      term.pty.resize(cols, rows);
-    }
+    if (!term) return;
+    if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return;
+    const nextCols = Math.floor(cols);
+    const nextRows = Math.floor(rows);
+    if (term.cols === nextCols && term.rows === nextRows) return;
+    term.pty.resize(nextCols, nextRows);
+    term.cols = nextCols;
+    term.rows = nextRows;
   }
 
   write(id: string, data: string): void {

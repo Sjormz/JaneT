@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 
 export function runCleanup(entries: unknown[]): void {
   for (const entry of entries) {
@@ -55,6 +56,11 @@ function repaintTerminal(term: Terminal, fitAddon: FitAddon): void {
   try { term.refresh(0, Math.max(term.rows - 1, 0)); } catch {}
 }
 
+function usableDimensions(dims: { cols: number; rows: number } | undefined | null) {
+  if (!dims || dims.cols <= 0 || dims.rows <= 0) return null;
+  return dims;
+}
+
 interface CachedTerminalPane {
   term: Terminal;
   fitAddon: FitAddon;
@@ -107,7 +113,8 @@ export default function TerminalPane({
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
-  const cleanupRef = useRef<(() => void)[]>([]);
+  const cleanupRef = useRef<unknown[]>([]);
+  const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
 
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -128,6 +135,23 @@ export default function TerminalPane({
       searchAddonRef.current.findNext('', { decorations: {} as any } as any);
     }
     termRef.current?.focus();
+  };
+
+  const syncTerminalSize = (term: Terminal, fitAddon: FitAddon) => {
+    try {
+      fitAddon.fit();
+      const dims = usableDimensions(fitAddon.proposeDimensions());
+      if (!dims) return;
+      const last = lastResizeRef.current;
+      if (last?.cols === dims.cols && last?.rows === dims.rows) return;
+      lastResizeRef.current = dims;
+      if (tabType === 'local') {
+        window.janet.terminalResize({ id: termId, cols: dims.cols, rows: dims.rows });
+      } else if (tabType === 'ssh') {
+        window.janet.sshResizeShell({ termId, ...sshDimensions(dims) });
+      }
+      term.refresh(0, Math.max(term.rows - 1, 0));
+    } catch {}
   };
 
 
@@ -180,29 +204,17 @@ export default function TerminalPane({
       });
       mountCleanup.push(resultsDisposable);
 
-      const resizeObserver = new ResizeObserver(() => {
-        try { fitAddon.fit(); } catch {}
-      });
-      resizeObserver.observe(container);
-      mountCleanup.push(() => resizeObserver.disconnect());
-
       let resizeTimer: ReturnType<typeof setTimeout> | null = null;
       const notifyResize = () => {
         if (resizeTimer) clearTimeout(resizeTimer);
         resizeTimer = setTimeout(() => {
-          try {
-            fitAddon.fit();
-            const dims = fitAddon.proposeDimensions();
-            if (dims) {
-              if (tabType === 'local') {
-                window.janet.terminalResize({ id: termId, cols: dims.cols, rows: dims.rows });
-              } else if (tabType === 'ssh') {
-                window.janet.sshResizeShell({ termId, ...sshDimensions(dims) });
-              }
-            }
-          } catch {}
-        }, 150);
+          syncTerminalSize(term, fitAddon);
+        }, 50);
       };
+
+      const resizeObserver = new ResizeObserver(notifyResize);
+      resizeObserver.observe(container);
+      mountCleanup.push(() => resizeObserver.disconnect());
 
       const initialResizeTimer = setTimeout(notifyResize, 0);
       mountCleanup.push(() => clearTimeout(initialResizeTimer));
@@ -270,9 +282,12 @@ export default function TerminalPane({
     });
 
     const fitAddon = new FitAddon();
+    const unicode11Addon = new Unicode11Addon();
     const webLinksAddon = new WebLinksAddon();
     const searchAddon = new SearchAddon();
 
+    term.loadAddon(unicode11Addon);
+    term.unicode.activeVersion = '11';
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
     term.loadAddon(searchAddon);
@@ -284,6 +299,9 @@ export default function TerminalPane({
     term.open(container);
     fitAddon.fit();
 
+    const lifetimeCleanup: unknown[] = [];
+    const mountCleanup: unknown[] = [];
+
     const disposable = term.onData((data) => {
       if (tabType === 'local') {
         window.janet.terminalWrite({ id: termId, data });
@@ -291,14 +309,14 @@ export default function TerminalPane({
         window.janet.sshWriteShell({ termId, data });
       }
     });
-    cleanupRef.current.push(() => disposable.dispose());
+    lifetimeCleanup.push(disposable);
 
     const cleanupListener = window.janet.onTerminalData(({ id, data }) => {
       if (id === termId) {
         term.write(data);
       }
     });
-    cleanupRef.current.push(cleanupListener);
+    lifetimeCleanup.push(cleanupListener);
 
     if (tabType === 'ssh' && sshSessionId && sshShellReady) {
       const dims = sshDimensions(fitAddon.proposeDimensions());
@@ -325,42 +343,32 @@ export default function TerminalPane({
     }
 
 
-    const resizeObserver = new ResizeObserver(() => {
-      try { fitAddon.fit(); } catch {}
-    });
-    resizeObserver.observe(container);
-    cleanupRef.current.push(() => resizeObserver.disconnect());
-
     let resizeTimer: any;
     const notifyResize = () => {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
-        try {
-          fitAddon.fit();
-          const dims = fitAddon.proposeDimensions();
-          if (dims) {
-            if (tabType === 'local') {
-              window.janet.terminalResize({ id: termId, cols: dims.cols, rows: dims.rows });
-            } else if (tabType === 'ssh') {
-              window.janet.sshResizeShell({ termId, ...sshDimensions(dims) });
-            }
-          }
-        } catch {}
-      }, 150);
+        syncTerminalSize(term, fitAddon);
+      }, 50);
     };
 
-    setTimeout(notifyResize, 100);
+    const resizeObserver = new ResizeObserver(notifyResize);
+    resizeObserver.observe(container);
+    mountCleanup.push(() => resizeObserver.disconnect());
+
+    const initialResizeTimer = setTimeout(notifyResize, 100);
+    mountCleanup.push(() => clearTimeout(initialResizeTimer));
+    mountCleanup.push(() => clearTimeout(resizeTimer));
 
     window.addEventListener('resize', notifyResize);
-    cleanupRef.current.push(() => window.removeEventListener('resize', notifyResize));
+    mountCleanup.push(() => window.removeEventListener('resize', notifyResize));
 
     const clickListener = () => term.focus();
     container.addEventListener('click', clickListener);
-    cleanupRef.current.push(() => container.removeEventListener('click', clickListener));
+    mountCleanup.push(() => container.removeEventListener('click', clickListener));
 
     const focusListener = () => onFocus?.(termId);
     container.addEventListener('focusin', focusListener);
-    cleanupRef.current.push(() => container.removeEventListener('focusin', focusListener));
+    mountCleanup.push(() => container.removeEventListener('focusin', focusListener));
 
     termRef.current = term;
     fitAddonRef.current = fitAddon;
@@ -384,16 +392,17 @@ export default function TerminalPane({
       if (path) reportCwd(path);
       return true;
     });
-    cleanupRef.current.push(() => oscDisposable.dispose());
-    cleanupRef.current.push(() => {
+    lifetimeCleanup.push(oscDisposable);
+    lifetimeCleanup.push(() => {
       if (cwdDebounce) clearTimeout(cwdDebounce);
     });
+    cleanupRef.current = lifetimeCleanup;
 
     terminalPaneCache.set(termId, {
       term,
       fitAddon,
       searchAddon,
-      cleanup: cleanupRef.current,
+      cleanup: lifetimeCleanup,
       tabType,
       sshSessionId,
       sshShellReady,
@@ -416,6 +425,7 @@ export default function TerminalPane({
     });
 
     return () => {
+      runCleanup(mountCleanup);
       onRemoved(termId);
       scheduleCachedTerminalDispose(termId);
       termRef.current = null;
