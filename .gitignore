@@ -9,3 +9,8 @@ test-results/
 .electron.log
 .DS_Store
 Thumbs.db
+
+# local planning artifacts
+task_plan.md
+findings.md
+progress.md

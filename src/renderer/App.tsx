@@ -13,7 +13,7 @@ import {
   SavedSSHProfile,
   WorkspaceTabPreset,
   PaneNode,
-  createPaneRoot, splitPane, removePane, getAllLeafIds, genId,
+  createPaneRoot, splitPane, removePane, resizePane, getAllLeafIds, genId,
 } from './types';
 import { ThemeName, applyCssTheme, getTheme } from './themes';
 import { KeybindingsProvider, useKeybindings } from './KeybindingsContext';
@@ -370,16 +370,25 @@ function AppInner() {
     (tabId: string) => {
       setTabs((prev) => {
         const idx = prev.findIndex((t) => t.id === tabId);
-        if (prev.length <= 1) return prev;
-        const filtered = prev.filter((t) => t.id !== tabId);
-
         const tab = prev.find((t) => t.id === tabId);
-        if (tab) {
-          for (const leafId of getAllLeafIds(tab.root)) {
-            window.janet.terminalDestroy({ id: leafId }).catch(() => {});
-          }
+        if (!tab) return prev;
+
+        for (const leafId of getAllLeafIds(tab.root)) {
+          window.janet.terminalDestroy({ id: leafId }).catch(() => {});
         }
 
+        if (prev.length <= 1) {
+          const newTab: TabInfo = {
+            id: genId('tab'),
+            title: 'terminal',
+            type: 'local',
+            root: createTabRoot('local'),
+          };
+          setActiveTabId(newTab.id);
+          return [newTab];
+        }
+
+        const filtered = prev.filter((t) => t.id !== tabId);
         if (activeTabId === tabId) {
           const newIdx = Math.min(idx, filtered.length - 1);
           setActiveTabId(filtered[newIdx].id);
@@ -419,6 +428,16 @@ function AppInner() {
       });
     },
     [updateTab, closeTab],
+  );
+
+  const handleResizePane = useCallback(
+    (tabId: string, splitId: string, dividerIndex: number, leftFraction: number) => {
+      updateTab(tabId, (tab) => ({
+        ...tab,
+        root: resizePane(tab.root, splitId, dividerIndex, leftFraction),
+      }));
+    },
+    [updateTab],
   );
 
   // === SSH session management ===
@@ -813,11 +832,8 @@ function AppInner() {
             section={sidebarSection}
             onSectionChange={setSidebarSection}
             sshProfiles={sshProfiles}
-            workspaceTabs={workspaceTabs}
             onSSHConnected={handleSSHConnected}
             onSSHProfilesChange={handleSSHProfilesChange}
-            onWorkspaceTabsChange={handleWorkspaceTabsChange}
-            onWorkspaceTabLaunch={openWorkspaceTab}
             currentTheme={currentTheme}
             onThemeChange={persistTheme}
             fontSize={fontSize}
@@ -835,9 +851,13 @@ function AppInner() {
           <VerticalTabBar
             tabs={tabs}
             activeTabId={activeTabId}
+            sshProfiles={sshProfiles}
+            workspaceTabs={workspaceTabs}
             onSelectTab={setActiveTabId}
             onCloseTab={closeTab}
             onNewTab={() => addTab('local')}
+            onWorkspaceTabsChange={handleWorkspaceTabsChange}
+            onWorkspaceTabLaunch={openWorkspaceTab}
             onRenameTab={renameTab}
             onCollapse={() => setTabsOpen(false)}
           />
@@ -862,6 +882,7 @@ function AppInner() {
             onTerminalRemoved={handleTerminalRemoved}
             onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}
             onClosePane={(leafId) => handleClosePane(activeTab.id, leafId)}
+            onResizePane={(splitId, dividerIndex, leftFraction) => handleResizePane(activeTab.id, splitId, dividerIndex, leftFraction)}
             themeName={currentTheme}
             fontSize={fontSize}
             onCwdChange={handleCwdChange}

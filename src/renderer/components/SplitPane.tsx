@@ -14,6 +14,7 @@ interface SplitPaneProps {
   onTerminalRemoved: (termId: string) => void;
   onSplitPane: (leafId: string, direction: 'horizontal' | 'vertical') => void;
   onClosePane: (leafId: string) => void;
+  onResizePane: (splitId: string, dividerIndex: number, leftFraction: number) => void;
   themeName?: string;
   fontSize?: number;
   /** Called when a terminal reports a new cwd (via OSC 7). */
@@ -103,23 +104,18 @@ function TerminalPaneLeaf({
   );
 }
 
-/** Draggable divider that directly manipulates DOM for instant resize feedback */
+/** Draggable divider that updates split sizes in React state. */
 function SplitDivider({
+  splitId,
   direction,
   dividerIndex,
+  onResize,
 }: {
+  splitId: string;
   direction: 'horizontal' | 'vertical';
   dividerIndex: number;
+  onResize: (splitId: string, dividerIndex: number, leftFraction: number) => void;
 }) {
-  const dragRef = useRef<{
-    startPos: number;
-    leftChild: HTMLElement;
-    rightChild: HTMLElement;
-    leftStartSize: number;
-    rightStartSize: number;
-    totalSize: number;
-  } | null>(null);
-
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
@@ -133,51 +129,32 @@ function SplitDivider({
       const rightChild = children[dividerIndex + 1] as HTMLElement | undefined;
       if (!leftChild || !rightChild) return;
 
-      const dim = direction === 'vertical' ? 'offsetWidth' : 'offsetHeight';
-      const clientDim = direction === 'vertical' ? 'clientX' : 'clientY';
-
-      dragRef.current = {
-        startPos: (e as unknown as MouseEvent)[clientDim],
-        leftChild,
-        rightChild,
-        leftStartSize: leftChild[dim],
-        rightStartSize: rightChild[dim],
-        totalSize: leftChild[dim] + rightChild[dim],
-      };
+      const isVertical = direction === 'vertical';
+      const clientDim = isVertical ? 'clientX' : 'clientY';
+      const startPos = (e as unknown as MouseEvent)[clientDim];
+      const leftStartSize = isVertical ? leftChild.offsetWidth : leftChild.offsetHeight;
+      const rightStartSize = isVertical ? rightChild.offsetWidth : rightChild.offsetHeight;
+      const totalSize = leftStartSize + rightStartSize;
+      const minSize = 50;
 
       const handleMouseMove = (ev: MouseEvent) => {
-        const d = dragRef.current;
-        if (!d) return;
-
         const currentPos = ev[clientDim as keyof MouseEvent] as number;
-        const delta = currentPos - d.startPos;
+        const delta = currentPos - startPos;
+        let newLeft = leftStartSize + delta;
+        let newRight = rightStartSize - delta;
 
-        // Minimum sizes (50px prevents collapsing)
-        const minSize = 50;
-        let newLeft = d.leftStartSize + delta;
-        let newRight = d.rightStartSize - delta;
-
-        // Clamp
         if (newLeft < minSize) {
           newLeft = minSize;
-          newRight = d.totalSize - minSize;
+          newRight = totalSize - minSize;
         } else if (newRight < minSize) {
           newRight = minSize;
-          newLeft = d.totalSize - minSize;
+          newLeft = totalSize - minSize;
         }
 
-        // Apply flex values based on pixel ratios
-        if (direction === 'vertical') {
-          d.leftChild.style.flex = `0 0 ${newLeft}px`;
-          d.rightChild.style.flex = `0 0 ${newRight}px`;
-        } else {
-          d.leftChild.style.flex = `0 0 ${newLeft}px`;
-          d.rightChild.style.flex = `0 0 ${newRight}px`;
-        }
+        onResize(splitId, dividerIndex, newLeft / totalSize);
       };
 
       const handleMouseUp = () => {
-        dragRef.current = null;
         document.removeEventListener('mousemove', handleMouseMove);
         document.removeEventListener('mouseup', handleMouseUp);
         document.body.style.cursor = '';
@@ -186,25 +163,24 @@ function SplitDivider({
 
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = direction === 'vertical' ? 'col-resize' : 'row-resize';
+      document.body.style.cursor = isVertical ? 'col-resize' : 'row-resize';
       document.body.style.userSelect = 'none';
     },
-    [direction, dividerIndex],
+    [direction, dividerIndex, onResize, splitId],
   );
 
-  return (
-    <div
-      className={`split-divider split-divider-${direction}`}
-      onMouseDown={handleMouseDown}
-    />
-  );
+  return <div className={`split-divider split-divider-${direction}`} onMouseDown={handleMouseDown} />;
+}
+
+function splitChildFlex(size: number | undefined) {
+  return `${size ?? 1} 1 0%`;
 }
 
 /** Recursive split pane renderer */
 export default function SplitPane(props: SplitPaneProps) {
   const {
     node, tabId, tabType, sshSessionId, onTerminalReady, onTerminalRemoved,
-    onSplitPane, onClosePane, themeName, fontSize,
+    onSplitPane, onClosePane, onResizePane, themeName, fontSize,
     onCwdChange, onTerminalFocus, initialCwd,
     hasSessionForLeaf, sshShellReady, onSshRetry,
   } = props;
@@ -240,11 +216,13 @@ export default function SplitPane(props: SplitPaneProps) {
         <React.Fragment key={child.id}>
           {i > 0 && (
             <SplitDivider
+              splitId={splitNode.id}
               direction={splitNode.direction}
               dividerIndex={i - 1}
+              onResize={onResizePane}
             />
           )}
-          <div className="split-child" style={{ flex: 1 }}>
+          <div className="split-child" style={{ flex: splitChildFlex(splitNode.sizes[i]) }}>
             <SplitPane
               node={child}
               tabId={tabId}
@@ -254,6 +232,7 @@ export default function SplitPane(props: SplitPaneProps) {
               onTerminalRemoved={onTerminalRemoved}
               onSplitPane={onSplitPane}
               onClosePane={onClosePane}
+              onResizePane={onResizePane}
               themeName={themeName}
               fontSize={fontSize}
               onCwdChange={onCwdChange}

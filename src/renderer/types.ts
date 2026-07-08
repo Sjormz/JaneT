@@ -182,6 +182,32 @@ export function removePane(tree: PaneNode, targetLeafId: string): PaneNode | nul
   return { ...tree, children: remaining, sizes: newSizes };
 }
 
+export function resizePane(
+  tree: PaneNode,
+  splitId: string,
+  dividerIndex: number,
+  leftFraction: number,
+): PaneNode {
+  if (tree.type === 'leaf') return tree;
+
+  if (tree.id === splitId) {
+    const nextSizes = tree.sizes.length === tree.children.length
+      ? [...tree.sizes]
+      : tree.children.map(() => 1);
+    const leftSize = nextSizes[dividerIndex] ?? 1;
+    const rightSize = nextSizes[dividerIndex + 1] ?? 1;
+    const pairTotal = leftSize + rightSize;
+    const clamped = Math.max(0.1, Math.min(0.9, leftFraction));
+    nextSizes[dividerIndex] = pairTotal * clamped;
+    nextSizes[dividerIndex + 1] = pairTotal * (1 - clamped);
+    return { ...tree, sizes: nextSizes };
+  }
+
+  const children = tree.children.map((child) => resizePane(child, splitId, dividerIndex, leftFraction));
+  const changed = children.some((child, i) => child !== tree.children[i]);
+  return changed ? { ...tree, children } : tree;
+}
+
 export function findLeaf(tree: PaneNode, leafId: string): TerminalLeaf | null {
   if (tree.type === 'leaf') {
     return tree.id === leafId ? tree : null;

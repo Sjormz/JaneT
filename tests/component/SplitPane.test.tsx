@@ -132,6 +132,26 @@ describe('split panes in the app', () => {
     expect(new Set(mountedTermIds).size).toBe(3);
   });
 
+  it('surviving pane fills space when sibling is closed', async () => {
+    render(<App />);
+
+    await screen.findByRole('button', { name: /split right/i });
+    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+
+    // Close the second pane
+    const closeButtons = screen.getAllByRole('button', { name: /close pane/i });
+    fireEvent.click(closeButtons[1]);
+
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+
+    // Survivor must be sized from React state, not from stale inline styles.
+    const survivor = document.querySelector<HTMLElement>('.split-child');
+    expect(survivor).toBeTruthy();
+    expect(survivor!.style.flex).toBe('1 1 0%');
+  });
+
   it('restores saved local workspace tab layouts with their cwd', async () => {
     window.janet.getSettings = vi.fn().mockResolvedValue({
       keybindings: {},

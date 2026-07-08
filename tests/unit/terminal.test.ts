@@ -5,10 +5,16 @@ import * as path from 'path';
 class MockPty {
   pid = 4242;
   onDataCallbacks: Array<(data: string) => void> = [];
+  onExitCallbacks: Array<(event: { exitCode: number; signal: number }) => void> = [];
   killed = false;
 
   onData(cb: (data: string) => void) {
     this.onDataCallbacks.push(cb);
+    return { dispose: vi.fn() };
+  }
+
+  onExit(cb: (event: { exitCode: number; signal: number }) => void) {
+    this.onExitCallbacks.push(cb);
     return { dispose: vi.fn() };
   }
 
@@ -104,6 +110,24 @@ describe('TerminalManager', () => {
 
     expect(mocks.spawnMock).toHaveBeenCalledTimes(2);
     expect(ptys[0].killed).toBe(true);
+  });
+
+  it('expands a leading tilde in cwd before spawning the shell', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+
+    manager.create('term-home', '~/projects/janet', '/bin/zsh', () => {});
+
+    expect(mocks.spawnMock).toHaveBeenCalledWith(
+      '/bin/zsh',
+      ['-i'],
+      expect.objectContaining({
+        cwd: `${os.homedir()}${path.sep}projects${path.sep}janet`,
+      }),
+    );
   });
 
   it('starts zsh with a JaneT-owned zshrc so OSC 7 hooks survive on mac', async () => {
