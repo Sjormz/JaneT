@@ -1,5 +1,6 @@
 import * as os from 'os';
 import * as path from 'path';
+import * as fs from 'fs';
 import { spawn, IPty } from 'node-pty';
 import { buildShellInit } from './shell-init';
 
@@ -14,6 +15,34 @@ interface TerminalInstance {
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+
+function shellLaunch(shell: string, init: string): { args: string[]; env: NodeJS.ProcessEnv } {
+  if (!init) return { args: [], env: {} };
+
+  const base = path.basename(shell).toLowerCase();
+  if (base === 'powershell' || base === 'powershell.exe' || base === 'pwsh' || base === 'pwsh.exe') {
+    return { args: ['-NoLogo', '-NoExit', '-Command', init], env: {} };
+  }
+
+  if (base === 'bash' || base === 'bash.exe') {
+    const rcfile = path.join(os.tmpdir(), 'janet-bashrc');
+    fs.writeFileSync(rcfile, `[ -f ~/.bashrc ] && . ~/.bashrc\n${init}\n`, 'utf8');
+    return { args: ['--rcfile', rcfile, '-i'], env: {} };
+  }
+
+  if (base === 'zsh' || base === 'zsh.exe') {
+    const zdotdir = path.join(os.tmpdir(), 'janet-zdotdir');
+    fs.mkdirSync(zdotdir, { recursive: true });
+    fs.writeFileSync(path.join(zdotdir, '.zshrc'), `[ -f ~/.zshrc ] && . ~/.zshrc\n${init}\n`, 'utf8');
+    return { args: ['-i'], env: { ZDOTDIR: zdotdir } };
+  }
+
+  if (base === 'fish' || base === 'fish.exe') {
+    return { args: ['--init-command', init], env: {} };
+  }
+
+  return { args: [], env: {} };
+}
 
 export class TerminalManager {
   private terminals: Map<string, TerminalInstance> = new Map();
@@ -48,24 +77,9 @@ export class TerminalManager {
 
     const init = buildShellInit(defaultShell);
 
-    // We pass the init as the first arg to the shell. For PowerShell
-    // that's `-NoLogo -NoExit -Command <init>`. For bash/zsh/fish it's
-    // `-c '<init>; exec <shell> -i'` so the init runs once and then we
-    // get a normal interactive session. For unknown shells, fall back
-    // to the bare spawn.
-    const base = path.basename(defaultShell).toLowerCase();
-    let args: string[] = [];
-    if (!init) {
-      args = [];
-    } else if (base === 'powershell' || base === 'powershell.exe' || base === 'pwsh' || base === 'pwsh.exe') {
-      args = ['-NoLogo', '-NoExit', '-Command', init];
-    } else if (base === 'bash' || base === 'bash.exe' || base === 'zsh' || base === 'zsh.exe' || base === 'fish' || base === 'fish.exe') {
-      // `<init>; exec <shell> -i` — eval the init, then start a fresh
-      // interactive shell that inherits the modifications.
-      args = ['-c', `${init}\nexec "${defaultShell}" -i`];
-    }
+    const launch = shellLaunch(defaultShell, init);
 
-    const pty = spawn(defaultShell, args, {
+    const pty = spawn(defaultShell, launch.args, {
       name: 'xterm-256color',
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
@@ -74,6 +88,7 @@ export class TerminalManager {
         ...process.env,
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor',
+        ...launch.env,
         // Ensure shells that key on these (some readline configs) stay
         // in their interactive mode.
         SHELL: defaultShell,

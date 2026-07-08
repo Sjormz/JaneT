@@ -31,8 +31,6 @@ interface SidebarProps {
   cwdReady: boolean;
   /** True if the active tab is an SSH tab. Sidebar shows a notice. */
   isRemote: boolean;
-  /** Shell integration copy-paste hints, shown in Settings. */
-  shellIntegrationHint?: React.ReactNode;
   onOpenLocalTabAt?: (cwd: string, title?: string) => void;
 }
 
@@ -54,7 +52,6 @@ export default function Sidebar({
   cwd,
   cwdReady,
   isRemote,
-  shellIntegrationHint,
   onOpenLocalTabAt,
 }: SidebarProps) {
   return (
@@ -93,7 +90,6 @@ export default function Sidebar({
               onLaunch={onWorkspaceTabLaunch}
             />
             {shortcutEditor}
-            {shellIntegrationHint}
           </>
         )}
       </div>

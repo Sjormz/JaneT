@@ -23,9 +23,6 @@ vi.mock('../../src/renderer/components/CommandPalette', () => ({
 vi.mock('../../src/renderer/components/ShortcutEditor', () => ({
   default: () => null,
 }));
-vi.mock('../../src/renderer/components/ShellIntegrationHint', () => ({
-  default: () => null,
-}));
 vi.mock('../../src/renderer/components/UpdateBanner', () => ({
   default: () => null,
 }));

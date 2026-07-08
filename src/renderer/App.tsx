@@ -7,7 +7,6 @@ import Sidebar from './components/Sidebar';
 import StatusBar from './components/StatusBar';
 import CommandPalette, { CommandAction } from './components/CommandPalette';
 import ShortcutEditor from './components/ShortcutEditor';
-import ShellIntegrationHint from './components/ShellIntegrationHint';
 import UpdateBanner from './components/UpdateBanner';
 import {
   TabInfo, SessionInfo,
@@ -829,7 +828,6 @@ function AppInner() {
             cwd={effectiveCwd}
             cwdReady={Boolean(effectiveCwd)}
             isRemote={activeTab.type === 'ssh'}
-            shellIntegrationHint={<ShellIntegrationHint />}
             onOpenLocalTabAt={openLocalTabAt}
           />
         )}

@@ -34,10 +34,15 @@ export function fileUrlToPath(url: string): string | null {
   const firstSlash = rest.indexOf('/');
   if (firstSlash < 0) return null; // no path
   let path = rest.slice(firstSlash + 1);
-  // Windows form: `file://host/C:/foo` — keep the drive letter.
-  if (/^[A-Za-z]:/.test(path)) {
-    return decodeURIComponent(path);
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    return null;
   }
-  // POSIX: `/path/with/slashes` — ensure leading slash, decode.
-  return '/' + decodeURIComponent(path);
+
+  // Windows form: `file://host/C:/foo` — keep the drive letter.
+  if (/^[A-Za-z]:/.test(path)) return path;
+
+  // POSIX: `/path/with/slashes` — ensure leading slash.
+  return '/' + path;
 }

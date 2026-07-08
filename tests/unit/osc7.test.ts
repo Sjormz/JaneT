@@ -31,6 +31,10 @@ describe('fileUrlToPath', () => {
     expect(fileUrlToPath('not-a-url')).toBeNull();
   });
 
+  it('rejects malformed percent encoding instead of throwing', () => {
+    expect(fileUrlToPath('file://localhost/home/%XX')).toBeNull();
+  });
+
   it('handles an empty path after the host (just a slash)', () => {
     // file://localhost/ -> the "/" is the path, so result is "/"
     expect(fileUrlToPath('file://localhost/')).toBe('/');
