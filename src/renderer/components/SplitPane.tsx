@@ -1,4 +1,4 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import {
   PaneNode, SplitNode, TerminalLeaf,
 } from '../types';
@@ -200,6 +200,22 @@ function SplitDivider({
   );
 }
 
+/** Clears drag-set inline flex when a child is added/removed so survivors fill the space. */
+function SplitContainer({ node, children }: { node: SplitNode; children: React.ReactNode }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const { children: nodeChildren } = node;
+  useEffect(() => {
+    containerRef.current
+      ?.querySelectorAll<HTMLElement>(':scope > .split-child')
+      .forEach((c) => { c.style.flex = ''; });
+  }, [nodeChildren.length]);
+  return (
+    <div ref={containerRef} className={`split-container split-${node.direction}`}>
+      {children}
+    </div>
+  );
+}
+
 /** Recursive split pane renderer */
 export default function SplitPane(props: SplitPaneProps) {
   const {
@@ -235,7 +251,7 @@ export default function SplitPane(props: SplitPaneProps) {
   const splitNode = node as SplitNode;
 
   return (
-    <div className={`split-container split-${splitNode.direction}`}>
+    <SplitContainer node={splitNode}>
       {splitNode.children.map((child, i) => (
         <React.Fragment key={child.id}>
           {i > 0 && (
@@ -266,6 +282,6 @@ export default function SplitPane(props: SplitPaneProps) {
           </div>
         </React.Fragment>
       ))}
-    </div>
+    </SplitContainer>
   );
 }

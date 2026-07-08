@@ -370,16 +370,25 @@ function AppInner() {
     (tabId: string) => {
       setTabs((prev) => {
         const idx = prev.findIndex((t) => t.id === tabId);
-        if (prev.length <= 1) return prev;
-        const filtered = prev.filter((t) => t.id !== tabId);
-
         const tab = prev.find((t) => t.id === tabId);
-        if (tab) {
-          for (const leafId of getAllLeafIds(tab.root)) {
-            window.janet.terminalDestroy({ id: leafId }).catch(() => {});
-          }
+        if (!tab) return prev;
+
+        for (const leafId of getAllLeafIds(tab.root)) {
+          window.janet.terminalDestroy({ id: leafId }).catch(() => {});
         }
 
+        if (prev.length <= 1) {
+          const newTab: TabInfo = {
+            id: genId('tab'),
+            title: 'terminal',
+            type: 'local',
+            root: createTabRoot('local'),
+          };
+          setActiveTabId(newTab.id);
+          return [newTab];
+        }
+
+        const filtered = prev.filter((t) => t.id !== tabId);
         if (activeTabId === tabId) {
           const newIdx = Math.min(idx, filtered.length - 1);
           setActiveTabId(filtered[newIdx].id);
@@ -813,11 +822,8 @@ function AppInner() {
             section={sidebarSection}
             onSectionChange={setSidebarSection}
             sshProfiles={sshProfiles}
-            workspaceTabs={workspaceTabs}
             onSSHConnected={handleSSHConnected}
             onSSHProfilesChange={handleSSHProfilesChange}
-            onWorkspaceTabsChange={handleWorkspaceTabsChange}
-            onWorkspaceTabLaunch={openWorkspaceTab}
             currentTheme={currentTheme}
             onThemeChange={persistTheme}
             fontSize={fontSize}
@@ -835,9 +841,13 @@ function AppInner() {
           <VerticalTabBar
             tabs={tabs}
             activeTabId={activeTabId}
+            sshProfiles={sshProfiles}
+            workspaceTabs={workspaceTabs}
             onSelectTab={setActiveTabId}
             onCloseTab={closeTab}
             onNewTab={() => addTab('local')}
+            onWorkspaceTabsChange={handleWorkspaceTabsChange}
+            onWorkspaceTabLaunch={openWorkspaceTab}
             onRenameTab={renameTab}
             onCollapse={() => setTabsOpen(false)}
           />

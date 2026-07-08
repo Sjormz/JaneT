@@ -43,7 +43,7 @@ describe('SSHManager', () => {
     fireEvent.change(screen.getByPlaceholderText(/host/i), { target: { value: 'box.local' } });
     fireEvent.change(screen.getByPlaceholderText(/username/i), { target: { value: 'pckpr' } });
     fireEvent.change(screen.getByPlaceholderText(/password/i), { target: { value: 'secret' } });
-    fireEvent.click(screen.getByRole('button', { name: /^connect$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /connect & save/i }));
 
     await waitFor(() => {
       expect(sshConnect).toHaveBeenCalledWith(expect.objectContaining({
@@ -80,7 +80,7 @@ describe('SSHManager', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /new connection/i }));
     fireEvent.change(screen.getByPlaceholderText(/host/i), { target: { value: 'terminal.shop' } });
-    fireEvent.click(screen.getByRole('button', { name: /^connect$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /connect & save/i }));
 
     await waitFor(() => {
       expect(sshConnect).toHaveBeenCalledWith(expect.objectContaining({
@@ -173,7 +173,7 @@ describe('SSHManager', () => {
     });
   });
 
-  it('opens saved profile details from the actions dropdown for editing', () => {
+  it('opens saved profile details from the edit action', () => {
     renderSSHManager({
       profiles: [{
         id: 'pckpr@box.local:22:password',
@@ -185,9 +185,7 @@ describe('SSHManager', () => {
       }],
     });
 
-    fireEvent.change(screen.getByRole('combobox', { name: /actions for pckpr@box.local/i }), {
-      target: { value: 'edit' },
-    });
+    fireEvent.click(screen.getByRole('button', { name: /edit pckpr@box.local:22/i }));
 
     expect(screen.getByPlaceholderText(/host/i)).toHaveValue('box.local');
     expect(screen.getByPlaceholderText(/port/i)).toHaveValue('22');
@@ -195,7 +193,7 @@ describe('SSHManager', () => {
     expect(screen.getByPlaceholderText(/password/i)).toHaveValue('secret');
   });
 
-  it('deletes saved profiles from the actions dropdown', () => {
+  it('deletes saved profiles from the delete action', () => {
     const onProfilesChange = vi.fn();
     renderSSHManager({
       onProfilesChange,
@@ -208,9 +206,7 @@ describe('SSHManager', () => {
       }],
     });
 
-    fireEvent.change(screen.getByRole('combobox', { name: /actions for pckpr@box.local/i }), {
-      target: { value: 'delete' },
-    });
+    fireEvent.click(screen.getByRole('button', { name: /delete pckpr@box.local:22/i }));
 
     expect(onProfilesChange).toHaveBeenCalledWith([]);
   });

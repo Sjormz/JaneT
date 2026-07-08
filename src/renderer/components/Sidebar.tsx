@@ -3,8 +3,7 @@ import FileExplorer from './FileExplorer';
 import SSHManager from './SSHManager';
 import GitTree from './GitTree';
 import ThemeSwitcher from './ThemeSwitcher';
-import WorkspaceTabsManager from './WorkspaceTabsManager';
-import { SavedSSHProfile, SessionInfo, WorkspaceTabPreset } from '../types';
+import { SavedSSHProfile, SessionInfo } from '../types';
 import { ThemeName } from '../themes';
 
 type SidebarSection = 'files' | 'ssh' | 'git' | 'settings';
@@ -13,11 +12,8 @@ interface SidebarProps {
   section: SidebarSection;
   onSectionChange: (section: SidebarSection) => void;
   sshProfiles: SavedSSHProfile[];
-  workspaceTabs: WorkspaceTabPreset[];
   onSSHConnected: (session: SessionInfo) => void;
   onSSHProfilesChange: (profiles: SavedSSHProfile[]) => void;
-  onWorkspaceTabsChange: (presets: WorkspaceTabPreset[]) => void;
-  onWorkspaceTabLaunch: (preset: WorkspaceTabPreset) => void;
   currentTheme: ThemeName;
   onThemeChange: (theme: ThemeName) => void;
   fontSize: number;
@@ -37,11 +33,8 @@ interface SidebarProps {
 export default function Sidebar({
   section,
   sshProfiles,
-  workspaceTabs,
   onSSHConnected,
   onSSHProfilesChange,
-  onWorkspaceTabsChange,
-  onWorkspaceTabLaunch,
   currentTheme,
   onThemeChange,
   fontSize,
@@ -82,12 +75,6 @@ export default function Sidebar({
               onFontSizeChange={onFontSizeChange}
               sidebarSide={sidebarSide}
               onSidebarSideChange={onSidebarSideChange}
-            />
-            <WorkspaceTabsManager
-              presets={workspaceTabs}
-              sshProfiles={sshProfiles}
-              onChange={onWorkspaceTabsChange}
-              onLaunch={onWorkspaceTabLaunch}
             />
             {shortcutEditor}
           </>

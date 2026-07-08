@@ -1,13 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { TabInfo } from '../types';
-import { TerminalTabIcon, LockIcon, XCloseIcon, PlusIcon, PencilIcon, CheckIcon, ChevronsLeftIcon } from '../icons';
+import { TabInfo, SavedSSHProfile, WorkspaceTabPreset } from '../types';
+import {
+  TerminalTabIcon, LockIcon, XCloseIcon, PencilIcon, TrashIcon, CheckIcon,
+  ChevronsLeftIcon, ListIcon, PlusIcon, ChevronRightIcon, ChevronDownIcon, PlugIcon,
+} from '../icons';
+import WorkspaceTabPresetForm, { sshProfileLabel } from './WorkspaceTabPresetForm';
 
 interface VerticalTabBarProps {
   tabs: TabInfo[];
   activeTabId: string;
+  sshProfiles: SavedSSHProfile[];
+  workspaceTabs: WorkspaceTabPreset[];
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onNewTab: () => void;
+  onWorkspaceTabsChange: (presets: WorkspaceTabPreset[]) => void;
+  onWorkspaceTabLaunch: (preset: WorkspaceTabPreset) => void;
   onRenameTab: (id: string, title: string) => void;
   onCollapse: () => void;
 }
@@ -24,17 +32,32 @@ function formatRelativeTime(date: Date): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function compactLocalTabLabel(cwd?: string): string {
+  if (!cwd) return 'Home';
+  const trimmed = cwd.replace(/[\\/]+$/, '');
+  if (!trimmed || trimmed === '~') return 'Home';
+  const parts = trimmed.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || trimmed;
+}
+
 export default function VerticalTabBar({
   tabs,
   activeTabId,
+  sshProfiles,
+  workspaceTabs,
   onSelectTab,
   onCloseTab,
   onNewTab,
+  onWorkspaceTabsChange,
+  onWorkspaceTabLaunch,
   onRenameTab,
   onCollapse,
 }: VerticalTabBarProps) {
   const [, setNow] = useState(Date.now());
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
+  const [workspacesExpanded, setWorkspacesExpanded] = useState(false);
+  const [showWorkspaceForm, setShowWorkspaceForm] = useState(false);
+  const [editingPreset, setEditingPreset] = useState<WorkspaceTabPreset | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
   const [tabTimestamps, setTabTimestamps] = useState<Record<string, Date>>(() => {
     const map: Record<string, Date> = {};
@@ -67,6 +90,41 @@ export default function VerticalTabBar({
     setDraftTitle('');
   };
 
+  const openWorkspaceForm = () => {
+    setEditingPreset(null);
+    setShowWorkspaceForm((visible) => !visible);
+  };
+
+  const closeWorkspaceForm = () => {
+    setShowWorkspaceForm(false);
+    setEditingPreset(null);
+  };
+
+  const editPreset = (preset: WorkspaceTabPreset) => {
+    setShowWorkspaceForm(false);
+    setEditingPreset(preset);
+  };
+
+  const closePresetEditor = () => {
+    setEditingPreset(null);
+  };
+
+  const savePreset = (preset: WorkspaceTabPreset) => {
+    if (editingPreset) {
+      onWorkspaceTabsChange(workspaceTabs.map((existing) => (existing.id === editingPreset.id ? preset : existing)));
+    } else {
+      onWorkspaceTabsChange([...workspaceTabs, preset]);
+    }
+    closeWorkspaceForm();
+    closePresetEditor();
+  };
+
+  const deletePreset = (id: string) => {
+    onWorkspaceTabsChange(workspaceTabs.filter((preset) => preset.id !== id));
+  };
+
+  const formOpen = showWorkspaceForm || editingPreset !== null;
+
   return (
     <div className="vtab-bar" aria-label="Tab list">
       <div className="vtab-header">
@@ -91,6 +149,15 @@ export default function VerticalTabBar({
           const TabIcon = isSSH ? LockIcon : TerminalTabIcon;
           const relTime = tabTimestamps[tab.id] ? formatRelativeTime(tabTimestamps[tab.id]) : 'now';
           const editing = editingTabId === tab.id;
+          const sshProfile = tab.sshProfileId
+            ? sshProfiles.find((profile) => profile.id === tab.sshProfileId)
+            : undefined;
+          const subLabel = isSSH
+            ? `SSH · ${sshProfile ? sshProfileLabel(sshProfile) : 'Saved session'}`
+            : `Local · ${compactLocalTabLabel(tab.cwd)}`;
+          const subTitle = isSSH
+            ? sshProfile ? sshProfileLabel(sshProfile) : tab.sshSessionId || 'SSH session'
+            : tab.cwd || 'Home directory';
 
           return (
             <div
@@ -124,8 +191,8 @@ export default function VerticalTabBar({
                 ) : (
                   <div className="vtab-name" title={tab.title}>{tab.title}</div>
                 )}
-                <div className="vtab-sub">
-                  {isSSH ? `SSH · ${tab.sshSessionId?.slice(0, 6) ?? ''}` : tab.cwd || 'local · pwsh'}
+                <div className="vtab-sub" title={subTitle}>
+                  {subLabel}
                 </div>
               </div>
               <div className="vtab-meta">
@@ -149,20 +216,126 @@ export default function VerticalTabBar({
                     <PencilIcon size="xs" />
                   </button>
                 )}
-                {tabs.length > 1 && (
-                  <button
-                    className="vtab-close"
-                    onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
-                    title="Close tab"
-                    aria-label="Close tab"
-                  >
-                    <XCloseIcon size="xs" />
-                  </button>
-                )}
+                <button
+                  className="vtab-close"
+                  onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
+                  title="Close tab"
+                  aria-label="Close tab"
+                >
+                  <XCloseIcon size="xs" />
+                </button>
               </div>
             </div>
           );
         })}
+      </div>
+
+      <div className="workspace-section">
+        <button
+          className="workspace-section-header"
+          onClick={() => setWorkspacesExpanded((expanded) => !expanded)}
+          title={workspacesExpanded ? 'Collapse workspaces' : 'Expand workspaces'}
+          aria-expanded={workspacesExpanded}
+          aria-label="Workspaces"
+        >
+          <span className="workspace-section-chevron">
+            {workspacesExpanded ? <ChevronDownIcon size="xs" /> : <ChevronRightIcon size="xs" />}
+          </span>
+          <span className="workspace-section-title">
+            <ListIcon size="xs" /> Workspaces
+          </span>
+          <span className="workspace-section-count">{workspaceTabs.length}</span>
+        </button>
+
+        {workspacesExpanded && (
+          <div className="workspace-section-content">
+            {formOpen && (
+              <div className="workspace-form-block">
+                <WorkspaceTabPresetForm
+                  sshProfiles={sshProfiles}
+                  preset={editingPreset ?? undefined}
+                  submitLabel={editingPreset ? 'Save Workspace Preset' : 'Add Workspace Preset'}
+                  onSubmit={savePreset}
+                />
+                <button
+                  className="workspace-form-close"
+                  onClick={editingPreset ? closePresetEditor : closeWorkspaceForm}
+                  title="Close form"
+                  aria-label="Close form"
+                >
+                  <XCloseIcon size="xs" /> Close
+                </button>
+              </div>
+            )}
+
+            {!formOpen && (
+              <button
+                className="workspace-add-btn"
+                onClick={openWorkspaceForm}
+                title="Save current workspace as preset"
+                aria-label="Save workspace preset"
+              >
+                <PlusIcon size="xs" /> Save workspace preset
+              </button>
+            )}
+
+            {workspaceTabs.length === 0 ? (
+              <div className="workspace-empty">No workspace presets saved</div>
+            ) : (
+              <div className="workspace-list">
+                {workspaceTabs.map((preset) => {
+                  const sshProfile = sshProfiles.find((profile) => profile.id === preset.sshProfileId);
+                  const subtitle = preset.type === 'ssh'
+                    ? sshProfile ? sshProfileLabel(sshProfile) : 'Missing SSH profile'
+                    : preset.cwd || 'Home directory';
+
+                  return (
+                    <div className="workspace-item" key={preset.id}>
+                      <div className="workspace-item-main">
+                        <TerminalTabIcon size="md" className="workspace-item-icon" />
+                        <div className="workspace-item-text">
+                          <span className="workspace-item-name">{preset.name}</span>
+                          <span className="workspace-item-sub">
+                            {subtitle} · {preset.terminalCount} {preset.splitDirection === 'vertical' ? 'vertical' : 'horizontal'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="session-actions">
+                        <button
+                          type="button"
+                          className="session-action-btn"
+                          onClick={() => onWorkspaceTabLaunch(preset)}
+                          title="Open workspace"
+                          aria-label={`Open ${preset.name}`}
+                        >
+                          <PlugIcon size="sm" />
+                        </button>
+                        <button
+                          type="button"
+                          className="session-action-btn"
+                          onClick={() => editPreset(preset)}
+                          title="Edit workspace preset"
+                          aria-label={`Edit ${preset.name}`}
+                        >
+                          <PencilIcon size="sm" />
+                        </button>
+                        <button
+                          type="button"
+                          className="session-action-btn danger"
+                          onClick={() => deletePreset(preset.id)}
+                          title="Delete workspace preset"
+                          aria-label={`Delete ${preset.name}`}
+                        >
+                          <TrashIcon size="sm" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { SavedSSHProfile, SessionInfo } from '../types';
-import { PlusIcon, XCloseIcon, ServerIcon, AlertIcon, PlugIcon } from '../icons';
+import { PlusIcon, XCloseIcon, ServerIcon, AlertIcon, PlugIcon, PencilIcon, TrashIcon } from '../icons';
 
 interface SSHManagerProps {
   sshProfiles: SavedSSHProfile[];
@@ -152,11 +152,6 @@ export default function SSHManager({
     onProfilesChange(sshProfiles.filter((profile) => profile.id !== profileIdToRemove));
   };
 
-  const handleProfileAction = (profile: SavedSSHProfile, action: string) => {
-    if (action === 'edit') editProfile(profile);
-    if (action === 'delete') forgetProfile(profile.id);
-  };
-
   const hasSavedProfiles = sshProfiles.length > 0;
 
   return (
@@ -239,7 +234,7 @@ export default function SSHManager({
             </div>
           )}
           <button type="submit" className="connect-btn" disabled={connecting}>
-            {connecting ? 'Connecting…' : 'Connect'}
+            {connecting ? 'Connecting…' : 'Connect & Save'}
           </button>
         </form>
       )}
@@ -259,6 +254,7 @@ export default function SSHManager({
                 </div>
                 <div className="session-actions">
                   <button
+                    type="button"
                     className="session-action-btn"
                     onClick={() => connectProfile(profile)}
                     disabled={connecting}
@@ -267,19 +263,24 @@ export default function SSHManager({
                   >
                     <PlugIcon size="sm" />
                   </button>
-                  <select
-                    className="session-action-select"
-                    value=""
-                    aria-label={`Actions for ${connectionLabel(profile)}`}
-                    onChange={(e) => {
-                      handleProfileAction(profile, e.target.value);
-                      e.currentTarget.value = '';
-                    }}
+                  <button
+                    type="button"
+                    className="session-action-btn"
+                    onClick={() => editProfile(profile)}
+                    title="Edit saved connection"
+                    aria-label={`Edit ${connectionLabel(profile)}`}
                   >
-                    <option value="" disabled>More</option>
-                    <option value="edit">Edit</option>
-                    <option value="delete">Delete</option>
-                  </select>
+                    <PencilIcon size="sm" />
+                  </button>
+                  <button
+                    type="button"
+                    className="session-action-btn danger"
+                    onClick={() => forgetProfile(profile.id)}
+                    title="Delete saved connection"
+                    aria-label={`Delete ${connectionLabel(profile)}`}
+                  >
+                    <TrashIcon size="sm" />
+                  </button>
                 </div>
               </div>
             ))}

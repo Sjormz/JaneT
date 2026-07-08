@@ -16,6 +16,16 @@ interface TerminalInstance {
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 
+function resolveTerminalCwd(cwd?: string): string {
+  if (!cwd) return os.homedir();
+  const trimmed = cwd.trim();
+  if (!trimmed || trimmed === '~') return os.homedir();
+  if (trimmed.startsWith('~/') || trimmed.startsWith('~\\')) {
+    return path.join(os.homedir(), trimmed.slice(2));
+  }
+  return trimmed;
+}
+
 function shellLaunch(shell: string, init: string): { args: string[]; env: NodeJS.ProcessEnv } {
   if (!init) return { args: [], env: {} };
 
@@ -73,7 +83,7 @@ export class TerminalManager {
     }
 
     const defaultShell = shell || (process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || '/bin/bash');
-    const defaultCwd = cwd || os.homedir();
+    const defaultCwd = resolveTerminalCwd(cwd);
 
     const init = buildShellInit(defaultShell);
 
@@ -96,6 +106,12 @@ export class TerminalManager {
     });
 
     this.terminals.set(id, { pty, id, wired: !!onData, cols: DEFAULT_COLS, rows: DEFAULT_ROWS });
+    pty.onExit(() => {
+      const current = this.terminals.get(id);
+      if (current?.pty === pty) {
+        this.terminals.delete(id);
+      }
+    });
     if (onData) pty.onData(onData);
     return pty;
   }
@@ -107,9 +123,18 @@ export class TerminalManager {
     const nextCols = Math.floor(cols);
     const nextRows = Math.floor(rows);
     if (term.cols === nextCols && term.rows === nextRows) return;
-    term.pty.resize(nextCols, nextRows);
-    term.cols = nextCols;
-    term.rows = nextRows;
+    try {
+      term.pty.resize(nextCols, nextRows);
+      term.cols = nextCols;
+      term.rows = nextRows;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('EBADF')) {
+        this.terminals.delete(id);
+        return;
+      }
+      throw error;
+    }
   }
 
   write(id: string, data: string): void {

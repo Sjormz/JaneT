@@ -132,6 +132,30 @@ describe('split panes in the app', () => {
     expect(new Set(mountedTermIds).size).toBe(3);
   });
 
+  it('clears stale flex on surviving pane when sibling is closed', async () => {
+    render(<App />);
+
+    await screen.findByRole('button', { name: /split right/i });
+    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+
+    // Simulate a drag: set inline flex on both split-child nodes
+    const splitChildren = document.querySelectorAll<HTMLElement>('.split-child');
+    splitChildren.forEach((c) => { c.style.flex = '0 0 300px'; });
+    expect(splitChildren[0].style.flex).toBe('0 0 300px');
+
+    // Close the second pane
+    const closeButtons = screen.getAllByRole('button', { name: /close pane/i });
+    fireEvent.click(closeButtons[1]);
+
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+
+    // Survivor must have its stale inline flex cleared so the CSS rule takes over
+    const survivors = document.querySelectorAll<HTMLElement>('.split-child');
+    survivors.forEach((c) => expect(c.style.flex).toBe(''));
+  });
+
   it('restores saved local workspace tab layouts with their cwd', async () => {
     window.janet.getSettings = vi.fn().mockResolvedValue({
       keybindings: {},
