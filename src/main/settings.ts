@@ -88,6 +88,8 @@ export interface AppSettings {
     terminalCount: number;
     splitDirection: 'horizontal' | 'vertical';
   }>;
+  gitWorktreeBaseDir: string;
+  gitWorktreeNameTemplate: string;
   /** Last-known open workspace. Restored on next launch. */
   session: SavedSession;
 }
@@ -113,6 +115,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   keybindings: { ...DEFAULT_KEYBINDINGS },
   sshProfiles: [],
   workspaceTabs: [],
+  gitWorktreeBaseDir: '../',
+  gitWorktreeNameTemplate: '{repo}-{branch}',
   session: EMPTY_SESSION,
 };
 
