@@ -13,7 +13,7 @@ import {
   SavedSSHProfile,
   WorkspaceTabPreset,
   PaneNode,
-  createPaneRoot, splitPane, removePane, getAllLeafIds, genId,
+  createPaneRoot, splitPane, removePane, resizePane, getAllLeafIds, genId,
 } from './types';
 import { ThemeName, applyCssTheme, getTheme } from './themes';
 import { KeybindingsProvider, useKeybindings } from './KeybindingsContext';
@@ -428,6 +428,16 @@ function AppInner() {
       });
     },
     [updateTab, closeTab],
+  );
+
+  const handleResizePane = useCallback(
+    (tabId: string, splitId: string, dividerIndex: number, leftFraction: number) => {
+      updateTab(tabId, (tab) => ({
+        ...tab,
+        root: resizePane(tab.root, splitId, dividerIndex, leftFraction),
+      }));
+    },
+    [updateTab],
   );
 
   // === SSH session management ===
@@ -872,6 +882,7 @@ function AppInner() {
             onTerminalRemoved={handleTerminalRemoved}
             onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}
             onClosePane={(leafId) => handleClosePane(activeTab.id, leafId)}
+            onResizePane={(splitId, dividerIndex, leftFraction) => handleResizePane(activeTab.id, splitId, dividerIndex, leftFraction)}
             themeName={currentTheme}
             fontSize={fontSize}
             onCwdChange={handleCwdChange}
