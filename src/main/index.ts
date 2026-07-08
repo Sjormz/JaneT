@@ -48,6 +48,7 @@ function createWindow() {
     // provides its own drag region and min/max/close controls.
     frame: false,
     titleBarStyle: 'hidden',
+    trafficLightPosition: { x: 14, y: 14 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

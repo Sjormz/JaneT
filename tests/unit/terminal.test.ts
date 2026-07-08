@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as os from 'os';
+import * as path from 'path';
 
 class MockPty {
   pid = 4242;
@@ -102,6 +104,43 @@ describe('TerminalManager', () => {
 
     expect(mocks.spawnMock).toHaveBeenCalledTimes(2);
     expect(ptys[0].killed).toBe(true);
+  });
+
+  it('starts zsh with a JaneT-owned zshrc so OSC 7 hooks survive on mac', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+
+    manager.create('term-zsh', undefined, '/bin/zsh', () => {});
+
+    expect(mocks.spawnMock).toHaveBeenCalledWith(
+      '/bin/zsh',
+      ['-i'],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          ZDOTDIR: expect.stringContaining('janet-zdotdir'),
+          SHELL: '/bin/zsh',
+        }),
+      }),
+    );
+  });
+
+  it('starts bash with --rcfile so PROMPT_COMMAND lives in the interactive shell', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+
+    manager.create('term-bash', undefined, 'bash', () => {});
+
+    expect(mocks.spawnMock.mock.calls[0][1]).toEqual([
+      '--rcfile',
+      `${os.tmpdir()}${path.sep}janet-bashrc`,
+      '-i',
+    ]);
   });
 
   it('ignores invalid and duplicate resize requests before calling node-pty', async () => {

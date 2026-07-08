@@ -42,6 +42,9 @@ export default function Titlebar({
   onOpenPalette,
 }: TitlebarProps) {
   const [maximized, setMaximized] = useState(false);
+  const [platform, setPlatform] = useState<string>(() => (
+    navigator.platform.toLowerCase().includes('mac') ? 'darwin' : ''
+  ));
 
   const refreshMaximized = useCallback(async () => {
     try { setMaximized(await window.janet.windowIsMaximized()); } catch {}
@@ -49,7 +52,11 @@ export default function Titlebar({
 
   useEffect(() => { refreshMaximized(); }, [refreshMaximized]);
 
-  // Track maximize state changes (window resize on Windows doesn't always
+  useEffect(() => {
+    window.janet.getPlatform().then(setPlatform).catch(() => {});
+  }, []);
+
+  // Track maximize state changes
   // tell us directly, so poll on focus / resize).
   useEffect(() => {
     const onResize = () => refreshMaximized();
@@ -62,7 +69,7 @@ export default function Titlebar({
   }, [refreshMaximized]);
 
   return (
-    <div className="titlebar" role="banner">
+    <div className={`titlebar ${platform === 'darwin' ? 'is-mac' : ''}`} role="banner">
       {/* Brand */}
       <div className="titlebar-brand">
         <div className="titlebar-logo" aria-hidden="true">
@@ -107,32 +114,34 @@ export default function Titlebar({
           </kbd>
         </button>
 
-        <div className="titlebar-controls">
-          <button
-            className="titlebar-control-btn"
-            onClick={() => window.janet.windowMinimize()}
-            title="Minimize"
-            aria-label="Minimize"
-          >
-            <MinimizeIcon size="md" />
-          </button>
-          <button
-            className="titlebar-control-btn"
-            onClick={() => { window.janet.windowMaximize().then(refreshMaximized); }}
-            title={maximized ? 'Restore' : 'Maximize'}
-            aria-label={maximized ? 'Restore' : 'Maximize'}
-          >
-            {maximized ? <RestoreIcon size="md" /> : <MaximizeIcon size="md" />}
-          </button>
-          <button
-            className="titlebar-control-btn close"
-            onClick={() => window.janet.windowClose()}
-            title="Close"
-            aria-label="Close"
-          >
-            <CloseIcon size="md" />
-          </button>
-        </div>
+        {platform !== 'darwin' && (
+          <div className="titlebar-controls">
+            <button
+              className="titlebar-control-btn"
+              onClick={() => window.janet.windowMinimize()}
+              title="Minimize"
+              aria-label="Minimize"
+            >
+              <MinimizeIcon size="md" />
+            </button>
+            <button
+              className="titlebar-control-btn"
+              onClick={() => { window.janet.windowMaximize().then(refreshMaximized); }}
+              title={maximized ? 'Restore' : 'Maximize'}
+              aria-label={maximized ? 'Restore' : 'Maximize'}
+            >
+              {maximized ? <RestoreIcon size="md" /> : <MaximizeIcon size="md" />}
+            </button>
+            <button
+              className="titlebar-control-btn close"
+              onClick={() => window.janet.windowClose()}
+              title="Close"
+              aria-label="Close"
+            >
+              <CloseIcon size="md" />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
