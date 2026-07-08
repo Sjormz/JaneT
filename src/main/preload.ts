@@ -64,6 +64,18 @@ const api = {
     ipcRenderer.invoke('git:findRepo', params),
   gitCheckout: (params: { repoPath: string; branch: string }) =>
     ipcRenderer.invoke('git:checkout', params),
+  gitCreateBranch: (params: { repoPath: string; branch: string; startPoint?: string; checkout?: boolean }) =>
+    ipcRenderer.invoke('git:createBranch', params),
+  gitDeleteBranch: (params: { repoPath: string; branch: string; force?: boolean }) =>
+    ipcRenderer.invoke('git:deleteBranch', params),
+  gitWorktrees: (params: { repoPath: string }) =>
+    ipcRenderer.invoke('git:worktrees', params),
+  gitAddWorktree: (params: { repoPath: string; worktreePath: string; branch: string; createBranch?: boolean; startPoint?: string }) =>
+    ipcRenderer.invoke('git:addWorktree', params),
+  gitRemoveWorktree: (params: { repoPath: string; worktreePath: string; force?: boolean }) =>
+    ipcRenderer.invoke('git:removeWorktree', params),
+  gitPruneWorktrees: (params: { repoPath: string }) =>
+    ipcRenderer.invoke('git:pruneWorktrees', params),
 
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),

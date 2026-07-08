@@ -33,6 +33,7 @@ interface SidebarProps {
   isRemote: boolean;
   /** Shell integration copy-paste hints, shown in Settings. */
   shellIntegrationHint?: React.ReactNode;
+  onOpenLocalTabAt?: (cwd: string, title?: string) => void;
 }
 
 export default function Sidebar({
@@ -54,6 +55,7 @@ export default function Sidebar({
   cwdReady,
   isRemote,
   shellIntegrationHint,
+  onOpenLocalTabAt,
 }: SidebarProps) {
   return (
     <div className="sidebar">
@@ -66,7 +68,14 @@ export default function Sidebar({
             onProfilesChange={onSSHProfilesChange}
           />
         )}
-        {section === 'git' && <GitTree cwd={cwd} cwdReady={cwdReady} isRemote={isRemote} />}
+        {section === 'git' && (
+          <GitTree
+            cwd={cwd}
+            cwdReady={cwdReady}
+            isRemote={isRemote}
+            onOpenLocalTabAt={onOpenLocalTabAt}
+          />
+        )}
         {section === 'settings' && (
           <>
             <ThemeSwitcher

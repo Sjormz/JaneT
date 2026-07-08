@@ -28,6 +28,7 @@ import {
   Palette, Sun, Moon, Monitor,
   // Misc
   MoreHorizontal, Loader2, AlertCircle, Check,
+  List,
 } from 'lucide-react';
 
 export type IconSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
@@ -147,6 +148,7 @@ export const PlugIcon = make(Plug);
 export const UnplugIcon = make(Unplug);
 export const ServerIcon = make(Server);
 export const MoreIcon = make(MoreHorizontal);
+export const ListIcon = make(List);
 
 // Command palette
 export const CommandIcon = make(Command);

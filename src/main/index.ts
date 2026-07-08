@@ -232,6 +232,30 @@ function registerIpcHandlers() {
     return await gitManager.checkout(repoPath, branch);
   });
 
+  electron.ipcMain.handle('git:createBranch', async (event, { repoPath, branch, startPoint, checkout }) => {
+    return await gitManager.createBranch(repoPath, branch, startPoint, checkout);
+  });
+
+  electron.ipcMain.handle('git:deleteBranch', async (event, { repoPath, branch, force }) => {
+    return await gitManager.deleteBranch(repoPath, branch, force);
+  });
+
+  electron.ipcMain.handle('git:worktrees', async (event, { repoPath }) => {
+    return await gitManager.worktrees(repoPath);
+  });
+
+  electron.ipcMain.handle('git:addWorktree', async (event, { repoPath, worktreePath, branch, createBranch, startPoint }) => {
+    return await gitManager.addWorktree(repoPath, worktreePath, branch, createBranch, startPoint);
+  });
+
+  electron.ipcMain.handle('git:removeWorktree', async (event, { repoPath, worktreePath, force }) => {
+    return await gitManager.removeWorktree(repoPath, worktreePath, force);
+  });
+
+  electron.ipcMain.handle('git:pruneWorktrees', async (event, { repoPath }) => {
+    return await gitManager.pruneWorktrees(repoPath);
+  });
+
   // === Settings IPC ===
   electron.ipcMain.handle('settings:get', () => {
     return settingsManager.get();

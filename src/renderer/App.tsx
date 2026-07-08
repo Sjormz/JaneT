@@ -20,6 +20,7 @@ import { ThemeName, applyCssTheme, getTheme } from './themes';
 import { KeybindingsProvider, useKeybindings } from './KeybindingsContext';
 import { KeybindingAction } from './keybindings';
 import { serializePaneTree, restorePaneTree, normalizeSession, SavedSession } from './sessionRestore';
+import { GitStatusSummary, summarizeGitStatus } from './gitStatus';
 
 function createTabRoot(type: 'local' | 'ssh'): PaneNode {
   return createPaneRoot(type, 1, 'vertical');
@@ -77,6 +78,7 @@ function AppInner() {
   // Cached home directory — used as the fallback cwd before any OSC 7
   // has arrived or for SSH tabs.
   const [homeDir, setHomeDir] = useState<string>('');
+  const [gitStatus, setGitStatus] = useState<GitStatusSummary | null>(null);
   useEffect(() => {
     try { window.janet.fsGetHome().then(setHomeDir).catch(() => {}); } catch {}
   }, []);
@@ -342,14 +344,17 @@ function AppInner() {
       sshSessionId?: string,
       sshShellReady = type !== 'ssh',
       sshProfileId?: string,
+      cwd?: string,
+      title?: string,
     ) => {
       const tab: TabInfo = {
         id: genId('tab'),
-        title: type === 'local' ? `terminal ${tabs.length + 1}` : `ssh-${sshSessionId?.slice(0, 6)}`,
+        title: title || (type === 'local' ? `terminal ${tabs.length + 1}` : `ssh-${sshSessionId?.slice(0, 6)}`),
         type,
         sshSessionId,
         sshProfileId,
         sshShellReady,
+        cwd,
         root: createTabRoot(type),
       };
       setTabs((prev) => [...prev, tab]);
@@ -357,6 +362,10 @@ function AppInner() {
     },
     [tabs.length],
   );
+
+  const openLocalTabAt = useCallback((cwd: string, title?: string) => {
+    addTab('local', undefined, true, undefined, cwd, title);
+  }, [addTab]);
 
   const closeTab = useCallback(
     (tabId: string) => {
@@ -609,6 +618,33 @@ function AppInner() {
     return homeDir;
   }, [activeTab, sidebarTerminalId, cwdByTerminal, homeDir]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!effectiveCwd || activeTab.type === 'ssh') {
+      setGitStatus(null);
+      return () => { cancelled = true; };
+    }
+
+    if (!window.janet.gitFindRepo || !window.janet.gitStatus) {
+      setGitStatus(null);
+      return () => { cancelled = true; };
+    }
+
+    window.janet.gitFindRepo({ startPath: effectiveCwd }).then(async (repoPath) => {
+      if (cancelled || !repoPath) {
+        if (!cancelled) setGitStatus(null);
+        return;
+      }
+      const status = await window.janet.gitStatus({ repoPath });
+      if (!cancelled) setGitStatus(status ? summarizeGitStatus(repoPath, status) : null);
+    }).catch(() => {
+      if (!cancelled) setGitStatus(null);
+    });
+
+    return () => { cancelled = true; };
+  }, [activeTab.type, effectiveCwd]);
+
   // === Keyboard shortcuts via keybindings context ===
   // Register global action handlers
   useEffect(() => {
@@ -794,6 +830,7 @@ function AppInner() {
             cwdReady={Boolean(effectiveCwd)}
             isRemote={activeTab.type === 'ssh'}
             shellIntegrationHint={<ShellIntegrationHint />}
+            onOpenLocalTabAt={openLocalTabAt}
           />
         )}
         {tabsOpen ? (
@@ -841,6 +878,7 @@ function AppInner() {
         sshSessions={sshSessions}
         activeTerminalsCount={activeTerminals.size}
         cwd={effectiveCwd}
+        gitStatus={gitStatus}
         isRemote={activeTab.type === 'ssh'}
         remoteHost={activeTab.type === 'ssh'
           ? sshSessions.find((s) => s.id === activeTab.sshSessionId)?.host
