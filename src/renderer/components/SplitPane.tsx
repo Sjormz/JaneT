@@ -133,7 +133,7 @@ function TerminalPaneLeaf({
           fontSize={fontSize}
           onCwdChange={onCwdChange}
           onFocus={onTerminalFocus}
-          initialCwd={initialCwd}
+          initialCwd={leaf.cwd ?? initialCwd}
           hasSession={hasSessionForLeaf?.(leaf.id)}
           sshShellReady={sshShellReady}
           onSshRetry={onSshRetry}

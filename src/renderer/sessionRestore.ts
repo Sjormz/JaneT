@@ -3,6 +3,7 @@ import { PaneNode, TerminalLeaf, SplitNode, genId } from './types';
 export interface SavedPaneLeaf {
   type: 'leaf';
   title?: string;
+  cwd?: string;
 }
 
 export interface SavedPaneSplit {
@@ -34,15 +35,15 @@ export interface SavedSession {
 const VALID_SECTIONS = new Set(['files', 'ssh', 'git', 'settings']);
 
 /** Strip runtime-only ids and emit a portable, JSON-safe tree. */
-export function serializePaneTree(node: PaneNode): SavedPaneNode {
+export function serializePaneTree(node: PaneNode, cwdByTerminal: Record<string, string> = {}): SavedPaneNode {
   if (node.type === 'leaf') {
-    return { type: 'leaf', title: node.title };
+    return { type: 'leaf', title: node.title, cwd: cwdByTerminal[node.id] ?? node.cwd };
   }
   return {
     type: 'split',
     direction: node.direction,
     sizes: [...node.sizes],
-    children: node.children.map(serializePaneTree),
+    children: node.children.map((child) => serializePaneTree(child, cwdByTerminal)),
   };
 }
 
@@ -61,6 +62,7 @@ export function restorePaneTree(saved: unknown, prefix: 'term' | 'split' = 'term
       id: genId(prefix),
       type: 'leaf',
       title: typeof node.title === 'string' ? node.title : undefined,
+      cwd: typeof (node as SavedPaneLeaf).cwd === 'string' ? (node as SavedPaneLeaf).cwd : undefined,
     };
     return leaf;
   }

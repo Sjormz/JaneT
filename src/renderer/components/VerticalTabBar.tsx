@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { TabInfo, SavedSSHProfile, WorkspaceTabPreset } from '../types';
 import {
   TerminalTabIcon, LockIcon, XCloseIcon, PencilIcon, TrashIcon, CheckIcon,
@@ -16,6 +17,7 @@ interface VerticalTabBarProps {
   onNewTab: () => void;
   onWorkspaceTabsChange: (presets: WorkspaceTabPreset[]) => void;
   onWorkspaceTabLaunch: (preset: WorkspaceTabPreset) => void;
+  onSaveWorkspaceTab: (tab: TabInfo) => void;
   onRenameTab: (id: string, title: string) => void;
   onCollapse: () => void;
 }
@@ -50,6 +52,7 @@ export default function VerticalTabBar({
   onNewTab,
   onWorkspaceTabsChange,
   onWorkspaceTabLaunch,
+  onSaveWorkspaceTab,
   onRenameTab,
   onCollapse,
 }: VerticalTabBarProps) {
@@ -59,6 +62,8 @@ export default function VerticalTabBar({
   const [showWorkspaceForm, setShowWorkspaceForm] = useState(false);
   const [editingPreset, setEditingPreset] = useState<WorkspaceTabPreset | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
+  const [tabMenu, setTabMenu] = useState<{ tab: TabInfo; x: number; y: number } | null>(null);
+  const tabMenuRef = useRef<HTMLDivElement>(null);
   const [tabTimestamps, setTabTimestamps] = useState<Record<string, Date>>(() => {
     const map: Record<string, Date> = {};
     for (const tab of tabs) map[tab.id] = new Date();
@@ -78,6 +83,15 @@ export default function VerticalTabBar({
     });
   }, [tabs]);
 
+  useEffect(() => {
+    if (!tabMenu) return;
+    const closeOnOutsidePointerDown = (event: PointerEvent) => {
+      if (!tabMenuRef.current?.contains(event.target as Node)) setTabMenu(null);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointerDown, true);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointerDown, true);
+  }, [tabMenu]);
+
   const startRename = (tab: TabInfo) => {
     setEditingTabId(tab.id);
     setDraftTitle(tab.title);
@@ -88,6 +102,11 @@ export default function VerticalTabBar({
     onRenameTab(editingTabId, draftTitle.trim());
     setEditingTabId(null);
     setDraftTitle('');
+  };
+
+  const openTabMenu = (event: React.MouseEvent, tab: TabInfo) => {
+    event.preventDefault();
+    setTabMenu({ tab, x: event.clientX, y: event.clientY });
   };
 
   const openWorkspaceForm = () => {
@@ -123,7 +142,7 @@ export default function VerticalTabBar({
     onWorkspaceTabsChange(workspaceTabs.filter((preset) => preset.id !== id));
   };
 
-  const formOpen = showWorkspaceForm || editingPreset !== null;
+  const workspaceModalOpen = showWorkspaceForm || editingPreset !== null;
 
   return (
     <div className="vtab-bar" aria-label="Tab list">
@@ -166,6 +185,7 @@ export default function VerticalTabBar({
               tabIndex={0}
               className={`vtab-item ${isActive ? 'active' : ''} ${isSSH ? 'ssh' : ''}`}
               onClick={() => !editing && onSelectTab(tab.id)}
+              onContextMenu={(event) => !editing && openTabMenu(event, tab)}
               onKeyDown={(e) => {
                 if (!editing && (e.key === 'Enter' || e.key === ' ')) {
                   e.preventDefault();
@@ -197,7 +217,7 @@ export default function VerticalTabBar({
               </div>
               <div className="vtab-meta">
                 <span className="vtab-time">{relTime}</span>
-                {editing ? (
+                {editing && (
                   <button
                     className="vtab-action"
                     onClick={(e) => { e.stopPropagation(); saveRename(); }}
@@ -205,15 +225,6 @@ export default function VerticalTabBar({
                     aria-label="Save tab name"
                   >
                     <CheckIcon size="xs" />
-                  </button>
-                ) : (
-                  <button
-                    className="vtab-action"
-                    onClick={(e) => { e.stopPropagation(); startRename(tab); }}
-                    title="Rename tab"
-                    aria-label="Rename tab"
-                  >
-                    <PencilIcon size="xs" />
                   </button>
                 )}
                 <button
@@ -249,35 +260,14 @@ export default function VerticalTabBar({
 
         {workspacesExpanded && (
           <div className="workspace-section-content">
-            {formOpen && (
-              <div className="workspace-form-block">
-                <WorkspaceTabPresetForm
-                  sshProfiles={sshProfiles}
-                  preset={editingPreset ?? undefined}
-                  submitLabel={editingPreset ? 'Save Workspace Preset' : 'Add Workspace Preset'}
-                  onSubmit={savePreset}
-                />
-                <button
-                  className="workspace-form-close"
-                  onClick={editingPreset ? closePresetEditor : closeWorkspaceForm}
-                  title="Close form"
-                  aria-label="Close form"
-                >
-                  <XCloseIcon size="xs" /> Close
-                </button>
-              </div>
-            )}
-
-            {!formOpen && (
-              <button
-                className="workspace-add-btn"
-                onClick={openWorkspaceForm}
-                title="Save current workspace as preset"
-                aria-label="Save workspace preset"
-              >
-                <PlusIcon size="xs" /> Save workspace preset
-              </button>
-            )}
+            <button
+              className="workspace-add-btn"
+              onClick={openWorkspaceForm}
+              title="Save current workspace as preset"
+              aria-label="Save workspace preset"
+            >
+              <PlusIcon size="xs" /> Save workspace preset
+            </button>
 
             {workspaceTabs.length === 0 ? (
               <div className="workspace-empty">No workspace presets saved</div>
@@ -310,6 +300,7 @@ export default function VerticalTabBar({
                         >
                           <PlugIcon size="sm" />
                         </button>
+
                         <button
                           type="button"
                           className="session-action-btn"
@@ -319,6 +310,7 @@ export default function VerticalTabBar({
                         >
                           <PencilIcon size="sm" />
                         </button>
+
                         <button
                           type="button"
                           className="session-action-btn danger"
@@ -337,6 +329,47 @@ export default function VerticalTabBar({
           </div>
         )}
       </div>
+      {tabMenu && createPortal(
+        <div
+          ref={tabMenuRef}
+          className="vtab-context-menu"
+          role="menu"
+          style={{ left: tabMenu.x, top: tabMenu.y }}
+        >
+          <button role="menuitem" onClick={() => { startRename(tabMenu.tab); setTabMenu(null); }}>
+            Rename tab
+          </button>
+          <button role="menuitem" onClick={() => { onSaveWorkspaceTab(tabMenu.tab); setTabMenu(null); }}>
+            Save as workspace
+          </button>
+        </div>,
+        document.body,
+      )}
+      {workspaceModalOpen && createPortal(
+        <div
+          className="workspace-modal-overlay"
+          role="presentation"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) closeWorkspaceForm();
+          }}
+        >
+          <div className="workspace-modal" role="dialog" aria-modal="true" aria-labelledby="workspace-modal-title">
+            <div className="workspace-modal-header">
+              <h2 id="workspace-modal-title">{editingPreset ? 'Edit Workspace Preset' : 'Create Workspace Preset'}</h2>
+              <button onClick={closeWorkspaceForm} title="Close" aria-label="Close workspace preset dialog">
+                <XCloseIcon size="sm" />
+              </button>
+            </div>
+            <WorkspaceTabPresetForm
+              sshProfiles={sshProfiles}
+              preset={editingPreset ?? undefined}
+              submitLabel={editingPreset ? 'Save Workspace Preset' : 'Add Workspace Preset'}
+              onSubmit={savePreset}
+            />
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

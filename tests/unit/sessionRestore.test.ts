@@ -7,6 +7,26 @@ import {
 } from '../../src/renderer/types';
 
 describe('serializePaneTree', () => {
+  it('keeps each local pane cwd in the portable tree', () => {
+    const tree: PaneNode = {
+      id: 'split-1',
+      type: 'split',
+      direction: 'vertical',
+      sizes: [1, 1],
+      children: [{ id: 'term-a', type: 'leaf' }, { id: 'term-b', type: 'leaf' }],
+    };
+
+    expect(serializePaneTree(tree, { 'term-a': 'C:/repo/api', 'term-b': 'C:/repo/web' })).toEqual({
+      type: 'split',
+      direction: 'vertical',
+      sizes: [1, 1],
+      children: [
+        { type: 'leaf', cwd: 'C:/repo/api' },
+        { type: 'leaf', cwd: 'C:/repo/web' },
+      ],
+    });
+  });
+
   it('strips leaf ids and keeps titles', () => {
     const leaf = createLeaf();
     const tree = splitPane(leaf, leaf.id, 'vertical');

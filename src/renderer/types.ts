@@ -2,6 +2,7 @@ export interface TerminalLeaf {
   id: string;
   type: 'leaf';
   title?: string;
+  cwd?: string;
 }
 
 export interface SplitNode {
@@ -18,6 +19,7 @@ export interface TabInfo {
   id: string;
   title: string;
   type: 'local' | 'ssh';
+  workspaceId?: string;
   sshSessionId?: string;
   sshProfileId?: string;
   sshShellReady?: boolean;
@@ -49,6 +51,8 @@ export interface WorkspaceTabPreset {
   type: 'local' | 'ssh';
   cwd?: string;
   sshProfileId?: string;
+  /** Portable saved pane tree. Legacy presets omit this and use count/direction. */
+  root?: import('./sessionRestore').SavedPaneNode;
   terminalCount: number;
   splitDirection: 'horizontal' | 'vertical';
 }

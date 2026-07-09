@@ -242,7 +242,7 @@ function AppInner() {
         type: tab.type,
         cwd: tab.cwd,
         sshProfileId: tab.sshProfileId,
-        root: serializePaneTree(tab.root),
+        root: serializePaneTree(tab.root, cwdByTerminal),
       }));
       const session: SavedSession = {
         tabs: savedTabs,
@@ -524,15 +524,40 @@ function AppInner() {
     try { window.janet.setSettings({ workspaceTabs: presets }).catch(() => {}); } catch {}
   }, []);
 
+  const saveWorkspaceTab = useCallback((tab: TabInfo) => {
+    const workspaceId = tab.workspaceId ?? genId('workspace');
+    const preset: WorkspaceTabPreset = {
+      id: workspaceId,
+      name: tab.title,
+      type: tab.type,
+      cwd: tab.type === 'local' ? tab.cwd : undefined,
+      sshProfileId: tab.sshProfileId,
+      root: serializePaneTree(tab.root, cwdByTerminal),
+      terminalCount: getAllLeafIds(tab.root).length,
+      splitDirection: tab.root.type === 'split' ? tab.root.direction : 'vertical',
+    };
+    setWorkspaceTabs((prev) => {
+      const next = prev.some((existing) => existing.id === preset.id)
+        ? prev.map((existing) => existing.id === preset.id ? preset : existing)
+        : [...prev, preset];
+      try { window.janet.setSettings({ workspaceTabs: next }).catch(() => {}); } catch {}
+      return next;
+    });
+    if (!tab.workspaceId) {
+      updateTab(tab.id, (existing) => ({ ...existing, workspaceId }));
+    }
+  }, [cwdByTerminal, updateTab]);
+
   const createTabFromPreset = useCallback((preset: WorkspaceTabPreset, sshSessionId?: string): TabInfo => ({
     id: genId('tab'),
     title: preset.name,
     type: preset.type,
+    workspaceId: preset.id,
     sshSessionId,
     sshProfileId: preset.sshProfileId,
     sshShellReady: preset.type !== 'ssh',
     cwd: preset.type === 'local' ? preset.cwd : undefined,
-    root: createPaneRoot(preset.type, preset.terminalCount, preset.splitDirection),
+    root: restorePaneTree(preset.root) ?? createPaneRoot(preset.type, preset.terminalCount, preset.splitDirection),
   }), []);
 
   const openWorkspaceTab = useCallback(async (preset: WorkspaceTabPreset) => {
@@ -870,6 +895,7 @@ function AppInner() {
             onNewTab={() => addTab('local')}
             onWorkspaceTabsChange={handleWorkspaceTabsChange}
             onWorkspaceTabLaunch={openWorkspaceTab}
+            onSaveWorkspaceTab={saveWorkspaceTab}
             onRenameTab={renameTab}
             onCollapse={() => setTabsOpen(false)}
           />
