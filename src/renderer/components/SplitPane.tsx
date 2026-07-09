@@ -1,9 +1,16 @@
 import React, { useCallback, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import {
   PaneNode, SplitNode, TerminalLeaf,
 } from '../types';
 import TerminalPane from './TerminalPane';
-import { ChevronsRightIcon, ChevronsDownIcon, XCloseIcon } from '../icons';
+import {
+  ChevronsRightIcon,
+  ChevronsDownIcon,
+  MaximizeIcon,
+  RestoreIcon,
+  XCloseIcon,
+} from '../icons';
 
 interface SplitPaneProps {
   node: PaneNode;
@@ -15,9 +22,11 @@ interface SplitPaneProps {
   onSplitPane: (leafId: string, direction: 'horizontal' | 'vertical') => void;
   onClosePane: (leafId: string) => void;
   onResizePane: (splitId: string, dividerIndex: number, leftFraction: number) => void;
+  maximizedLeafId?: string | null;
+  onToggleMaximizePane: (leafId: string) => void;
   themeName?: string;
   fontSize?: number;
-  /** Called when a terminal reports a new cwd (via OSC 7). */
+
   onCwdChange?: (termId: string, cwd: string) => void;
   /** Called when a terminal gains focus. */
   onTerminalFocus?: (termId: string) => void;
@@ -41,6 +50,8 @@ function TerminalPaneLeaf({
   onSplitRight,
   onSplitDown,
   onClose,
+  onToggleMaximize,
+  isMaximized = false,
   themeName,
   fontSize,
   onCwdChange,
@@ -58,6 +69,8 @@ function TerminalPaneLeaf({
   onSplitRight: () => void;
   onSplitDown: () => void;
   onClose: () => void;
+  onToggleMaximize: () => void;
+  isMaximized?: boolean;
   themeName?: string;
   fontSize?: number;
   onCwdChange?: (termId: string, cwd: string) => void;
@@ -67,17 +80,43 @@ function TerminalPaneLeaf({
   sshShellReady?: boolean;
   onSshRetry?: (termId: string) => void;
 }) {
+  function toggleMaximize() {
+    const startViewTransition = (document as Document & {
+      startViewTransition?: (update: () => void) => unknown;
+    }).startViewTransition;
+    if (startViewTransition && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      startViewTransition.call(document, () => flushSync(onToggleMaximize));
+      return;
+    }
+    onToggleMaximize();
+  }
+
   return (
-    <div className="terminal-leaf">
+    <div
+      className="terminal-leaf"
+      style={{ viewTransitionName: `terminal-pane-${leaf.id.replace(/[^a-zA-Z0-9_-]/g, '_')}` }}
+    >
       <div className="terminal-leaf-header">
         <span className="leaf-title">{leaf.title || 'terminal'}</span>
         <div className="leaf-actions">
-          <button className="leaf-btn" onClick={onSplitRight} title="Split right" aria-label="Split right">
-            <ChevronsRightIcon size="sm" />
+          <button
+            className="leaf-btn"
+            onClick={toggleMaximize}
+            title={isMaximized ? 'Restore pane layout' : 'Maximize pane'}
+            aria-label={isMaximized ? 'Restore pane layout' : 'Maximize pane'}
+          >
+            {isMaximized ? <RestoreIcon size="sm" /> : <MaximizeIcon size="sm" />}
           </button>
-          <button className="leaf-btn" onClick={onSplitDown} title="Split down" aria-label="Split down">
-            <ChevronsDownIcon size="sm" />
-          </button>
+          {!isMaximized && (
+            <>
+              <button className="leaf-btn" onClick={onSplitRight} title="Split right" aria-label="Split right">
+                <ChevronsRightIcon size="sm" />
+              </button>
+              <button className="leaf-btn" onClick={onSplitDown} title="Split down" aria-label="Split down">
+                <ChevronsDownIcon size="sm" />
+              </button>
+            </>
+          )}
           <button className="leaf-btn leaf-close" onClick={onClose} title="Close pane" aria-label="Close pane">
             <XCloseIcon size="sm" />
           </button>
@@ -176,13 +215,38 @@ function splitChildFlex(size: number | undefined) {
   return `${size ?? 1} 1 0%`;
 }
 
+function findBranchForLeaf(node: PaneNode, leafId: string): PaneNode | null {
+  if (node.type === 'leaf') return node.id === leafId ? node : null;
+  for (const child of node.children) {
+    if (child.type === 'leaf' && child.id === leafId) return child;
+    const nested = child.type === 'split' ? findBranchForLeaf(child, leafId) : null;
+    if (nested) return child;
+  }
+  return null;
+}
+
 /** Recursive split pane renderer */
 export default function SplitPane(props: SplitPaneProps) {
   const {
-    node, tabId, tabType, sshSessionId, onTerminalReady, onTerminalRemoved,
-    onSplitPane, onClosePane, onResizePane, themeName, fontSize,
-    onCwdChange, onTerminalFocus, initialCwd,
-    hasSessionForLeaf, sshShellReady, onSshRetry,
+    node,
+    tabId,
+    tabType,
+    sshSessionId,
+    onTerminalReady,
+    onTerminalRemoved,
+    onSplitPane,
+    onClosePane,
+    onResizePane,
+    maximizedLeafId,
+    onToggleMaximizePane,
+    themeName,
+    fontSize,
+    onCwdChange,
+    onTerminalFocus,
+    initialCwd,
+    hasSessionForLeaf,
+    sshShellReady,
+    onSshRetry,
   } = props;
 
   if (node.type === 'leaf') {
@@ -196,6 +260,8 @@ export default function SplitPane(props: SplitPaneProps) {
         onSplitRight={() => onSplitPane(node.id, 'vertical')}
         onSplitDown={() => onSplitPane(node.id, 'horizontal')}
         onClose={() => onClosePane(node.id)}
+        onToggleMaximize={() => onToggleMaximizePane(node.id)}
+        isMaximized={maximizedLeafId === node.id}
         themeName={themeName}
         fontSize={fontSize}
         onCwdChange={onCwdChange}
@@ -209,6 +275,37 @@ export default function SplitPane(props: SplitPaneProps) {
   }
 
   const splitNode = node as SplitNode;
+
+  if (maximizedLeafId) {
+    const maximizedBranch = findBranchForLeaf(splitNode, maximizedLeafId);
+    if (maximizedBranch) {
+      return (
+        <div className="split-container split-maximized">
+          <SplitPane
+            node={maximizedBranch}
+            tabId={tabId}
+            tabType={tabType}
+            sshSessionId={sshSessionId}
+            onTerminalReady={onTerminalReady}
+            onTerminalRemoved={onTerminalRemoved}
+            onSplitPane={onSplitPane}
+            onClosePane={onClosePane}
+            onResizePane={onResizePane}
+            maximizedLeafId={maximizedLeafId}
+            onToggleMaximizePane={onToggleMaximizePane}
+            themeName={themeName}
+            fontSize={fontSize}
+            onCwdChange={onCwdChange}
+            onTerminalFocus={onTerminalFocus}
+            initialCwd={initialCwd}
+            hasSessionForLeaf={hasSessionForLeaf}
+            sshShellReady={sshShellReady}
+            onSshRetry={onSshRetry}
+          />
+        </div>
+      );
+    }
+  }
 
   return (
     <div className={`split-container split-${splitNode.direction}`}>
@@ -233,6 +330,8 @@ export default function SplitPane(props: SplitPaneProps) {
               onSplitPane={onSplitPane}
               onClosePane={onClosePane}
               onResizePane={onResizePane}
+              maximizedLeafId={maximizedLeafId}
+              onToggleMaximizePane={onToggleMaximizePane}
               themeName={themeName}
               fontSize={fontSize}
               onCwdChange={onCwdChange}

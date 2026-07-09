@@ -82,6 +82,13 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
 
 beforeEach(() => {
   mountedTermIds.length = 0;
+  Object.defineProperty(document, 'startViewTransition', {
+    configurable: true,
+    value: vi.fn((update: () => void) => {
+      update();
+      return { finished: Promise.resolve(), ready: Promise.resolve(), updateCallbackDone: Promise.resolve() };
+    }),
+  });
   (window as any).janet = {
     fsGetHome: vi.fn().mockResolvedValue('/home/test'),
     getSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] }),
@@ -150,6 +157,57 @@ describe('split panes in the app', () => {
     const survivor = document.querySelector<HTMLElement>('.split-child');
     expect(survivor).toBeTruthy();
     expect(survivor!.style.flex).toBe('1 1 0%');
+  });
+
+  it('maximizes a single pane within the terminal area and restores it to the split layout', async () => {
+    render(<App />);
+
+    await screen.findByRole('button', { name: /split right/i });
+    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    expect(screen.getAllByRole('button', { name: /maximize pane/i })).toHaveLength(2);
+
+    fireEvent.click(screen.getAllByRole('button', { name: /maximize pane/i })[1]);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
+      expect(screen.getByRole('button', { name: /restore pane layout/i })).toBeInTheDocument();
+    });
+    expect(document.startViewTransition).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: /maximize pane/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /restore pane layout/i }));
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2);
+      expect(screen.getAllByRole('button', { name: /maximize pane/i })).toHaveLength(2);
+    });
+    expect(document.startViewTransition).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears maximized state if the maximized pane is closed', async () => {
+    render(<App />);
+
+    await screen.findByRole('button', { name: /split right/i });
+    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+
+    fireEvent.click(screen.getAllByRole('button', { name: /maximize pane/i })[1]);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
+      expect(screen.getByRole('button', { name: /restore pane layout/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /close pane/i }));
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
+    });
+    expect(screen.queryByRole('button', { name: /restore pane layout/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /maximize pane/i })).toBeInTheDocument();
   });
 
   it('restores saved local workspace tab layouts with their cwd', async () => {

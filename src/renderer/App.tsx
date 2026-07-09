@@ -58,6 +58,7 @@ function AppInner() {
   const [readySshSessionIds, setReadySshSessionIds] = useState<Set<string>>(new Set());
   const [sshProfiles, setSshProfiles] = useState<SavedSSHProfile[]>([]);
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>([]);
+  const [maximizedLeafByTab, setMaximizedLeafByTab] = useState<Record<string, string | null>>({});
   const [activeTerminals, setActiveTerminals] = useState<Set<string>>(new Set());
   const liveTerminalIdsRef = useRef<Set<string>>(new Set());
   const workspaceTabsRestoredRef = useRef(false);
@@ -416,8 +417,16 @@ function AppInner() {
     [updateTab],
   );
 
+  const handleToggleMaximizePane = useCallback((tabId: string, leafId: string) => {
+    setMaximizedLeafByTab((prev) => ({
+      ...prev,
+      [tabId]: prev[tabId] === leafId ? null : leafId,
+    }));
+  }, []);
+
   const handleClosePane = useCallback(
     (tabId: string, leafId: string) => {
+      const wasMaximized = maximizedLeafByTab[tabId] === leafId;
       updateTab(tabId, (tab) => {
         const newRoot = removePane(tab.root, leafId);
         if (!newRoot) {
@@ -426,8 +435,11 @@ function AppInner() {
         }
         return { ...tab, root: ensureSplitRoot(newRoot) };
       });
+      if (wasMaximized) {
+        setMaximizedLeafByTab((prev) => ({ ...prev, [tabId]: null }));
+      }
     },
-    [updateTab, closeTab],
+    [updateTab, closeTab, maximizedLeafByTab],
   );
 
   const handleResizePane = useCallback(
@@ -883,6 +895,8 @@ function AppInner() {
             onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}
             onClosePane={(leafId) => handleClosePane(activeTab.id, leafId)}
             onResizePane={(splitId, dividerIndex, leftFraction) => handleResizePane(activeTab.id, splitId, dividerIndex, leftFraction)}
+            maximizedLeafId={maximizedLeafByTab[activeTab.id] ?? null}
+            onToggleMaximizePane={(leafId) => handleToggleMaximizePane(activeTab.id, leafId)}
             themeName={currentTheme}
             fontSize={fontSize}
             onCwdChange={handleCwdChange}
