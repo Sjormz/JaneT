@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  createLeaf, splitPane, removePane, findLeaf,
+  createLeaf, splitPane, removePane, movePane, findLeaf,
   getAllLeafIds, countLeaves, genId, PaneNode,
 } from '../../src/renderer/types';
 
@@ -220,6 +220,67 @@ describe('removePane', () => {
     const leaf = createLeaf();
     const result = removePane(leaf, 'nonexistent');
     expect(result).toBe(leaf);
+  });
+});
+
+describe('movePane', () => {
+  it('moves a nested leaf beside its target without replacing either terminal', () => {
+    const leafA = createLeaf();
+    const leafB = createLeaf();
+    const leafC = createLeaf();
+    const tree: PaneNode = {
+      id: 'outer', type: 'split', direction: 'vertical',
+      children: [
+        leafA,
+        { id: 'right', type: 'split', direction: 'horizontal', children: [leafB, leafC], sizes: [1, 1] },
+      ], sizes: [1, 1],
+    };
+
+    const result = movePane(tree, leafC.id, leafA.id, 'bottom');
+
+    expect(countLeaves(result)).toBe(3);
+    expect(new Set(getAllLeafIds(result))).toEqual(new Set([leafA.id, leafB.id, leafC.id]));
+    expect(findLeaf(result, leafA.id)).toBe(leafA);
+    expect(findLeaf(result, leafC.id)).toBe(leafC);
+    expect(result.type).toBe('split');
+    if (result.type === 'split') {
+      expect(result.children[0].type).toBe('split');
+      if (result.children[0].type === 'split') {
+        expect(result.children[0].direction).toBe('horizontal');
+        expect(result.children[0].children).toEqual([leafA, leafC]);
+      }
+      expect(result.children[1]).toBe(leafB);
+    }
+  });
+
+  it('flattens a nested stack when moving its pane to a matching outer split edge', () => {
+    const leafA = createLeaf();
+    const leafB = createLeaf();
+    const leafC = createLeaf();
+    const tree: PaneNode = {
+      id: 'outer', type: 'split', direction: 'vertical',
+      children: [
+        leafA,
+        { id: 'right', type: 'split', direction: 'horizontal', children: [leafB, leafC], sizes: [1, 1] },
+      ], sizes: [1, 1],
+    };
+
+    const result = movePane(tree, leafC.id, leafB.id, 'right');
+
+    expect(result.type).toBe('split');
+    if (result.type === 'split') {
+      expect(result.direction).toBe('vertical');
+      expect(result.children).toEqual([leafA, leafB, leafC]);
+    }
+  });
+
+  it('ignores a drop onto the dragged pane or an unknown target', () => {
+    const leafA = createLeaf();
+    const leafB = createLeaf();
+    const tree: PaneNode = { id: 'root', type: 'split', direction: 'vertical', children: [leafA, leafB], sizes: [1, 1] };
+
+    expect(movePane(tree, leafA.id, leafA.id, 'left')).toBe(tree);
+    expect(movePane(tree, leafA.id, 'missing', 'left')).toBe(tree);
   });
 });
 

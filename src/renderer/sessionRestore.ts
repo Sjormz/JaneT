@@ -34,6 +34,14 @@ export interface SavedSession {
 
 const VALID_SECTIONS = new Set(['files', 'ssh', 'git', 'settings']);
 
+function normalizeSizes(sizes: unknown, count: number): number[] {
+  if (!Array.isArray(sizes) || sizes.length !== count || !sizes.every((size) => typeof size === 'number' && Number.isFinite(size) && size > 0)) {
+    return new Array<number>(count).fill(1 / count);
+  }
+  const total = sizes.reduce((sum, size) => sum + size, 0);
+  return total > 0 ? sizes.map((size) => size / total) : new Array<number>(count).fill(1 / count);
+}
+
 /** Strip runtime-only ids and emit a portable, JSON-safe tree. */
 export function serializePaneTree(node: PaneNode, cwdByTerminal: Record<string, string> = {}): SavedPaneNode {
   if (node.type === 'leaf') {
@@ -42,7 +50,7 @@ export function serializePaneTree(node: PaneNode, cwdByTerminal: Record<string, 
   return {
     type: 'split',
     direction: node.direction,
-    sizes: [...node.sizes],
+    sizes: normalizeSizes(node.sizes, node.children.length),
     children: node.children.map((child) => serializePaneTree(child, cwdByTerminal)),
   };
 }
@@ -71,16 +79,16 @@ export function restorePaneTree(saved: unknown, prefix: 'term' | 'split' = 'term
     const direction = node.direction === 'horizontal' ? 'horizontal' : 'vertical';
     if (!Array.isArray(node.children) || node.children.length === 0) return null;
 
-    const children: PaneNode[] = [];
-    for (const child of node.children) {
+    const restoredChildren: Array<{ node: PaneNode; index: number }> = [];
+    for (const [index, child] of node.children.entries()) {
       const restored = restorePaneTree(child, prefix);
-      if (restored) children.push(restored);
+      if (restored) restoredChildren.push({ node: restored, index });
     }
-    if (children.length === 0) return null;
+    if (restoredChildren.length === 0) return null;
 
-    // Rebuild sizes so they line up with the actual child list and sum to 1.
-    const total = children.length;
-    const sizes = new Array<number>(total).fill(1 / total);
+    const children = restoredChildren.map(({ node: child }) => child);
+    const savedSizes = normalizeSizes(node.sizes, node.children.length);
+    const sizes = normalizeSizes(restoredChildren.map(({ index }) => savedSizes[index]), children.length);
 
     const splitNode: SplitNode = {
       id: genId('split'),

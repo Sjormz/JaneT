@@ -12,8 +12,8 @@ import {
   TabInfo, SessionInfo,
   SavedSSHProfile,
   WorkspaceTabPreset,
-  PaneNode,
-  createPaneRoot, splitPane, removePane, resizePane, getAllLeafIds, genId,
+  PaneNode, PaneDropSide,
+  createPaneRoot, splitPane, removePane, movePane, resizePane, getAllLeafIds, genId,
 } from './types';
 import { ThemeName, applyCssTheme, getTheme } from './themes';
 import { KeybindingsProvider, useKeybindings } from './KeybindingsContext';
@@ -59,6 +59,8 @@ function AppInner() {
   const [sshProfiles, setSshProfiles] = useState<SavedSSHProfile[]>([]);
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>([]);
   const [maximizedLeafByTab, setMaximizedLeafByTab] = useState<Record<string, string | null>>({});
+  const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null);
+  const [paneDropTarget, setPaneDropTarget] = useState<{ leafId: string; side: PaneDropSide } | null>(null);
   const [activeTerminals, setActiveTerminals] = useState<Set<string>>(new Set());
   const liveTerminalIdsRef = useRef<Set<string>>(new Set());
   const workspaceTabsRestoredRef = useRef(false);
@@ -451,6 +453,12 @@ function AppInner() {
     },
     [updateTab],
   );
+
+  const handleMovePane = useCallback((tabId: string, draggedLeafId: string, targetLeafId: string, side: PaneDropSide) => {
+    updateTab(tabId, (tab) => ({ ...tab, root: movePane(tab.root, draggedLeafId, targetLeafId, side) }));
+    setDraggedPaneId(null);
+    setPaneDropTarget(null);
+  }, [updateTab]);
 
   // === SSH session management ===
 
@@ -921,6 +929,12 @@ function AppInner() {
             onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}
             onClosePane={(leafId) => handleClosePane(activeTab.id, leafId)}
             onResizePane={(splitId, dividerIndex, leftFraction) => handleResizePane(activeTab.id, splitId, dividerIndex, leftFraction)}
+            onMovePane={(draggedLeafId, targetLeafId, side) => handleMovePane(activeTab.id, draggedLeafId, targetLeafId, side)}
+            draggedLeafId={draggedPaneId}
+            dropTarget={paneDropTarget}
+            onPaneDragStart={setDraggedPaneId}
+            onPaneDragOver={setPaneDropTarget}
+            onPaneDragEnd={() => { setDraggedPaneId(null); setPaneDropTarget(null); }}
             maximizedLeafId={maximizedLeafByTab[activeTab.id] ?? null}
             onToggleMaximizePane={(leafId) => handleToggleMaximizePane(activeTab.id, leafId)}
             themeName={currentTheme}

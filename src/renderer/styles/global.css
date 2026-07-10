@@ -1815,7 +1815,24 @@ html, body, #root {
   overflow: hidden;
   min-width: 0;
   min-height: 0;
+  position: relative;
 }
+.terminal-leaf.pane-dragging { opacity: 0.45; }
+.terminal-leaf-header[draggable="true"] { cursor: grab; }
+.terminal-leaf-header[draggable="true"]:active { cursor: grabbing; }
+.pane-drop-indicator {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  background: var(--text-accent);
+  box-shadow: var(--glow-accent);
+}
+.pane-drop-left, .pane-drop-right { top: 0; bottom: 0; width: 3px; }
+.pane-drop-left { left: 0; }
+.pane-drop-right { right: 0; }
+.pane-drop-top, .pane-drop-bottom { left: 0; right: 0; height: 3px; }
+.pane-drop-top { top: 0; }
+.pane-drop-bottom { bottom: 0; }
 .split-maximized {
   width: 100%;
   height: 100%;

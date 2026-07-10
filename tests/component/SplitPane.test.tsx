@@ -139,6 +139,32 @@ describe('split panes in the app', () => {
     expect(new Set(mountedTermIds).size).toBe(3);
   });
 
+  it('moves an existing pane without creating or destroying a terminal', async () => {
+    render(<App />);
+
+    await screen.findByRole('button', { name: /split right/i });
+    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+
+    const [firstTerminal, secondTerminal] = screen.getAllByTestId(/terminal-/);
+    const firstLeaf = firstTerminal.closest('.terminal-leaf')!;
+    const secondLeaf = secondTerminal.closest('.terminal-leaf')!;
+    const dataTransfer = { effectAllowed: '', setData: vi.fn(), getData: vi.fn() };
+
+    fireEvent.dragStart(secondLeaf.querySelector('.terminal-leaf-header')!, { dataTransfer });
+    fireEvent.dragOver(firstLeaf, { dataTransfer, clientX: 0, clientY: 0 });
+    fireEvent.drop(firstLeaf, { dataTransfer, clientX: 0, clientY: 0 });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/).map((element) => element.textContent)).toEqual([
+        secondTerminal.textContent,
+        firstTerminal.textContent,
+      ]);
+    });
+    expect(window.janet.terminalCreate).toHaveBeenCalledTimes(2);
+    expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
+  });
+
   it('surviving pane fills space when sibling is closed', async () => {
     render(<App />);
 

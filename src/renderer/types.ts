@@ -186,6 +186,51 @@ export function removePane(tree: PaneNode, targetLeafId: string): PaneNode | nul
   return { ...tree, children: remaining, sizes: newSizes };
 }
 
+export type PaneDropSide = 'top' | 'right' | 'bottom' | 'left';
+
+function insertPaneBeside(
+  tree: PaneNode,
+  targetLeafId: string,
+  pane: TerminalLeaf,
+  side: PaneDropSide,
+): PaneNode {
+  const direction = side === 'left' || side === 'right' ? 'vertical' : 'horizontal';
+  const before = side === 'left' || side === 'top';
+
+  if (tree.type === 'leaf') {
+    if (tree.id !== targetLeafId) return tree;
+    return {
+      id: genId('split'), type: 'split', direction,
+      children: before ? [pane, tree] : [tree, pane], sizes: [1, 1],
+    };
+  }
+
+  if (tree.direction === direction) {
+    const targetIndex = tree.children.findIndex((child) => child.type === 'leaf' && child.id === targetLeafId);
+    if (targetIndex >= 0) {
+      const insertAt = before ? targetIndex : targetIndex + 1;
+      const targetSize = tree.sizes[targetIndex] ?? 1;
+      return {
+        ...tree,
+        children: [...tree.children.slice(0, insertAt), pane, ...tree.children.slice(insertAt)],
+        sizes: [...tree.sizes.slice(0, targetIndex), targetSize / 2, targetSize / 2, ...tree.sizes.slice(targetIndex + 1)],
+      };
+    }
+  }
+
+  const children = tree.children.map((child) => insertPaneBeside(child, targetLeafId, pane, side));
+  return children.some((child, index) => child !== tree.children[index]) ? { ...tree, children } : tree;
+}
+
+/** Moves an existing terminal leaf beside another leaf without replacing either terminal. */
+export function movePane(tree: PaneNode, draggedLeafId: string, targetLeafId: string, side: PaneDropSide): PaneNode {
+  if (draggedLeafId === targetLeafId) return tree;
+  const dragged = findLeaf(tree, draggedLeafId);
+  if (!dragged || !findLeaf(tree, targetLeafId)) return tree;
+  const withoutDragged = removePane(tree, draggedLeafId);
+  return withoutDragged ? insertPaneBeside(withoutDragged, targetLeafId, dragged, side) : tree;
+}
+
 export function resizePane(
   tree: PaneNode,
   splitId: string,

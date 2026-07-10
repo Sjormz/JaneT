@@ -19,10 +19,10 @@ describe('serializePaneTree', () => {
     expect(serializePaneTree(tree, { 'term-a': 'C:/repo/api', 'term-b': 'C:/repo/web' })).toEqual({
       type: 'split',
       direction: 'vertical',
-      sizes: [1, 1],
+      sizes: [0.5, 0.5],
       children: [
-        { type: 'leaf', cwd: 'C:/repo/api' },
-        { type: 'leaf', cwd: 'C:/repo/web' },
+        { type: 'leaf', title: undefined, cwd: 'C:/repo/api' },
+        { type: 'leaf', title: undefined, cwd: 'C:/repo/web' },
       ],
     });
   });
@@ -35,10 +35,10 @@ describe('serializePaneTree', () => {
     expect(saved).toEqual({
       type: 'split',
       direction: 'vertical',
-      sizes: [1, 1],
+      sizes: [0.5, 0.5],
       children: [
-        { type: 'leaf', title: 'terminal' },
-        { type: 'leaf', title: 'terminal' },
+        { type: 'leaf', title: 'terminal', cwd: undefined },
+        { type: 'leaf', title: 'terminal', cwd: undefined },
       ],
     });
   });
@@ -81,28 +81,53 @@ describe('restorePaneTree', () => {
     expect(new Set(ids).size).toBe(3);
   });
 
-  it('round-trips through serialize/restore with the same shape', () => {
-    let tree: PaneNode = createLeaf();
-    const firstId = tree.id;
-    tree = splitPane(tree, firstId, 'vertical');
-    const leaves = getAllLeafIds(tree);
-    tree = splitPane(tree, leaves[1], 'horizontal');
-    tree = splitPane(tree, getAllLeafIds(tree)[0], 'vertical');
-    const originalCount = countLeaves(tree);
-    const originalSaved = serializePaneTree(tree);
+  it('round-trips nested layout ratios and terminal working directories', () => {
+    const saved = {
+      type: 'split' as const,
+      direction: 'vertical' as const,
+      sizes: [3, 7],
+      children: [
+        { type: 'leaf' as const, title: 'api', cwd: 'C:/repo/api' },
+        {
+          type: 'split' as const,
+          direction: 'horizontal' as const,
+          sizes: [1, 3],
+          children: [
+            { type: 'leaf' as const, title: 'web', cwd: 'C:/repo/web' },
+            { type: 'leaf' as const, title: 'worker', cwd: 'C:/repo/worker' },
+          ],
+        },
+      ],
+    };
 
-    // Re-serialize the restored tree: counts, directions, and titles all
-    // match the original (sizes are re-normalized to sum to 1 on restore,
-    // which is intentional — see restorePaneTree — so we don't compare them
-    // bit-for-bit).
-    const restored = restorePaneTree(originalSaved)!;
-    expect(countLeaves(restored)).toBe(originalCount);
-    const restoredSaved = serializePaneTree(restored) as typeof originalSaved;
-    expect(restoredSaved.type).toBe(originalSaved.type);
-    if (restoredSaved.type === 'split' && originalSaved.type === 'split') {
-      expect(restoredSaved.direction).toBe(originalSaved.direction);
-      expect(restoredSaved.children).toHaveLength(originalSaved.children.length);
-    }
+    const restored = restorePaneTree(saved)!;
+    expect(countLeaves(restored)).toBe(3);
+    expect(serializePaneTree(restored)).toEqual({
+      type: 'split',
+      direction: 'vertical',
+      sizes: [0.3, 0.7],
+      children: [
+        { type: 'leaf', title: 'api', cwd: 'C:/repo/api' },
+        {
+          type: 'split',
+          direction: 'horizontal',
+          sizes: [0.25, 0.75],
+          children: [
+            { type: 'leaf', title: 'web', cwd: 'C:/repo/web' },
+            { type: 'leaf', title: 'worker', cwd: 'C:/repo/worker' },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('falls back to equal sizes for older presets without valid layout sizes', () => {
+    const restored = restorePaneTree({
+      type: 'split', direction: 'vertical', sizes: [1],
+      children: [{ type: 'leaf' }, { type: 'leaf' }],
+    });
+
+    expect(restored).toMatchObject({ type: 'split', sizes: [0.5, 0.5] });
   });
 
   it('returns null for garbage input', () => {
