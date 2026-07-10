@@ -12,8 +12,8 @@ import {
   TabInfo, SessionInfo,
   SavedSSHProfile,
   WorkspaceTabPreset,
-  PaneNode,
-  createPaneRoot, splitPane, removePane, resizePane, getAllLeafIds, genId,
+  PaneNode, PaneDropSide,
+  createPaneRoot, splitPane, removePane, movePane, resizePane, getAllLeafIds, genId,
 } from './types';
 import { ThemeName, applyCssTheme, getTheme } from './themes';
 import { KeybindingsProvider, useKeybindings } from './KeybindingsContext';
@@ -58,6 +58,9 @@ function AppInner() {
   const [readySshSessionIds, setReadySshSessionIds] = useState<Set<string>>(new Set());
   const [sshProfiles, setSshProfiles] = useState<SavedSSHProfile[]>([]);
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>([]);
+  const [maximizedLeafByTab, setMaximizedLeafByTab] = useState<Record<string, string | null>>({});
+  const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null);
+  const [paneDropTarget, setPaneDropTarget] = useState<{ leafId: string; side: PaneDropSide } | null>(null);
   const [activeTerminals, setActiveTerminals] = useState<Set<string>>(new Set());
   const liveTerminalIdsRef = useRef<Set<string>>(new Set());
   const workspaceTabsRestoredRef = useRef(false);
@@ -241,7 +244,7 @@ function AppInner() {
         type: tab.type,
         cwd: tab.cwd,
         sshProfileId: tab.sshProfileId,
-        root: serializePaneTree(tab.root),
+        root: serializePaneTree(tab.root, cwdByTerminal),
       }));
       const session: SavedSession = {
         tabs: savedTabs,
@@ -416,8 +419,16 @@ function AppInner() {
     [updateTab],
   );
 
+  const handleToggleMaximizePane = useCallback((tabId: string, leafId: string) => {
+    setMaximizedLeafByTab((prev) => ({
+      ...prev,
+      [tabId]: prev[tabId] === leafId ? null : leafId,
+    }));
+  }, []);
+
   const handleClosePane = useCallback(
     (tabId: string, leafId: string) => {
+      const wasMaximized = maximizedLeafByTab[tabId] === leafId;
       updateTab(tabId, (tab) => {
         const newRoot = removePane(tab.root, leafId);
         if (!newRoot) {
@@ -426,8 +437,11 @@ function AppInner() {
         }
         return { ...tab, root: ensureSplitRoot(newRoot) };
       });
+      if (wasMaximized) {
+        setMaximizedLeafByTab((prev) => ({ ...prev, [tabId]: null }));
+      }
     },
-    [updateTab, closeTab],
+    [updateTab, closeTab, maximizedLeafByTab],
   );
 
   const handleResizePane = useCallback(
@@ -439,6 +453,12 @@ function AppInner() {
     },
     [updateTab],
   );
+
+  const handleMovePane = useCallback((tabId: string, draggedLeafId: string, targetLeafId: string, side: PaneDropSide) => {
+    updateTab(tabId, (tab) => ({ ...tab, root: movePane(tab.root, draggedLeafId, targetLeafId, side) }));
+    setDraggedPaneId(null);
+    setPaneDropTarget(null);
+  }, [updateTab]);
 
   // === SSH session management ===
 
@@ -512,15 +532,40 @@ function AppInner() {
     try { window.janet.setSettings({ workspaceTabs: presets }).catch(() => {}); } catch {}
   }, []);
 
+  const saveWorkspaceTab = useCallback((tab: TabInfo) => {
+    const workspaceId = tab.workspaceId ?? genId('workspace');
+    const preset: WorkspaceTabPreset = {
+      id: workspaceId,
+      name: tab.title,
+      type: tab.type,
+      cwd: tab.type === 'local' ? tab.cwd : undefined,
+      sshProfileId: tab.sshProfileId,
+      root: serializePaneTree(tab.root, cwdByTerminal),
+      terminalCount: getAllLeafIds(tab.root).length,
+      splitDirection: tab.root.type === 'split' ? tab.root.direction : 'vertical',
+    };
+    setWorkspaceTabs((prev) => {
+      const next = prev.some((existing) => existing.id === preset.id)
+        ? prev.map((existing) => existing.id === preset.id ? preset : existing)
+        : [...prev, preset];
+      try { window.janet.setSettings({ workspaceTabs: next }).catch(() => {}); } catch {}
+      return next;
+    });
+    if (!tab.workspaceId) {
+      updateTab(tab.id, (existing) => ({ ...existing, workspaceId }));
+    }
+  }, [cwdByTerminal, updateTab]);
+
   const createTabFromPreset = useCallback((preset: WorkspaceTabPreset, sshSessionId?: string): TabInfo => ({
     id: genId('tab'),
     title: preset.name,
     type: preset.type,
+    workspaceId: preset.id,
     sshSessionId,
     sshProfileId: preset.sshProfileId,
     sshShellReady: preset.type !== 'ssh',
     cwd: preset.type === 'local' ? preset.cwd : undefined,
-    root: createPaneRoot(preset.type, preset.terminalCount, preset.splitDirection),
+    root: restorePaneTree(preset.root) ?? createPaneRoot(preset.type, preset.terminalCount, preset.splitDirection),
   }), []);
 
   const openWorkspaceTab = useCallback(async (preset: WorkspaceTabPreset) => {
@@ -858,6 +903,7 @@ function AppInner() {
             onNewTab={() => addTab('local')}
             onWorkspaceTabsChange={handleWorkspaceTabsChange}
             onWorkspaceTabLaunch={openWorkspaceTab}
+            onSaveWorkspaceTab={saveWorkspaceTab}
             onRenameTab={renameTab}
             onCollapse={() => setTabsOpen(false)}
           />
@@ -883,6 +929,14 @@ function AppInner() {
             onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}
             onClosePane={(leafId) => handleClosePane(activeTab.id, leafId)}
             onResizePane={(splitId, dividerIndex, leftFraction) => handleResizePane(activeTab.id, splitId, dividerIndex, leftFraction)}
+            onMovePane={(draggedLeafId, targetLeafId, side) => handleMovePane(activeTab.id, draggedLeafId, targetLeafId, side)}
+            draggedLeafId={draggedPaneId}
+            dropTarget={paneDropTarget}
+            onPaneDragStart={setDraggedPaneId}
+            onPaneDragOver={setPaneDropTarget}
+            onPaneDragEnd={() => { setDraggedPaneId(null); setPaneDropTarget(null); }}
+            maximizedLeafId={maximizedLeafByTab[activeTab.id] ?? null}
+            onToggleMaximizePane={(leafId) => handleToggleMaximizePane(activeTab.id, leafId)}
             themeName={currentTheme}
             fontSize={fontSize}
             onCwdChange={handleCwdChange}

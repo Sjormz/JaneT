@@ -9,6 +9,7 @@ import { app, safeStorage } from 'electron';
 export interface SavedPaneLeaf {
   type: 'leaf';
   title?: string;
+  cwd?: string;
 }
 
 export interface SavedPaneSplit {
@@ -85,6 +86,7 @@ export interface AppSettings {
     type: 'local' | 'ssh';
     cwd?: string;
     sshProfileId?: string;
+    root?: SavedPaneNode;
     terminalCount: number;
     splitDirection: 'horizontal' | 'vertical';
   }>;

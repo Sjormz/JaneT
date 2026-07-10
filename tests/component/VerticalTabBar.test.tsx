@@ -55,6 +55,7 @@ function renderTabs(overrides?: Partial<React.ComponentProps<typeof VerticalTabB
       onRenameTab={vi.fn()}
       onCollapse={vi.fn()}
       {...overrides}
+      onSaveWorkspaceTab={overrides?.onSaveWorkspaceTab ?? vi.fn()}
     />,
   );
 }
@@ -83,6 +84,7 @@ describe('VerticalTabBar', () => {
     fireEvent.click(screen.getByRole('button', { name: /^workspaces$/i }));
 
     fireEvent.click(screen.getByRole('button', { name: /save workspace preset/i }));
+    expect(screen.getByRole('dialog', { name: /create workspace preset/i }).parentElement?.parentElement).toBe(document.body);
     fireEvent.change(screen.getByPlaceholderText(/tab name/i), { target: { value: 'JaneT workspace' } });
     fireEvent.change(screen.getByPlaceholderText(/directory path/i), { target: { value: '~/projects/janet' } });
     fireEvent.click(screen.getByRole('button', { name: /add workspace preset/i }));
@@ -96,6 +98,16 @@ describe('VerticalTabBar', () => {
         splitDirection: 'vertical',
       }),
     ]));
+  });
+
+  it('closes the workspace preset dialog from its backdrop', () => {
+    renderTabs();
+
+    fireEvent.click(screen.getByRole('button', { name: /^workspaces$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save workspace preset/i }));
+    fireEvent.pointerDown(screen.getByRole('dialog').parentElement!);
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('launches a workspace preset from the workspaces section', () => {
@@ -116,15 +128,32 @@ describe('VerticalTabBar', () => {
     expect(screen.queryByRole('button', { name: /save workspace preset/i })).not.toBeInTheDocument();
   });
 
-  it('renames tabs inline', () => {
+  it('moves secondary tab actions into a context menu', () => {
     const onRenameTab = vi.fn();
-    renderTabs({ onRenameTab });
+    const onSaveWorkspaceTab = vi.fn();
+    renderTabs({ onRenameTab, onSaveWorkspaceTab });
 
-    fireEvent.click(screen.getAllByRole('button', { name: /rename tab/i })[0]);
+    expect(screen.queryByRole('button', { name: /rename tab/i })).not.toBeInTheDocument();
+    fireEvent.contextMenu(screen.getAllByRole('button', { name: /close tab/i })[0].closest('.vtab-item')!);
+    expect(screen.getByRole('menu').parentElement).toBe(document.body);
+    fireEvent.click(screen.getByRole('menuitem', { name: /rename tab/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /^tab name$/i }), { target: { value: 'Renamed' } });
     fireEvent.click(screen.getByRole('button', { name: /save tab name/i }));
 
     expect(onRenameTab).toHaveBeenCalledWith('tab-1', 'Renamed');
+
+    fireEvent.contextMenu(screen.getAllByRole('button', { name: /close tab/i })[0].closest('.vtab-item')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: /save as workspace/i }));
+    expect(onSaveWorkspaceTab).toHaveBeenCalledWith(tabs[0]);
+  });
+
+  it('closes the tab context menu when clicking outside it', () => {
+    renderTabs();
+
+    fireEvent.contextMenu(screen.getAllByRole('button', { name: /close tab/i })[0].closest('.vtab-item')!);
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
   it('shows scan-friendly subtitles for local and SSH tabs', () => {

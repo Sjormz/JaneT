@@ -1,6 +1,6 @@
 {
   "name": "janet",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "JaneT - A powerful cross-platform terminal with file explorer, SSH, and git tree",
   "main": "dist/main/index.js",
   "scripts": {

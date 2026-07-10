@@ -500,6 +500,45 @@ html, body, #root {
   align-self: flex-end;
 }
 .workspace-form-close:hover { color: var(--text-secondary); }
+.workspace-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+}
+.workspace-modal {
+  width: min(520px, 100%);
+  padding: 20px;
+  border: 1px solid var(--glass-border-active);
+  border-radius: var(--radius-lg);
+  background: var(--glass-bg-strong);
+  box-shadow: var(--glass-shadow);
+}
+.workspace-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.workspace-modal-header h2 { font-size: 15px; font-weight: 600; }
+.workspace-modal-header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.workspace-modal-header button:hover { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
 
 .vtab-list {
   flex: 1;
@@ -593,6 +632,32 @@ html, body, #root {
 .vtab-close:hover {
   background: color-mix(in srgb, var(--red) 20%, transparent);
   color: var(--red);
+}
+.vtab-context-menu {
+  position: fixed;
+  z-index: 100;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg-strong);
+  box-shadow: var(--glass-shadow);
+}
+.vtab-context-menu button {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+.vtab-context-menu button:hover {
+  background: color-mix(in srgb, var(--text-accent) 16%, transparent);
 }
 
 /* === Terminal Area === */
@@ -1750,11 +1815,35 @@ html, body, #root {
   overflow: hidden;
   min-width: 0;
   min-height: 0;
+  position: relative;
 }
+.terminal-leaf.pane-dragging { opacity: 0.45; }
+.terminal-leaf-header[draggable="true"] { cursor: grab; }
+.terminal-leaf-header[draggable="true"]:active { cursor: grabbing; }
+.pane-drop-indicator {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  background: var(--text-accent);
+  box-shadow: var(--glow-accent);
+}
+.pane-drop-left, .pane-drop-right { top: 0; bottom: 0; width: 3px; }
+.pane-drop-left { left: 0; }
+.pane-drop-right { right: 0; }
+.pane-drop-top, .pane-drop-bottom { left: 0; right: 0; height: 3px; }
+.pane-drop-top { top: 0; }
+.pane-drop-bottom { bottom: 0; }
+.split-maximized {
+  width: 100%;
+  height: 100%;
+}
+
 .terminal-leaf-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  position: relative;
+  z-index: 2;
   padding: 3px 10px;
   background: rgba(255, 255, 255, 0.04);
   border-bottom: 1px solid var(--glass-border);
@@ -1772,6 +1861,8 @@ html, body, #root {
   display: flex;
   gap: 2px;
   opacity: 0.4;
+  position: relative;
+  z-index: 3;
   transition: opacity var(--transition-fast);
 }
 .terminal-leaf:hover .leaf-actions { opacity: 1; }
@@ -1780,6 +1871,8 @@ html, body, #root {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+  z-index: 4;
   width: 22px;
   height: 22px;
   border: none;
@@ -1803,6 +1896,15 @@ html, body, #root {
   flex: 1;
   overflow: hidden;
   display: flex;
+}
+
+::view-transition-group(*) {
+  animation-duration: 260ms;
+  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*) { animation: none; }
 }
 
 /* === Shortcut Editor === */
