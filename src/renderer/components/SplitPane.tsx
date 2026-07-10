@@ -98,6 +98,7 @@ function TerminalPaneLeaf({
   sshShellReady?: boolean;
   onSshRetry?: (termId: string) => void;
 }) {
+  const leafType = leaf.terminalType ?? tabType;
   const dropSideAt = (event: React.DragEvent): PaneDropSide => {
     const bounds = event.currentTarget.getBoundingClientRect();
     const x = bounds.width ? (event.clientX - bounds.left) / bounds.width : 0;
@@ -178,8 +179,8 @@ function TerminalPaneLeaf({
       <div className="terminal-leaf-body">
         <TerminalPane
           termId={leaf.id}
-          tabType={tabType}
-          sshSessionId={sshSessionId}
+          tabType={leafType}
+          sshSessionId={leaf.sshSessionId ?? sshSessionId}
           onReady={onTerminalReady}
           onRemoved={onTerminalRemoved}
           themeName={themeName}
@@ -188,7 +189,7 @@ function TerminalPaneLeaf({
           onFocus={onTerminalFocus}
           initialCwd={leaf.cwd ?? initialCwd}
           hasSession={hasSessionForLeaf?.(leaf.id)}
-          sshShellReady={sshShellReady}
+          sshShellReady={leaf.sshShellReady ?? sshShellReady}
           onSshRetry={onSshRetry}
         />
       </div>

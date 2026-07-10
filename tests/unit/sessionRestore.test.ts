@@ -37,8 +37,29 @@ describe('serializePaneTree', () => {
       direction: 'vertical',
       sizes: [0.5, 0.5],
       children: [
-        { type: 'leaf', title: 'terminal', cwd: undefined },
-        { type: 'leaf', title: 'terminal', cwd: undefined },
+        { type: 'leaf', title: 'terminal', terminalType: 'local' },
+        { type: 'leaf', title: 'terminal' },
+      ],
+    });
+  });
+
+  it('preserves terminal type and SSH profile per leaf', () => {
+    const saved = serializePaneTree({
+      id: 'split-1',
+      type: 'split',
+      direction: 'vertical',
+      sizes: [1, 1],
+      children: [
+        { id: 'local-1', type: 'leaf', terminalType: 'local', cwd: 'C:/repo' },
+        { id: 'ssh-1', type: 'leaf', terminalType: 'ssh', sshProfileId: 'profile-1' },
+      ],
+    });
+
+    expect(saved).toEqual({
+      type: 'split', direction: 'vertical', sizes: [0.5, 0.5],
+      children: [
+        { type: 'leaf', terminalType: 'local', cwd: 'C:/repo' },
+        { type: 'leaf', terminalType: 'ssh', sshProfileId: 'profile-1' },
       ],
     });
   });

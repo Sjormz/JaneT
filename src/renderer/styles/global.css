@@ -513,11 +513,15 @@ html, body, #root {
 }
 .workspace-modal {
   width: min(520px, 100%);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
   padding: 20px;
   border: 1px solid var(--glass-border-active);
   border-radius: var(--radius-lg);
   background: var(--glass-bg-strong);
   box-shadow: var(--glass-shadow);
+  overflow: hidden;
 }
 .workspace-modal-header {
   display: flex;
@@ -539,6 +543,29 @@ html, body, #root {
   cursor: pointer;
 }
 .workspace-modal-header button:hover { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
+.workspace-modal .workspace-form { flex: 1; min-height: 0; gap: 16px; margin: 0; overflow-y: auto; }
+.workspace-modal > .workspace-form > .form-input { min-height: 40px; padding: 9px 12px; }
+.workspace-terminal-list { display: flex; flex-direction: column; gap: 12px; }
+.workspace-terminal-entry { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--glass-border); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.025); }
+.workspace-terminal-label-row { display: flex; align-items: center; justify-content: space-between; }
+.workspace-terminal-remove { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer; }
+.workspace-terminal-remove:hover { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
+.workspace-terminal-label { color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+.workspace-terminal-type { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border: 1px solid var(--glass-border); border-radius: var(--radius-sm); background: rgba(0, 0, 0, 0.18); }
+.workspace-terminal-type button { min-height: 32px; padding: 0 10px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); font: inherit; font-size: 12px; cursor: pointer; }
+.workspace-terminal-type button:hover { color: var(--text-secondary); background: rgba(255, 255, 255, 0.05); }
+.workspace-terminal-type button.active { background: color-mix(in srgb, var(--text-accent) 20%, transparent); color: var(--text-primary); }
+.workspace-terminal-entry .form-input { min-height: 38px; padding: 8px 11px; }
+.workspace-profile-select { position: relative; }
+.workspace-profile-trigger { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 38px; padding: 8px 11px; border: 1px solid var(--glass-border); border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.04); color: var(--text-primary); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.workspace-profile-trigger:hover, .workspace-profile-trigger[aria-expanded="true"] { border-color: var(--text-accent); background: rgba(255, 255, 255, 0.06); }
+.workspace-profile-trigger svg { color: var(--text-muted); transition: transform var(--transition-fast); }
+.workspace-profile-trigger[aria-expanded="true"] svg { transform: rotate(180deg); }
+.workspace-profile-menu { position: absolute; z-index: 2; top: calc(100% + 6px); right: 0; left: 0; display: flex; flex-direction: column; gap: 2px; max-height: 180px; overflow: auto; padding: 4px; border: 1px solid var(--glass-border-active); border-radius: var(--radius-sm); background: var(--bg-tertiary); box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42); }
+.workspace-profile-menu button { min-height: 32px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.workspace-profile-menu button:hover, .workspace-profile-menu button[aria-selected="true"] { background: color-mix(in srgb, var(--text-accent) 18%, transparent); color: var(--text-primary); }
+.workspace-modal .workspace-add-btn { min-height: 40px; justify-content: center; border-style: solid; }
+.workspace-modal .connect-btn { min-height: 42px; margin-top: 2px; }
 
 .vtab-list {
   flex: 1;

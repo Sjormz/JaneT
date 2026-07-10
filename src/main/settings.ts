@@ -9,7 +9,9 @@ import { app, safeStorage } from 'electron';
 export interface SavedPaneLeaf {
   type: 'leaf';
   title?: string;
+  terminalType?: 'local' | 'ssh';
   cwd?: string;
+  sshProfileId?: string;
 }
 
 export interface SavedPaneSplit {

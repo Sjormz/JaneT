@@ -85,17 +85,37 @@ describe('VerticalTabBar', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /save workspace preset/i }));
     expect(screen.getByRole('dialog', { name: /create workspace preset/i }).parentElement?.parentElement).toBe(document.body);
-    fireEvent.change(screen.getByPlaceholderText(/tab name/i), { target: { value: 'JaneT workspace' } });
+    fireEvent.change(screen.getByPlaceholderText(/workspace name/i), { target: { value: 'JaneT workspace' } });
     fireEvent.change(screen.getByPlaceholderText(/directory path/i), { target: { value: '~/projects/janet' } });
     fireEvent.click(screen.getByRole('button', { name: /add workspace preset/i }));
 
     expect(onWorkspaceTabsChange).toHaveBeenCalledWith(expect.arrayContaining([
       expect.objectContaining({
         name: 'JaneT workspace',
-        type: 'local',
-        cwd: '~/projects/janet',
         terminalCount: 1,
-        splitDirection: 'vertical',
+        root: expect.objectContaining({ type: 'split' }),
+      }),
+    ]));
+  });
+
+  it('chooses an SSH profile from the custom workspace picker', () => {
+    const onWorkspaceTabsChange = vi.fn();
+    renderTabs({ onWorkspaceTabsChange });
+
+    fireEvent.click(screen.getByRole('button', { name: /^workspaces$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save workspace preset/i }));
+    fireEvent.change(screen.getByPlaceholderText(/workspace name/i), { target: { value: 'Remote workspace' } });
+    fireEvent.click(screen.getByRole('button', { name: 'SSH connection' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal 1 SSH profile' }));
+    fireEvent.click(screen.getByRole('option', { name: 'pckpr@box.local:22' }));
+    fireEvent.click(screen.getByRole('button', { name: /add workspace preset/i }));
+
+    expect(onWorkspaceTabsChange).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'Remote workspace',
+        root: expect.objectContaining({
+          children: [expect.objectContaining({ sshProfileId: sshProfiles[0].id })],
+        }),
       }),
     ]));
   });

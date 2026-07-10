@@ -236,27 +236,25 @@ describe('split panes in the app', () => {
     expect(screen.getByRole('button', { name: /maximize pane/i })).toBeInTheDocument();
   });
 
-  it('restores saved local workspace tab layouts with their cwd', async () => {
+  it('does not auto-open saved workspace presets at startup', async () => {
     window.janet.getSettings = vi.fn().mockResolvedValue({
       keybindings: {},
       workspaceTabs: [{
         id: 'workspace-tab-1',
         name: 'JaneT repo',
         type: 'local',
-        cwd: 'C:/Users/pckpr/projects/JaneT',
-        terminalCount: 3,
+        root: { type: 'leaf', terminalType: 'local', cwd: 'C:/Users/pckpr/projects/JaneT' },
+        terminalCount: 1,
         splitDirection: 'vertical',
       }],
     });
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(3);
-      expect(window.janet.terminalCreate).toHaveBeenCalledWith(expect.objectContaining({
-        cwd: 'C:/Users/pckpr/projects/JaneT',
-      }));
-    });
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+    expect(window.janet.terminalCreate).not.toHaveBeenCalledWith(expect.objectContaining({
+      cwd: 'C:/Users/pckpr/projects/JaneT',
+    }));
   });
 
   it('restores a saved session with multiple tabs, pane tree, and active tab', async () => {

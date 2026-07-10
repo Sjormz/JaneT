@@ -3,7 +3,9 @@ import { PaneNode, TerminalLeaf, SplitNode, genId } from './types';
 export interface SavedPaneLeaf {
   type: 'leaf';
   title?: string;
+  terminalType?: 'local' | 'ssh';
   cwd?: string;
+  sshProfileId?: string;
 }
 
 export interface SavedPaneSplit {
@@ -45,7 +47,13 @@ function normalizeSizes(sizes: unknown, count: number): number[] {
 /** Strip runtime-only ids and emit a portable, JSON-safe tree. */
 export function serializePaneTree(node: PaneNode, cwdByTerminal: Record<string, string> = {}): SavedPaneNode {
   if (node.type === 'leaf') {
-    return { type: 'leaf', title: node.title, cwd: cwdByTerminal[node.id] ?? node.cwd };
+    return {
+      type: 'leaf',
+      ...(node.title ? { title: node.title } : {}),
+      ...(node.terminalType ? { terminalType: node.terminalType } : {}),
+      ...(cwdByTerminal[node.id] ?? node.cwd ? { cwd: cwdByTerminal[node.id] ?? node.cwd } : {}),
+      ...(node.sshProfileId ? { sshProfileId: node.sshProfileId } : {}),
+    };
   }
   return {
     type: 'split',
@@ -63,14 +71,19 @@ export function serializePaneTree(node: PaneNode, cwdByTerminal: Record<string, 
  */
 export function restorePaneTree(saved: unknown, prefix: 'term' | 'split' = 'term'): PaneNode | null {
   if (!saved || typeof saved !== 'object') return null;
-  const node = saved as { type?: string; title?: string; direction?: string; sizes?: unknown; children?: unknown };
+  const node = saved as {
+    type?: string; title?: string; direction?: string; sizes?: unknown; children?: unknown;
+    terminalType?: string; cwd?: string; sshProfileId?: string;
+  };
 
   if (node.type === 'leaf') {
     const leaf: TerminalLeaf = {
       id: genId(prefix),
       type: 'leaf',
       title: typeof node.title === 'string' ? node.title : undefined,
-      cwd: typeof (node as SavedPaneLeaf).cwd === 'string' ? (node as SavedPaneLeaf).cwd : undefined,
+      terminalType: node.terminalType === 'ssh' || node.terminalType === 'local' ? node.terminalType : undefined,
+      cwd: typeof node.cwd === 'string' ? node.cwd : undefined,
+      sshProfileId: typeof node.sshProfileId === 'string' ? node.sshProfileId : undefined,
     };
     return leaf;
   }
