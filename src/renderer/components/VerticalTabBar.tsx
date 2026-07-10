@@ -134,6 +134,7 @@ export default function VerticalTabBar({
     } else {
       onWorkspaceTabsChange([...workspaceTabs, preset]);
     }
+    if (!editingPreset) onWorkspaceTabLaunch(preset);
     closeWorkspaceForm();
     closePresetEditor();
   };
@@ -286,7 +287,7 @@ export default function VerticalTabBar({
                         <div className="workspace-item-text">
                           <span className="workspace-item-name">{preset.name}</span>
                           <span className="workspace-item-sub">
-                            {subtitle} · {preset.terminalCount} {preset.splitDirection === 'vertical' ? 'vertical' : 'horizontal'}
+                            {preset.terminalCount} terminal{preset.terminalCount === 1 ? '' : 's'}
                           </span>
                         </div>
                       </div>
@@ -339,6 +340,11 @@ export default function VerticalTabBar({
           <button role="menuitem" onClick={() => { startRename(tabMenu.tab); setTabMenu(null); }}>
             Rename tab
           </button>
+          {tabMenu.tab.workspaceId && workspaceTabs.find((preset) => preset.id === tabMenu.tab.workspaceId) && (
+            <button role="menuitem" onClick={() => { editPreset(workspaceTabs.find((preset) => preset.id === tabMenu.tab.workspaceId)!); setTabMenu(null); }}>
+              Edit workspace
+            </button>
+          )}
           <button role="menuitem" onClick={() => { onSaveWorkspaceTab(tabMenu.tab); setTabMenu(null); }}>
             Save as workspace
           </button>

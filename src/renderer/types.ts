@@ -2,7 +2,17 @@ export interface TerminalLeaf {
   id: string;
   type: 'leaf';
   title?: string;
+  terminalType?: 'local' | 'ssh';
   cwd?: string;
+  sshProfileId?: string;
+  sshSessionId?: string;
+  sshShellReady?: boolean;
+}
+
+export interface WorkspaceTerminal {
+  type: 'local' | 'ssh';
+  cwd?: string;
+  sshProfileId?: string;
 }
 
 export interface SplitNode {
@@ -63,7 +73,31 @@ export function genId(prefix = 'p'): string {
 }
 
 export function createLeaf(type: 'local' | 'ssh' = 'local'): TerminalLeaf {
-  return { id: genId('term'), type: 'leaf', title: type === 'local' ? 'terminal' : 'ssh' };
+  return { id: genId('term'), type: 'leaf', title: type === 'local' ? 'terminal' : 'ssh', terminalType: type };
+}
+
+function workspaceLeaf(terminal: WorkspaceTerminal): TerminalLeaf {
+  return {
+    id: genId('term'), type: 'leaf', title: terminal.type === 'ssh' ? 'ssh' : 'terminal',
+    terminalType: terminal.type, cwd: terminal.type === 'local' ? terminal.cwd : undefined,
+    sshProfileId: terminal.type === 'ssh' ? terminal.sshProfileId : undefined,
+  };
+}
+
+/** Creates a balanced initial workspace grid; the final pane spans unused row cells. */
+export function createWorkspaceRoot(terminals: WorkspaceTerminal[]): PaneNode {
+  const leaves = terminals.length ? terminals.map(workspaceLeaf) : [workspaceLeaf({ type: 'local' })];
+  const columns = Math.ceil(Math.sqrt(leaves.length));
+  const rows: PaneNode[] = [];
+  for (let offset = 0; offset < leaves.length; offset += columns) {
+    const row = leaves.slice(offset, offset + columns);
+    const remaining = columns - row.length;
+    rows.push({
+      id: genId('split'), type: 'split', direction: 'vertical', children: row,
+      sizes: row.map((_, index) => index === row.length - 1 ? 1 + remaining : 1),
+    });
+  }
+  return rows.length === 1 ? rows[0] : { id: genId('split'), type: 'split', direction: 'horizontal', children: rows, sizes: rows.map(() => 1) };
 }
 
 export function createPaneRoot(
@@ -271,6 +305,11 @@ export function findLeaf(tree: PaneNode, leafId: string): TerminalLeaf | null {
 export function getAllLeafIds(tree: PaneNode): string[] {
   if (tree.type === 'leaf') return [tree.id];
   return tree.children.flatMap(getAllLeafIds);
+}
+
+export function mapLeaves(tree: PaneNode, mapper: (leaf: TerminalLeaf) => TerminalLeaf): PaneNode {
+  if (tree.type === 'leaf') return mapper(tree);
+  return { ...tree, children: tree.children.map((child) => mapLeaves(child, mapper)) };
 }
 
 export function countLeaves(tree: PaneNode): number {

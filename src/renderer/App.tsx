@@ -13,7 +13,7 @@ import {
   SavedSSHProfile,
   WorkspaceTabPreset,
   PaneNode, PaneDropSide,
-  createPaneRoot, splitPane, removePane, movePane, resizePane, getAllLeafIds, genId,
+  createPaneRoot, splitPane, removePane, movePane, resizePane, getAllLeafIds, genId, mapLeaves,
 } from './types';
 import { ThemeName, applyCssTheme, getTheme } from './themes';
 import { KeybindingsProvider, useKeybindings } from './KeybindingsContext';
@@ -63,7 +63,7 @@ function AppInner() {
   const [paneDropTarget, setPaneDropTarget] = useState<{ leafId: string; side: PaneDropSide } | null>(null);
   const [activeTerminals, setActiveTerminals] = useState<Set<string>>(new Set());
   const liveTerminalIdsRef = useRef<Set<string>>(new Set());
-  const workspaceTabsRestoredRef = useRef(false);
+
   const sessionRestoredRef = useRef(false);
   const [paletteVisible, setPaletteVisible] = useState(false);
 
@@ -118,8 +118,15 @@ function AppInner() {
             const restored: TabInfo[] = [];
             let restoredActiveId: string | null = null;
             for (const saved of session.tabs) {
-              const tree = restorePaneTree(saved.root);
+              let tree = restorePaneTree(saved.root);
               if (!tree) continue;
+              if (saved.type !== 'ssh') {
+                tree = mapLeaves(tree, (leaf) => leaf.terminalType === 'ssh' && leaf.sshProfileId ? {
+                  ...leaf,
+                  sshSessionId: `ssh-${Date.now()}-${leaf.id}`,
+                  sshShellReady: false,
+                } : leaf);
+              }
               const tab: TabInfo = {
                 id: genId('tab'),
                 title: saved.title,
@@ -229,6 +236,35 @@ function AppInner() {
             : existing,
         ));
       });
+    }
+  }, [sshProfiles]);
+
+  // Mixed workspace tabs carry their SSH connection settings on individual leaves.
+  useEffect(() => {
+    if (!sessionRestoredRef.current) return;
+    const leaves: Array<{ tabId: string; leafId: string; sshProfileId: string; sshSessionId: string }> = [];
+    const collect = (tab: TabInfo, node: PaneNode) => {
+      if (node.type === 'leaf') {
+        if (node.terminalType === 'ssh' && node.sshProfileId && node.sshSessionId) leaves.push({ tabId: tab.id, leafId: node.id, sshProfileId: node.sshProfileId, sshSessionId: node.sshSessionId });
+        return;
+      }
+      node.children.forEach((child) => collect(tab, child));
+    };
+    tabsRef.current.filter((tab) => tab.type !== 'ssh').forEach((tab) => collect(tab, tab.root));
+    for (const leaf of leaves) {
+      const profile = sshProfiles.find((candidate) => candidate.id === leaf.sshProfileId);
+      if (!profile) continue;
+      window.janet.sshConnect({
+        id: leaf.sshSessionId, host: profile.host, port: profile.port,
+        ...(profile.username ? { username: profile.username } : {}), auth: profile.auth,
+        password: profile.auth === 'password' ? profile.password : undefined,
+        privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+      }).then(() => {
+        setReadySshSessionIds((current) => new Set(current).add(leaf.sshSessionId));
+        setTabs((current) => current.map((tab) => tab.id === leaf.tabId
+          ? { ...tab, root: mapLeaves(tab.root, (candidate) => candidate.id === leaf.leafId ? { ...candidate, sshShellReady: true } : candidate) }
+          : tab));
+      }).catch((error) => console.error('Failed to reconnect saved workspace SSH terminal:', error));
     }
   }, [sshProfiles]);
 
@@ -556,82 +592,46 @@ function AppInner() {
     }
   }, [cwdByTerminal, updateTab]);
 
-  const createTabFromPreset = useCallback((preset: WorkspaceTabPreset, sshSessionId?: string): TabInfo => ({
-    id: genId('tab'),
-    title: preset.name,
-    type: preset.type,
-    workspaceId: preset.id,
-    sshSessionId,
-    sshProfileId: preset.sshProfileId,
-    sshShellReady: preset.type !== 'ssh',
-    cwd: preset.type === 'local' ? preset.cwd : undefined,
-    root: restorePaneTree(preset.root) ?? createPaneRoot(preset.type, preset.terminalCount, preset.splitDirection),
-  }), []);
-
   const openWorkspaceTab = useCallback(async (preset: WorkspaceTabPreset) => {
-    if (preset.type === 'local') {
-      const tab = createTabFromPreset(preset);
-      setTabs((prev) => [...prev, tab]);
-      setActiveTabId(tab.id);
-      return;
+    let root = restorePaneTree(preset.root) ?? createPaneRoot(preset.type, preset.terminalCount, preset.splitDirection);
+    root = mapLeaves(root, (leaf) => leaf.terminalType !== 'ssh' ? leaf : {
+      ...leaf,
+      sshSessionId: `ssh-${Date.now()}-${leaf.id}`,
+      sshShellReady: false,
+    });
+    const tab: TabInfo = {
+      id: genId('tab'), title: preset.name, workspaceId: preset.id, type: 'local', root,
+    };
+    setTabs((prev) => [...prev, tab]);
+    setActiveTabId(tab.id);
+
+    const sshLeaves: Array<{ id: string; sshProfileId: string; sshSessionId: string }> = [];
+    const collect = (node: PaneNode) => {
+      if (node.type === 'leaf') {
+        if (node.terminalType === 'ssh' && node.sshProfileId && node.sshSessionId) sshLeaves.push({ id: node.id, sshProfileId: node.sshProfileId, sshSessionId: node.sshSessionId });
+        return;
+      }
+      node.children.forEach(collect);
+    };
+    collect(root);
+    for (const leaf of sshLeaves) {
+      const profile = sshProfiles.find((candidate) => candidate.id === leaf.sshProfileId);
+      if (!profile) continue;
+      try {
+        await window.janet.sshConnect({
+          id: leaf.sshSessionId, host: profile.host, port: profile.port,
+          ...(profile.username ? { username: profile.username } : {}), auth: profile.auth,
+          password: profile.auth === 'password' ? profile.password : undefined,
+          privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+        });
+        setReadySshSessionIds((current) => new Set(current).add(leaf.sshSessionId));
+        updateTab(tab.id, (current) => ({ ...current, root: mapLeaves(current.root, (candidate) => candidate.id === leaf.id ? { ...candidate, sshShellReady: true } : candidate) }));
+      } catch (error) {
+        console.error('Failed to open workspace SSH terminal:', error);
+      }
     }
+  }, [sshProfiles, updateTab]);
 
-    const profile = sshProfiles.find((candidate) => candidate.id === preset.sshProfileId);
-    if (!profile) return;
-
-    const sessionId = `ssh-${Date.now()}`;
-    try {
-      await window.janet.sshConnect({
-        id: sessionId,
-        host: profile.host,
-        port: profile.port,
-        ...(profile.username ? { username: profile.username } : {}),
-        auth: profile.auth,
-        password: profile.auth === 'password' ? profile.password : undefined,
-        privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
-      });
-      const session = {
-        id: sessionId,
-        host: profile.host,
-        port: profile.port,
-        ...(profile.username ? { username: profile.username } : {}),
-        sshProfileId: profile.id,
-      };
-      setSshSessions((prev) => [...prev, session]);
-      setReadySshSessionIds((prev) => new Set(prev).add(sessionId));
-      const tab = createTabFromPreset(preset, sessionId);
-      tab.sshShellReady = true;
-      setTabs((prev) => [...prev, tab]);
-      setActiveTabId(tab.id);
-    } catch (err) {
-      console.error('Failed to open workspace SSH tab:', err);
-    }
-  }, [createTabFromPreset, sshProfiles]);
-
-  useEffect(() => {
-    if (workspaceTabsRestoredRef.current) return;
-    // If a session restore is in flight or already happened, defer to it —
-    // the session wins because it represents the user's actual open tabs.
-    if (!sessionRestoredRef.current) return;
-    if (workspaceTabs.length === 0) {
-      workspaceTabsRestoredRef.current = true;
-      return;
-    }
-    workspaceTabsRestoredRef.current = true;
-
-    const localTabs = workspaceTabs
-      .filter((preset) => preset.type === 'local')
-      .map((preset) => createTabFromPreset(preset));
-
-    if (localTabs.length > 0) {
-      setTabs(localTabs);
-      setActiveTabId(localTabs[0].id);
-    }
-
-    for (const preset of workspaceTabs.filter((candidate) => candidate.type === 'ssh')) {
-      openWorkspaceTab(preset);
-    }
-  }, [createTabFromPreset, openWorkspaceTab, workspaceTabs]);
 
   const handleSSHDisconnected = useCallback(
     (sessionId: string) => {
