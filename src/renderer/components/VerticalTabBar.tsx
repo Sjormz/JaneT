@@ -9,6 +9,7 @@ import WorkspaceTabPresetForm, { sshProfileLabel } from './WorkspaceTabPresetFor
 import { useRefreshTask } from '../refreshCoordinator';
 import { useModalFocus } from '../useModalFocus';
 import Tooltip from './Tooltip';
+import { sanitizeStartupCommands } from '../../shared/startupCommands';
 
 interface VerticalTabBarProps {
   tabs: TabInfo[];
@@ -43,6 +44,12 @@ function compactLocalTabLabel(cwd?: string): string {
   if (!trimmed || trimmed === '~') return 'Home';
   const parts = trimmed.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] || trimmed;
+}
+
+function countPresetStartupCommands(node: WorkspaceTabPreset['root']): number {
+  if (!node) return 0;
+  if (node.type === 'leaf') return sanitizeStartupCommands(node.startupCommands).length;
+  return node.children.reduce((total, child) => total + countPresetStartupCommands(child), 0);
 }
 
 export default function VerticalTabBar({
@@ -297,6 +304,7 @@ export default function VerticalTabBar({
                   const subtitle = preset.type === 'ssh'
                     ? sshProfile ? sshProfileLabel(sshProfile) : 'Missing SSH profile'
                     : preset.cwd || 'Home directory';
+                  const startupCommandCount = countPresetStartupCommands(preset.root);
 
                   return (
                     <div className="workspace-item" key={preset.id}>
@@ -306,6 +314,7 @@ export default function VerticalTabBar({
                           <span className="workspace-item-name">{preset.name}</span>
                           <span className="workspace-item-sub">
                             {preset.terminalCount} terminal{preset.terminalCount === 1 ? '' : 's'}
+                            {startupCommandCount > 0 && ` · ${startupCommandCount} startup command${startupCommandCount === 1 ? '' : 's'}`}
                           </span>
                         </div>
                       </div>

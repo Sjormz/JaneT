@@ -5,6 +5,7 @@ import type {
   SSHDirectoryListing,
   SSHListDirParams,
 } from '../shared/files';
+import type { StartupShellDialect } from '../shared/startupCommands';
 
 export interface UpdateProgress {
   percent: number;
@@ -21,13 +22,19 @@ export interface UpdateAvailableInfo {
 
 const api = {
   // Terminal
-  terminalCreate: (params: { id: string; cwd?: string; shell?: string }) =>
+  terminalCreate: (params: {
+    id: string;
+    cwd?: string;
+    shell?: string;
+    startupCommands?: string[];
+    startupShellDialect?: StartupShellDialect;
+  }) =>
     ipcRenderer.invoke('terminal:create', params),
   terminalResize: (params: { id: string; cols: number; rows: number }) =>
     ipcRenderer.invoke('terminal:resize', params),
-  terminalWrite: (params: { id: string; data: string }) =>
+  terminalWrite: (params: { id: string; data: string; userInput?: boolean }) =>
     ipcRenderer.invoke('terminal:write', params),
-  terminalWriteBinary: (params: { id: string; data: string }) =>
+  terminalWriteBinary: (params: { id: string; data: string; userInput?: boolean }) =>
     ipcRenderer.invoke('terminal:writeBinary', params),
   terminalDestroy: (params: { id: string }) =>
     ipcRenderer.invoke('terminal:destroy', params),
@@ -40,11 +47,18 @@ const api = {
   // SSH
   sshConnect: (params: { id: string; host: string; port: number; username?: string; auth: string; password?: string; privateKey?: string }) =>
     ipcRenderer.invoke('ssh:connect', params),
-  sshCreateShell: (params: { id: string; termId: string; cols: number; rows: number }) =>
+  sshCreateShell: (params: {
+    id: string;
+    termId: string;
+    cols: number;
+    rows: number;
+    startupCommands?: string[];
+    startupShellDialect?: StartupShellDialect;
+  }) =>
     ipcRenderer.invoke('ssh:createShell', params),
-  sshWriteShell: (params: { sessionId?: string; termId: string; data: string }) =>
+  sshWriteShell: (params: { sessionId?: string; termId: string; data: string; userInput?: boolean }) =>
     ipcRenderer.invoke('ssh:writeShell', params),
-  sshWriteShellBinary: (params: { sessionId?: string; termId: string; data: string }) =>
+  sshWriteShellBinary: (params: { sessionId?: string; termId: string; data: string; userInput?: boolean }) =>
     ipcRenderer.invoke('ssh:writeShellBinary', params),
   sshDestroyShell: (params: { sessionId?: string; termId: string }) =>
     ipcRenderer.invoke('ssh:destroyShell', params),

@@ -442,12 +442,12 @@ function registerIpcHandlers() {
   };
 
   // === Terminal IPC ===
-  handle('terminal:create', (event, { id, cwd, shell }) => {
+  handle('terminal:create', (event, { id, cwd, shell, startupCommands }) => {
     const pty = terminalManager.create(id, cwd, shell, (data) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('terminal:onData', { id, data });
       }
-    });
+    }, startupCommands);
     return { pid: pty.pid };
   });
 
@@ -455,11 +455,11 @@ function registerIpcHandlers() {
     terminalManager.resize(id, cols, rows);
   });
 
-  handle('terminal:write', (event, { id, data }) => {
-    terminalManager.write(id, data);
+  handle('terminal:write', (event, { id, data, userInput }) => {
+    terminalManager.write(id, data, userInput !== false);
   });
-  handle('terminal:writeBinary', (event, { id, data }) => {
-    terminalManager.writeBinary(id, data);
+  handle('terminal:writeBinary', (event, { id, data, userInput }) => {
+    terminalManager.writeBinary(id, data, userInput !== false);
   });
 
   handle('terminal:destroy', (event, { id }) => {
@@ -474,9 +474,17 @@ function registerIpcHandlers() {
     return { connected: true };
   });
 
-  handle('ssh:createShell', (event, { id, termId, cols, rows }) => {
+  handle('ssh:createShell', (event, {
+    id, termId, cols, rows, startupCommands, startupShellDialect,
+  }) => {
     recordE2eEvent({ type: 'ssh:createShell:start', id, termId, cols, rows });
-    const shell = sshManager.createShell(id, termId, { cols, rows });
+    const shell = sshManager.createShell(
+      id,
+      termId,
+      { cols, rows },
+      startupCommands,
+      startupShellDialect,
+    );
     shell.onData((data) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('terminal:onData', { id: termId, data });
@@ -485,11 +493,11 @@ function registerIpcHandlers() {
     return shell.ready.then(() => ({ connected: true }));
   });
 
-  handle('ssh:writeShell', (event, { sessionId, termId, data }) => {
-    sshManager.writeShell(termId, data, sessionId);
+  handle('ssh:writeShell', (event, { sessionId, termId, data, userInput }) => {
+    sshManager.writeShell(termId, data, sessionId, userInput !== false);
   });
-  handle('ssh:writeShellBinary', (event, { sessionId, termId, data }) => {
-    sshManager.writeShellBinary(termId, data, sessionId);
+  handle('ssh:writeShellBinary', (event, { sessionId, termId, data, userInput }) => {
+    sshManager.writeShellBinary(termId, data, sessionId, userInput !== false);
   });
 
   handle('ssh:destroyShell', (event, { sessionId, termId }) => {

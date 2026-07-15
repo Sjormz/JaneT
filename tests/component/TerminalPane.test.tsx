@@ -69,6 +69,7 @@ class MockTerminal {
   unicode = { activeVersion: '6' };
   onData = vi.fn(() => ({ dispose: vi.fn() }));
   onBinary = vi.fn(() => ({ dispose: vi.fn() }));
+  onKey = vi.fn(() => ({ dispose: vi.fn() }));
   loadAddon = vi.fn();
   open = vi.fn();
   focus = vi.fn();
@@ -179,6 +180,31 @@ async function loadTerminalPane() {
 }
 
 describe('TerminalPane SSH reinitialization', () => {
+  it('passes local startup commands to backend creation without typing them from the renderer', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-startup-local"
+          tabType="local"
+          initialCwd="/repo"
+          startupCommands={['npm install', 'npm run dev']}
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    expect(terminalCreate).toHaveBeenCalledWith({
+      id: 'term-startup-local',
+      cwd: '/repo',
+      startupCommands: ['npm install', 'npm run dev'],
+    });
+    expect(terminalWrite).not.toHaveBeenCalled();
+  });
+
   it('creates a new SSH shell when the pane switches from a local terminal to SSH props', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     const onReady = vi.fn();
@@ -230,6 +256,8 @@ describe('TerminalPane SSH reinitialization', () => {
       termId: 'term-restored-ssh',
       tabType: 'ssh' as const,
       sshSessionId: 'ssh-restored',
+      startupCommands: ['hermes doctor', 'hermes --tui'],
+      startupShellDialect: 'posix' as const,
       onReady: vi.fn(),
       onRemoved: vi.fn(),
       themeName: 'tokyo-night',
@@ -253,6 +281,8 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(sshCreateShell).toHaveBeenCalledWith(expect.objectContaining({
       id: 'ssh-restored',
       termId: 'term-restored-ssh',
+      startupCommands: ['hermes doctor', 'hermes --tui'],
+      startupShellDialect: 'posix',
     }));
   });
 
@@ -420,6 +450,7 @@ describe('TerminalPane SSH reinitialization', () => {
         <TerminalPane
           termId="term-reused"
           tabType="local"
+          startupCommands={['codex update']}
           onReady={onReady}
           onRemoved={onRemoved}
           themeName="tokyo-night"
@@ -429,6 +460,10 @@ describe('TerminalPane SSH reinitialization', () => {
 
     expect(MockTerminal.instances).toHaveLength(1);
     expect(terminalCreate).toHaveBeenCalledTimes(1);
+    expect(terminalCreate).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'term-reused',
+      startupCommands: ['codex update'],
+    }));
     expect(MockTerminal.instances[0].dispose).not.toHaveBeenCalled();
 
     const searchAddon = MockAddonSearch.instances[0];
@@ -446,6 +481,7 @@ describe('TerminalPane SSH reinitialization', () => {
         <TerminalPane
           termId="term-reused"
           tabType="local"
+          startupCommands={['codex update']}
           hasSession
           onReady={onReady}
           onRemoved={onRemoved}
@@ -636,10 +672,39 @@ describe('TerminalPane SSH shell output', () => {
       </KeybindingsProvider>,
     );
 
-    const binaryHandler = (MockTerminal.instances.at(-1)?.onBinary as any).mock.calls[0][0] as (data: string) => void;
+    const terminal = MockTerminal.instances.at(-1)!;
+    const keyHandler = (terminal.onKey as any).mock.calls[0][0] as () => void;
+    const binaryHandler = (terminal.onBinary as any).mock.calls[0][0] as (data: string) => void;
+    keyHandler();
     binaryHandler('\xff\x00');
 
-    expect(terminalWriteBinary).toHaveBeenCalledWith({ id: 'term-binary', data: '\xff\x00' });
+    expect(terminalWriteBinary).toHaveBeenCalledWith({
+      id: 'term-binary', data: '\xff\x00', userInput: true,
+    });
+  });
+
+  it('distinguishes user keystrokes from automatic terminal replies', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-input-source" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    const terminal = MockTerminal.instances.at(-1)!;
+    const dataHandler = (terminal.onData as any).mock.calls[0][0] as (data: string) => void;
+    const keyHandler = (terminal.onKey as any).mock.calls[0][0] as () => void;
+
+    dataHandler('\x1b[1;1R');
+    keyHandler();
+    dataHandler('l');
+
+    expect(terminalWrite).toHaveBeenNthCalledWith(1, {
+      id: 'term-input-source', data: '\x1b[1;1R', userInput: false,
+    });
+    expect(terminalWrite).toHaveBeenNthCalledWith(2, {
+      id: 'term-input-source', data: 'l', userInput: true,
+    });
   });
 
   it('keeps the waiting SSH notice visible until remote output arrives', async () => {

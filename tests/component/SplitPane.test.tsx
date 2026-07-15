@@ -8,6 +8,7 @@ const rendererMocks = vi.hoisted(() => ({
   disposeCachedTerminal: vi.fn(),
   paletteActions: [] as Array<{ id: string; handler: () => void }>,
   sidebarProps: null as any,
+  verticalTabBarProps: null as any,
   sshConnectionClosedHandler: null as null | ((event: { id: string; reason: string }) => void),
   sshRetryHandlers: new Map<string, (
     termId: string,
@@ -19,7 +20,10 @@ vi.mock('../../src/renderer/components/Titlebar', () => ({
   default: () => <div data-testid="titlebar" />,
 }));
 vi.mock('../../src/renderer/components/VerticalTabBar', () => ({
-  default: () => <div data-testid="vertical-tab-bar" />,
+  default: (props: unknown) => {
+    rendererMocks.verticalTabBarProps = props;
+    return <div data-testid="vertical-tab-bar" />;
+  },
 }));
 vi.mock('../../src/renderer/components/Sidebar', () => ({
   default: (props: unknown) => {
@@ -60,6 +64,8 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     sshSessionId,
     sshShellReady = true,
     sshConnectionLost = false,
+    startupCommands,
+    startupShellDialect,
     onReady,
     onRemoved,
     onFocus,
@@ -72,6 +78,8 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     sshSessionId?: string;
     sshShellReady?: boolean;
     sshConnectionLost?: boolean;
+    startupCommands?: string[];
+    startupShellDialect?: 'posix' | 'fish' | 'powershell';
     onReady?: (id: string) => void;
     onRemoved?: (id: string) => void;
     onFocus?: (id: string) => void;
@@ -93,11 +101,23 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
       if (!hasSession) {
         if (tabType === 'ssh') {
           if (sshSessionId && sshShellReady) {
-            window.janet.sshCreateShell({ id: sshSessionId, termId, cols: 80, rows: 24 });
+            window.janet.sshCreateShell({
+              id: sshSessionId,
+              termId,
+              cols: 80,
+              rows: 24,
+              ...(startupCommands?.length ? { startupCommands } : {}),
+              ...(startupShellDialect ? { startupShellDialect } : {}),
+            });
             onReady?.(termId);
           }
         } else if (tabType === 'local') {
-          window.janet.terminalCreate({ id: termId, cwd: initialCwd });
+          window.janet.terminalCreate({
+            id: termId,
+            cwd: initialCwd,
+            ...(startupCommands?.length ? { startupCommands } : {}),
+            ...(startupShellDialect ? { startupShellDialect } : {}),
+          });
           onReady?.(termId);
         } else {
           onReady?.(termId);
@@ -106,7 +126,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
       } else {
         onReady?.(termId);
       }
-    }, [termId, hasSession, initialCwd, tabType, sshSessionId, sshShellReady, onReady]);
+    }, [termId, hasSession, initialCwd, tabType, sshSessionId, sshShellReady, startupCommands, startupShellDialect, onReady]);
 
     return (
       <div
@@ -128,6 +148,7 @@ beforeEach(() => {
   rendererMocks.disposeCachedTerminal.mockReset();
   rendererMocks.paletteActions = [];
   rendererMocks.sidebarProps = null;
+  rendererMocks.verticalTabBarProps = null;
   rendererMocks.sshConnectionClosedHandler = null;
   rendererMocks.sshRetryHandlers.clear();
   Object.defineProperty(document, 'startViewTransition', {
@@ -439,6 +460,216 @@ describe('split panes in the app', () => {
     }));
   });
 
+  it('passes each preset pane startup sequence to its matching local or SSH backend', async () => {
+    const sshProfileId = 'forge@box.local:22:password';
+    const preset = {
+      id: 'workspace-startup',
+      name: 'Forge workspace',
+      type: 'local' as const,
+      root: {
+        type: 'split' as const,
+        direction: 'vertical' as const,
+        sizes: [1, 1],
+        children: [
+          {
+            type: 'leaf' as const,
+            terminalType: 'local' as const,
+            cwd: '/repo',
+            startupCommands: ['npm install', 'npm run dev'],
+          },
+          {
+            type: 'leaf' as const,
+            terminalType: 'ssh' as const,
+            sshProfileId,
+            startupCommands: ['hermes doctor', 'hermes -p forge --tui'],
+            startupShellDialect: 'posix' as const,
+          },
+        ],
+      },
+      terminalCount: 2,
+      splitDirection: 'vertical' as const,
+    };
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [preset],
+      sshProfiles: [{
+        id: sshProfileId,
+        host: 'box.local',
+        port: 22,
+        username: 'forge',
+        auth: 'password',
+        password: 'secret',
+      }],
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function');
+      expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1);
+    });
+    (window.janet.terminalCreate as any).mockClear();
+    (window.janet.sshCreateShell as any).mockClear();
+
+    await act(async () => {
+      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+    });
+
+    await waitFor(() => {
+      expect(window.janet.terminalCreate).toHaveBeenCalledWith(expect.objectContaining({
+        cwd: '/repo',
+        startupCommands: ['npm install', 'npm run dev'],
+      }));
+      expect(window.janet.sshCreateShell).toHaveBeenCalledWith(expect.objectContaining({
+        startupCommands: ['hermes doctor', 'hermes -p forge --tui'],
+        startupShellDialect: 'posix',
+      }));
+    });
+    expect(window.janet.terminalWrite).not.toHaveBeenCalled();
+    expect(window.janet.sshWriteShell).not.toHaveBeenCalled();
+
+    const launchedTab = rendererMocks.verticalTabBarProps.tabs.find(
+      (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+    );
+    expect(launchedTab).toBeTruthy();
+    act(() => rendererMocks.verticalTabBarProps.onSaveWorkspaceTab(launchedTab));
+    await waitFor(() => {
+      const workspaceUpdates = (window.janet.setSettings as any).mock.calls
+        .map((call: any[]) => call[0])
+        .filter((update: any) => Array.isArray(update?.workspaceTabs));
+      const savedPreset = workspaceUpdates.at(-1)?.workspaceTabs
+        .find((candidate: { id: string }) => candidate.id === preset.id);
+      expect(savedPreset?.root.children[0].startupCommands).toEqual(['npm install', 'npm run dev']);
+      expect(savedPreset?.root.children[1]).toMatchObject({
+        startupCommands: ['hermes doctor', 'hermes -p forge --tui'],
+        startupShellDialect: 'posix',
+      });
+    });
+  });
+
+  it('launches every terminal from a rootless legacy SSH preset', async () => {
+    const sshProfileId = 'legacy@box.local:22:password';
+    const preset = {
+      id: 'legacy-remote-workspace',
+      name: 'Legacy remote workspace',
+      type: 'ssh' as const,
+      sshProfileId,
+      terminalCount: 2,
+      splitDirection: 'horizontal' as const,
+    };
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [preset],
+      sshProfiles: [{
+        id: sshProfileId,
+        host: 'box.local',
+        port: 22,
+        username: 'legacy',
+        auth: 'password',
+        password: 'secret',
+      }],
+    });
+
+    render(<App />);
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
+    (window.janet.sshCreateShell as any).mockClear();
+
+    await act(async () => {
+      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+    });
+
+    await waitFor(() => {
+      expect(window.janet.sshConnect).toHaveBeenCalledTimes(2);
+      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
+    });
+    expect((window.janet.sshConnect as any).mock.calls.map((call: any[]) => call[0]))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ host: 'box.local', username: 'legacy' }),
+        expect.objectContaining({ host: 'box.local', username: 'legacy' }),
+      ]));
+  });
+
+  it('demotes a fresh preset SSH pane with a missing profile without running its commands locally', async () => {
+    const preset = {
+      id: 'missing-remote-workspace',
+      name: 'Missing remote workspace',
+      type: 'local' as const,
+      terminalCount: 1,
+      splitDirection: 'vertical' as const,
+      root: {
+        type: 'leaf' as const,
+        terminalType: 'ssh' as const,
+        sshProfileId: 'missing-profile',
+        startupCommands: ['remote-only-command'],
+        startupShellDialect: 'posix' as const,
+      },
+    };
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [preset], sshProfiles: [],
+    });
+
+    render(<App />);
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
+    (window.janet.terminalCreate as any).mockClear();
+
+    await act(async () => {
+      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+    });
+
+    await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1));
+    expect(window.janet.sshConnect).not.toHaveBeenCalled();
+    expect((window.janet.terminalCreate as any).mock.calls[0][0]).not.toHaveProperty('startupCommands');
+    const launched = rendererMocks.verticalTabBarProps.tabs.find(
+      (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+    );
+    expect(launched.root).toMatchObject({ terminalType: 'local' });
+    expect(launched.root).not.toHaveProperty('startupCommands');
+  });
+
+  it('demotes a fresh preset SSH pane when its connection fails', async () => {
+    const sshProfileId = 'offline@box.local:22:password';
+    const preset = {
+      id: 'offline-remote-workspace',
+      name: 'Offline remote workspace',
+      type: 'local' as const,
+      terminalCount: 1,
+      splitDirection: 'vertical' as const,
+      root: {
+        type: 'leaf' as const,
+        terminalType: 'ssh' as const,
+        sshProfileId,
+        startupCommands: ['remote-only-command'],
+        startupShellDialect: 'posix' as const,
+      },
+    };
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [preset],
+      sshProfiles: [{
+        id: sshProfileId, host: 'box.local', port: 22, username: 'offline',
+        auth: 'password', password: 'secret',
+      }],
+    });
+    (window.janet.sshConnect as any).mockRejectedValueOnce(new Error('offline'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      render(<App />);
+      await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
+      (window.janet.terminalCreate as any).mockClear();
+
+      await act(async () => {
+        await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+      });
+
+      await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1));
+      expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
+      expect((window.janet.terminalCreate as any).mock.calls[0][0]).not.toHaveProperty('startupCommands');
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it('restores a saved session with multiple tabs, pane tree, and active tab', async () => {
     window.janet.getSettings = vi.fn().mockResolvedValue({
       keybindings: {},
@@ -454,7 +685,14 @@ describe('split panes in the app', () => {
               type: 'split',
               direction: 'vertical',
               sizes: [1, 1],
-              children: [{ type: 'leaf' }, { type: 'leaf' }],
+              children: [
+                {
+                  type: 'leaf',
+                  startupCommands: ['git pull', 'npm install'],
+                  startupShellDialect: 'posix',
+                },
+                { type: 'leaf' },
+              ],
             },
           },
           {
@@ -482,6 +720,10 @@ describe('split panes in the app', () => {
         (call: any[]) => call[0]?.cwd === 'C:/repo',
       );
       expect(projectCreates).toHaveLength(2);
+      for (const [params] of projectCreates) {
+        expect(params).not.toHaveProperty('startupCommands');
+        expect(params).not.toHaveProperty('startupShellDialect');
+      }
       expect(window.janet.terminalCreate).toHaveBeenCalledTimes(2);
     });
   });
@@ -519,7 +761,11 @@ describe('split panes in the app', () => {
             title: 'box',
             type: 'ssh',
             sshProfileId,
-            root: { type: 'leaf' },
+            root: {
+              type: 'leaf',
+              startupCommands: ['hermes doctor', 'hermes --tui'],
+              startupShellDialect: 'posix',
+            },
           },
         ],
         activeTabId: 'ssh-1',
@@ -560,6 +806,8 @@ describe('split panes in the app', () => {
     const shellArgs = (window.janet.sshCreateShell as any).mock.calls[0][0] as any;
     expect(connectArgs.id).toBeTruthy();
     expect(shellArgs.id).toBe(connectArgs.id);
+    expect(shellArgs).not.toHaveProperty('startupCommands');
+    expect(shellArgs).not.toHaveProperty('startupShellDialect');
     expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
       kind: 'ssh',
       sessionId: connectArgs.id,
@@ -636,7 +884,13 @@ describe('split panes in the app', () => {
           title: 'removed host',
           type: 'ssh',
           sshProfileId: 'removed-profile',
-          root: { type: 'leaf', terminalType: 'ssh', sshProfileId: 'removed-profile' },
+          root: {
+            type: 'leaf',
+            terminalType: 'ssh',
+            sshProfileId: 'removed-profile',
+            startupCommands: ['rm -rf remote-build'],
+            startupShellDialect: 'posix',
+          },
         }],
         activeTabId: 'missing-ssh',
         sidebarOpen: true,
@@ -648,6 +902,9 @@ describe('split panes in the app', () => {
     render(<App />);
 
     await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1));
+    const localCreate = (window.janet.terminalCreate as any).mock.calls[0][0];
+    expect(localCreate).not.toHaveProperty('startupCommands');
+    expect(localCreate).not.toHaveProperty('startupShellDialect');
     expect(window.janet.sshConnect).not.toHaveBeenCalled();
     expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
   });
@@ -694,9 +951,31 @@ describe('split panes in the app', () => {
 
   it('retries a mixed-workspace SSH leaf with measured dimensions and surfaces transport failure', async () => {
     const sshProfileId = 'mixed@box.local:22:password';
+    const preset = {
+      id: 'mixed-workspace-retry',
+      name: 'mixed retry',
+      type: 'local' as const,
+      terminalCount: 2,
+      splitDirection: 'vertical' as const,
+      root: {
+        type: 'split' as const,
+        direction: 'vertical' as const,
+        sizes: [1, 1],
+        children: [
+          { type: 'leaf' as const, terminalType: 'local' as const },
+          {
+            type: 'leaf' as const,
+            terminalType: 'ssh' as const,
+            sshProfileId,
+            startupCommands: ['hermes doctor', 'hermes --tui'],
+            startupShellDialect: 'posix' as const,
+          },
+        ],
+      },
+    };
     window.janet.getSettings = vi.fn().mockResolvedValue({
       keybindings: {},
-      workspaceTabs: [],
+      workspaceTabs: [preset],
       sshProfiles: [{
         id: sshProfileId,
         host: 'box.local',
@@ -705,29 +984,14 @@ describe('split panes in the app', () => {
         auth: 'password',
         password: 'secret',
       }],
-      session: {
-        tabs: [{
-          id: 'mixed-workspace-retry',
-          title: 'mixed retry',
-          type: 'local',
-          root: {
-            type: 'split',
-            direction: 'vertical',
-            sizes: [1, 1],
-            children: [
-              { type: 'leaf', terminalType: 'local' },
-              { type: 'leaf', terminalType: 'ssh', sshProfileId },
-            ],
-          },
-        }],
-        activeTabId: 'mixed-workspace-retry',
-        sidebarOpen: true,
-        tabsOpen: true,
-        sidebarSection: 'files',
-      },
     });
 
     render(<App />);
+
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
+    await act(async () => {
+      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+    });
 
     await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
     const initialShell = (window.janet.sshCreateShell as any).mock.calls[0][0];
@@ -754,12 +1018,16 @@ describe('split panes in the app', () => {
       termId: initialShell.termId,
       cols: 132,
       rows: 48,
+      startupCommands: ['hermes doctor', 'hermes --tui'],
+      startupShellDialect: 'posix',
     });
     expect(window.janet.sshCreateShell).toHaveBeenNthCalledWith(2, {
       id: initialShell.id,
       termId: initialShell.termId,
       cols: 132,
       rows: 48,
+      startupCommands: ['hermes doctor', 'hermes --tui'],
+      startupShellDialect: 'posix',
     });
 
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});

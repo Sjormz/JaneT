@@ -1,3 +1,6 @@
+import type { StartupShellDialect } from '../shared/startupCommands';
+import { sanitizeStartupCommands } from '../shared/startupCommands';
+
 export interface TerminalLeaf {
   id: string;
   type: 'leaf';
@@ -7,12 +10,16 @@ export interface TerminalLeaf {
   sshProfileId?: string;
   sshSessionId?: string;
   sshShellReady?: boolean;
+  startupCommands?: string[];
+  startupShellDialect?: StartupShellDialect;
 }
 
 export interface WorkspaceTerminal {
   type: 'local' | 'ssh';
   cwd?: string;
   sshProfileId?: string;
+  startupCommands?: string[];
+  startupShellDialect?: StartupShellDialect;
 }
 
 export interface SplitNode {
@@ -77,10 +84,15 @@ export function createLeaf(type: 'local' | 'ssh' = 'local'): TerminalLeaf {
 }
 
 function workspaceLeaf(terminal: WorkspaceTerminal): TerminalLeaf {
+  const startupCommands = sanitizeStartupCommands(terminal.startupCommands);
   return {
     id: genId('term'), type: 'leaf', title: terminal.type === 'ssh' ? 'ssh' : 'terminal',
     terminalType: terminal.type, cwd: terminal.type === 'local' ? terminal.cwd : undefined,
     sshProfileId: terminal.type === 'ssh' ? terminal.sshProfileId : undefined,
+    ...(startupCommands.length > 0 ? { startupCommands } : {}),
+    ...(terminal.type === 'ssh' && startupCommands.length > 0
+      ? { startupShellDialect: terminal.startupShellDialect ?? 'posix' }
+      : {}),
   };
 }
 

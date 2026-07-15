@@ -91,8 +91,22 @@ function sshSessionInfo(sessionId: string, profile: SavedSSHProfile): SessionInf
   };
 }
 
+function stripStartupAutomation(leaf: TerminalLeaf): TerminalLeaf {
+  const {
+    startupCommands: _startupCommands,
+    startupShellDialect: _startupShellDialect,
+    ...safeLeaf
+  } = leaf;
+  return safeLeaf;
+}
+
 function localizeTerminalLeaf(leaf: TerminalLeaf): TerminalLeaf {
-  const { sshProfileId: _profile, sshSessionId: _session, sshShellReady: _ready, ...local } = leaf;
+  const {
+    sshProfileId: _profile,
+    sshSessionId: _session,
+    sshShellReady: _ready,
+    ...local
+  } = stripStartupAutomation(leaf);
   return { ...local, terminalType: 'local' };
 }
 
@@ -137,6 +151,10 @@ function createInitialAppState(settings: any): InitialAppState {
   for (const saved of session.tabs) {
     let tree = restorePaneTree(saved.root);
     if (!tree) continue;
+    // Durable sessions describe terminals that already existed; startup
+    // automation belongs only to an explicit fresh preset launch. Refuse
+    // stale or manually injected startup fields on app restoration.
+    tree = mapLeaves(tree, stripStartupAutomation);
     if (saved.type !== 'ssh') {
       tree = mapLeaves(tree, (leaf) => leaf.terminalType === 'ssh' && leaf.sshProfileId ? {
         ...leaf,
@@ -761,7 +779,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     };
 
     try {
-      await window.janet.sshCreateShell({ id: sessionId, termId, ...dims });
+      await window.janet.sshCreateShell({
+        id: sessionId,
+        termId,
+        ...dims,
+        ...(leaf?.startupCommands?.length ? { startupCommands: leaf.startupCommands } : {}),
+        ...(leaf?.startupShellDialect ? { startupShellDialect: leaf.startupShellDialect } : {}),
+      });
     } catch (shellErr) {
       // Shell open failed — the session itself may be dead. Try
       // re-establishing the SSH connection from the saved profile,
@@ -798,7 +822,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           ? current
           : [...current, session]);
         markSshSessionReady(sessionId);
-        await window.janet.sshCreateShell({ id: sessionId, termId, ...dims });
+        await window.janet.sshCreateShell({
+          id: sessionId,
+          termId,
+          ...dims,
+          ...(leaf?.startupCommands?.length ? { startupCommands: leaf.startupCommands } : {}),
+          ...(leaf?.startupShellDialect ? { startupShellDialect: leaf.startupShellDialect } : {}),
+        });
       } catch (reconnectErr) {
         console.error('SSH retry failed:', reconnectErr);
         throw reconnectErr;
@@ -826,7 +856,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       type: tab.type,
       cwd: tab.type === 'local' ? tab.cwd : undefined,
       sshProfileId: tab.sshProfileId,
-      root: serializePaneTree(tab.root, cwdByTerminal),
+      root: serializePaneTree(tab.root, cwdByTerminal, { includeStartupCommands: true }),
       terminalCount: getAllLeafIds(tab.root).length,
       splitDirection: tab.root.type === 'split' ? tab.root.direction : 'vertical',
     };
@@ -843,7 +873,16 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   }, [cwdByTerminal, updateTab]);
 
   const openWorkspaceTab = useCallback(async (preset: WorkspaceTabPreset) => {
-    let root = restorePaneTree(preset.root) ?? createPaneRoot(preset.type, preset.terminalCount, preset.splitDirection);
+    const restoredRoot = restorePaneTree(preset.root);
+    let root = restoredRoot ?? createPaneRoot(preset.type, preset.terminalCount, preset.splitDirection);
+    if (!restoredRoot) {
+      // Legacy presets stored one terminal configuration at the top level.
+      // Carry it into each synthesized leaf before the preset becomes a mixed
+      // workspace tab, otherwise rootless SSH presets cannot connect.
+      root = mapLeaves(root, (leaf) => preset.type === 'ssh'
+        ? { ...leaf, terminalType: 'ssh', sshProfileId: preset.sshProfileId }
+        : { ...leaf, terminalType: 'local', cwd: preset.cwd });
+    }
     root = mapLeaves(root, (leaf) => leaf.terminalType !== 'ssh' ? leaf : {
       ...leaf,
       sshSessionId: `ssh-${Date.now()}-${leaf.id}`,
@@ -857,10 +896,12 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     setTabs(nextTabs);
     setActiveTabId(tab.id);
 
-    const sshLeaves: Array<{ id: string; sshProfileId: string; sshSessionId: string }> = [];
+    const sshLeaves: Array<{ id: string; sshProfileId?: string; sshSessionId: string }> = [];
     const collect = (node: PaneNode) => {
       if (node.type === 'leaf') {
-        if (node.terminalType === 'ssh' && node.sshProfileId && node.sshSessionId) sshLeaves.push({ id: node.id, sshProfileId: node.sshProfileId, sshSessionId: node.sshSessionId });
+        if (node.terminalType === 'ssh' && node.sshSessionId) {
+          sshLeaves.push({ id: node.id, sshProfileId: node.sshProfileId, sshSessionId: node.sshSessionId });
+        }
         return;
       }
       node.children.forEach(collect);
@@ -868,7 +909,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     collect(root);
     for (const leaf of sshLeaves) {
       const profile = sshProfiles.find((candidate) => candidate.id === leaf.sshProfileId);
-      if (!profile) continue;
+      if (!profile) {
+        updateTab(tab.id, (current) => demoteSshLeaf(current, leaf.id));
+        continue;
+      }
       releasedSshSessionIdsRef.current.delete(leaf.sshSessionId);
       connectingSshSessionIdsRef.current.add(leaf.sshSessionId);
       try {
@@ -893,6 +937,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         updateTab(tab.id, (current) => ({ ...current, root: mapLeaves(current.root, (candidate) => candidate.id === leaf.id ? { ...candidate, sshShellReady: true } : candidate) }));
       } catch (error) {
         console.error('Failed to open workspace SSH terminal:', error);
+        updateTab(tab.id, (current) => demoteSshLeaf(current, leaf.id));
       } finally {
         connectingSshSessionIdsRef.current.delete(leaf.sshSessionId);
       }

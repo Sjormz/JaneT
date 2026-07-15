@@ -75,3 +75,6 @@ jobs:
 
       - name: Run durable workspace Electron tests
         run: npx playwright test --config playwright.config.ts tests/e2e/durable-workspace.spec.ts
+
+      - name: Run startup command Electron test
+        run: npx playwright test --config playwright.config.ts tests/e2e/pane-maximize.spec.ts --grep "runs ordered preset startup commands"

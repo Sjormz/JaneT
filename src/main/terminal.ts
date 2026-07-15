@@ -2,7 +2,8 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn, IPty } from 'node-pty';
-import { buildShellInit } from './shell-init';
+import { buildShellInit, STARTUP_READY_MARKER } from './shell-init';
+import { compileStartupCommands, inferStartupShellDialect } from '../shared/startupCommands';
 import {
   ProcessInfo,
   ProcessInspector,
@@ -22,6 +23,8 @@ interface TerminalInstance {
   atPrompt: boolean;
   hasSubmittedCommand: boolean;
   promptMarkerTail: string;
+  startupExpression?: string;
+  startupTimer?: ReturnType<typeof setTimeout>;
 }
 
 export interface RunningTerminalWork {
@@ -49,7 +52,9 @@ const DEFAULT_PROCESS_SAMPLE_DELAY_MS = 150;
 const DEFAULT_STOP_GRACE_MS = 300;
 const DEFAULT_TERMINATE_GRACE_MS = 750;
 const DEFAULT_FORCE_KILL_GRACE_MS = 250;
+const STARTUP_COMMAND_FALLBACK_MS = 1_000;
 const PROMPT_MARKER = '\x1b]7;';
+const PROMPT_PROBE_TAIL_LENGTH = Math.max(PROMPT_MARKER.length, STARTUP_READY_MARKER.length) - 1;
 
 const SHELL_PROCESS_NAMES = new Set([
   'bash', 'cmd', 'dash', 'fish', 'ksh', 'nu', 'nushell', 'powershell', 'pwsh', 'sh', 'tcsh', 'zsh',
@@ -133,6 +138,7 @@ function shellLaunch(shell: string, init: string, initFile: ShellInitFile): { ar
 export class TerminalManager {
   private terminals: Map<string, TerminalInstance> = new Map();
   private pendingStopProcesses: Map<string, ProcessInfo> = new Map();
+  private startupCommandLedger = new Set<string>();
   private shellInitDir: string | null = null;
   private readonly processInspector: ProcessInspector;
   private readonly sampleDelayMs: number;
@@ -167,7 +173,13 @@ export class TerminalManager {
    * C:\...> PS C:\...>" duplicate-prompt bug. Reusing the existing pty
    * and only ever wiring onData once fixes both.
    */
-  create(id: string, cwd?: string, shell?: string, onData?: (data: string) => void): IPty {
+  create(
+    id: string,
+    cwd?: string,
+    shell?: string,
+    onData?: (data: string) => void,
+    startupCommands?: unknown,
+  ): IPty {
     const existing = this.terminals.get(id);
     if (existing) {
       if (onData && !existing.forwardData) existing.forwardData = onData;
@@ -176,6 +188,10 @@ export class TerminalManager {
 
     const defaultShell = shell || (process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || '/bin/bash');
     const defaultCwd = resolveTerminalCwd(cwd);
+    const startupDialect = inferStartupShellDialect(defaultShell);
+    const startupExpression = startupDialect
+      ? compileStartupCommands(startupCommands, startupDialect)
+      : '';
 
     const init = buildShellInit(defaultShell);
 
@@ -228,11 +244,13 @@ export class TerminalManager {
       atPrompt: true,
       hasSubmittedCommand: false,
       promptMarkerTail: '',
+      ...(startupExpression && !this.startupCommandLedger.has(id) ? { startupExpression } : {}),
     };
     this.terminals.set(id, terminal);
     pty.onExit(() => {
       const current = this.terminals.get(id);
       if (current?.pty === pty) {
+        if (current.startupTimer) clearTimeout(current.startupTimer);
         this.terminals.delete(id);
       }
     });
@@ -240,10 +258,25 @@ export class TerminalManager {
       const current = this.terminals.get(id);
       if (current?.pty !== pty) return;
       const promptProbe = current.promptMarkerTail + data;
-      if (promptProbe.includes(PROMPT_MARKER)) current.atPrompt = true;
-      current.promptMarkerTail = promptProbe.slice(-(PROMPT_MARKER.length - 1));
+      const reachedPrompt = promptProbe.includes(PROMPT_MARKER);
+      const reachedStartupReady = promptProbe.includes(STARTUP_READY_MARKER);
+      if (reachedPrompt) current.atPrompt = true;
+      current.promptMarkerTail = promptProbe.slice(-PROMPT_PROBE_TAIL_LENGTH);
       current.forwardData?.(data);
+      if (reachedStartupReady) {
+        setImmediate(() => this.dispatchStartupCommands(current));
+      }
     });
+    // Integrated shells emit a real prompt marker after the user's profile
+    // finishes. Never bypass that signal: a slow profile may itself read
+    // stdin. The bounded timer is only for recognized shells that JaneT
+    // cannot instrument (for example sh variants).
+    if (terminal.startupExpression && !init) {
+      terminal.startupTimer = setTimeout(() => {
+        this.dispatchStartupCommands(terminal);
+      }, STARTUP_COMMAND_FALLBACK_MS);
+      terminal.startupTimer.unref?.();
+    }
     return pty;
   }
 
@@ -268,25 +301,26 @@ export class TerminalManager {
     }
   }
 
-  write(id: string, data: string): void {
+  write(id: string, data: string, userInput = true): void {
     const term = this.terminals.get(id);
     if (term) {
-      if (data.includes('\r') || data.includes('\n')) {
-        term.atPrompt = false;
-        term.hasSubmittedCommand = true;
+      const submitsCommand = data.includes('\r') || data.includes('\n');
+      if (userInput && term.startupExpression && !this.startupCommandLedger.has(id)) {
+        this.cancelStartupCommands(term);
       }
-      term.pty.write(data);
+      this.writeTerminalInput(term, data, submitsCommand);
     }
   }
 
-  writeBinary(id: string, data: string): void {
+  writeBinary(id: string, data: string, userInput = true): void {
     const term = this.terminals.get(id);
     if (term) {
-      if (data.includes('\r') || data.includes('\n')) {
-        term.atPrompt = false;
-        term.hasSubmittedCommand = true;
+      const binary = Buffer.from(data, 'binary');
+      const submitsCommand = data.includes('\r') || data.includes('\n');
+      if (userInput && term.startupExpression && !this.startupCommandLedger.has(id)) {
+        this.cancelStartupCommands(term);
       }
-      term.pty.write(Buffer.from(data, 'binary'));
+      this.writeTerminalInput(term, binary, submitsCommand);
     }
   }
 
@@ -519,15 +553,18 @@ export class TerminalManager {
   destroy(id: string): void {
     const term = this.terminals.get(id);
     if (term) {
+      if (term.startupTimer) clearTimeout(term.startupTimer);
       try { term.pty.kill(); } catch {}
       this.terminals.delete(id);
     }
+    this.startupCommandLedger.delete(id);
   }
 
   cleanup(): void {
     for (const [id] of this.terminals) {
       this.destroy(id);
     }
+    this.startupCommandLedger.clear();
     if (this.shellInitDir) {
       try { fs.rmSync(this.shellInitDir, { recursive: true, force: true }); } catch {}
       this.shellInitDir = null;
@@ -539,6 +576,51 @@ export class TerminalManager {
       if (process.state?.toUpperCase().startsWith('Z')) continue;
       this.pendingStopProcesses.set(processIdentityKey(process), process);
     }
+  }
+
+  private dispatchStartupCommands(terminal: TerminalInstance): void {
+    if (
+      this.terminals.get(terminal.id) !== terminal ||
+      !terminal.startupExpression ||
+      this.startupCommandLedger.has(terminal.id)
+    ) return;
+
+    const startupExpression = terminal.startupExpression;
+    this.startupCommandLedger.add(terminal.id);
+    terminal.startupExpression = undefined;
+    if (terminal.startupTimer) {
+      clearTimeout(terminal.startupTimer);
+      terminal.startupTimer = undefined;
+    }
+    terminal.atPrompt = false;
+    terminal.hasSubmittedCommand = true;
+    try {
+      terminal.pty.write(`${startupExpression}\r`);
+    } catch {
+      // The PTY may have exited between readiness detection and the write.
+      // This still counts as the pane's single automatic startup attempt.
+    }
+  }
+
+  private cancelStartupCommands(terminal: TerminalInstance): void {
+    this.startupCommandLedger.add(terminal.id);
+    terminal.startupExpression = undefined;
+    if (terminal.startupTimer) {
+      clearTimeout(terminal.startupTimer);
+      terminal.startupTimer = undefined;
+    }
+  }
+
+  private writeTerminalInput(
+    terminal: TerminalInstance,
+    data: string | Buffer,
+    submitsCommand: boolean,
+  ): void {
+    if (submitsCommand) {
+      terminal.atPrompt = false;
+      terminal.hasSubmittedCommand = true;
+    }
+    terminal.pty.write(data);
   }
 
   private ensureShellInitFile(name: string, contents: string): string {

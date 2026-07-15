@@ -10,6 +10,7 @@ A focused terminal workspace for local and SSH work, with durable sessions, file
 
 - **Local terminals** — Run full PTY-backed shells with xterm.js and node-pty.
 - **Tabs and split panes** — Arrange multiple terminals in one window and save reusable launch presets.
+- **Preset startup commands** — Give each local or SSH pane its own ordered bootstrap commands.
 - **Local and remote Explorer** — Browse local folders or a connected SSH machine through SFTP.
 - **SSH connections** — Save password or private-key profiles and reconnect in one step.
 - **Durable workspaces** — Keep active terminals and SSH sessions running after the window closes, or stop them before quitting.
@@ -48,6 +49,16 @@ When JaneT detects active local terminal processes or an open SSH shell, closing
 - **Cancel** returns to the workspace without changing anything.
 
 Idle local shells close normally without an extra prompt. This first durable-workspace release keeps the JaneT Electron process alive in the background; it does not preserve local processes through a force-quit, operating-system restart, or machine shutdown. Remote jobs deliberately detached with tools such as `tmux`, `nohup`, `systemd`, or `disown` may continue after JaneT closes its SSH connection.
+
+### Preset startup commands
+
+Every terminal in a saved preset can run its own ordered command list when its shell starts. For example, one pane can run `git pull` followed by `npm install`, while another opens `hermes -p forge --tui`.
+
+Commands run in order and stop at the first failure. Put interactive applications and long-running services last. Local terminals start in their saved directory; JaneT waits for the first detected prompt in integrated local shells and uses a bounded delay for recognized shells without prompt integration. If a local profile asks for input first, submitting that input safely cancels automation for the pane. For SSH, JaneT submits the sequence when the remote shell channel opens; typing before it opens cancels the pane's automation, but login/profile scripts must still not prompt for input. Choose the remote shell dialect and use an initial `cd` command when a remote working directory is required.
+
+POSIX shells, Fish, and PowerShell are supported. Command Prompt is not yet offered because its one-line parse rules cannot preserve independent command-row behavior reliably; use PowerShell for Windows presets.
+
+Startup commands run once each time the preset creates a fresh pane. They do not replay when switching tabs, restoring a hidden window, remounting the terminal UI, or reconnecting an existing SSH pane. Commands are stored as plain text with the preset and may also appear in shell history, so do not include passwords, tokens, or other secrets.
 
 ## Contributing
 
