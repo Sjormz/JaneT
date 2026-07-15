@@ -729,6 +729,8 @@ describe('split panes in the app', () => {
   });
 
   it('restores a saved SSH tab, connects it, then binds a single shell', async () => {
+    const sessionUuid = '7f81f492-7008-4e40-b558-1c0ca27d1b46';
+    const randomUuid = vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(sessionUuid);
     const sshProfileId = 'pckpr@box.local:22:password';
     const profile = {
       id: sshProfileId,
@@ -787,6 +789,9 @@ describe('split panes in the app', () => {
     // against ssh:connect and can fail with "session not found".
     await waitFor(() => expect(window.janet.sshConnect).toHaveBeenCalledTimes(1));
     const pendingSessionId = (window.janet.sshConnect as any).mock.calls[0][0].id as string;
+    expect(randomUuid).toHaveBeenCalledOnce();
+    expect(pendingSessionId).toBe(`ssh-${sessionUuid}`);
+    randomUuid.mockRestore();
     expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
       kind: 'ssh',
       sessionId: pendingSessionId,
@@ -804,7 +809,7 @@ describe('split panes in the app', () => {
 
     const connectArgs = (window.janet.sshConnect as any).mock.calls[0][0] as any;
     const shellArgs = (window.janet.sshCreateShell as any).mock.calls[0][0] as any;
-    expect(connectArgs.id).toBeTruthy();
+    expect(connectArgs.id).toBe(`ssh-${sessionUuid}`);
     expect(shellArgs.id).toBe(connectArgs.id);
     expect(shellArgs).not.toHaveProperty('startupCommands');
     expect(shellArgs).not.toHaveProperty('startupShellDialect');
