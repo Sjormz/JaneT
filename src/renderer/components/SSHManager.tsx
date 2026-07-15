@@ -42,8 +42,10 @@ export default function SSHManager({
   const [auth, setAuth] = useState<'password' | 'key'>('password');
   const [password, setPassword] = useState('');
   const [privateKey, setPrivateKey] = useState('');
-  const [connecting, setConnecting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [formConnecting, setFormConnecting] = useState(false);
+  const [connectingProfileId, setConnectingProfileId] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [profileError, setProfileError] = useState<{ label: string; message: string } | null>(null);
 
   const resetForm = () => {
     setHost('');
@@ -52,7 +54,7 @@ export default function SSHManager({
     setAuth('password');
     setPassword('');
     setPrivateKey('');
-    setError(null);
+    setFormError(null);
   };
 
   const saveProfile = (profile: SavedSSHProfile) => {
@@ -65,8 +67,8 @@ export default function SSHManager({
     const trimmedHost = host.trim();
     const trimmedUsername = username.trim();
     if (!trimmedHost) return;
-    setConnecting(true);
-    setError(null);
+    setFormConnecting(true);
+    setFormError(null);
 
     const parsedPort = parseInt(port) || 22;
     const sessionId = `ssh-${Date.now()}`;
@@ -102,9 +104,9 @@ export default function SSHManager({
       setShowForm(false);
       resetForm();
     } catch (err: any) {
-      setError(err.message || 'Connection failed');
+      setFormError(err.message || 'Connection failed');
     } finally {
-      setConnecting(false);
+      setFormConnecting(false);
     }
   };
 
@@ -115,13 +117,14 @@ export default function SSHManager({
     setAuth(profile.auth);
     setPassword(profile.password ?? '');
     setPrivateKey(profile.privateKey ?? '');
-    setError(null);
+    setFormError(null);
     setShowForm(true);
   };
 
   const connectProfile = async (profile: SavedSSHProfile) => {
-    setConnecting(true);
-    setError(null);
+    const label = connectionLabel(profile);
+    setConnectingProfileId(profile.id);
+    setProfileError(null);
     const sessionId = `ssh-${Date.now()}`;
 
     try {
@@ -142,9 +145,9 @@ export default function SSHManager({
         sshProfileId: profile.id,
       });
     } catch (err: any) {
-      setError(err.message || 'Connection failed');
+      setProfileError({ label, message: err?.message || 'Connection failed' });
     } finally {
-      setConnecting(false);
+      setConnectingProfileId((current) => current === profile.id ? null : current);
     }
   };
 
@@ -153,6 +156,8 @@ export default function SSHManager({
   };
 
   const hasSavedProfiles = sshProfiles.length > 0;
+  const connectingProfile = sshProfiles.find((profile) => profile.id === connectingProfileId);
+  const anyProfileConnecting = connectingProfileId !== null;
 
   return (
     <div className="ssh-manager">
@@ -168,12 +173,31 @@ export default function SSHManager({
         </button>
       </div>
 
+      {connectingProfile && (
+        <div
+          className="ssh-error"
+          role="status"
+          aria-live="polite"
+          style={{ margin: '8px 14px 0', color: 'var(--text-secondary)' }}
+        >
+          <ServerIcon size="sm" /> Connecting to {connectionLabel(connectingProfile)}…
+        </div>
+      )}
+      {profileError && (
+        <div className="ssh-error" role="alert" style={{ margin: '8px 14px 0' }}>
+          <AlertIcon size="sm" /> Couldn’t connect to {profileError.label}: {profileError.message}
+        </div>
+      )}
+
       {showForm && (
         <form className="ssh-form" onSubmit={handleConnect}>
           <div className="form-row">
             <input
               type="text"
               placeholder="Host (e.g. 192.168.1.100)"
+              aria-label="Host"
+              autoFocus
+              required
               value={host}
               onChange={(e) => setHost(e.target.value)}
               className="form-input"
@@ -183,6 +207,7 @@ export default function SSHManager({
             <input
               type="text"
               placeholder="Port"
+              aria-label="Port"
               value={port}
               onChange={(e) => setPort(e.target.value)}
               className="form-input"
@@ -190,20 +215,23 @@ export default function SSHManager({
             <input
               type="text"
               placeholder="Username"
+              aria-label="Username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               className="form-input"
             />
           </div>
-          <div className="form-row auth-row">
+          <div className="form-row auth-row" role="group" aria-label="Authentication method">
             <button
               type="button"
               className={`auth-btn ${auth === 'password' ? 'active' : ''}`}
+              aria-pressed={auth === 'password'}
               onClick={() => setAuth('password')}
             >Password</button>
             <button
               type="button"
               className={`auth-btn ${auth === 'key' ? 'active' : ''}`}
+              aria-pressed={auth === 'key'}
               onClick={() => setAuth('key')}
             >Key</button>
           </div>
@@ -212,6 +240,7 @@ export default function SSHManager({
               <input
                 type="password"
                 placeholder="Password"
+                aria-label="Password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="form-input"
@@ -221,6 +250,7 @@ export default function SSHManager({
             <div className="form-row">
               <textarea
                 placeholder="Paste private key (RSA/ED25519)"
+                aria-label="Private key"
                 value={privateKey}
                 onChange={(e) => setPrivateKey(e.target.value)}
                 className="form-input form-textarea"
@@ -228,13 +258,17 @@ export default function SSHManager({
               />
             </div>
           )}
-          {error && (
-            <div className="ssh-error">
-              <AlertIcon size="sm" /> {error}
+          {formError && (
+            <div className="ssh-error" role="alert">
+              <AlertIcon size="sm" /> {formError}
             </div>
           )}
-          <button type="submit" className="connect-btn" disabled={connecting}>
-            {connecting ? 'Connecting…' : 'Connect & Save'}
+          <button
+            type="submit"
+            className="connect-btn"
+            disabled={formConnecting || anyProfileConnecting || !host.trim()}
+          >
+            {formConnecting ? 'Connecting…' : 'Connect & Save'}
           </button>
         </form>
       )}
@@ -243,47 +277,50 @@ export default function SSHManager({
         {hasSavedProfiles && (
           <div className="ssh-list-group">
             <div className="ssh-list-title">Saved</div>
-            {sshProfiles.map((profile) => (
-              <div key={profile.id} className="ssh-session-item">
-                <div className="session-info">
-                  <ServerIcon size="md" className="session-icon saved" />
-                  <div className="session-details">
-                    <span className="session-user">{profile.username || profile.host}</span>
-                    <span className="session-host">{profile.username ? `@${profile.host}:${profile.port}` : `:${profile.port}`}</span>
+            {sshProfiles.map((profile) => {
+              const isConnecting = connectingProfileId === profile.id;
+              return (
+                <div key={profile.id} className="ssh-session-item">
+                  <div className="session-info">
+                    <ServerIcon size="md" className="session-icon saved" />
+                    <div className="session-details">
+                      <span className="session-user">{profile.username || profile.host}</span>
+                      <span className="session-host">{profile.username ? `@${profile.host}:${profile.port}` : `:${profile.port}`}</span>
+                    </div>
+                  </div>
+                  <div className="session-actions">
+                    <button
+                      type="button"
+                      className="session-action-btn"
+                      onClick={() => connectProfile(profile)}
+                      disabled={formConnecting || anyProfileConnecting}
+                      title={isConnecting ? `Connecting to ${connectionLabel(profile)}` : 'Connect'}
+                      aria-label={isConnecting ? `Connecting to ${connectionLabel(profile)}` : `Connect to ${connectionLabel(profile)}`}
+                    >
+                      <PlugIcon size="sm" />
+                    </button>
+                    <button
+                      type="button"
+                      className="session-action-btn"
+                      onClick={() => editProfile(profile)}
+                      title="Edit saved connection"
+                      aria-label={`Edit ${connectionLabel(profile)}`}
+                    >
+                      <PencilIcon size="sm" />
+                    </button>
+                    <button
+                      type="button"
+                      className="session-action-btn danger"
+                      onClick={() => forgetProfile(profile.id)}
+                      title="Delete saved connection"
+                      aria-label={`Delete ${connectionLabel(profile)}`}
+                    >
+                      <TrashIcon size="sm" />
+                    </button>
                   </div>
                 </div>
-                <div className="session-actions">
-                  <button
-                    type="button"
-                    className="session-action-btn"
-                    onClick={() => connectProfile(profile)}
-                    disabled={connecting}
-                    title="Connect"
-                    aria-label={`Connect to ${connectionLabel(profile)}`}
-                  >
-                    <PlugIcon size="sm" />
-                  </button>
-                  <button
-                    type="button"
-                    className="session-action-btn"
-                    onClick={() => editProfile(profile)}
-                    title="Edit saved connection"
-                    aria-label={`Edit ${connectionLabel(profile)}`}
-                  >
-                    <PencilIcon size="sm" />
-                  </button>
-                  <button
-                    type="button"
-                    className="session-action-btn danger"
-                    onClick={() => forgetProfile(profile.id)}
-                    title="Delete saved connection"
-                    aria-label={`Delete ${connectionLabel(profile)}`}
-                  >
-                    <TrashIcon size="sm" />
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 

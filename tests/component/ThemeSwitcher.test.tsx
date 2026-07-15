@@ -44,7 +44,7 @@ describe('ThemeSwitcher', () => {
   it('displays current font size', () => {
     renderThemeSwitcher({ fontSize: 16 });
 
-    expect(screen.getByText('Font Size: 16px')).toBeInTheDocument();
+    expect(screen.getByText('Terminal Font Size: 16px')).toBeInTheDocument();
   });
 
   it('renders a font size slider with current value', () => {
@@ -73,5 +73,6 @@ describe('ThemeSwitcher', () => {
 
     fireEvent.click(screen.getByText('Right'));
     expect(onSidebarSideChange).toHaveBeenCalledWith('right');
+    expect(screen.getByRole('button', { name: 'Right' })).toHaveAttribute('aria-pressed', 'false');
   });
 });

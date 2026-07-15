@@ -25,13 +25,14 @@ export default function ThemeSwitcher({
         <label className="theme-label">
           <PaletteIcon size="xs" /> Theme
         </label>
-        <div className="theme-options">
+        <div className="theme-options" role="group" aria-label="Theme">
           {themeOptions.map((opt) => (
             <button
               key={opt.value}
               className={`theme-option ${currentTheme === opt.value ? 'active' : ''}`}
               onClick={() => onThemeChange(opt.value as ThemeName)}
               title={opt.label}
+              aria-pressed={currentTheme === opt.value}
             >
               {opt.label}
             </button>
@@ -41,7 +42,7 @@ export default function ThemeSwitcher({
 
       <div className="theme-section">
         <label className="theme-label">
-          <TypeIcon size="xs" /> Font Size: {fontSize}px
+          <TypeIcon size="xs" /> Terminal Font Size: {fontSize}px
         </label>
         <div className="font-size-controls">
           <input
@@ -58,16 +59,18 @@ export default function ThemeSwitcher({
 
       <div className="theme-section">
         <label className="theme-label">Explorer Side</label>
-        <div className="theme-options">
+        <div className="theme-options" role="group" aria-label="Explorer side">
           <button
             className={`theme-option ${sidebarSide === 'left' ? 'active' : ''}`}
             onClick={() => onSidebarSideChange('left')}
+            aria-pressed={sidebarSide === 'left'}
           >
             Left
           </button>
           <button
             className={`theme-option ${sidebarSide === 'right' ? 'active' : ''}`}
             onClick={() => onSidebarSideChange('right')}
+            aria-pressed={sidebarSide === 'right'}
           >
             Right
           </button>

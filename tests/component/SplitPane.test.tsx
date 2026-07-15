@@ -8,6 +8,10 @@ const rendererMocks = vi.hoisted(() => ({
   disposeCachedTerminal: vi.fn(),
   paletteActions: [] as Array<{ id: string; handler: () => void }>,
   sidebarProps: null as any,
+  sshRetryHandlers: new Map<string, (
+    termId: string,
+    dimensions: { cols: number; rows: number },
+  ) => void | Promise<void>>(),
 }));
 
 vi.mock('../../src/renderer/components/Titlebar', () => ({
@@ -59,6 +63,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     onReady,
     onRemoved,
     onFocus,
+    onSshRetry,
   }: {
     termId: string;
     hasSession?: boolean;
@@ -69,7 +74,13 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     onReady?: (id: string) => void;
     onRemoved?: (id: string) => void;
     onFocus?: (id: string) => void;
+    onSshRetry?: (
+      id: string,
+      dimensions: { cols: number; rows: number },
+    ) => void | Promise<void>;
   }) {
+    if (onSshRetry) rendererMocks.sshRetryHandlers.set(termId, onSshRetry);
+
     React.useEffect(() => {
       mountedTermIds.push(termId);
       return () => {
@@ -115,6 +126,7 @@ beforeEach(() => {
   rendererMocks.disposeCachedTerminal.mockReset();
   rendererMocks.paletteActions = [];
   rendererMocks.sidebarProps = null;
+  rendererMocks.sshRetryHandlers.clear();
   Object.defineProperty(document, 'startViewTransition', {
     configurable: true,
     value: vi.fn((update: () => void) => {
@@ -150,6 +162,7 @@ describe('split panes in the app', () => {
       expect(mountedTermIds).toHaveLength(1);
       expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1);
     });
+    expect(window.janet.getSettings).toHaveBeenCalledTimes(1);
 
     fireEvent.click(splitButton);
 
@@ -261,6 +274,47 @@ describe('split panes in the app', () => {
       expect(screen.getAllByTestId(/terminal-/).map((terminal) => terminal.textContent)).toEqual([firstId]);
     });
     expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: secondId });
+  });
+
+  it('opens terminal search from the command palette for the focused pane', async () => {
+    const searchRequest = vi.fn();
+    window.addEventListener('janet:terminal-search-request', searchRequest);
+
+    try {
+      render(<App />);
+      await screen.findByRole('button', { name: /split right/i });
+      fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+      await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+
+      const focusedTerminal = screen.getAllByTestId(/terminal-/)[1];
+      fireEvent.focus(focusedTerminal);
+      await waitFor(() => {
+        expect(rendererMocks.paletteActions.find((action) => action.id === 'search-toggle')).toBeTruthy();
+      });
+
+      act(() => {
+        rendererMocks.paletteActions.find((action) => action.id === 'search-toggle')!.handler();
+      });
+
+      expect(searchRequest).toHaveBeenCalledTimes(1);
+      expect((searchRequest.mock.calls[0][0] as CustomEvent).detail).toEqual({
+        termId: focusedTerminal.textContent,
+      });
+    } finally {
+      window.removeEventListener('janet:terminal-search-request', searchRequest);
+    }
+  });
+
+  it('shows a recoverable startup state when settings cannot be loaded', async () => {
+    window.janet.getSettings = vi.fn().mockRejectedValue(new Error('settings unavailable'));
+
+    render(<App />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'JaneT could not load your workspace settings.',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Use defaults' }));
+    expect(await screen.findByTestId('titlebar')).toBeInTheDocument();
   });
 
   it('maximizes a single pane within the terminal area and restores it to the split layout', async () => {
@@ -380,6 +434,7 @@ describe('split panes in the app', () => {
       (call: any[]) => call[0]?.cwd === 'C:/repo',
     );
     expect(projectCreates).toHaveLength(2);
+    expect(window.janet.terminalCreate).toHaveBeenCalledTimes(2);
   });
 
   it('restores a saved SSH tab, connects it, then binds a single shell', async () => {
@@ -522,6 +577,87 @@ describe('split panes in the app', () => {
     });
     expect(window.janet.sshConnect).not.toHaveBeenCalled();
     expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
+  });
+
+  it('retries a mixed-workspace SSH leaf with measured dimensions and surfaces transport failure', async () => {
+    const sshProfileId = 'mixed@box.local:22:password';
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId,
+        host: 'box.local',
+        port: 22,
+        username: 'mixed',
+        auth: 'password',
+        password: 'secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'mixed-workspace-retry',
+          title: 'mixed retry',
+          type: 'local',
+          root: {
+            type: 'split',
+            direction: 'vertical',
+            sizes: [1, 1],
+            children: [
+              { type: 'leaf', terminalType: 'local' },
+              { type: 'leaf', terminalType: 'ssh', sshProfileId },
+            ],
+          },
+        }],
+        activeTabId: 'mixed-workspace-retry',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
+    const initialShell = (window.janet.sshCreateShell as any).mock.calls[0][0];
+    const retry = rendererMocks.sshRetryHandlers.get(initialShell.termId);
+    expect(retry).toBeTruthy();
+
+    (window.janet.sshCreateShell as any).mockClear();
+    (window.janet.sshConnect as any).mockClear();
+    (window.janet.sshCreateShell as any)
+      .mockRejectedValueOnce(new Error('stale shell'))
+      .mockResolvedValueOnce({ connected: true });
+
+    await act(async () => {
+      await retry!(initialShell.termId, { cols: 132, rows: 48 });
+    });
+
+    expect(window.janet.sshConnect).toHaveBeenCalledWith(expect.objectContaining({
+      id: initialShell.id,
+      host: 'box.local',
+      username: 'mixed',
+    }));
+    expect(window.janet.sshCreateShell).toHaveBeenNthCalledWith(1, {
+      id: initialShell.id,
+      termId: initialShell.termId,
+      cols: 132,
+      rows: 48,
+    });
+    expect(window.janet.sshCreateShell).toHaveBeenNthCalledWith(2, {
+      id: initialShell.id,
+      termId: initialShell.termId,
+      cols: 132,
+      rows: 48,
+    });
+
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      (window.janet.sshCreateShell as any).mockRejectedValueOnce(new Error('shell unavailable'));
+      (window.janet.sshConnect as any).mockRejectedValueOnce(new Error('transport unavailable'));
+      await expect(retry!(initialShell.termId, { cols: 132, rows: 48 }))
+        .rejects.toThrow('transport unavailable');
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it('releases an SSH connection that finishes after its owning tab closes', async () => {

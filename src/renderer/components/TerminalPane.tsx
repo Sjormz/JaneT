@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
@@ -18,12 +18,14 @@ export function runCleanup(entries: unknown[]): void {
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon, type ISearchOptions } from '@xterm/addon-search';
 import SearchOverlay from './SearchOverlay';
+import SSHConnectionNotice from './SSHConnectionNotice';
 import { getTheme, ThemeName } from '../themes';
 import { useKeybindings } from '../KeybindingsContext';
 import { matchesShortcut } from '../keybindings';
 import { fileUrlToPath } from '../osc7';
 import { createKittyGraphicsLayer } from '../kittyGraphics';
 import { refreshCoordinator } from '../refreshCoordinator';
+import { TERMINAL_SEARCH_REQUEST_EVENT, TerminalSearchRequestDetail } from '../terminalSearch';
 import '@xterm/xterm/css/xterm.css';
 
 interface TerminalPaneProps {
@@ -40,8 +42,10 @@ interface TerminalPaneProps {
   initialCwd?: string;
   hasSession?: boolean;
   sshShellReady?: boolean;
-  onSshRetry?: (termId: string) => void;
+  onSshRetry?: (termId: string, dimensions: { cols: number; rows: number }) => void | Promise<void>;
 }
+
+type SshNoticeState = React.ComponentProps<typeof SSHConnectionNotice>['state'];
 
 const MIN_SSH_COLS = 120;
 const MIN_SSH_ROWS = 40;
@@ -81,6 +85,8 @@ interface CachedTerminalPane {
   tabType: 'local' | 'ssh';
   sshSessionId?: string;
   sshShellReady: boolean;
+  sshNoticeState: SshNoticeState;
+  sshNoticeListener: ((state: SshNoticeState) => void) | null;
   disposeTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -110,6 +116,7 @@ export default function TerminalPane({
   termId,
   tabType,
   sshSessionId,
+  sshSessionLabel,
   onReady,
   onRemoved,
   themeName,
@@ -119,6 +126,7 @@ export default function TerminalPane({
   initialCwd,
   hasSession,
   sshShellReady = true,
+  onSshRetry,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -126,17 +134,46 @@ export default function TerminalPane({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const sshNoticeAttemptRef = useRef(0);
 
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState({ resultIndex: 0, resultCount: 0 });
+  const [sshNoticeState, setSshNoticeState] = useState<SshNoticeState>(
+    () => terminalPaneCache.get(termId)?.sshNoticeState ?? { kind: 'hidden' },
+  );
+  const componentMountedRef = useRef(false);
   const searchVisibleRef = useRef(false);
   searchVisibleRef.current = searchVisible;
+
+  useEffect(() => {
+    componentMountedRef.current = true;
+    return () => { componentMountedRef.current = false; };
+  }, []);
+
+  const publishSshNoticeState = useCallback((next: SshNoticeState) => {
+    const cached = terminalPaneCache.get(termId);
+    if (cached) {
+      cached.sshNoticeState = next;
+      if (cached.sshNoticeListener) cached.sshNoticeListener(next);
+      else if (componentMountedRef.current) setSshNoticeState(next);
+    } else if (componentMountedRef.current) {
+      setSshNoticeState(next);
+    }
+  }, [termId]);
 
   const { bindings: kbBindings } = useKeybindings();
 
   const kbBindingsRef = useRef(kbBindings);
   kbBindingsRef.current = kbBindings;
+
+  useEffect(() => {
+    if (tabType !== 'ssh') {
+      publishSshNoticeState({ kind: 'hidden' });
+    } else if (!sshShellReady) {
+      publishSshNoticeState({ kind: 'reconnecting' });
+    }
+  }, [publishSshNoticeState, tabType, sshSessionId, sshShellReady]);
 
   const clearSearchSelection = () => {
     searchAddonRef.current?.clearDecorations();
@@ -152,6 +189,16 @@ export default function TerminalPane({
     clearSearchSelection();
     termRef.current?.focus();
   };
+
+  useEffect(() => {
+    const openRequestedSearch = (event: Event) => {
+      const request = event as CustomEvent<TerminalSearchRequestDetail>;
+      if (request.detail?.termId !== termId) return;
+      setSearchVisible(true);
+    };
+    window.addEventListener(TERMINAL_SEARCH_REQUEST_EVENT, openRequestedSearch);
+    return () => window.removeEventListener(TERMINAL_SEARCH_REQUEST_EVENT, openRequestedSearch);
+  }, [termId]);
 
   const syncTerminalSize = (term: Terminal, fitAddon: FitAddon) => {
     try {
@@ -236,6 +283,7 @@ export default function TerminalPane({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    let effectActive = true;
 
     const cached = terminalPaneCache.get(termId);
     if (
@@ -250,6 +298,7 @@ export default function TerminalPane({
       }
 
       const { term, fitAddon, searchAddon } = cached;
+      cached.sshNoticeListener = setSshNoticeState;
 
       if (term.element && term.element.parentElement !== container) {
         container.appendChild(term.element);
@@ -261,12 +310,20 @@ export default function TerminalPane({
       const repaintTimer = setTimeout(() => repaintTerminal(term, fitAddon), 0);
       const mountCleanup = attachTerminal(container, term, fitAddon, searchAddon, 0);
       mountCleanup.push(() => clearTimeout(repaintTimer));
+      if (tabType !== 'ssh') {
+        publishSshNoticeState({ kind: 'hidden' });
+      }
       onReady(termId);
 
       return () => {
+        effectActive = false;
         runCleanup(mountCleanup);
         onRemoved(termId);
         scheduleCachedTerminalDispose(termId);
+        const currentCache = terminalPaneCache.get(termId);
+        if (currentCache?.sshNoticeListener === setSshNoticeState) {
+          currentCache.sshNoticeListener = null;
+        }
         termRef.current = null;
         fitAddonRef.current = null;
         searchAddonRef.current = null;
@@ -351,6 +408,8 @@ export default function TerminalPane({
 
     const cleanupListener = window.janet.onTerminalData(({ id, data }) => {
       if (id === termId) {
+        sshNoticeAttemptRef.current += 1;
+        publishSshNoticeState({ kind: 'hidden' });
         kittyGraphics?.push(data);
         term.write(data);
       }
@@ -358,6 +417,8 @@ export default function TerminalPane({
     lifetimeCleanup.push(cleanupListener);
 
     if (tabType === 'ssh' && sshSessionId && sshShellReady) {
+      const noticeAttempt = ++sshNoticeAttemptRef.current;
+      publishSshNoticeState({ kind: 'waiting' });
       const dims = sshDimensions(fitAddon.proposeDimensions());
       const openShell = window.janet.sshCreateShell({
         id: sshSessionId,
@@ -366,12 +427,17 @@ export default function TerminalPane({
         rows: dims.rows,
       });
       openShell.then(() => {
+        if (!effectActive) return;
         onReady(termId);
         term.focus();
       }).catch((err: any) => {
-        onReady(termId);
         const message = err?.message || 'connection may have dropped';
-        term.write('\r\n\x1b[31mSSH shell failed to open: ' + message + '\x1b[0m\r\n');
+        if (sshNoticeAttemptRef.current === noticeAttempt) {
+          const errorState: SshNoticeState = { kind: 'error', message };
+          publishSshNoticeState(errorState);
+          term.write('\r\n\x1b[31mSSH shell failed to open: ' + message + '\x1b[0m\r\n');
+        }
+        if (effectActive) onReady(termId);
       });
     } else if (hasSession) {
       onReady(termId);
@@ -416,13 +482,24 @@ export default function TerminalPane({
       tabType,
       sshSessionId,
       sshShellReady,
+      sshNoticeState: tabType !== 'ssh'
+        ? { kind: 'hidden' }
+        : sshShellReady
+          ? { kind: 'waiting' }
+          : { kind: 'reconnecting' },
+      sshNoticeListener: setSshNoticeState,
       disposeTimer: null,
     });
 
     return () => {
+      effectActive = false;
       runCleanup(mountCleanup);
       onRemoved(termId);
       scheduleCachedTerminalDispose(termId);
+      const currentCache = terminalPaneCache.get(termId);
+      if (currentCache?.sshNoticeListener === setSshNoticeState) {
+        currentCache.sshNoticeListener = null;
+      }
       termRef.current = null;
       fitAddonRef.current = null;
       searchAddonRef.current = null;
@@ -459,8 +536,30 @@ export default function TerminalPane({
     return () => clearTimeout(timer);
   }, []);
 
+  const retrySshShell = () => {
+    if (!onSshRetry) return;
+    const noticeAttempt = ++sshNoticeAttemptRef.current;
+    const dimensions = sshDimensions(fitAddonRef.current?.proposeDimensions());
+    publishSshNoticeState({ kind: 'reconnecting' });
+    Promise.resolve(onSshRetry(termId, dimensions))
+      .then(() => {
+        if (sshNoticeAttemptRef.current !== noticeAttempt) return;
+        publishSshNoticeState({ kind: 'waiting' });
+      })
+      .catch((err: any) => {
+        if (sshNoticeAttemptRef.current !== noticeAttempt) return;
+        publishSshNoticeState({ kind: 'error', message: err?.message || 'Reconnect failed' });
+      });
+  };
+
   return (
     <div className="terminal-container" ref={containerRef}>
+      <SSHConnectionNotice
+        state={sshNoticeState}
+        label={sshSessionLabel}
+        onDismiss={() => publishSshNoticeState({ kind: 'hidden' })}
+        onRetry={onSshRetry ? retrySshShell : undefined}
+      />
       <SearchOverlay
         query={searchQuery}
         results={searchResults}

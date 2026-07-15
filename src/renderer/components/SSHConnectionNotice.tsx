@@ -46,13 +46,15 @@ export default function SSHConnectionNotice({
   const isError = state.kind === 'error';
   const isStalled = state.kind === 'stalled';
   const isBusy = state.kind === 'reconnecting';
+  const canRetry = Boolean(onRetry) && (isError || isStalled);
 
   return (
     <div
       className={`ssh-terminal-notice ${isError ? 'is-error' : ''} ${isStalled ? 'is-stalled' : ''}`}
       data-testid="ssh-terminal-notice"
       data-state={state.kind}
-      aria-live="polite"
+      role={isError ? 'alert' : 'status'}
+      aria-live={isError ? 'assertive' : 'polite'}
     >
       <div className="ssh-terminal-notice-icon">
         {isError ? <AlertIcon size="sm" /> : <ServerIcon size="sm" />}
@@ -64,7 +66,7 @@ export default function SSHConnectionNotice({
           <div className="ssh-terminal-notice-message">{state.message}</div>
         )}
         <div className="ssh-terminal-notice-actions">
-          {onRetry && !isBusy && (
+          {canRetry && !isBusy && (
             <button
               type="button"
               className="ssh-notice-action primary"

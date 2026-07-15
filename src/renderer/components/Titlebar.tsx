@@ -2,7 +2,6 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   FilesIcon, SSHIcon, SourceControlIcon, SettingsIconCmp,
   MinimizeIcon, MaximizeIcon, RestoreIcon, CloseIcon,
-  CommandIcon,
 } from '../icons';
 
 export type SidebarSection = 'files' | 'ssh' | 'git' | 'settings';
@@ -28,6 +27,7 @@ interface TitlebarProps {
   sidebarOpen: boolean;
   // palette
   onOpenPalette: () => void;
+  paletteShortcut: string;
 }
 
 /**
@@ -40,6 +40,7 @@ export default function Titlebar({
   onSectionChange,
   sidebarOpen,
   onOpenPalette,
+  paletteShortcut,
 }: TitlebarProps) {
   const [maximized, setMaximized] = useState(false);
   const [platform, setPlatform] = useState<string>(() => (
@@ -105,13 +106,11 @@ export default function Titlebar({
         <button
           className="titlebar-palette-btn"
           onClick={onOpenPalette}
-          title="Command palette (Ctrl+Shift+P)"
+          title={`Command palette (${paletteShortcut})`}
+          aria-label={`Open command palette (${paletteShortcut})`}
         >
-          <span className="titlebar-palette-label">Search</span>
-          <kbd className="titlebar-kbd">
-            <CommandIcon size="xs" />
-            <span>K</span>
-          </kbd>
+          <span className="titlebar-palette-label">Commands</span>
+          <kbd className="titlebar-kbd" aria-hidden="true">{paletteShortcut}</kbd>
         </button>
 
         {platform !== 'darwin' && (

@@ -22,4 +22,18 @@ describe('StatusBar', () => {
     expect(screen.getByText('2 terminals')).toBeInTheDocument();
     expect(screen.getByText('C:/work/barrel-racer')).toBeInTheDocument();
   });
+
+  it('does not mislabel a local fallback path as the remote cwd', () => {
+    render(
+      <StatusBar
+        {...defaultProps}
+        cwd="/Users/local-user"
+        isRemote
+        remoteHost="build.example.com"
+      />,
+    );
+
+    expect(screen.getByText('build.example.com · remote cwd unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('/Users/local-user')).toBeNull();
+  });
 });

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import Titlebar from './components/Titlebar';
 import VerticalTabBar from './components/VerticalTabBar';
 import SplitPane from './components/SplitPane';
@@ -21,6 +21,7 @@ import { KeybindingAction } from './keybindings';
 import { serializePaneTree, restorePaneTree, normalizeSession, SavedSession } from './sessionRestore';
 import { GitStatusSummary, summarizeGitStatus } from './gitStatus';
 import { useGitRepository } from './useGitRepository';
+import { requestTerminalSearch } from './terminalSearch';
 
 function createTabRoot(type: 'local' | 'ssh'): PaneNode {
   return createPaneRoot(type, 1, 'vertical');
@@ -109,26 +110,91 @@ function demoteSshLeaf(tab: TabInfo, leafId: string): TabInfo {
   };
 }
 
-function AppInner() {
-  // Default starter tab — used only when no session has been restored.
-  const starterTab: TabInfo = useMemo(() => ({
+interface InitialAppState {
+  tabs: TabInfo[];
+  activeTabId: string;
+  sidebarOpen: boolean;
+  tabsOpen: boolean;
+  sidebarSection: 'files' | 'ssh' | 'git' | 'settings';
+  sshProfiles: SavedSSHProfile[];
+  workspaceTabs: WorkspaceTabPreset[];
+  currentTheme: ThemeName;
+  fontSize: number;
+  sidebarSide: 'left' | 'right';
+}
+
+function createInitialAppState(settings: any): InitialAppState {
+  const s = settings || {};
+  const session = normalizeSession(s.session);
+  const restored: TabInfo[] = [];
+  let restoredActiveId: string | null = null;
+
+  for (const saved of session.tabs) {
+    let tree = restorePaneTree(saved.root);
+    if (!tree) continue;
+    if (saved.type !== 'ssh') {
+      tree = mapLeaves(tree, (leaf) => leaf.terminalType === 'ssh' && leaf.sshProfileId ? {
+        ...leaf,
+        sshSessionId: `ssh-${Date.now()}-${leaf.id}`,
+        sshShellReady: false,
+      } : leaf);
+    }
+    const tab: TabInfo = {
+      id: genId('tab'),
+      title: saved.title,
+      type: saved.type,
+      cwd: saved.cwd,
+      sshProfileId: saved.sshProfileId,
+      // Allocate the runtime session id before any terminal component mounts.
+      sshSessionId: saved.type === 'ssh' && saved.sshProfileId
+        ? `ssh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        : undefined,
+      sshShellReady: saved.type !== 'ssh',
+      root: tree,
+    };
+    restored.push(tab);
+    if (saved.id === session.activeTabId) restoredActiveId = tab.id;
+  }
+
+  const starterTab: TabInfo = {
     id: genId('tab'),
     title: 'terminal',
     type: 'local',
     root: createTabRoot('local'),
-  }), []);
+  };
+  const tabs = restored.length > 0 ? restored : [starterTab];
+  const theme = getTheme(s.theme || 'tokyo-night').name;
 
-  const [tabs, setTabs] = useState<TabInfo[]>([starterTab]);
+  return {
+    tabs,
+    activeTabId: restoredActiveId ?? tabs[0].id,
+    sidebarOpen: session.sidebarOpen,
+    tabsOpen: session.tabsOpen,
+    sidebarSection: session.sidebarSection,
+    sshProfiles: Array.isArray(s.sshProfiles) ? s.sshProfiles : [],
+    workspaceTabs: Array.isArray(s.workspaceTabs) ? s.workspaceTabs : [],
+    currentTheme: theme,
+    fontSize: typeof s.fontSize === 'number' ? s.fontSize : 14,
+    sidebarSide: s.sidebarSide === 'right' ? 'right' : 'left',
+  };
+}
+
+function AppInner({ initialSettings }: { initialSettings: any }) {
+  // Settings have already loaded before AppInner mounts, so derive the first
+  // render synchronously. This prevents a disposable starter terminal from
+  // being created before a saved workspace replaces it.
+  const [initialState] = useState(() => createInitialAppState(initialSettings));
+  const [tabs, setTabs] = useState<TabInfo[]>(initialState.tabs);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
-  const [activeTabId, setActiveTabId] = useState(starterTab.id);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [tabsOpen, setTabsOpen] = useState(true);
-  const [sidebarSection, setSidebarSection] = useState<'files' | 'ssh' | 'git' | 'settings'>('files');
+  const [activeTabId, setActiveTabId] = useState(initialState.activeTabId);
+  const [sidebarOpen, setSidebarOpen] = useState(initialState.sidebarOpen);
+  const [tabsOpen, setTabsOpen] = useState(initialState.tabsOpen);
+  const [sidebarSection, setSidebarSection] = useState<'files' | 'ssh' | 'git' | 'settings'>(initialState.sidebarSection);
   const [sshSessions, setSshSessions] = useState<SessionInfo[]>([]);
   const [readySshSessionIds, setReadySshSessionIds] = useState<Set<string>>(new Set());
-  const [sshProfiles, setSshProfiles] = useState<SavedSSHProfile[]>([]);
-  const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>([]);
+  const [sshProfiles, setSshProfiles] = useState<SavedSSHProfile[]>(initialState.sshProfiles);
+  const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>(initialState.workspaceTabs);
   const [maximizedLeafByTab, setMaximizedLeafByTab] = useState<Record<string, string | null>>({});
   const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null);
   const [paneDropTarget, setPaneDropTarget] = useState<{ leafId: string; side: PaneDropSide } | null>(null);
@@ -137,7 +203,7 @@ function AppInner() {
   const connectingSshSessionIdsRef = useRef<Set<string>>(new Set());
   const releasedSshSessionIdsRef = useRef<Set<string>>(new Set());
 
-  const sessionRestoredRef = useRef(false);
+  const sessionRestoredRef = useRef(true);
   const [paletteVisible, setPaletteVisible] = useState(false);
 
   // === CWD tracking ===
@@ -158,92 +224,12 @@ function AppInner() {
   }, []);
 
   // Settings state
-  const [currentTheme, setCurrentTheme] = useState<ThemeName>('tokyo-night');
-  const [fontSize, setFontSize] = useState(14);
-  const [sidebarSide, setSidebarSide] = useState<'left' | 'right'>('left');
-  const settingsLoadedRef = useRef(false);
+  const [currentTheme, setCurrentTheme] = useState<ThemeName>(initialState.currentTheme);
+  const [fontSize, setFontSize] = useState(initialState.fontSize);
+  const [sidebarSide, setSidebarSide] = useState<'left' | 'right'>(initialState.sidebarSide);
+  const settingsLoadedRef = useRef(true);
 
-  const { bindings, setBinding, matches, on } = useKeybindings();
-
-  // Load settings on mount and apply saved keybindings
-  useEffect(() => {
-    if (settingsLoadedRef.current) return;
-    settingsLoadedRef.current = true;
-
-    try {
-      window.janet.getSettings().then((s: any) => {
-        setCurrentTheme(s.theme || 'tokyo-night');
-        setFontSize(s.fontSize || 14);
-        setSidebarSide(s.sidebarSide === 'right' ? 'right' : 'left');
-        setSshProfiles(Array.isArray(s.sshProfiles) ? s.sshProfiles : []);
-        setWorkspaceTabs(Array.isArray(s.workspaceTabs) ? s.workspaceTabs : []);
-        applyCssTheme(getTheme(s.theme || 'tokyo-night').css);
-
-        // Restore the last open workspace (tabs + active tab + sidebar UI).
-        // We do this in the same effect as the rest of settings so a single
-        // round-trip handles everything; both the first paint and the
-        // session shape are available here.
-        if (!sessionRestoredRef.current) {
-          sessionRestoredRef.current = true;
-          const session = normalizeSession(s.session);
-          if (session.tabs.length > 0) {
-            const restored: TabInfo[] = [];
-            let restoredActiveId: string | null = null;
-            for (const saved of session.tabs) {
-              let tree = restorePaneTree(saved.root);
-              if (!tree) continue;
-              if (saved.type !== 'ssh') {
-                tree = mapLeaves(tree, (leaf) => leaf.terminalType === 'ssh' && leaf.sshProfileId ? {
-                  ...leaf,
-                  sshSessionId: `ssh-${Date.now()}-${leaf.id}`,
-                  sshShellReady: false,
-                } : leaf);
-              }
-              const tab: TabInfo = {
-                id: genId('tab'),
-                title: saved.title,
-                type: saved.type,
-                cwd: saved.cwd,
-                sshProfileId: saved.sshProfileId,
-                // For SSH tabs, pre-allocate a session id so the
-                // TerminalPane mounts with a stable `sshSessionId` prop.
-                // Otherwise the pane would mount with `undefined`,
-                // create a dangling xterm with no shell bound, and
-                // then have to be torn down + rebuilt when the
-                // reconnect effect eventually fills in the id —
-                // leaving the user with a blank pane for a beat (or
-                // permanently, if any data arrived in between).
-                sshSessionId: saved.type === 'ssh' && saved.sshProfileId
-                  ? `ssh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-                  : undefined,
-                sshShellReady: saved.type !== 'ssh',
-                root: tree,
-              };
-              restored.push(tab);
-              if (saved.id === session.activeTabId) restoredActiveId = tab.id;
-            }
-            if (restored.length > 0) {
-              setTabs(restored);
-              setActiveTabId(restoredActiveId ?? restored[0].id);
-            }
-          }
-          setSidebarOpen(session.sidebarOpen);
-          setTabsOpen(session.tabsOpen);
-          setSidebarSection(session.sidebarSection);
-        }
-
-        // Apply saved keybindings
-        if (s.keybindings) {
-          for (const [action, shortcut] of Object.entries(s.keybindings)) {
-            if (shortcut && typeof shortcut === 'string') {
-              setBinding(action as KeybindingAction, shortcut);
-            }
-          }
-        }
-      }).catch(() => {});
-    } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const { bindings, matches, on } = useKeybindings();
 
   // Reconnect SSH tabs that were restored from the saved session.
   // The tree is rebuilt with fresh leaf ids during restore, and the
@@ -408,8 +394,8 @@ function AppInner() {
     return () => clearTimeout(timer);
   }, [tabs, activeTabId, sidebarOpen, tabsOpen, sidebarSection, cwdByTerminal]);
 
-  // Apply CSS theme whenever it changes
-  useEffect(() => {
+  // Apply the loaded theme before paint and keep it synchronized thereafter.
+  useLayoutEffect(() => {
     const theme = getTheme(currentTheme);
     applyCssTheme(theme.css);
   }, [currentTheme]);
@@ -688,38 +674,43 @@ function AppInner() {
   // "Reconnect" button on the SSH notice. If the underlying SSH
   // session is gone (server closed the connection), reconnect the
   // session first using the tab's saved profile.
-  const handleSshRetry = useCallback(async (termId: string) => {
-    const tab = tabsRef.current.find(
-      (candidate) => candidate.type === 'ssh' && getAllLeafIds(candidate.root).includes(termId),
-    );
-    if (!tab || !tab.sshSessionId) return;
+  const handleSshRetry = useCallback(async (
+    termId: string,
+    dimensions: { cols: number; rows: number },
+  ) => {
+    const tab = tabsRef.current.find((candidate) => getAllLeafIds(candidate.root).includes(termId));
+    const leaf = tab ? findLeaf(tab.root, termId) : null;
+    const leafType = leaf?.terminalType ?? tab?.type;
+    const sessionId = leaf?.sshSessionId ?? tab?.sshSessionId;
+    const profileId = leaf?.sshProfileId ?? tab?.sshProfileId;
+    if (!tab || leafType !== 'ssh' || !sessionId) {
+      throw new Error('SSH session is no longer available');
+    }
 
-    const dims = (() => {
-      // Best-effort — falls back to 80x24 if the term isn't measured yet.
-      const el = document.querySelector(`[data-terminal-id="${termId}"]`);
-      if (!el) return { cols: 80, rows: 24 };
-      return { cols: 80, rows: 24 };
-    })();
+    const dims = {
+      cols: Math.max(dimensions?.cols || 80, 120),
+      rows: Math.max(dimensions?.rows || 24, 40),
+    };
 
     try {
-      await window.janet.sshCreateShell({ id: tab.sshSessionId, termId, ...dims });
+      await window.janet.sshCreateShell({ id: sessionId, termId, ...dims });
     } catch (shellErr) {
       // Shell open failed — the session itself may be dead. Try
       // re-establishing the SSH connection from the saved profile,
       // then re-open the shell. If the profile is missing the user
       // will see the original error and can dismiss the tab.
-      const profile = tab.sshProfileId
-        ? sshProfiles.find((candidate) => candidate.id === tab.sshProfileId)
+      const profile = profileId
+        ? sshProfiles.find((candidate) => candidate.id === profileId)
         : undefined;
       if (!profile) {
         console.error('SSH retry failed and no saved profile to reconnect from:', shellErr);
-        return;
+        throw shellErr;
       }
-      releasedSshSessionIdsRef.current.delete(tab.sshSessionId);
-      connectingSshSessionIdsRef.current.add(tab.sshSessionId);
+      releasedSshSessionIdsRef.current.delete(sessionId);
+      connectingSshSessionIdsRef.current.add(sessionId);
       try {
         await window.janet.sshConnect({
-          id: tab.sshSessionId,
+          id: sessionId,
           host: profile.host,
           port: profile.port,
           ...(profile.username ? { username: profile.username } : {}),
@@ -728,18 +719,19 @@ function AppInner() {
           privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
         });
         if (
-          releasedSshSessionIdsRef.current.has(tab.sshSessionId) ||
-          !ownsSshSession(tabsRef.current, tab.sshSessionId)
+          releasedSshSessionIdsRef.current.has(sessionId) ||
+          !ownsSshSession(tabsRef.current, sessionId)
         ) {
-          window.janet.sshDisconnect({ id: tab.sshSessionId }).catch(() => {});
+          window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
           return;
         }
-        setReadySshSessionIds((prev) => new Set(prev).add(tab.sshSessionId!));
-        await window.janet.sshCreateShell({ id: tab.sshSessionId, termId, ...dims });
+        setReadySshSessionIds((prev) => new Set(prev).add(sessionId));
+        await window.janet.sshCreateShell({ id: sessionId, termId, ...dims });
       } catch (reconnectErr) {
         console.error('SSH retry failed:', reconnectErr);
+        throw reconnectErr;
       } finally {
-        connectingSshSessionIdsRef.current.delete(tab.sshSessionId);
+        connectingSshSessionIdsRef.current.delete(sessionId);
       }
     }
   }, [sshProfiles]);
@@ -987,7 +979,10 @@ function AppInner() {
       },
       {
         id: 'search-toggle', label: 'Search in Terminal', category: 'Terminal',
-        shortcut: bindings['search-toggle'], handler: () => {},
+        shortcut: bindings['search-toggle'],
+        handler: () => {
+          if (sidebarTerminalId) requestTerminalSearch(sidebarTerminalId);
+        },
       },
       {
         id: 'palette-toggle', label: 'Command Palette', category: 'General',
@@ -1060,6 +1055,7 @@ function AppInner() {
         }}
         sidebarOpen={sidebarOpen}
         onOpenPalette={() => setPaletteVisible(true)}
+        paletteShortcut={bindings['palette-toggle']}
       />
       <div className={`app-body sidebar-${sidebarSide}`}>
         {sidebarOpen && (
@@ -1157,34 +1153,57 @@ function AppInner() {
 }
 
 export default function App() {
-  const [bindings, setBindings] = useState<Record<KeybindingAction, string> | null>(null);
+  const [settings, setSettings] = useState<any | null>(null);
+  const [settingsError, setSettingsError] = useState(false);
 
-  // Load saved keybindings from settings before rendering
-  useEffect(() => {
+  const loadSettings = useCallback(() => {
+    setSettingsError(false);
     try {
       window.janet.getSettings().then((s: any) => {
-        if (s.keybindings) {
-          setBindings(s.keybindings as Record<KeybindingAction, string>);
-        } else {
-          setBindings({} as Record<KeybindingAction, string>);
-        }
-      }).catch(() => setBindings({} as Record<KeybindingAction, string>));
+        setSettings(s || {});
+      }).catch(() => setSettingsError(true));
     } catch {
-      setBindings({} as Record<KeybindingAction, string>);
+      setSettingsError(true);
     }
   }, []);
+
+  // Load one coherent settings snapshot before rendering the workspace.
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
 
   // Persist keybindings to main process
   const handleSave = useCallback((b: Record<KeybindingAction, string>) => {
     try { window.janet.setSettings({ keybindings: b }).catch(() => {}); } catch {}
   }, []);
 
-  // Don't render until bindings are loaded (avoids flash of defaults)
-  if (!bindings) return null;
+  if (!settings) {
+    return (
+      <div className="app-startup" role={settingsError ? 'alert' : 'status'} aria-live="polite">
+        <div className="app-startup-mark" aria-hidden="true">›_</div>
+        <div className="app-startup-name">JaneT</div>
+        {settingsError ? (
+          <>
+            <p>JaneT could not load your workspace settings.</p>
+            <div className="app-startup-actions">
+              <button type="button" onClick={loadSettings}>Try again</button>
+              <button type="button" onClick={() => setSettings({})}>Use defaults</button>
+            </div>
+          </>
+        ) : (
+          <p>Restoring your workspace…</p>
+        )}
+      </div>
+    );
+  }
+
+  const initialBindings = settings.keybindings && typeof settings.keybindings === 'object'
+    ? settings.keybindings as Record<KeybindingAction, string>
+    : {} as Record<KeybindingAction, string>;
 
   return (
-    <KeybindingsProvider initialBindings={bindings} onSave={handleSave}>
-      <AppInner />
+    <KeybindingsProvider initialBindings={initialBindings} onSave={handleSave}>
+      <AppInner initialSettings={settings} />
     </KeybindingsProvider>
   );
 }

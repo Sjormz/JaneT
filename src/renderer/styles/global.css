@@ -12,6 +12,7 @@
   --text-secondary: #a9b1d6;
   --text-muted: #565f89;
   --text-accent: #7aa2f7;
+  --on-accent: #0b0d12;
 
   --border-color: #2a2b42;
   --border-active: #7aa2f7;
@@ -122,6 +123,55 @@ html, body, #root {
   width: 100%;
   height: 100%;
   background: var(--bg-primary);
+}
+
+.app-startup {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px;
+  background:
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--text-accent) 12%, transparent), transparent 34%),
+    var(--bg-primary);
+  color: var(--text-secondary);
+  text-align: center;
+}
+.app-startup-mark {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid var(--glass-border-active);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--text-accent) 14%, transparent);
+  color: var(--text-accent);
+  box-shadow: var(--glow-accent);
+  font: 600 18px/1 var(--font-mono);
+}
+.app-startup-name {
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: 0.4px;
+}
+.app-startup p { font-size: 12px; }
+.app-startup-actions { display: flex; gap: 8px; margin-top: 4px; }
+.app-startup-actions button {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--glass-border-active);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+}
+.app-startup-actions button:hover {
+  background: color-mix(in srgb, var(--text-accent) 14%, transparent);
 }
 
 /* === Titlebar (custom, fully themed, glassy) === */
@@ -274,7 +324,7 @@ html, body, #root {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   cursor: pointer;
   font-family: var(--font-ui);
   font-size: 12px;
@@ -374,7 +424,7 @@ html, body, #root {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 1px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -476,7 +526,7 @@ html, body, #root {
   width: 100%;
   transition: border-color var(--transition-fast), color var(--transition-fast);
 }
-.workspace-add-btn:hover { color: var(--text-primary); border-color: var(--accent-primary); }
+.workspace-add-btn:hover { color: var(--text-primary); border-color: var(--text-accent); }
 .workspace-form-block {
   display: flex;
   flex-direction: column;
@@ -655,7 +705,9 @@ html, body, #root {
   opacity: 0;
   transition: all var(--transition-fast);
 }
-.vtab-item:hover .vtab-close { opacity: 1; }
+.vtab-item:hover .vtab-close,
+.vtab-item:focus-within .vtab-close,
+.vtab-close:focus-visible { opacity: 1; }
 .vtab-close:hover {
   background: color-mix(in srgb, var(--red) 20%, transparent);
   color: var(--red);
@@ -754,7 +806,7 @@ html, body, #root {
   -webkit-backdrop-filter: blur(var(--glass-blur-heavy)) saturate(160%);
   box-shadow: var(--glass-shadow);
   color: var(--text-primary);
-  pointer-events: none;
+  pointer-events: auto;
   animation: search-slide-in 0.15s ease-out;
 }
 .ssh-terminal-notice-icon {
@@ -764,6 +816,7 @@ html, body, #root {
 }
 .ssh-terminal-notice-text {
   display: flex;
+  flex: 1;
   min-width: 0;
   flex-direction: column;
   gap: 2px;
@@ -778,6 +831,46 @@ html, body, #root {
   line-height: 1.35;
   color: var(--text-muted);
 }
+.ssh-terminal-notice-message {
+  margin-top: 4px;
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.ssh-terminal-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+.ssh-notice-action,
+.ssh-terminal-notice-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+.ssh-notice-action { padding: 4px 7px; font-size: 10px; }
+.ssh-notice-action.primary {
+  border-color: var(--glass-border-active);
+  color: var(--text-accent);
+}
+.ssh-notice-action:hover,
+.ssh-terminal-notice-close:hover { background: rgba(255, 255, 255, 0.09); }
+.ssh-terminal-notice-close {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  flex-shrink: 0;
+}
+.ssh-terminal-notice.is-error .ssh-terminal-notice-icon { color: var(--red); }
 
 /* === File Explorer === */
 .file-explorer { display: flex; flex-direction: column; height: 100%; }
@@ -865,6 +958,11 @@ html, body, #root {
   gap: 8px;
   border-radius: 0;
   color: var(--text-secondary);
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
 }
 .explorer-item .item-icon {
   color: var(--text-muted);
@@ -966,7 +1064,7 @@ html, body, #root {
   width: 100%;
   padding: 8px;
   background: var(--text-accent);
-  color: white;
+  color: var(--on-accent);
   border: none;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -1141,7 +1239,7 @@ html, body, #root {
 }
 .git-section-toggle:focus-visible,
 .git-tree-dir:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 2px solid var(--text-accent);
   outline-offset: 1px;
 }
 .git-section-title {
@@ -1220,7 +1318,10 @@ html, body, #root {
   opacity: 0;
 }
 .git-branch-item:hover .git-mini-btn,
-.git-worktree-item:hover .git-mini-btn { opacity: 1; }
+.git-worktree-item:hover .git-mini-btn,
+.git-branch-item:focus-within .git-mini-btn,
+.git-worktree-item:focus-within .git-mini-btn,
+.git-mini-btn:focus-visible { opacity: 1; }
 .git-mini-btn.danger:hover { background: color-mix(in srgb, var(--red) 18%, transparent); color: var(--red); }
 .git-branch-item .branch-icon { flex-shrink: 0; }
 .git-branch-item.current .branch-icon { color: var(--text-accent); }
@@ -1585,7 +1686,7 @@ html, body, #root {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 1px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   margin-bottom: 8px;
 }
 .theme-options {
@@ -1658,8 +1759,8 @@ html, body, #root {
   to   { opacity: 1; }
 }
 .command-palette {
-  width: 560px;
-  max-height: 420px;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(420px, calc(100vh - 112px));
   background: var(--glass-bg-strong);
   backdrop-filter: blur(var(--glass-blur-heavy)) saturate(160%);
   -webkit-backdrop-filter: blur(var(--glass-blur-heavy)) saturate(160%);
@@ -1750,7 +1851,7 @@ html, body, #root {
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
   border-top: 1px solid var(--glass-border);
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   flex-shrink: 0;
 }
 .status-left, .status-right { display: flex; align-items: center; gap: 16px; }
@@ -1916,7 +2017,8 @@ html, body, #root {
   z-index: 3;
   transition: opacity var(--transition-fast);
 }
-.terminal-leaf:hover .leaf-actions { opacity: 1; }
+.terminal-leaf:hover .leaf-actions,
+.terminal-leaf:focus-within .leaf-actions { opacity: 1; }
 
 .leaf-btn {
   display: inline-flex;
@@ -1955,6 +2057,12 @@ html, body, #root {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
   ::view-transition-group(*) { animation: none; }
 }
 
@@ -2024,7 +2132,7 @@ html, body, #root {
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 11px;
   font-family: var(--font-ui);
@@ -2048,9 +2156,39 @@ html, body, #root {
 /* === Focus rings (consistent across all interactive elements) === */
 button:focus-visible,
 input:focus-visible,
+select:focus-visible,
 textarea:focus-visible {
   outline: 2px solid var(--text-accent);
   outline-offset: 1px;
+}
+
+/* Preserve a useful terminal canvas at the app's 800px minimum width. */
+@media (max-width: 1000px) {
+  :root {
+    --sidebar-width: 260px;
+    --vertical-tab-bar-width: 190px;
+  }
+
+  .titlebar {
+    gap: 8px;
+  }
+
+  .titlebar-palette-btn {
+    min-width: 132px;
+  }
+
+  .status-left,
+  .status-right {
+    gap: 8px;
+  }
+
+  .status-cwd {
+    max-width: 220px;
+  }
+
+  .status-item.platform {
+    display: none;
+  }
 }
 
 /* === Layout controls: sidebar side + collapsible tabs/explorer === */

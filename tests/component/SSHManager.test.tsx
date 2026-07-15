@@ -142,6 +142,34 @@ describe('SSHManager', () => {
     });
   });
 
+  it('identifies the saved profile while connecting and keeps failures visible with the form closed', async () => {
+    let rejectConnection: (error: Error) => void = () => {};
+    sshConnect.mockImplementationOnce(() => new Promise((_, reject) => { rejectConnection = reject; }));
+    renderSSHManager({
+      profiles: [{
+        id: 'pckpr@box.local:22:password',
+        host: 'box.local',
+        port: 22,
+        username: 'pckpr',
+        auth: 'password',
+      }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /connect to pckpr@box.local/i }));
+
+    expect(screen.getByRole('status')).toHaveTextContent('Connecting to pckpr@box.local:22…');
+    expect(screen.getByRole('button', { name: /connecting to pckpr@box.local/i })).toBeDisabled();
+
+    rejectConnection(new Error('Authentication failed'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Couldn’t connect to pckpr@box.local:22: Authentication failed',
+      );
+    });
+    expect(screen.queryByPlaceholderText(/host/i)).toBeNull();
+  });
+
   it('renders and reconnects saved host-only profiles', async () => {
     const onConnected = vi.fn();
     renderSSHManager({
@@ -191,6 +219,44 @@ describe('SSHManager', () => {
     expect(screen.getByPlaceholderText(/port/i)).toHaveValue('22');
     expect(screen.getByPlaceholderText(/username/i)).toHaveValue('pckpr');
     expect(screen.getByPlaceholderText(/password/i)).toHaveValue('secret');
+  });
+
+  it('focuses and requires Host, exposes auth selection, and disables empty submission', () => {
+    renderSSHManager();
+
+    fireEvent.click(screen.getByRole('button', { name: /new connection/i }));
+
+    const host = screen.getByRole('textbox', { name: 'Host' });
+    const submit = screen.getByRole('button', { name: /connect & save/i });
+    const passwordAuth = screen.getByRole('button', { name: 'Password' });
+    const keyAuth = screen.getByRole('button', { name: 'Key' });
+
+    expect(host).toHaveFocus();
+    expect(host).toBeRequired();
+    expect(screen.getByRole('textbox', { name: 'Port' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Username' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Password')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Authentication method' })).toBeInTheDocument();
+    expect(submit).toBeDisabled();
+    expect(passwordAuth).toHaveAttribute('aria-pressed', 'true');
+    expect(keyAuth).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.change(host, { target: { value: 'box.local' } });
+    expect(submit).toBeEnabled();
+    fireEvent.click(keyAuth);
+    expect(passwordAuth).toHaveAttribute('aria-pressed', 'false');
+    expect(keyAuth).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('announces new-connection failures as an alert', async () => {
+    sshConnect.mockRejectedValueOnce(new Error('Host key mismatch'));
+    renderSSHManager();
+
+    fireEvent.click(screen.getByRole('button', { name: /new connection/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Host' }), { target: { value: 'box.local' } });
+    fireEvent.click(screen.getByRole('button', { name: /connect & save/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Host key mismatch');
   });
 
   it('deletes saved profiles from the delete action', () => {

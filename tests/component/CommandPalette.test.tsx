@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { useState } from 'react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import CommandPalette, { CommandAction } from '../../src/renderer/components/CommandPalette';
 
 const sampleActions: CommandAction[] = [
@@ -25,6 +26,13 @@ describe('CommandPalette', () => {
     expect(screen.getByTestId('command-palette-panel')).toBeInTheDocument();
     expect(screen.getByTestId('command-palette-input')).toBeInTheDocument();
     expect(screen.getByTestId('command-palette-results')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Search commands' })).toHaveAttribute(
+      'aria-controls',
+      'command-palette-results',
+    );
+    expect(screen.getByRole('listbox', { name: 'Commands' })).toBeInTheDocument();
+    expect(screen.getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true');
   });
 
   it('shows all actions grouped by category', () => {
@@ -110,6 +118,8 @@ describe('CommandPalette', () => {
     // Arrow down to second
     fireEvent.keyDown(input, { key: 'ArrowDown' });
     expect(screen.getByTestId('command-item-second').classList.contains('selected')).toBe(true);
+    expect(screen.getByTestId('command-item-second')).toHaveAttribute('aria-selected', 'true');
+    expect(input).toHaveAttribute('aria-activedescendant', 'command-option-second');
     expect(firstItem.classList.contains('selected')).toBe(false);
 
     // Arrow up back to first
@@ -154,5 +164,56 @@ describe('CommandPalette', () => {
     fireEvent.mouseDown(screen.getByTestId('command-palette-panel'));
 
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('returns focus to the opener when closed with Escape', async () => {
+    function Harness() {
+      const [visible, setVisible] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setVisible(true)}>Open commands</button>
+          <CommandPalette visible={visible} onClose={() => setVisible(false)} actions={sampleActions} />
+        </>
+      );
+    }
+
+    render(<Harness />);
+    const opener = screen.getByRole('button', { name: 'Open commands' });
+    opener.focus();
+    fireEvent.click(opener);
+
+    const input = screen.getByRole('combobox', { name: 'Search commands' });
+    await waitFor(() => expect(input).toHaveFocus());
+    fireEvent.keyDown(input, { key: 'Escape' });
+
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
+  it('preserves focus claimed by the command action while the palette closes', async () => {
+    function Harness() {
+      const [visible, setVisible] = useState(false);
+      const [showDestination, setShowDestination] = useState(false);
+      const actions: CommandAction[] = [{
+        id: 'open-destination',
+        label: 'Open destination',
+        category: 'General',
+        handler: () => setShowDestination(true),
+      }];
+      return (
+        <>
+          <button type="button" onClick={() => setVisible(true)}>Open commands</button>
+          {showDestination && <input aria-label="Command destination" autoFocus />}
+          <CommandPalette visible={visible} onClose={() => setVisible(false)} actions={actions} />
+        </>
+      );
+    }
+
+    render(<Harness />);
+    const opener = screen.getByRole('button', { name: 'Open commands' });
+    opener.focus();
+    fireEvent.click(opener);
+    fireEvent.click(await screen.findByRole('option', { name: 'Open destination' }));
+
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Command destination' })).toHaveFocus());
   });
 });

@@ -16,6 +16,14 @@ function file(name: string) {
   };
 }
 
+function directory(name: string) {
+  return {
+    ...file(name),
+    path: `/repo/${name}`,
+    isDirectory: true,
+  };
+}
+
 beforeEach(() => {
   fsListDir.mockReset();
   Object.defineProperty(window, 'janet', {
@@ -79,6 +87,34 @@ describe('FileExplorer live refresh', () => {
     await waitFor(() => {
       expect(fsListDir).toHaveBeenLastCalledWith({ dirPath: '/Users', showHidden: false });
     });
+    view.unmount();
+  });
+
+  it('exposes directories as keyboard-operable folder buttons', async () => {
+    fsListDir
+      .mockResolvedValueOnce([directory('src'), file('README.md')])
+      .mockResolvedValueOnce([]);
+
+    const view = render(<FileExplorer cwd="/repo" cwdReady isRemote={false} />);
+    const folder = await screen.findByRole('button', { name: 'Open folder src' });
+
+    expect(screen.queryByRole('button', { name: 'README.md' })).toBeNull();
+    fireEvent.click(folder);
+
+    await waitFor(() => {
+      expect(fsListDir).toHaveBeenLastCalledWith({ dirPath: '/repo/src', showHidden: false });
+    });
+    view.unmount();
+  });
+
+  it('shows terminal startup instead of a false empty-directory state before cwd is ready', () => {
+    fsListDir.mockResolvedValue([]);
+
+    const view = render(<FileExplorer cwd="" cwdReady={false} isRemote={false} />);
+
+    expect(screen.getByRole('status')).toHaveTextContent('Starting terminal…');
+    expect(screen.queryByText('Empty directory')).toBeNull();
+    expect(fsListDir).not.toHaveBeenCalled();
     view.unmount();
   });
 });

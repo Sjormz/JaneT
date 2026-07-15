@@ -36,16 +36,18 @@ export default function StatusBar({
             {sshSessions.length} SSH
           </span>
         )}
-        {cwd && (
+        {isRemote && remoteHost ? (
+          <span
+            className="status-item status-cwd status-cwd-remote"
+            title={`Connected to ${remoteHost}; remote working directory unavailable`}
+          >
+            <FolderIcon size="xs" />
+            <span>{remoteHost} · remote cwd unavailable</span>
+          </span>
+        ) : cwd && (
           <span className="status-item status-cwd" title={cwd}>
             <FolderIcon size="xs" />
-            {isRemote && remoteHost ? (
-              <span className="status-cwd-remote">
-                {remoteHost}: {cwd}
-              </span>
-            ) : (
-              <span className="status-cwd-local">{cwd}</span>
-            )}
+            <span className="status-cwd-local">{cwd}</span>
           </span>
         )}
         {gitStatus && (
