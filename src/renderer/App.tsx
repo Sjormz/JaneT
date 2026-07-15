@@ -8,6 +8,8 @@ import StatusBar from './components/StatusBar';
 import CommandPalette, { CommandAction } from './components/CommandPalette';
 import ShortcutEditor from './components/ShortcutEditor';
 import UpdateBanner from './components/UpdateBanner';
+import BrandMark from './components/BrandMark';
+import Tooltip from './components/Tooltip';
 import {
   TabInfo, SessionInfo,
   SavedSSHProfile,
@@ -23,6 +25,7 @@ import { GitStatusSummary, summarizeGitStatus } from './gitStatus';
 import { useGitRepository } from './useGitRepository';
 import { requestTerminalSearch } from './terminalSearch';
 import type { FileExplorerSource } from './fileExplorerSource';
+import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
 
 function createTabRoot(type: 'local' | 'ssh'): PaneNode {
   return createPaneRoot(type, 1, 'vertical');
@@ -121,6 +124,7 @@ interface InitialAppState {
   workspaceTabs: WorkspaceTabPreset[];
   currentTheme: ThemeName;
   fontSize: number;
+  fontFamily: string;
   sidebarSide: 'left' | 'right';
 }
 
@@ -159,7 +163,7 @@ function createInitialAppState(settings: any): InitialAppState {
 
   const starterTab: TabInfo = {
     id: genId('tab'),
-    title: 'terminal',
+    title: 'Terminal',
     type: 'local',
     root: createTabRoot('local'),
   };
@@ -176,6 +180,7 @@ function createInitialAppState(settings: any): InitialAppState {
     workspaceTabs: Array.isArray(s.workspaceTabs) ? s.workspaceTabs : [],
     currentTheme: theme,
     fontSize: typeof s.fontSize === 'number' ? s.fontSize : 14,
+    fontFamily: normalizeTerminalFontFamily(s.fontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY),
     sidebarSide: s.sidebarSide === 'right' ? 'right' : 'left',
   };
 }
@@ -191,6 +196,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [activeTabId, setActiveTabId] = useState(initialState.activeTabId);
   const [sidebarOpen, setSidebarOpen] = useState(initialState.sidebarOpen);
   const [tabsOpen, setTabsOpen] = useState(initialState.tabsOpen);
+  const responsiveTabsCollapsedRef = useRef(false);
   const [sidebarSection, setSidebarSection] = useState<'files' | 'ssh' | 'git' | 'settings'>(initialState.sidebarSection);
   const [sshSessions, setSshSessions] = useState<SessionInfo[]>([]);
   const [readySshSessionIds, setReadySshSessionIds] = useState<Set<string>>(new Set());
@@ -201,10 +207,29 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [maximizedLeafByTab, setMaximizedLeafByTab] = useState<Record<string, string | null>>({});
   const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null);
   const [paneDropTarget, setPaneDropTarget] = useState<{ leafId: string; side: PaneDropSide } | null>(null);
-  const [activeTerminals, setActiveTerminals] = useState<Set<string>>(new Set());
   const liveTerminalIdsRef = useRef<Set<string>>(new Set());
   const connectingSshSessionIdsRef = useRef<Set<string>>(new Set());
   const releasedSshSessionIdsRef = useRef<Set<string>>(new Set());
+
+  useLayoutEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const narrowWindow = window.matchMedia('(max-width: 1000px)');
+    const syncResponsiveTabs = () => {
+      if (narrowWindow.matches) {
+        setTabsOpen((current) => {
+          if (!current) return current;
+          responsiveTabsCollapsedRef.current = true;
+          return false;
+        });
+      } else if (responsiveTabsCollapsedRef.current) {
+        responsiveTabsCollapsedRef.current = false;
+        setTabsOpen(true);
+      }
+    };
+    syncResponsiveTabs();
+    narrowWindow.addEventListener('change', syncResponsiveTabs);
+    return () => narrowWindow.removeEventListener('change', syncResponsiveTabs);
+  }, []);
 
   const markSshSessionReady = useCallback((sessionId: string) => {
     setReadySshSessionIds((current) => new Set(current).add(sessionId));
@@ -262,6 +287,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   // Settings state
   const [currentTheme, setCurrentTheme] = useState<ThemeName>(initialState.currentTheme);
   const [fontSize, setFontSize] = useState(initialState.fontSize);
+  const [fontFamily] = useState(initialState.fontFamily);
   const [sidebarSide, setSidebarSide] = useState<'left' | 'right'>(initialState.sidebarSide);
   const settingsLoadedRef = useRef(true);
 
@@ -421,7 +447,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         tabs: savedTabs,
         activeTabId,
         sidebarOpen,
-        tabsOpen,
+        tabsOpen: responsiveTabsCollapsedRef.current ? true : tabsOpen,
         sidebarSection,
       };
       try { window.janet.setSettings({ session }).catch(() => {}); } catch {}
@@ -473,7 +499,6 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   // Track terminal registrations
   const handleTerminalReady = useCallback((termId: string) => {
     liveTerminalIdsRef.current.add(termId);
-    setActiveTerminals(new Set(liveTerminalIdsRef.current));
   }, []);
 
   // Called by TerminalPane when the shell reports a new cwd (via OSC 7
@@ -542,7 +567,6 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         return next;
       });
     }
-    setActiveTerminals(new Set(liveTerminalIdsRef.current));
   }, []);
 
   // Called when a TerminalPane unmounts
@@ -553,7 +577,6 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         if (stillRendered) return;
 
         liveTerminalIdsRef.current.delete(termId);
-        setActiveTerminals(new Set(liveTerminalIdsRef.current));
         disposeCachedTerminal(termId);
         window.janet.terminalDestroy({ id: termId }).catch(() => {});
       }, 0);
@@ -574,7 +597,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     ) => {
       const tab: TabInfo = {
         id: genId('tab'),
-        title: title || (type === 'local' ? `terminal ${tabs.length + 1}` : `ssh-${sshSessionId?.slice(0, 6)}`),
+        title: title || (type === 'local' ? `Terminal ${tabs.length + 1}` : `SSH ${tabs.length + 1}`),
         type,
         sshSessionId,
         sshProfileId,
@@ -603,7 +626,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       if (next.length === 0) {
         const replacement: TabInfo = {
           id: genId('tab'),
-          title: 'terminal',
+          title: 'Terminal',
           type: 'local',
           root: createTabRoot('local'),
         };
@@ -1004,54 +1027,54 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const paletteActions = useMemo<CommandAction[]>(() => {
     const actions: CommandAction[] = [
       {
-        id: 'new-terminal', label: 'New Terminal', category: 'Tab',
+        id: 'new-terminal', label: 'New terminal tab', category: 'Tabs',
         shortcut: bindings['new-terminal'], handler: () => addTab('local'),
       },
       {
-        id: 'close-tab', label: 'Close Tab', category: 'Tab',
+        id: 'close-tab', label: 'Close current tab', category: 'Tabs',
         shortcut: bindings['close-tab'], handler: () => closeTab(activeTabId),
       },
       {
-        id: 'toggle-sidebar', label: 'Toggle Sidebar', category: 'View',
+        id: 'toggle-sidebar', label: 'Show or hide sidebar', category: 'View',
         shortcut: bindings['toggle-sidebar'], handler: () => setSidebarOpen((v) => !v),
       },
       {
-        id: 'sidebar-files', label: 'Show File Explorer', category: 'View',
+        id: 'sidebar-files', label: 'Open Explorer', category: 'View',
         handler: () => { setSidebarOpen(true); setSidebarSection('files'); },
       },
       {
-        id: 'sidebar-ssh', label: 'Show SSH Connections', category: 'View',
+        id: 'sidebar-ssh', label: 'Open SSH connections', category: 'View',
         handler: () => { setSidebarOpen(true); setSidebarSection('ssh'); },
       },
       {
-        id: 'sidebar-git', label: 'Show Git Tree', category: 'View',
+        id: 'sidebar-git', label: 'Open Source Control', category: 'View',
         handler: () => { setSidebarOpen(true); setSidebarSection('git'); },
       },
       {
-        id: 'sidebar-settings', label: 'Show Settings', category: 'View',
+        id: 'sidebar-settings', label: 'Open Settings', category: 'View',
         handler: () => { setSidebarOpen(true); setSidebarSection('settings'); },
       },
       {
-        id: 'font-increase', label: 'Increase Font Size', category: 'Settings',
+        id: 'font-increase', label: 'Increase terminal text size', category: 'Settings',
         shortcut: bindings['font-increase'], handler: () => persistFontSize(Math.min(24, fontSize + 1)),
       },
       {
-        id: 'font-decrease', label: 'Decrease Font Size', category: 'Settings',
+        id: 'font-decrease', label: 'Decrease terminal text size', category: 'Settings',
         shortcut: bindings['font-decrease'], handler: () => persistFontSize(Math.max(10, fontSize - 1)),
       },
       {
-        id: 'search-toggle', label: 'Search in Terminal', category: 'Terminal',
+        id: 'search-toggle', label: 'Search terminal output', category: 'Terminal',
         shortcut: bindings['search-toggle'],
         handler: () => {
           if (sidebarTerminalId) requestTerminalSearch(sidebarTerminalId);
         },
       },
       {
-        id: 'palette-toggle', label: 'Command Palette', category: 'General',
+        id: 'palette-toggle', label: 'Open command palette', category: 'General',
         shortcut: bindings['palette-toggle'], handler: () => setPaletteVisible((v) => !v),
       },
       {
-        id: 'check-updates', label: 'Check for Updates', category: 'General',
+        id: 'check-updates', label: 'Check for updates', category: 'General',
         handler: () => { window.janet.checkForUpdates().catch(() => {}); },
       },
       {
@@ -1081,16 +1104,16 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       const leaves = getAllLeafIds(activeTab.root);
       if (sidebarTerminalId) {
         actions.push({
-          id: 'split-right', label: 'Split Right', category: 'Pane',
+          id: 'split-right', label: 'Split pane right', category: 'Pane',
           shortcut: bindings['split-right'], handler: () => handleSplitPane(activeTab.id, sidebarTerminalId, 'vertical'),
         });
         actions.push({
-          id: 'split-down', label: 'Split Down', category: 'Pane',
+          id: 'split-down', label: 'Split pane below', category: 'Pane',
           shortcut: bindings['split-down'], handler: () => handleSplitPane(activeTab.id, sidebarTerminalId, 'horizontal'),
         });
         if (leaves.length > 1) {
           actions.push({
-            id: 'close-pane', label: 'Close Pane', category: 'Pane',
+            id: 'close-pane', label: 'Close current pane', category: 'Pane',
             shortcut: bindings['close-pane'], handler: () => handleClosePane(activeTab.id, sidebarTerminalId),
           });
         }
@@ -1154,17 +1177,20 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
             onWorkspaceTabLaunch={openWorkspaceTab}
             onSaveWorkspaceTab={saveWorkspaceTab}
             onRenameTab={renameTab}
-            onCollapse={() => setTabsOpen(false)}
+            onCollapse={() => {
+              responsiveTabsCollapsedRef.current = false;
+              setTabsOpen(false);
+            }}
           />
         ) : (
-          <button
-            className="tabs-rail"
-            onClick={() => setTabsOpen(true)}
-            title="Show tabs"
-            aria-label="Show tabs"
-          >
-            Tabs
-          </button>
+          <Tooltip label="Show terminal tabs" placement="right">
+            <button className="tabs-rail" onClick={() => {
+              responsiveTabsCollapsedRef.current = false;
+              setTabsOpen(true);
+            }} aria-label="Show terminal tabs">
+              Tabs
+            </button>
+          </Tooltip>
         )}
         <div className="terminal-area">
           <SplitPane
@@ -1188,6 +1214,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
             onToggleMaximizePane={(leafId) => handleToggleMaximizePane(activeTab.id, leafId)}
             themeName={currentTheme}
             fontSize={fontSize}
+            fontFamily={fontFamily}
             onCwdChange={handleCwdChange}
             onTerminalFocus={handleTerminalFocus}
             initialCwd={activeTab.cwd || homeDir || undefined}
@@ -1199,7 +1226,6 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       </div>
       <StatusBar
         sshSessions={sshSessions}
-        activeTerminalsCount={activeTerminals.size}
         cwd={effectiveCwd}
         gitStatus={gitStatus}
         isRemote={sidebarIsRemote}
@@ -1243,7 +1269,7 @@ export default function App() {
   if (!settings) {
     return (
       <div className="app-startup" role={settingsError ? 'alert' : 'status'} aria-live="polite">
-        <div className="app-startup-mark" aria-hidden="true">›_</div>
+        <BrandMark size={56} className="app-startup-mark" />
         <div className="app-startup-name">JaneT</div>
         {settingsError ? (
           <>

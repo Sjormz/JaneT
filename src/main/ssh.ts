@@ -582,6 +582,37 @@ export class SSHManager {
     return result;
   }
 
+  listRunningSessions(): Array<{
+    id: string;
+    host: string;
+    port: number;
+    username?: string;
+    shellCount: number;
+  }> {
+    const result: Array<{
+      id: string;
+      host: string;
+      port: number;
+      username?: string;
+      shellCount: number;
+    }> = [];
+    this.connections.forEach((connection) => {
+      const shellIds = new Set([
+        ...connection.shells.keys(),
+        ...connection.shellHandles.keys(),
+      ]);
+      if (shellIds.size === 0) return;
+      result.push({
+        id: connection.id,
+        host: connection.config.host,
+        port: connection.config.port,
+        username: connection.config.username,
+        shellCount: shellIds.size,
+      });
+    });
+    return result;
+  }
+
   cleanup(): void {
     for (const id of Array.from(this.pendingConnections.keys())) {
       void this.disconnect(id);

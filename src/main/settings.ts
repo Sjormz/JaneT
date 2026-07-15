@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { app, safeStorage } from 'electron';
+import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
 
 // Mirrors `SavedSession` in src/renderer/sessionRestore.ts. Duplicated as a
 // type-only contract because the main process cannot import the renderer
@@ -136,7 +137,7 @@ const EMPTY_SESSION: SavedSession = {
 const DEFAULT_SETTINGS: AppSettings = {
   theme: 'tokyo-night',
   fontSize: 14,
-  fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace",
+  fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
   sidebarSide: 'left',
   keybindings: { ...DEFAULT_KEYBINDINGS },
   sshProfiles: [],
@@ -276,6 +277,7 @@ export class SettingsManager {
     const profiles = Array.isArray(settings.sshProfiles) ? settings.sshProfiles : [];
     return {
       ...settings,
+      fontFamily: normalizeTerminalFontFamily(settings.fontFamily),
       sshHostKeys: isStringRecord(settings.sshHostKeys) ? { ...settings.sshHostKeys } : {},
       sshProfiles: profiles.map((profile) => ({
         id: profile.id,

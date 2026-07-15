@@ -151,7 +151,7 @@ describe('FileExplorer live refresh', () => {
     const view = render(<FileExplorer source={sshSource('ssh-1')} />);
 
     expect(await screen.findByText('projects')).toBeInTheDocument();
-    expect(screen.getByText(/remote files on/i)).toHaveTextContent('box.local');
+    expect(screen.getByText(/files on/i)).toHaveTextContent('box.local');
     expect(sshListDir).toHaveBeenCalledWith({
       sessionId: 'ssh-1',
       showHidden: false,
@@ -237,7 +237,7 @@ describe('FileExplorer live refresh', () => {
 
     view.rerender(<FileExplorer source={sshSource('ssh-b', true, 'b.local')} />);
     expect(screen.queryByText('private-a.txt')).toBeNull();
-    expect(screen.getByText(/remote files on/i)).toHaveTextContent('b.local');
+    expect(screen.getByText(/files on/i)).toHaveTextContent('b.local');
     expect(screen.getByText('Loading…')).toHaveAttribute('role', 'status');
 
     resolveB(remoteListing('/home/b', [{ ...file('from-b.txt'), path: '/home/b/from-b.txt' }]));
@@ -272,7 +272,7 @@ describe('FileExplorer live refresh', () => {
   it('waits for the SSH transport before opening the remote filesystem', () => {
     const view = render(<FileExplorer source={sshSource('ssh-pending', false)} />);
 
-    expect(screen.getByText('Connecting to remote filesystem…')).toHaveAttribute('role', 'status');
+    expect(screen.getByText('Connecting to files on box.local…')).toHaveAttribute('role', 'status');
     expect(sshListDir).not.toHaveBeenCalled();
     expect(fsListDir).not.toHaveBeenCalled();
     view.unmount();
@@ -285,7 +285,7 @@ describe('FileExplorer live refresh', () => {
     };
     const view = render(<FileExplorer source={source} />);
 
-    expect(screen.getByText(/remote filesystem disconnected/i)).toHaveAttribute('role', 'status');
+    expect(screen.getByText(/Reconnect .* to browse its files/i)).toHaveAttribute('role', 'status');
     expect(sshListDir).not.toHaveBeenCalled();
     expect(fsListDir).not.toHaveBeenCalled();
     view.unmount();
@@ -355,7 +355,7 @@ describe('FileExplorer live refresh', () => {
 
     const view = render(<FileExplorer source={sshSource('ssh-hidden')} />);
     expect(await screen.findByText('visible.txt')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle hidden files' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show hidden files' }));
 
     expect(await screen.findByText('.secret')).toBeInTheDocument();
     expect(sshListDir).toHaveBeenLastCalledWith({

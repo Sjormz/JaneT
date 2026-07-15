@@ -82,7 +82,7 @@ function isHttpReady(url) {
       });
       response.on('end', () => {
         const statusOk = response.statusCode >= 200 && response.statusCode < 400;
-        resolve(statusOk && body.includes('<title>JaneT</title>'));
+        resolve(statusOk && body.includes('<meta name="application-name" content="JaneT"'));
       });
     });
     request.once('error', () => resolve(false));

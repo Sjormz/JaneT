@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { SavedSSHProfile, SessionInfo } from '../types';
 import { PlusIcon, XCloseIcon, ServerIcon, AlertIcon, PlugIcon, PencilIcon, TrashIcon } from '../icons';
+import Tooltip from './Tooltip';
 
 interface SSHManagerProps {
   sshProfiles: SavedSSHProfile[];
@@ -46,6 +47,7 @@ export default function SSHManager({
   const [connectingProfileId, setConnectingProfileId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<{ label: string; message: string } | null>(null);
+  const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
 
   const resetForm = () => {
     setHost('');
@@ -55,10 +57,11 @@ export default function SSHManager({
     setPassword('');
     setPrivateKey('');
     setFormError(null);
+    setEditingProfileId(null);
   };
 
-  const saveProfile = (profile: SavedSSHProfile) => {
-    const next = [profile, ...sshProfiles.filter((p) => p.id !== profile.id)];
+  const saveProfile = (profile: SavedSSHProfile, replacedProfileId?: string | null) => {
+    const next = [profile, ...sshProfiles.filter((p) => p.id !== profile.id && p.id !== replacedProfileId)];
     onProfilesChange(next);
   };
 
@@ -93,7 +96,7 @@ export default function SSHManager({
         auth,
         password: auth === 'password' && password ? password : undefined,
         privateKey: auth === 'key' && privateKey ? privateKey : undefined,
-      });
+      }, editingProfileId);
       onConnected({
         id: sessionId,
         host: trimmedHost,
@@ -118,6 +121,7 @@ export default function SSHManager({
     setPassword(profile.password ?? '');
     setPrivateKey(profile.privateKey ?? '');
     setFormError(null);
+    setEditingProfileId(profile.id);
     setShowForm(true);
   };
 
@@ -158,19 +162,33 @@ export default function SSHManager({
   const hasSavedProfiles = sshProfiles.length > 0;
   const connectingProfile = sshProfiles.find((profile) => profile.id === connectingProfileId);
   const anyProfileConnecting = connectingProfileId !== null;
+  const formToggleLabel = showForm
+    ? editingProfileId ? 'Cancel editing' : 'Cancel new connection'
+    : 'New SSH connection';
+
+  const toggleForm = () => {
+    if (showForm) {
+      setShowForm(false);
+      resetForm();
+      return;
+    }
+    resetForm();
+    setShowForm(true);
+  };
 
   return (
     <div className="ssh-manager">
       <div className="ssh-header">
-        <span className="section-title">SSH Connections</span>
-        <button
-          className="icon-btn"
-          onClick={() => setShowForm((v) => !v)}
-          title={showForm ? 'Close form' : 'New connection'}
-          aria-label={showForm ? 'Close form' : 'New connection'}
-        >
-          {showForm ? <XCloseIcon size="sm" /> : <PlusIcon size="sm" />}
-        </button>
+        <span className="section-title">SSH connections</span>
+        <Tooltip label={formToggleLabel} placement="left">
+          <button
+            className="icon-btn"
+            onClick={toggleForm}
+            aria-label={formToggleLabel}
+          >
+            {showForm ? <XCloseIcon size="sm" /> : <PlusIcon size="sm" />}
+          </button>
+        </Tooltip>
       </div>
 
       {connectingProfile && (
@@ -191,10 +209,11 @@ export default function SSHManager({
 
       {showForm && (
         <form className="ssh-form" onSubmit={handleConnect}>
-          <div className="form-row">
+          <label className="form-field">
+            <span>Host</span>
             <input
               type="text"
-              placeholder="Host (e.g. 192.168.1.100)"
+              placeholder="server.example.com"
               aria-label="Host"
               autoFocus
               required
@@ -202,24 +221,16 @@ export default function SSHManager({
               onChange={(e) => setHost(e.target.value)}
               className="form-input"
             />
-          </div>
+          </label>
           <div className="form-row form-row-2">
-            <input
-              type="text"
-              placeholder="Port"
-              aria-label="Port"
-              value={port}
-              onChange={(e) => setPort(e.target.value)}
-              className="form-input"
-            />
-            <input
-              type="text"
-              placeholder="Username"
-              aria-label="Username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="form-input"
-            />
+            <label className="form-field">
+              <span>Port</span>
+              <input type="text" placeholder="22" aria-label="Port" value={port} onChange={(e) => setPort(e.target.value)} className="form-input" />
+            </label>
+            <label className="form-field">
+              <span>Username</span>
+              <input type="text" placeholder="Optional" aria-label="Username" value={username} onChange={(e) => setUsername(e.target.value)} className="form-input" />
+            </label>
           </div>
           <div className="form-row auth-row" role="group" aria-label="Authentication method">
             <button
@@ -233,30 +244,32 @@ export default function SSHManager({
               className={`auth-btn ${auth === 'key' ? 'active' : ''}`}
               aria-pressed={auth === 'key'}
               onClick={() => setAuth('key')}
-            >Key</button>
+            >Private key</button>
           </div>
           {auth === 'password' ? (
-            <div className="form-row">
+            <label className="form-field">
+              <span>Password</span>
               <input
                 type="password"
-                placeholder="Password"
+                placeholder="Optional — use SSH agent if blank"
                 aria-label="Password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="form-input"
               />
-            </div>
+            </label>
           ) : (
-            <div className="form-row">
+            <label className="form-field">
+              <span>Private key</span>
               <textarea
-                placeholder="Paste private key (RSA/ED25519)"
+                placeholder="Paste an RSA or Ed25519 private key"
                 aria-label="Private key"
                 value={privateKey}
                 onChange={(e) => setPrivateKey(e.target.value)}
                 className="form-input form-textarea"
                 rows={4}
               />
-            </div>
+            </label>
           )}
           {formError && (
             <div className="ssh-error" role="alert">
@@ -268,7 +281,7 @@ export default function SSHManager({
             className="connect-btn"
             disabled={formConnecting || anyProfileConnecting || !host.trim()}
           >
-            {formConnecting ? 'Connecting…' : 'Connect & Save'}
+            {formConnecting ? 'Connecting…' : editingProfileId ? 'Update and connect' : 'Save and connect'}
           </button>
         </form>
       )}
@@ -276,7 +289,7 @@ export default function SSHManager({
       <div className="ssh-sessions">
         {hasSavedProfiles && (
           <div className="ssh-list-group">
-            <div className="ssh-list-title">Saved</div>
+            <div className="ssh-list-title">Saved connections</div>
             {sshProfiles.map((profile) => {
               const isConnecting = connectingProfileId === profile.id;
               return (
@@ -289,34 +302,27 @@ export default function SSHManager({
                     </div>
                   </div>
                   <div className="session-actions">
-                    <button
-                      type="button"
-                      className="session-action-btn"
-                      onClick={() => connectProfile(profile)}
-                      disabled={formConnecting || anyProfileConnecting}
-                      title={isConnecting ? `Connecting to ${connectionLabel(profile)}` : 'Connect'}
-                      aria-label={isConnecting ? `Connecting to ${connectionLabel(profile)}` : `Connect to ${connectionLabel(profile)}`}
-                    >
-                      <PlugIcon size="sm" />
-                    </button>
-                    <button
-                      type="button"
-                      className="session-action-btn"
-                      onClick={() => editProfile(profile)}
-                      title="Edit saved connection"
-                      aria-label={`Edit ${connectionLabel(profile)}`}
-                    >
-                      <PencilIcon size="sm" />
-                    </button>
-                    <button
-                      type="button"
-                      className="session-action-btn danger"
-                      onClick={() => forgetProfile(profile.id)}
-                      title="Delete saved connection"
-                      aria-label={`Delete ${connectionLabel(profile)}`}
-                    >
-                      <TrashIcon size="sm" />
-                    </button>
+                    <Tooltip label={isConnecting ? `Connecting to ${connectionLabel(profile)}` : `Connect to ${connectionLabel(profile)}`} placement="top">
+                      <button
+                        type="button"
+                        className="session-action-btn"
+                        onClick={() => connectProfile(profile)}
+                        disabled={formConnecting || anyProfileConnecting}
+                        aria-label={isConnecting ? `Connecting to ${connectionLabel(profile)}` : `Connect to ${connectionLabel(profile)}`}
+                      >
+                        <PlugIcon size="sm" />
+                      </button>
+                    </Tooltip>
+                    <Tooltip label={`Edit ${connectionLabel(profile)}`} placement="top">
+                      <button type="button" className="session-action-btn" onClick={() => editProfile(profile)} aria-label={`Edit ${connectionLabel(profile)}`}>
+                        <PencilIcon size="sm" />
+                      </button>
+                    </Tooltip>
+                    <Tooltip label={`Remove ${connectionLabel(profile)}`} placement="top">
+                      <button type="button" className="session-action-btn danger" onClick={() => forgetProfile(profile.id)} aria-label={`Remove ${connectionLabel(profile)}`}>
+                        <TrashIcon size="sm" />
+                      </button>
+                    </Tooltip>
                   </div>
                 </div>
               );
@@ -324,8 +330,15 @@ export default function SSHManager({
           </div>
         )}
 
-        {!hasSavedProfiles && (
-          <div className="ssh-empty">No SSH connections saved</div>
+        {!hasSavedProfiles && !showForm && (
+          <div className="ssh-empty">
+            <ServerIcon size="lg" />
+            <strong>Connect to a remote host</strong>
+            <span>Save a connection once, then reopen it from here.</span>
+            <button type="button" className="empty-state-action" onClick={() => setShowForm(true)}>
+              <PlusIcon size="sm" /> New connection
+            </button>
+          </div>
         )}
       </div>
     </div>

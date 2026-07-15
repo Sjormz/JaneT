@@ -1,20 +1,22 @@
+<p align="center">
+  <img src="assets/brand/app-icon.svg" width="96" height="96" alt="JaneT Prompt-J mark">
+</p>
+
 # JaneT
 
-A powerful, cross-platform terminal with built-in file explorer, SSH remote file browsing, and git tree visualization.
-
-Built by sjorm, for sjorm.
+A focused terminal workspace for local and SSH work, with durable sessions, file browsing, and Git context built in.
 
 ## Features
 
-- **Terminal Emulator** - Full-featured terminal with xterm.js and node-pty
-- **Multiple Tabs** - Open many terminals in one window
-- **File Explorer** - Local and remote file browsing with breadcrumb navigation and live refresh
-- **SSH Connection Manager** - Connect to remote servers with password or key auth
-- **SSH Remote File Browser** - Browse each connected machine from its server-resolved home via SFTP
-- **Git Integration** - See branches, status, file changes, and switch branches
-- **Drag & Drop** - Drag files from explorer into terminal (pastes the path)
-- **Tokyo Night Theme** - Beautiful dark theme inspired by Tokyo Night
-- **Cross-Platform** - Windows, macOS, Linux
+- **Local terminals** — Run full PTY-backed shells with xterm.js and node-pty.
+- **Tabs and split panes** — Arrange multiple terminals in one window and save reusable launch presets.
+- **Local and remote Explorer** — Browse local folders or a connected SSH machine through SFTP.
+- **SSH connections** — Save password or private-key profiles and reconnect in one step.
+- **Durable workspaces** — Keep active terminals and SSH sessions running after the window closes, or stop them before quitting.
+- **Source Control** — See branches, worktrees, conflicts, and file changes without leaving the terminal.
+- **Drag and drop** — Drag a file into the terminal to paste its escaped path.
+- **Five readable themes** — Choose Tokyo Night, Dracula, One Dark, Solarized Light, or Gruvbox.
+- **Cross-platform desktop app** — Use the same workspace on Windows, macOS, and Linux.
 
 ## Quick Start
 
@@ -37,6 +39,16 @@ npm run dev
 
 This starts the Vite dev server for hot-reload, then launches Electron.
 
+### Background workspaces
+
+When JaneT detects active local terminal processes or an open SSH shell, closing the window offers three choices:
+
+- **Keep running in background** hides JaneT while preserving the exact panes, processes, connections, and terminal output. Reopen it from the tray, the macOS Dock, or by launching JaneT again; a second launch restores the existing workspace instead of creating a competing instance.
+- **Stop all and quit** interrupts JaneT-owned local work, terminates and verifies surviving child processes, closes SSH sessions, and quits. If JaneT cannot confirm that a local process stopped, it stays open and reports the survivor so Stop can be retried.
+- **Cancel** returns to the workspace without changing anything.
+
+Idle local shells close normally without an extra prompt. This first durable-workspace release keeps the JaneT Electron process alive in the background; it does not preserve local processes through a force-quit, operating-system restart, or machine shutdown. Remote jobs deliberately detached with tools such as `tmux`, `nohup`, `systemd`, or `disown` may continue after JaneT closes its SSH connection.
+
 ## Contributing
 
 Public contributions are welcome. Please see:
@@ -54,13 +66,17 @@ janet/
 │   │   ├── index.ts       # App entry, IPC handlers
 │   │   ├── preload.ts     # Context bridge (secure API)
 │   │   ├── terminal.ts    # node-pty terminal management
+│   │   ├── processInspector.ts # Running-work detection
+│   │   ├── workspaceLifecycle.ts # Background/stop/close decisions
 │   │   ├── ssh.ts         # SSH/SFTP connection management
 │   │   ├── filesystem.ts  # Local file system operations
 │   │   └── git.ts         # Git repository operations
 │   └── renderer/          # React frontend
 │       ├── App.tsx         # Main app layout & state
 │       ├── components/
-│       │   ├── TabBar.tsx        # Tab management
+│       │   ├── Titlebar.tsx      # Brand, navigation, and command entry
+│       │   ├── VerticalTabBar.tsx # Tabs and saved presets
+│       │   ├── SplitPane.tsx     # Pane layout and resize controls
 │       │   ├── TerminalPane.tsx  # xterm.js terminal
 │       │   ├── Sidebar.tsx       # Sidebar container
 │       │   ├── FileExplorer.tsx  # File tree navigation
@@ -68,7 +84,7 @@ janet/
 │       │   ├── GitTree.tsx       # Git visualization
 │       │   └── StatusBar.tsx     # Status bar
 │       └── styles/
-│           └── global.css  # Tokyo Night theme
+│           └── global.css  # Shared visual system and theme roles
 ├── scripts/dev.mjs         # Dev server launcher
 ├── vite.config.ts          # Vite bundler config
 └── package.json
@@ -83,7 +99,8 @@ janet/
 - **ssh2** - SSH/SFTP client (pure JS)
 - **simple-git** - Git operations
 - **Vite** - Frontend bundler
-- **Tokyo Night** - Color scheme
+- **Lucide** — Shared interface icon system
+- **Inter and JetBrains Mono** — Bundled UI and terminal typography
 
 ## Building for Distribution
 

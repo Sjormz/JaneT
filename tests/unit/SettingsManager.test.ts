@@ -45,7 +45,7 @@ describe('SettingsManager', () => {
 
     expect(settings.theme).toBe('tokyo-night');
     expect(settings.fontSize).toBe(14);
-    expect(settings.fontFamily).toContain('Cascadia Code');
+    expect(settings.fontFamily).toContain('JetBrains Mono Variable');
     expect(settings.sidebarSide).toBe('left');
     expect(settings.sshProfiles).toEqual([]);
     expect(settings.workspaceTabs).toEqual([]);

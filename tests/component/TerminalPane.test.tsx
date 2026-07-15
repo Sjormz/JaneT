@@ -662,7 +662,7 @@ describe('TerminalPane SSH shell output', () => {
     );
 
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'waiting');
-    expect(screen.getByText('Connected to box')).toBeInTheDocument();
+    expect(screen.getByText('Connected to box. Waiting for first output.')).toBeInTheDocument();
 
     await act(async () => resolveShell({ connected: true }));
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'waiting');
@@ -884,8 +884,8 @@ describe('TerminalPane SSH shell output', () => {
       </KeybindingsProvider>,
     );
 
-    expect(await screen.findByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'error');
-    expect(screen.getByText(/SSH connection closed/i)).toBeInTheDocument();
+    expect(await screen.findByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'closed');
+    expect(screen.getByText('Connection closed')).toBeInTheDocument();
     expect(screen.getByTestId('ssh-notice-retry')).toBeInTheDocument();
   });
 

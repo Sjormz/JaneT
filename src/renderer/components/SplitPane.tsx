@@ -1,7 +1,7 @@
 import React, { useCallback, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import {
-  PaneDropSide, PaneNode, SplitNode, TerminalLeaf,
+  getAllLeafIds, PaneDropSide, PaneNode, SplitNode, TerminalLeaf,
 } from '../types';
 import TerminalPane from './TerminalPane';
 import {
@@ -10,7 +10,10 @@ import {
   MaximizeIcon,
   RestoreIcon,
   XCloseIcon,
+  TerminalTabIcon,
+  SSHIcon,
 } from '../icons';
+import Tooltip from './Tooltip';
 
 interface SplitPaneProps {
   node: PaneNode;
@@ -32,6 +35,7 @@ interface SplitPaneProps {
   onToggleMaximizePane: (leafId: string) => void;
   themeName?: string;
   fontSize?: number;
+  fontFamily?: string;
 
   onCwdChange?: (termId: string, cwd: string) => void;
   /** Called when a terminal gains focus. */
@@ -46,6 +50,8 @@ interface SplitPaneProps {
   isSshSessionDisconnected?: (sessionId?: string) => boolean;
   /** User clicked "Reconnect" on the SSH notice for this term. */
   onSshRetry?: (termId: string, dimensions: { cols: number; rows: number }) => void | Promise<void>;
+  /** Total panes in the tab; propagated internally so leaf actions describe their real outcome. */
+  totalPaneCount?: number;
 }
 
 /** Wraps a TerminalLeaf with split/close action buttons */
@@ -68,6 +74,7 @@ function TerminalPaneLeaf({
   isMaximized = false,
   themeName,
   fontSize,
+  fontFamily,
   onCwdChange,
   onTerminalFocus,
   initialCwd,
@@ -75,6 +82,7 @@ function TerminalPaneLeaf({
   sshShellReady,
   isSshSessionDisconnected,
   onSshRetry,
+  totalPaneCount,
 }: {
   leaf: TerminalLeaf;
   tabType: 'local' | 'ssh';
@@ -94,6 +102,7 @@ function TerminalPaneLeaf({
   isMaximized?: boolean;
   themeName?: string;
   fontSize?: number;
+  fontFamily?: string;
   onCwdChange?: (termId: string, cwd: string) => void;
   onTerminalFocus?: (termId: string) => void;
   initialCwd?: string;
@@ -101,8 +110,18 @@ function TerminalPaneLeaf({
   sshShellReady?: boolean;
   isSshSessionDisconnected?: (sessionId?: string) => boolean;
   onSshRetry?: (termId: string, dimensions: { cols: number; rows: number }) => void | Promise<void>;
+  totalPaneCount: number;
 }) {
   const leafType = leaf.terminalType ?? tabType;
+  const PaneTypeIcon = leafType === 'ssh' ? SSHIcon : TerminalTabIcon;
+  const paneTypeLabel = leafType === 'ssh' ? 'SSH' : 'Local terminal';
+  const paneTitle = leaf.title?.trim();
+  const paneLabel = paneTitle ? `${paneTitle} — ${paneTypeLabel} pane` : `${paneTypeLabel} pane`;
+  const paneActionContext = paneTitle ? `${paneTitle} (${paneTypeLabel})` : paneTypeLabel;
+  const hasMultiplePanes = totalPaneCount > 1;
+  const closeLabel = hasMultiplePanes
+    ? `Close pane — ${paneActionContext}`
+    : `Close terminal tab — ${paneActionContext}`;
   const effectiveSshSessionId = leaf.sshSessionId ?? sshSessionId;
   const dropSideAt = (event: React.DragEvent): PaneDropSide => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -156,29 +175,30 @@ function TerminalPaneLeaf({
         }}
         onDragEnd={onPaneDragEnd}
       >
-        <span className="leaf-title">{leaf.title || 'terminal'}</span>
+        <Tooltip label={paneLabel} placement="bottom">
+          <span className="leaf-title" aria-label={paneLabel}><PaneTypeIcon size="sm" /></span>
+        </Tooltip>
         <div className="leaf-actions">
-          <button
-            className="leaf-btn"
-            onClick={toggleMaximize}
-            title={isMaximized ? 'Restore pane layout' : 'Maximize pane'}
-            aria-label={isMaximized ? 'Restore pane layout' : 'Maximize pane'}
-          >
-            {isMaximized ? <RestoreIcon size="sm" /> : <MaximizeIcon size="sm" />}
-          </button>
+          {hasMultiplePanes && (
+            <Tooltip label={isMaximized ? 'Restore pane layout' : `Maximize pane — ${paneActionContext}`} placement="bottom">
+              <button className="leaf-btn" onClick={toggleMaximize} aria-label={isMaximized ? 'Restore pane layout' : `Maximize pane — ${paneActionContext}`}>
+                {isMaximized ? <RestoreIcon size="sm" /> : <MaximizeIcon size="sm" />}
+              </button>
+            </Tooltip>
+          )}
           {!isMaximized && (
             <>
-              <button className="leaf-btn" onClick={onSplitRight} title="Split right" aria-label="Split right">
-                <ChevronsRightIcon size="sm" />
-              </button>
-              <button className="leaf-btn" onClick={onSplitDown} title="Split down" aria-label="Split down">
-                <ChevronsDownIcon size="sm" />
-              </button>
+              <Tooltip label="Split pane right" placement="bottom">
+                <button className="leaf-btn" onClick={onSplitRight} aria-label="Split pane right"><ChevronsRightIcon size="sm" /></button>
+              </Tooltip>
+              <Tooltip label="Split pane below" placement="bottom">
+                <button className="leaf-btn" onClick={onSplitDown} aria-label="Split pane below"><ChevronsDownIcon size="sm" /></button>
+              </Tooltip>
             </>
           )}
-          <button className="leaf-btn leaf-close" onClick={onClose} title="Close pane" aria-label="Close pane">
-            <XCloseIcon size="sm" />
-          </button>
+          <Tooltip label={closeLabel} placement="bottom">
+            <button className="leaf-btn leaf-close" onClick={onClose} aria-label={closeLabel}><XCloseIcon size="sm" /></button>
+          </Tooltip>
         </div>
       </div>
       <div className="terminal-leaf-body">
@@ -190,6 +210,7 @@ function TerminalPaneLeaf({
           onRemoved={onTerminalRemoved}
           themeName={themeName}
           fontSize={fontSize}
+          fontFamily={fontFamily}
           onCwdChange={onCwdChange}
           onFocus={onTerminalFocus}
           initialCwd={leaf.cwd ?? initialCwd}
@@ -209,11 +230,13 @@ function SplitDivider({
   splitId,
   direction,
   dividerIndex,
+  fraction,
   onResize,
 }: {
   splitId: string;
   direction: 'horizontal' | 'vertical';
   dividerIndex: number;
+  fraction: number;
   onResize: (splitId: string, dividerIndex: number, leftFraction: number) => void;
 }) {
   const handleMouseDown = useCallback(
@@ -269,7 +292,33 @@ function SplitDivider({
     [direction, dividerIndex, onResize, splitId],
   );
 
-  return <div className={`split-divider split-divider-${direction}`} onMouseDown={handleMouseDown} />;
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const decreaseKey = direction === 'vertical' ? 'ArrowLeft' : 'ArrowUp';
+    const increaseKey = direction === 'vertical' ? 'ArrowRight' : 'ArrowDown';
+    let next = fraction;
+    if (event.key === decreaseKey) next -= event.shiftKey ? 0.1 : 0.05;
+    else if (event.key === increaseKey) next += event.shiftKey ? 0.1 : 0.05;
+    else if (event.key === 'Home') next = 0.1;
+    else if (event.key === 'End') next = 0.9;
+    else return;
+    event.preventDefault();
+    onResize(splitId, dividerIndex, Math.max(0.1, Math.min(0.9, next)));
+  };
+
+  return (
+    <div
+      className={`split-divider split-divider-${direction}`}
+      role="separator"
+      tabIndex={0}
+      aria-label={direction === 'vertical' ? 'Resize left and right panes' : 'Resize upper and lower panes'}
+      aria-orientation={direction === 'vertical' ? 'vertical' : 'horizontal'}
+      aria-valuemin={10}
+      aria-valuemax={90}
+      aria-valuenow={Math.round(fraction * 100)}
+      onMouseDown={handleMouseDown}
+      onKeyDown={handleKeyDown}
+    />
+  );
 }
 
 function splitChildFlex(size: number | undefined) {
@@ -308,6 +357,7 @@ export default function SplitPane(props: SplitPaneProps) {
     onToggleMaximizePane,
     themeName,
     fontSize,
+    fontFamily,
     onCwdChange,
     onTerminalFocus,
     initialCwd,
@@ -316,6 +366,7 @@ export default function SplitPane(props: SplitPaneProps) {
     isSshSessionDisconnected,
     onSshRetry,
   } = props;
+  const totalPaneCount = props.totalPaneCount ?? getAllLeafIds(node).length;
 
   if (node.type === 'leaf') {
     return (
@@ -338,6 +389,7 @@ export default function SplitPane(props: SplitPaneProps) {
         isMaximized={maximizedLeafId === node.id}
         themeName={themeName}
         fontSize={fontSize}
+        fontFamily={fontFamily}
         onCwdChange={onCwdChange}
         onTerminalFocus={onTerminalFocus}
         initialCwd={initialCwd}
@@ -345,6 +397,7 @@ export default function SplitPane(props: SplitPaneProps) {
         sshShellReady={sshShellReady}
         isSshSessionDisconnected={isSshSessionDisconnected}
         onSshRetry={onSshRetry}
+        totalPaneCount={totalPaneCount}
       />
     );
   }
@@ -376,6 +429,7 @@ export default function SplitPane(props: SplitPaneProps) {
             onToggleMaximizePane={onToggleMaximizePane}
             themeName={themeName}
             fontSize={fontSize}
+            fontFamily={fontFamily}
             onCwdChange={onCwdChange}
             onTerminalFocus={onTerminalFocus}
             initialCwd={initialCwd}
@@ -383,6 +437,7 @@ export default function SplitPane(props: SplitPaneProps) {
             sshShellReady={sshShellReady}
             isSshSessionDisconnected={isSshSessionDisconnected}
             onSshRetry={onSshRetry}
+            totalPaneCount={totalPaneCount}
           />
         </div>
       );
@@ -391,13 +446,18 @@ export default function SplitPane(props: SplitPaneProps) {
 
   return (
     <div className={`split-container split-${splitNode.direction}`}>
-      {splitNode.children.map((child, i) => (
+      {splitNode.children.map((child, i) => {
+        const leftSize = splitNode.sizes[i - 1] ?? 1;
+        const rightSize = splitNode.sizes[i] ?? 1;
+        const dividerFraction = leftSize / (leftSize + rightSize);
+        return (
         <React.Fragment key={child.id}>
           {i > 0 && (
             <SplitDivider
               splitId={splitNode.id}
               direction={splitNode.direction}
               dividerIndex={i - 1}
+              fraction={dividerFraction}
               onResize={onResizePane}
             />
           )}
@@ -422,6 +482,7 @@ export default function SplitPane(props: SplitPaneProps) {
               onToggleMaximizePane={onToggleMaximizePane}
               themeName={themeName}
               fontSize={fontSize}
+              fontFamily={fontFamily}
               onCwdChange={onCwdChange}
               onTerminalFocus={onTerminalFocus}
               initialCwd={initialCwd}
@@ -429,10 +490,12 @@ export default function SplitPane(props: SplitPaneProps) {
               sshShellReady={sshShellReady}
               isSshSessionDisconnected={isSshSessionDisconnected}
               onSshRetry={onSshRetry}
+              totalPaneCount={totalPaneCount}
             />
           </div>
         </React.Fragment>
-      ))}
+        );
+      })}
     </div>
   );
 }

@@ -28,13 +28,11 @@ vi.mock('../../src/renderer/components/Sidebar', () => ({
   },
 }));
 vi.mock('../../src/renderer/components/StatusBar', () => ({
-  default: ({ activeTerminalsCount, sshSessions }: {
-    activeTerminalsCount: number;
+  default: ({ sshSessions }: {
     sshSessions: unknown[];
   }) => (
     <div
       data-testid="statusbar"
-      data-terminal-count={activeTerminalsCount}
       data-ssh-count={sshSessions.length}
     />
   ),
@@ -170,7 +168,7 @@ describe('split panes in the app', () => {
   it('keeps existing terminals alive when splitting deeper panes', async () => {
     render(<App />);
 
-    const splitButton = await screen.findByRole('button', { name: /split right/i });
+    const splitButton = await screen.findByRole('button', { name: /split pane right/i });
     await waitFor(() => {
       expect(mountedTermIds).toHaveLength(1);
       expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1);
@@ -186,7 +184,7 @@ describe('split panes in the app', () => {
       expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
     });
 
-    const splitButtons = screen.getAllByRole('button', { name: /split right/i });
+    const splitButtons = screen.getAllByRole('button', { name: /split pane right/i });
     fireEvent.click(splitButtons[1]);
 
     await waitFor(() => {
@@ -202,8 +200,8 @@ describe('split panes in the app', () => {
   it('moves an existing pane without creating or destroying a terminal', async () => {
     render(<App />);
 
-    await screen.findByRole('button', { name: /split right/i });
-    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+    await screen.findByRole('button', { name: /split pane right/i });
+    fireEvent.click(screen.getByRole('button', { name: /split pane right/i }));
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
 
     const [firstTerminal, secondTerminal] = screen.getAllByTestId(/terminal-/);
@@ -228,13 +226,13 @@ describe('split panes in the app', () => {
   it('surviving pane fills space when sibling is closed', async () => {
     render(<App />);
 
-    await screen.findByRole('button', { name: /split right/i });
-    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+    await screen.findByRole('button', { name: /split pane right/i });
+    fireEvent.click(screen.getByRole('button', { name: /split pane right/i }));
 
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
 
     // Close the second pane
-    const closeButtons = screen.getAllByRole('button', { name: /close pane/i });
+    const closeButtons = screen.getAllByRole('button', { name: /close (?:pane|terminal tab)/i });
     fireEvent.click(closeButtons[1]);
 
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
@@ -248,8 +246,8 @@ describe('split panes in the app', () => {
   it('applies the close-pane shortcut to the focused pane', async () => {
     render(<App />);
 
-    await screen.findByRole('button', { name: /split right/i });
-    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+    await screen.findByRole('button', { name: /split pane right/i });
+    fireEvent.click(screen.getByRole('button', { name: /split pane right/i }));
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
 
     const [firstTerminal, secondTerminal] = screen.getAllByTestId(/terminal-/);
@@ -267,8 +265,8 @@ describe('split panes in the app', () => {
   it('applies the command-palette close action to the focused pane', async () => {
     render(<App />);
 
-    await screen.findByRole('button', { name: /split right/i });
-    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+    await screen.findByRole('button', { name: /split pane right/i });
+    fireEvent.click(screen.getByRole('button', { name: /split pane right/i }));
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
 
     const [firstTerminal, secondTerminal] = screen.getAllByTestId(/terminal-/);
@@ -295,8 +293,8 @@ describe('split panes in the app', () => {
 
     try {
       render(<App />);
-      await screen.findByRole('button', { name: /split right/i });
-      fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+      await screen.findByRole('button', { name: /split pane right/i });
+      fireEvent.click(screen.getByRole('button', { name: /split pane right/i }));
       await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
 
       const focusedTerminal = screen.getAllByTestId(/terminal-/)[1];
@@ -333,8 +331,8 @@ describe('split panes in the app', () => {
   it('maximizes a single pane within the terminal area and restores it to the split layout', async () => {
     render(<App />);
 
-    await screen.findByRole('button', { name: /split right/i });
-    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+    await screen.findByRole('button', { name: /split pane right/i });
+    fireEvent.click(screen.getByRole('button', { name: /split pane right/i }));
 
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
     expect(screen.getAllByRole('button', { name: /maximize pane/i })).toHaveLength(2);
@@ -360,8 +358,8 @@ describe('split panes in the app', () => {
   it('clears maximized state if the maximized pane is closed', async () => {
     render(<App />);
 
-    await screen.findByRole('button', { name: /split right/i });
-    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+    await screen.findByRole('button', { name: /split pane right/i });
+    fireEvent.click(screen.getByRole('button', { name: /split pane right/i }));
 
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
 
@@ -372,13 +370,52 @@ describe('split panes in the app', () => {
       expect(screen.getByRole('button', { name: /restore pane layout/i })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /close pane/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
 
     await waitFor(() => {
       expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
     });
     expect(screen.queryByRole('button', { name: /restore pane layout/i })).toBeNull();
-    expect(screen.getByRole('button', { name: /maximize pane/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /maximize pane/i })).toBeNull();
+  });
+
+  it('resizes split panes from the keyboard', async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    const divider = await screen.findByRole('separator', { name: 'Resize left and right panes' });
+    expect(divider).toHaveAttribute('aria-valuenow', '50');
+
+    fireEvent.keyDown(divider, { key: 'ArrowRight' });
+    await waitFor(() => expect(divider).toHaveAttribute('aria-valuenow', '55'));
+    fireEvent.keyDown(divider, { key: 'Home' });
+    await waitFor(() => expect(divider).toHaveAttribute('aria-valuenow', '10'));
+  });
+
+  it('auto-collapses tabs at compact widths and restores responsive collapses', async () => {
+    const originalMatchMedia = window.matchMedia;
+    let narrow = true;
+    let listener: (() => void) | null = null;
+    window.matchMedia = vi.fn(() => ({
+      get matches() { return narrow; },
+      media: '(max-width: 1000px)',
+      onchange: null,
+      addEventListener: (_event: string, next: () => void) => { listener = next; },
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })) as any;
+    try {
+      render(<App />);
+      expect(await screen.findByRole('button', { name: 'Show terminal tabs' })).toBeInTheDocument();
+
+      narrow = false;
+      act(() => listener?.());
+      expect(await screen.findByTestId('vertical-tab-bar')).toBeInTheDocument();
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 
   it('does not auto-open saved workspace presets at startup', async () => {
@@ -441,13 +478,12 @@ describe('split panes in the app', () => {
     // restored tree (not the starter) is what's mounted.
     await waitFor(() => {
       expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2);
+      const projectCreates = (window.janet.terminalCreate as any).mock.calls.filter(
+        (call: any[]) => call[0]?.cwd === 'C:/repo',
+      );
+      expect(projectCreates).toHaveLength(2);
+      expect(window.janet.terminalCreate).toHaveBeenCalledTimes(2);
     });
-
-    const projectCreates = (window.janet.terminalCreate as any).mock.calls.filter(
-      (call: any[]) => call[0]?.cwd === 'C:/repo',
-    );
-    expect(projectCreates).toHaveLength(2);
-    expect(window.janet.terminalCreate).toHaveBeenCalledTimes(2);
   });
 
   it('restores a saved SSH tab, connects it, then binds a single shell', async () => {
@@ -776,7 +812,7 @@ describe('split panes in the app', () => {
     });
     const sessionId = (window.janet.sshConnect as any).mock.calls[0][0].id as string;
 
-    fireEvent.click(screen.getByRole('button', { name: /close pane/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
     await waitFor(() => {
       expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: sessionId });
       expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
@@ -831,24 +867,22 @@ describe('split panes in the app', () => {
     await waitFor(() => {
       expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2);
       expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-terminal-count', '2');
       expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
     });
 
     const sessionId = (window.janet.sshConnect as any).mock.calls[0][0].id as string;
     const secondId = screen.getAllByTestId(/terminal-/)[1].textContent!;
-    fireEvent.click(screen.getAllByRole('button', { name: /close pane/i })[1]);
+    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal tab)/i })[1]);
 
     await waitFor(() => {
       expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
       expect(window.janet.sshDestroyShell).toHaveBeenCalledWith({ sessionId, termId: secondId });
       expect(rendererMocks.disposeCachedTerminal).toHaveBeenCalledWith(secondId);
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-terminal-count', '1');
     });
     expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
 
     const remainingId = screen.getByTestId(/terminal-/).textContent!;
-    fireEvent.click(screen.getByRole('button', { name: /close pane/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
 
     await waitFor(() => {
       expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: sessionId });
@@ -869,7 +903,7 @@ describe('split panes in the app', () => {
     });
 
     // Split right — adds a leaf to the active tab.
-    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+    fireEvent.click(screen.getByRole('button', { name: /split pane right/i }));
 
     // Wait past the 500ms debounce window for the save to flush.
     await new Promise((r) => setTimeout(r, 700));

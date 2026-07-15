@@ -6,6 +6,7 @@ import {
 import type { FileEntry } from '../../shared/files';
 import type { FileExplorerSource } from '../fileExplorerSource';
 import { refreshCoordinator, RefreshReason, useRefreshTask } from '../refreshCoordinator';
+import Tooltip from './Tooltip';
 
 interface NavigationState {
   currentPath: string;
@@ -230,46 +231,39 @@ export default function FileExplorer({ source }: FileExplorerProps) {
       <div className="explorer-header">
         <span className="section-title">Explorer</span>
         <div className="explorer-toolbar">
-          <button
-            className="icon-btn"
-            onClick={goBack}
-            disabled={history.length === 0}
-            title="Go back"
-            aria-label="Go back"
-          >
-            <ArrowLeftIcon size="sm" />
-          </button>
-          <button
-            className="icon-btn"
-            onClick={() => setShowHidden(!showHidden)}
-            title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
-            aria-label="Toggle hidden files"
-            aria-pressed={showHidden}
-            disabled={!source.ready}
-          >
-            {showHidden ? <EyeOffIcon size="sm" /> : <EyeIcon size="sm" />}
-          </button>
-          <button
-            className="icon-btn"
-            onClick={() => refreshCoordinator.invalidate('manual', refreshKey)}
-            title="Refresh"
-            aria-label="Refresh"
-            disabled={!source.ready}
-          >
-            <RefreshIcon size="sm" />
-          </button>
+          <Tooltip label="Back to previous folder" placement="bottom">
+            <button className="icon-btn" onClick={goBack} disabled={history.length === 0} aria-label="Back to previous folder">
+              <ArrowLeftIcon size="sm" />
+            </button>
+          </Tooltip>
+          <Tooltip label={showHidden ? 'Hide hidden files' : 'Show hidden files'} placement="bottom">
+            <button
+              className="icon-btn"
+              onClick={() => setShowHidden(!showHidden)}
+              aria-label={showHidden ? 'Hide hidden files' : 'Show hidden files'}
+              aria-pressed={showHidden}
+              disabled={!source.ready}
+            >
+              {showHidden ? <EyeOffIcon size="sm" /> : <EyeIcon size="sm" />}
+            </button>
+          </Tooltip>
+          <Tooltip label="Refresh files" placement="bottom">
+            <button className="icon-btn" onClick={() => refreshCoordinator.invalidate('manual', refreshKey)} aria-label="Refresh files" disabled={!source.ready}>
+              <RefreshIcon size="sm" />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
       {source.kind === 'ssh' && (
         <div className="explorer-remote-notice" role="status">
-          Remote files on <strong>{source.label}</strong>
+          Files on <strong>{source.label}</strong>
         </div>
       )}
 
       <div className="explorer-breadcrumb">
         {currentPath.startsWith('/') && (
-          <button className="crumb" onClick={() => navigateTo('/')}>/</button>
+          <button className="crumb" onClick={() => navigateTo('/')} aria-label="Open filesystem root">/</button>
         )}
         {source.kind === 'local' && currentPath.match(/^[A-Z]:/) && (
           <button
@@ -289,7 +283,7 @@ export default function FileExplorer({ source }: FileExplorerProps) {
           if (source.kind === 'local' && isDrive && index === 0) return null;
           return (
             <React.Fragment key={pathSoFar}>
-              <span className="crumb-sep">/</span>
+              {(!currentPath.startsWith('/') || index > 0) && <span className="crumb-sep">/</span>}
               <button className="crumb" onClick={() => navigateTo(pathSoFar)}>
                 {segment}
               </button>
@@ -305,8 +299,8 @@ export default function FileExplorer({ source }: FileExplorerProps) {
         {!source.ready && source.kind === 'ssh' && (
           <div className="explorer-loading" role="status">
             {source.connectionState === 'disconnected'
-              ? 'Remote filesystem disconnected. Reconnect the SSH session to browse files.'
-              : 'Connecting to remote filesystem…'}
+              ? `Reconnect ${source.label} to browse its files.`
+              : `Connecting to files on ${source.label}…`}
           </div>
         )}
         {loading && <div className="explorer-loading" role="status">Loading…</div>}
@@ -341,33 +335,29 @@ export default function FileExplorer({ source }: FileExplorerProps) {
 
           if (entry.isDirectory) {
             return (
-              <button
-                key={entry.path}
-                type="button"
-                className="explorer-item dir"
-                onClick={() => navigateTo(entry.path)}
-                aria-label={`Open folder ${entry.name}`}
-                {...dragProps}
-              >
-                {content}
-              </button>
+              <Tooltip key={entry.path} label={`${entry.name} · Drag into a terminal to paste its path`} placement="right">
+                <button
+                  type="button"
+                  className="explorer-item dir"
+                  onClick={() => navigateTo(entry.path)}
+                  aria-label={`Open folder ${entry.name}`}
+                  {...dragProps}
+                >
+                  {content}
+                </button>
+              </Tooltip>
             );
           }
 
           return (
-            <div
-              key={entry.path}
-              className="explorer-item file"
-              title={`${entry.name} — drag into a terminal to paste its path`}
-              {...dragProps}
-            >
-              {content}
-            </div>
+            <Tooltip key={entry.path} label={`${entry.name} · Drag into a terminal to paste its path`} placement="right">
+              <div className="explorer-item file" {...dragProps}>{content}</div>
+            </Tooltip>
           );
         })}
 
         {ready && !loading && entries.length === 0 && !error && currentPath && (
-          <div className="explorer-empty" role="status">Empty directory</div>
+          <div className="explorer-empty" role="status">This folder is empty</div>
         )}
       </div>
     </div>

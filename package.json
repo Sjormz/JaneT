@@ -1,7 +1,8 @@
 {
   "name": "janet",
   "version": "0.2.8",
-  "description": "JaneT - A powerful cross-platform terminal with file explorer, SSH, and git tree",
+  "description": "A focused cross-platform terminal workspace with SSH, file browsing, Git tools, and durable sessions",
+  "desktopName": "janet",
   "main": "dist/main/index.js",
   "engines": {
     "node": ">=22.12.0"
@@ -12,7 +13,9 @@
     "build:main": "node scripts/build-electron.mjs --main",
     "build:preload": "node scripts/build-electron.mjs --preload",
     "build:renderer": "npx vite build --config vite.config.ts",
-    "build": "npm run build:main && npm run build:preload && npm run build:renderer",
+    "build": "npm run brand:check && npm run build:main && npm run build:preload && npm run build:renderer",
+    "brand:generate": "node scripts/generate-brand-assets.mjs",
+    "brand:check": "node scripts/generate-brand-assets.mjs --check",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "npm run build && playwright test --config playwright.config.ts",
@@ -34,10 +37,13 @@
     "productName": "JaneT",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "assets/brand"
     },
     "files": [
       "dist/**/*",
+      "assets/runtime/*",
+      "assets/licenses/*",
       "!dist/renderer/**/*.map"
     ],
     "asarUnpack": [
@@ -59,16 +65,13 @@
           ]
         }
       ],
-      "icon": "assets/icon.png",
+      "icon": "assets/brand/app-icon.svg",
       "artifactName": "${productName}-Setup-${version}-win-x64.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": true,
       "allowToChangeInstallationDirectory": true,
-      "installerIcon": "assets/icon.ico",
-      "uninstallerIcon": "assets/icon.ico",
-      "installerHeaderIcon": "assets/icon.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "JaneT",
@@ -97,7 +100,7 @@
           ]
         }
       ],
-      "icon": "assets/icon.png",
+      "icon": "assets/brand/app-icon.svg",
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
       "category": "public.app-category.utilities",
       "hardenedRuntime": true,
@@ -138,13 +141,14 @@
           ]
         }
       ],
-      "icon": "assets/icon.png",
+      "icon": "assets/brand/app-icon.svg",
       "artifactName": "${productName}-${version}-linux-x64.${ext}",
       "maintainer": "sjorm <sjorm@users.noreply.github.com>",
       "category": "TerminalEmulator",
-      "synopsis": "A powerful cross-platform terminal emulator",
-      "description": "JaneT - A powerful cross-platform terminal with file explorer, SSH, and git tree",
-      "executableName": "janet"
+      "synopsis": "A focused terminal workspace for local and SSH work",
+      "description": "JaneT combines local terminals, SSH, file browsing, Git tools, and durable sessions in one focused workspace",
+      "executableName": "janet",
+      "syncDesktopName": true
     },
     "publish": {
       "provider": "github",
@@ -177,6 +181,8 @@
     "ssh2-sftp-client": "^12.1.1"
   },
   "devDependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@playwright/test": "^1.61.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -190,6 +196,7 @@
     "electron-builder": "^26.0.0",
     "esbuild": "^0.28.1",
     "jsdom": "^29.1.1",
+    "sharp": "^0.35.3",
     "typescript": "^6.0.3",
     "vite": "^8.1.3",
     "vitest": "^4.1.10"

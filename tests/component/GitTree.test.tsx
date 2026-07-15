@@ -85,7 +85,7 @@ describe('GitTree live refresh', () => {
         searching={false}
       />,
     );
-    expect(await screen.findByTitle('Switch to feature/heartbeat')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Switch to branch feature/heartbeat' })).toBeInTheDocument();
 
     view.rerender(
       <GitTree
@@ -97,8 +97,8 @@ describe('GitTree live refresh', () => {
       />,
     );
 
-    expect(screen.getByTitle('Current branch')).toHaveTextContent('feature/heartbeat');
-    expect(screen.getByTitle('Switch to main')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Current branch feature/heartbeat' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('button', { name: 'Switch to branch main' })).toBeInTheDocument();
     expect(screen.getAllByText('feature/heartbeat')).not.toHaveLength(0);
     await waitFor(() => expect(gitDetails).toHaveBeenCalledTimes(2));
     view.unmount();
@@ -128,7 +128,7 @@ describe('GitTree live refresh', () => {
     expect(screen.getAllByText('conflict.ts')).toHaveLength(1);
     expect(screen.getByText('conflict.ts').closest('.git-file-item')).toHaveClass('conflicted');
 
-    fireEvent.click(screen.getByTitle('Switch to tree view'));
+    fireEvent.click(screen.getByRole('button', { name: 'Show changes as a folder tree' }));
     expect(screen.getByRole('button', { name: 'src' })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getAllByText('conflict.ts')).toHaveLength(1);
     expect(screen.getByText('conflict.ts').closest('.git-file-item')).toHaveClass('conflicted');
@@ -147,7 +147,7 @@ describe('GitTree live refresh', () => {
     );
     const file = await screen.findByText('mixed.ts');
     expect(file.closest('.git-file-item')).toHaveClass('mixed');
-    expect(file.closest('.git-file-item')).toHaveAttribute('title', 'Staged and modified in working tree');
+    expect(file.closest('.git-file-item')).toHaveAttribute('aria-label', 'src/mixed.ts: Staged and modified in working tree');
     view.unmount();
   });
 });

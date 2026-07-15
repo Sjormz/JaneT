@@ -21,16 +21,16 @@ export type KeybindingAction =
   | 'close-pane';
 
 export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
-  'search-toggle': 'Toggle Search',
-  'palette-toggle': 'Toggle Command Palette',
-  'new-terminal': 'New Terminal',
-  'close-tab': 'Close Tab',
-  'toggle-sidebar': 'Toggle Sidebar',
-  'font-increase': 'Increase Font Size',
-  'font-decrease': 'Decrease Font Size',
-  'split-right': 'Split Right',
-  'split-down': 'Split Down',
-  'close-pane': 'Close Pane',
+  'search-toggle': 'Search terminal output',
+  'palette-toggle': 'Open command palette',
+  'new-terminal': 'New terminal tab',
+  'close-tab': 'Close current tab',
+  'toggle-sidebar': 'Show or hide sidebar',
+  'font-increase': 'Increase terminal text size',
+  'font-decrease': 'Decrease terminal text size',
+  'split-right': 'Split pane right',
+  'split-down': 'Split pane below',
+  'close-pane': 'Close current pane',
 };
 
 export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
@@ -105,4 +105,13 @@ export function formatShortcut(e: KeyboardEvent): string {
   parts.push(formattedKey);
 
   return parts.join('+');
+}
+
+/** Render a saved shortcut using the conventions of the current platform. */
+export function formatShortcutForDisplay(shortcut: string, platform = ''): string {
+  if (platform !== 'darwin') return shortcut.replace(/\bPlus\b/g, '+');
+  return shortcut
+    .split('+')
+    .map((part) => ({ Meta: '⌘', Ctrl: '⌃', Alt: '⌥', Shift: '⇧', Plus: '+' })[part] ?? part)
+    .join('');
 }

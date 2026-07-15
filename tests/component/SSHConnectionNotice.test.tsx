@@ -18,8 +18,8 @@ describe('SSHConnectionNotice', () => {
     );
 
     expect(screen.getByTestId('ssh-terminal-notice')).toBeInTheDocument();
-    expect(screen.getByText('Connected to test.example.com')).toBeInTheDocument();
-    expect(screen.getByText('Waiting for shell output…')).toBeInTheDocument();
+    expect(screen.getByText('Opening remote shell')).toBeInTheDocument();
+    expect(screen.getByText('Connected to test.example.com. Waiting for first output.')).toBeInTheDocument();
     expect(screen.queryByTestId('ssh-notice-retry')).toBeNull();
   });
 
@@ -28,7 +28,7 @@ describe('SSHConnectionNotice', () => {
     render(<SSHConnectionNotice state={{ kind: 'stalled' }} onRetry={onRetry} />);
 
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'stalled');
-    expect(screen.getByText('Shell is not responding')).toBeInTheDocument();
+    expect(screen.getByText('No response from remote shell')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('ssh-notice-retry'));
     expect(onRetry).toHaveBeenCalledOnce();
   });
@@ -42,7 +42,7 @@ describe('SSHConnectionNotice', () => {
     );
 
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'error');
-    expect(screen.getByText('SSH shell failed to open')).toBeInTheDocument();
+    expect(screen.getByText('Couldn’t open remote shell')).toBeInTheDocument();
     expect(screen.getByText('connect ECONNREFUSED')).toBeInTheDocument();
   });
 
@@ -56,7 +56,7 @@ describe('SSHConnectionNotice', () => {
     );
 
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'reconnecting');
-    expect(screen.getByText('Reconnecting…')).toBeInTheDocument();
+    expect(screen.getByText('Reconnecting to remote shell')).toBeInTheDocument();
     expect(screen.queryByTestId('ssh-notice-retry')).toBeNull();
     expect(screen.queryByTestId('ssh-notice-dismiss')).toBeNull();
   });
@@ -66,5 +66,13 @@ describe('SSHConnectionNotice', () => {
     render(<SSHConnectionNotice state={{ kind: 'waiting' }} onDismiss={onDismiss} />);
     fireEvent.click(screen.getByTestId('ssh-notice-dismiss'));
     expect(onDismiss).toHaveBeenCalledOnce();
+  });
+
+  it('describes a closed connection separately from a shell-open failure', () => {
+    render(<SSHConnectionNotice state={{ kind: 'closed' }} onRetry={vi.fn()} />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Connection closed');
+    expect(screen.getByText('Reconnect to open a new remote shell.')).toBeInTheDocument();
+    expect(screen.getByTestId('ssh-notice-retry')).toBeInTheDocument();
   });
 });

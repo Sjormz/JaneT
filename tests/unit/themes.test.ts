@@ -1,6 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import { getTheme, themeNames, applyCssTheme } from '../../src/renderer/themes';
 
+function relativeLuminance(hex: string) {
+  const channels = hex.slice(1).match(/.{2}/g)!.map((channel) => parseInt(channel, 16) / 255);
+  const [red, green, blue] = channels.map((value) => (
+    value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  ));
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+function contrastRatio(foreground: string, background: string) {
+  const foregroundLuminance = relativeLuminance(foreground);
+  const backgroundLuminance = relativeLuminance(background);
+  return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05)
+    / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+}
+
 describe('themes', () => {
   it('has all expected themes', () => {
     expect(themeNames).toContain('tokyo-night');
@@ -46,5 +61,15 @@ describe('themes', () => {
 
     // Cleanup
     root.style.cssText = originalStyle;
+  });
+
+  it('keeps Solarized Light chrome, functional colors, and terminal text legible', () => {
+    const theme = getTheme('solarized-light');
+    expect(contrastRatio(theme.css['text-primary'], theme.css['bg-secondary'])).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(theme.css['text-secondary'], theme.css['bg-tertiary'])).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(theme.xterm.foreground!, theme.xterm.background!)).toBeGreaterThanOrEqual(4.5);
+    for (const color of ['text-accent', 'red', 'green', 'yellow', 'cyan']) {
+      expect(contrastRatio(theme.css[color], theme.css['bg-tertiary'])).toBeGreaterThanOrEqual(3);
+    }
   });
 });
