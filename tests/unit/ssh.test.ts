@@ -533,6 +533,47 @@ describe('SSHManager', () => {
     expect(manager.listConnections()).toHaveLength(0);
   });
 
+  it('reports an unexpected active-client close exactly once, but ignores explicit and stale closes', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const onConnectionClosed = vi.fn();
+    const manager = new SSHManager(undefined, undefined, onConnectionClosed);
+
+    await manager.connect('unexpected-session', {
+      host: 'unexpected.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const unexpectedlyClosedClient = mocks.lastClient;
+    unexpectedlyClosedClient?.emit('error', new Error('transport reset'));
+    unexpectedlyClosedClient?.emit('end');
+    unexpectedlyClosedClient?.emit('close');
+
+    expect(onConnectionClosed).toHaveBeenCalledTimes(1);
+    expect(onConnectionClosed).toHaveBeenCalledWith({
+      id: 'unexpected-session',
+      reason: 'transport reset',
+    });
+
+    await manager.connect('reused-session', {
+      host: 'old.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const explicitlyClosedClient = mocks.lastClient;
+    (explicitlyClosedClient as any).end.mockImplementation(() => explicitlyClosedClient?.emit('close'));
+    await manager.disconnect('reused-session');
+    explicitlyClosedClient?.emit('close');
+
+    await manager.connect('reused-session', {
+      host: 'new.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    explicitlyClosedClient?.emit('error', new Error('stale transport reset'));
+    explicitlyClosedClient?.emit('end');
+
+    expect(onConnectionClosed).toHaveBeenCalledTimes(1);
+    expect(manager.listConnections()).toEqual([
+      expect.objectContaining({ id: 'reused-session', host: 'new.example.com' }),
+    ]);
+  });
+
   it('decodes UTF-8 incrementally when a code point spans SSH data chunks', async () => {
     let stream: MockShellStream | undefined;
     mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, channel?: MockShellStream) => void) => {
@@ -576,7 +617,38 @@ describe('SSHManager', () => {
     expect(manager.destroyShell('destroy-term', 'destroy-session')).toBe(false);
   });
 
-  it('returns cloneable boolean directory metadata from SFTP listings', async () => {
+  it('resolves and lists the remote home directory on one SFTP channel', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('home-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    const sftp = {
+      end: vi.fn(),
+      realpath: vi.fn((_remotePath: string, callback: (error: Error | undefined, path?: string) => void) => {
+        callback(undefined, '/home/alice');
+      }),
+      readdir: vi.fn((_remotePath: string, callback: (error: Error | undefined, entries?: any[]) => void) => {
+        callback(undefined, []);
+      }),
+    };
+    (mocks.lastClient as any).sftp.mockImplementation((callback: (error: Error | undefined, client?: typeof sftp) => void) => {
+      callback(undefined, sftp);
+    });
+
+    await expect(manager.listDir('home-session')).resolves.toEqual({
+      resolvedPath: '/home/alice',
+      entries: [],
+    });
+    expect(sftp.realpath).toHaveBeenCalledWith('.', expect.any(Function));
+    expect(sftp.readdir).toHaveBeenCalledWith('/home/alice', expect.any(Function));
+    expect(sftp.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns filtered, sorted, cloneable directory metadata from SFTP listings', async () => {
     mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
 
     const { SSHManager } = await loadSSHManager();
@@ -587,6 +659,9 @@ describe('SSHManager', () => {
 
     const sftp = {
       end: vi.fn(),
+      realpath: vi.fn((_remotePath: string, callback: (error: Error | undefined, path?: string) => void) => {
+        callback(undefined, '/repo/');
+      }),
       readdir: vi.fn((_remotePath: string, callback: (error: Error | undefined, entries?: any[]) => void) => {
         callback(undefined, [
           {
@@ -609,6 +684,16 @@ describe('SSHManager', () => {
               mtime: 2,
             },
           },
+          {
+            filename: '.env',
+            attrs: {
+              isDirectory: () => false,
+              isSymbolicLink: () => false,
+              size: 8,
+              mode: 0o600,
+              mtime: 3,
+            },
+          },
         ]);
       }),
     };
@@ -616,12 +701,286 @@ describe('SSHManager', () => {
       callback(undefined, sftp);
     });
 
-    const entries = await manager.listDir('sftp-session', '/repo');
+    const listing = await manager.listDir('sftp-session', '/repo', false);
 
-    expect(entries.map(({ name, isDirectory }) => ({ name, isDirectory }))).toEqual([
+    expect(listing.resolvedPath).toBe('/repo/');
+    expect(listing.entries.map(({ name, isDirectory }) => ({ name, isDirectory }))).toEqual([
       { name: 'src', isDirectory: true },
       { name: 'README.md', isDirectory: false },
     ]);
+    expect(listing.entries[0].path).toBe('/repo/src');
+
+    const withHidden = await manager.listDir('sftp-session', '/repo', true);
+    expect(withHidden.entries.map(({ name }) => name)).toEqual(['src', '.env', 'README.md']);
+    expect(sftp.end).toHaveBeenCalledTimes(2);
+  });
+
+  it('follows only symlink targets sequentially so directory links are navigable', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('symlink-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    let activeStats = 0;
+    let maxActiveStats = 0;
+    const attrs = (isDirectory: boolean, isSymlink: boolean) => ({
+      isDirectory: () => isDirectory,
+      isSymbolicLink: () => isSymlink,
+      size: 0,
+      mode: 0o755,
+      mtime: 1,
+    });
+    const sftp = {
+      end: vi.fn(),
+      realpath: vi.fn((_path: string, callback: (error: Error | undefined, path?: string) => void) => {
+        callback(undefined, '/workspace');
+      }),
+      readdir: vi.fn((_path: string, callback: (error: Error | undefined, entries?: any[]) => void) => {
+        callback(undefined, [
+          { filename: 'regular-dir', attrs: attrs(true, false) },
+          { filename: 'linked-dir', attrs: attrs(false, true) },
+          { filename: 'linked-file', attrs: attrs(false, true) },
+          { filename: 'broken-link', attrs: attrs(false, true) },
+          { filename: 'throwing-link', attrs: attrs(false, true) },
+          { filename: 'regular-file', attrs: attrs(false, false) },
+        ]);
+      }),
+      stat: vi.fn((path: string, callback: (error?: Error, targetAttrs?: any) => void) => {
+        if (path.endsWith('/throwing-link')) throw new Error('stat unavailable');
+        activeStats += 1;
+        maxActiveStats = Math.max(maxActiveStats, activeStats);
+        queueMicrotask(() => {
+          activeStats -= 1;
+          if (path.endsWith('/broken-link')) {
+            callback(new Error('dangling symlink'));
+          } else {
+            callback(undefined, attrs(path.endsWith('/linked-dir'), false));
+          }
+        });
+      }),
+    };
+    (mocks.lastClient as any).sftp.mockImplementation((callback: (error: Error | undefined, client?: typeof sftp) => void) => {
+      callback(undefined, sftp);
+    });
+
+    const listing = await manager.listDir('symlink-session', '/workspace');
+
+    expect(sftp.stat.mock.calls.map(([path]) => path)).toEqual([
+      '/workspace/linked-dir',
+      '/workspace/linked-file',
+      '/workspace/broken-link',
+      '/workspace/throwing-link',
+    ]);
+    expect(maxActiveStats).toBe(1);
+    expect(listing.entries.map(({ name, isDirectory, isSymlink }) => ({
+      name, isDirectory, isSymlink,
+    }))).toEqual([
+      { name: 'linked-dir', isDirectory: true, isSymlink: true },
+      { name: 'regular-dir', isDirectory: true, isSymlink: false },
+      { name: 'broken-link', isDirectory: false, isSymlink: true },
+      { name: 'linked-file', isDirectory: false, isSymlink: true },
+      { name: 'regular-file', isDirectory: false, isSymlink: false },
+      { name: 'throwing-link', isDirectory: false, isSymlink: true },
+    ]);
     expect(sftp.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the SFTP channel when a directory read fails', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('failed-sftp-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    const sftp = {
+      end: vi.fn(),
+      realpath: vi.fn((_remotePath: string, callback: (error: Error | undefined, path?: string) => void) => {
+        callback(undefined, '/root');
+      }),
+      readdir: vi.fn((_remotePath: string, callback: (error: Error | undefined) => void) => {
+        callback(new Error('permission denied'));
+      }),
+    };
+    (mocks.lastClient as any).sftp.mockImplementation((callback: (error: Error | undefined, client?: typeof sftp) => void) => {
+      callback(undefined, sftp);
+    });
+
+    await expect(manager.listDir('failed-sftp-session', '/root'))
+      .rejects.toThrow('permission denied');
+    expect(sftp.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects invalid remote paths before opening SFTP', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('invalid-path-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    await expect(manager.listDir('invalid-path-session', 'bad\0path'))
+      .rejects.toThrow(/NUL/i);
+    expect((mocks.lastClient as any).sftp).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an SFTP subsystem failure without closing the SSH shell connection', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('no-sftp-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    (mocks.lastClient as any).sftp.mockImplementation((callback: (error: Error) => void) => {
+      callback(new Error('subsystem unavailable'));
+    });
+
+    await expect(manager.listDir('no-sftp-session'))
+      .rejects.toThrow('subsystem unavailable');
+    expect((mocks.lastClient as any).end).not.toHaveBeenCalled();
+    expect(manager.listConnections()).toEqual([expect.objectContaining({ id: 'no-sftp-session' })]);
+  });
+
+  it('settles and cleans up immediately when opening SFTP throws synchronously', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('throwing-sftp-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    const sftp = {
+      end: vi.fn(),
+      realpath: vi.fn(() => {}),
+    };
+    (mocks.lastClient as any).sftp.mockImplementation((callback: (error: Error | undefined, client?: typeof sftp) => void) => {
+      callback(undefined, sftp);
+      throw new Error('sftp open threw');
+    });
+
+    await expect(manager.listDir('throwing-sftp-session'))
+      .rejects.toThrow('sftp open threw');
+    expect(sftp.end).toHaveBeenCalledTimes(1);
+    expect((manager as any).connections.get('throwing-sftp-session').sftpOperations.size).toBe(0);
+  });
+
+  it('does not continue resolving symlinks after an SFTP listing times out', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+      const { SSHManager } = await loadSSHManager();
+      const manager = new SSHManager();
+      const connected = manager.connect('late-stat-session', {
+        host: 'example.com', port: 22, username: 'alice', auth: 'password',
+      });
+      await vi.runAllTicks();
+      await connected;
+
+      const symlinkAttrs = {
+        isDirectory: () => false,
+        isSymbolicLink: () => true,
+        size: 0,
+        mode: 0o777,
+        mtime: 1,
+      };
+      let finishFirstStat!: (error?: Error, attrs?: any) => void;
+      const sftp = {
+        end: vi.fn(),
+        realpath: vi.fn((_path: string, callback: (error: Error | undefined, path?: string) => void) => {
+          callback(undefined, '/workspace');
+        }),
+        readdir: vi.fn((_path: string, callback: (error: Error | undefined, entries?: any[]) => void) => {
+          callback(undefined, [
+            { filename: 'first-link', attrs: symlinkAttrs },
+            { filename: 'second-link', attrs: symlinkAttrs },
+          ]);
+        }),
+        stat: vi.fn((_path: string, callback: typeof finishFirstStat) => {
+          finishFirstStat = callback;
+        }),
+      };
+      (mocks.lastClient as any).sftp.mockImplementation((callback: (error: Error | undefined, client?: typeof sftp) => void) => {
+        callback(undefined, sftp);
+      });
+
+      const listing = manager.listDir('late-stat-session', '/workspace');
+      const timedOut = expect(listing).rejects.toThrow(/timed out/i);
+      expect(sftp.stat).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await timedOut;
+      expect(sftp.end).toHaveBeenCalledTimes(1);
+
+      finishFirstStat(undefined, { isDirectory: () => true });
+      await vi.runAllTicks();
+      expect(sftp.stat).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels an in-flight listing before the session id is reused', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('reused-sftp-session', {
+      host: 'old.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    let finishRealpath!: (error: Error | undefined, path?: string) => void;
+    const oldSftp = {
+      end: vi.fn(),
+      realpath: vi.fn((_path: string, callback: typeof finishRealpath) => {
+        finishRealpath = callback;
+      }),
+      readdir: vi.fn((_path: string, callback: (error: Error | undefined, entries?: any[]) => void) => {
+        callback(undefined, []);
+      }),
+    };
+    (mocks.lastClient as any).sftp.mockImplementation((callback: (error: Error | undefined, client?: typeof oldSftp) => void) => {
+      callback(undefined, oldSftp);
+    });
+
+    const staleListing = manager.listDir('reused-sftp-session');
+    const staleRejection = expect(staleListing).rejects.toThrow(/connection reused-sftp-session was closed/i);
+    await manager.disconnect('reused-sftp-session');
+    await manager.connect('reused-sftp-session', {
+      host: 'new.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    finishRealpath(undefined, '/home/alice');
+
+    await staleRejection;
+    expect(oldSftp.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('times out an SFTP request that never opens a subsystem channel', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+      const { SSHManager } = await loadSSHManager();
+      const manager = new SSHManager();
+      const connected = manager.connect('hung-sftp-session', {
+        host: 'example.com', port: 22, username: 'alice', auth: 'password',
+      });
+      await vi.runAllTicks();
+      await connected;
+      (mocks.lastClient as any).sftp.mockImplementation(() => {});
+
+      const listing = manager.listDir('hung-sftp-session');
+      const timedOut = expect(listing).rejects.toThrow(/timed out/i);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await timedOut;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

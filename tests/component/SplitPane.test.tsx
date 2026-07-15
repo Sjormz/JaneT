@@ -8,6 +8,7 @@ const rendererMocks = vi.hoisted(() => ({
   disposeCachedTerminal: vi.fn(),
   paletteActions: [] as Array<{ id: string; handler: () => void }>,
   sidebarProps: null as any,
+  sshConnectionClosedHandler: null as null | ((event: { id: string; reason: string }) => void),
   sshRetryHandlers: new Map<string, (
     termId: string,
     dimensions: { cols: number; rows: number },
@@ -60,6 +61,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     tabType,
     sshSessionId,
     sshShellReady = true,
+    sshConnectionLost = false,
     onReady,
     onRemoved,
     onFocus,
@@ -71,6 +73,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     tabType?: 'local' | 'ssh';
     sshSessionId?: string;
     sshShellReady?: boolean;
+    sshConnectionLost?: boolean;
     onReady?: (id: string) => void;
     onRemoved?: (id: string) => void;
     onFocus?: (id: string) => void;
@@ -110,6 +113,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     return (
       <div
         data-testid={`terminal-${termId}`}
+        data-ssh-connection-lost={sshConnectionLost ? 'true' : 'false'}
         tabIndex={0}
         onFocus={() => onFocus?.(termId)}
       >
@@ -126,6 +130,7 @@ beforeEach(() => {
   rendererMocks.disposeCachedTerminal.mockReset();
   rendererMocks.paletteActions = [];
   rendererMocks.sidebarProps = null;
+  rendererMocks.sshConnectionClosedHandler = null;
   rendererMocks.sshRetryHandlers.clear();
   Object.defineProperty(document, 'startViewTransition', {
     configurable: true,
@@ -149,6 +154,14 @@ beforeEach(() => {
     sshResizeShell: vi.fn(),
     sshDestroyShell: vi.fn().mockResolvedValue(true),
     sshDisconnect: vi.fn().mockResolvedValue(undefined),
+    onSSHConnectionClosed: vi.fn((callback: (event: { id: string; reason: string }) => void) => {
+      rendererMocks.sshConnectionClosedHandler = callback;
+      return () => {
+        if (rendererMocks.sshConnectionClosedHandler === callback) {
+          rendererMocks.sshConnectionClosedHandler = null;
+        }
+      };
+    }),
     checkForUpdates: vi.fn().mockResolvedValue(undefined),
   };
 });
@@ -491,6 +504,15 @@ describe('split panes in the app', () => {
     // transport exists. Otherwise restored panes race ssh:createShell
     // against ssh:connect and can fail with "session not found".
     await waitFor(() => expect(window.janet.sshConnect).toHaveBeenCalledTimes(1));
+    const pendingSessionId = (window.janet.sshConnect as any).mock.calls[0][0].id as string;
+    expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
+      kind: 'ssh',
+      sessionId: pendingSessionId,
+      label: 'pckpr@box.local:22',
+      connectionState: 'connecting',
+      ready: false,
+    }));
+    expect(rendererMocks.sidebarProps.explorerSource).not.toHaveProperty('cwd', '/home/test');
 
     resolveConnect?.({ connected: true });
 
@@ -502,6 +524,12 @@ describe('split panes in the app', () => {
     const shellArgs = (window.janet.sshCreateShell as any).mock.calls[0][0] as any;
     expect(connectArgs.id).toBeTruthy();
     expect(shellArgs.id).toBe(connectArgs.id);
+    expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
+      kind: 'ssh',
+      sessionId: connectArgs.id,
+      connectionState: 'ready',
+      ready: true,
+    }));
 
     act(() => {
       rendererMocks.sidebarProps.onSSHProfilesChange([{ ...profile, host: 'renamed-box.local' }]);
@@ -510,6 +538,55 @@ describe('split panes in the app', () => {
       expect(rendererMocks.sidebarProps.sshProfiles[0].host).toBe('renamed-box.local');
     });
     expect(window.janet.sshConnect).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      rendererMocks.sshConnectionClosedHandler?.({ id: connectArgs.id, reason: 'transport reset' });
+    });
+    await waitFor(() => {
+      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
+        kind: 'ssh',
+        sessionId: connectArgs.id,
+        connectionState: 'disconnected',
+        ready: false,
+      }));
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+    });
+    expect(screen.getByTestId(`terminal-${shellArgs.termId}`)).toHaveAttribute(
+      'data-ssh-connection-lost',
+      'true',
+    );
+    expect(window.janet.sshConnect).toHaveBeenCalledTimes(1);
+
+    const retry = rendererMocks.sshRetryHandlers.get(shellArgs.termId);
+    expect(retry).toBeTruthy();
+    (window.janet.sshCreateShell as any).mockRejectedValueOnce(new Error('session not found'));
+    (window.janet.sshConnect as any)
+      .mockRejectedValueOnce(new Error('host offline'))
+      .mockResolvedValue({ connected: true });
+
+    await act(async () => {
+      await expect(Promise.resolve(retry?.(shellArgs.termId, { cols: 120, rows: 40 })))
+        .rejects.toThrow('host offline');
+    });
+    expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
+    expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
+      connectionState: 'disconnected',
+      ready: false,
+    }));
+
+    (window.janet.sshCreateShell as any).mockRejectedValueOnce(new Error('session not found'));
+    await act(async () => {
+      await retry?.(shellArgs.termId, { cols: 120, rows: 40 });
+    });
+    await waitFor(() => {
+      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(4);
+      expect(window.janet.sshConnect).toHaveBeenCalledTimes(3);
+      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
+        connectionState: 'ready',
+        ready: true,
+      }));
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
+    });
   });
 
   it('demotes a restored SSH tab with a missing profile to a working local shell', async () => {

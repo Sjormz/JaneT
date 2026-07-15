@@ -994,7 +994,23 @@ html, body, #root {
   color: var(--text-muted);
   font-size: 12px;
 }
-.explorer-error { color: var(--red); }
+.explorer-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--red);
+}
+.explorer-retry {
+  padding: 4px 9px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--glass-border));
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.explorer-retry:hover { background: rgba(255, 255, 255, 0.09); }
 
 /* === SSH Manager === */
 .ssh-manager { display: flex; flex-direction: column; height: 100%; }
@@ -1906,10 +1922,10 @@ html, body, #root {
   color: var(--text-muted);
   background: rgba(255, 255, 255, 0.03);
 }
-.explorer-remote-notice em {
+.explorer-remote-notice strong {
   color: var(--yellow);
-  font-style: normal;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 

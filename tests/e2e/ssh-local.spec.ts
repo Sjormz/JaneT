@@ -5,12 +5,104 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
-import { Server, utils } from 'ssh2';
+import { Server, utils, type SFTPWrapper } from 'ssh2';
 
 const root = path.resolve(__dirname, '../..');
 const devServerUrl = process.env.JANET_DEV_SERVER_URL || 'http://127.0.0.1:5173';
 const testUsername = 'janet';
 const testPassword = 'janet-test';
+const remoteHome = '/home/janet';
+
+interface VirtualRemoteEntry {
+  name: string;
+  type: 'directory' | 'file';
+  size?: number;
+}
+
+const virtualRemoteTree = new Map<string, VirtualRemoteEntry[]>([
+  [remoteHome, [
+    { name: 'projects', type: 'directory' },
+    { name: 'REMOTE_README.md', type: 'file', size: 42 },
+    { name: '.remote-hidden', type: 'file', size: 7 },
+  ]],
+  [`${remoteHome}/projects`, [
+    { name: 'nested-remote.txt', type: 'file', size: 21 },
+  ]],
+]);
+
+const virtualRemoteTimestamp = Math.floor(Date.UTC(2026, 0, 1) / 1000);
+
+function virtualAttributes(entry: Pick<VirtualRemoteEntry, 'type' | 'size'>) {
+  const directory = entry.type === 'directory';
+  return {
+    mode: (directory ? fs.constants.S_IFDIR | 0o755 : fs.constants.S_IFREG | 0o644),
+    uid: 1000,
+    gid: 1000,
+    size: entry.size ?? 0,
+    atime: virtualRemoteTimestamp,
+    mtime: virtualRemoteTimestamp,
+  };
+}
+
+function resolveVirtualRemotePath(requestedPath: string): string | null {
+  const resolvedPath = requestedPath === '.'
+    ? remoteHome
+    : path.posix.resolve(remoteHome, requestedPath);
+  return virtualRemoteTree.has(resolvedPath) ? resolvedPath : null;
+}
+
+function serveVirtualRemoteTree(sftp: SFTPWrapper) {
+  const { STATUS_CODE } = utils.sftp;
+  const openDirectories = new Map<string, { path: string; read: boolean }>();
+  let nextHandle = 0;
+
+  sftp.on('error', ignoreBenignSshFixtureError);
+  sftp.on('REALPATH', (requestId, requestedPath) => {
+    const resolvedPath = resolveVirtualRemotePath(requestedPath);
+    if (!resolvedPath) {
+      sftp.status(requestId, STATUS_CODE.NO_SUCH_FILE);
+      return;
+    }
+    sftp.name(requestId, [{
+      filename: resolvedPath,
+      longname: resolvedPath,
+      attrs: virtualAttributes({ type: 'directory' }),
+    }]);
+  });
+  sftp.on('OPENDIR', (requestId, requestedPath) => {
+    const resolvedPath = resolveVirtualRemotePath(requestedPath);
+    if (!resolvedPath) {
+      sftp.status(requestId, STATUS_CODE.NO_SUCH_FILE);
+      return;
+    }
+    const handle = Buffer.alloc(4);
+    handle.writeUInt32BE(++nextHandle);
+    openDirectories.set(handle.toString('hex'), { path: resolvedPath, read: false });
+    sftp.handle(requestId, handle);
+  });
+  sftp.on('READDIR', (requestId, handle) => {
+    const directory = openDirectories.get(handle.toString('hex'));
+    if (!directory) {
+      sftp.status(requestId, STATUS_CODE.FAILURE);
+      return;
+    }
+    if (directory.read) {
+      sftp.status(requestId, STATUS_CODE.EOF);
+      return;
+    }
+    directory.read = true;
+    const entries = virtualRemoteTree.get(directory.path) ?? [];
+    sftp.name(requestId, entries.map((entry) => ({
+      filename: entry.name,
+      longname: `${entry.type === 'directory' ? 'd' : '-'}rw-r--r-- 1 janet janet ${entry.size ?? 0} ${entry.name}`,
+      attrs: virtualAttributes(entry),
+    })));
+  });
+  sftp.on('CLOSE', (requestId, handle) => {
+    const removed = openDirectories.delete(handle.toString('hex'));
+    sftp.status(requestId, removed ? STATUS_CODE.OK : STATUS_CODE.FAILURE);
+  });
+}
 
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -128,7 +220,12 @@ function respondToShellCommand(stream: NodeJS.WritableStream & { exit?: (code: n
   stream.write('$ ');
 }
 
-async function startLocalSshServer(): Promise<{ port: number; fingerprint: string; close: () => Promise<void> }> {
+async function startLocalSshServer(): Promise<{
+  port: number;
+  fingerprint: string;
+  disconnectClients: () => void;
+  close: () => Promise<void>;
+}> {
   const port = await getFreePort();
   const { privateKey } = generateKeyPairSync('rsa', {
     modulusLength: 2048,
@@ -142,7 +239,10 @@ async function startLocalSshServer(): Promise<{ port: number; fingerprint: strin
     .digest('base64')
     .replace(/=+$/, '')}`;
 
+  const clients = new Set<{ end: () => void }>();
   const server = new Server({ hostKeys: [privateKey] }, (client) => {
+    clients.add(client);
+    client.on('close', () => clients.delete(client));
     client.on('error', ignoreBenignSshFixtureError);
     client.on('authentication', (ctx) => {
       if (ctx.method === 'password' && ctx.username === testUsername && ctx.password === testPassword) {
@@ -157,6 +257,9 @@ async function startLocalSshServer(): Promise<{ port: number; fingerprint: strin
         const session = accept();
         session.on('error', ignoreBenignSshFixtureError);
         session.on('pty', (acceptPty) => acceptPty?.());
+        session.on('sftp', (acceptSftp) => {
+          serveVirtualRemoteTree(acceptSftp());
+        });
         session.on('shell', (acceptShell) => {
           const stream = acceptShell();
           stream.on('error', ignoreBenignSshFixtureError);
@@ -187,6 +290,9 @@ async function startLocalSshServer(): Promise<{ port: number; fingerprint: strin
   return {
     port,
     fingerprint,
+    disconnectClients: () => {
+      for (const client of clients) client.end();
+    },
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };
 }
@@ -289,12 +395,25 @@ async function runMarkedLs(page: Page, marker: string) {
   await expect.poll(async () => page.locator('.xterm-rows').innerText(), { timeout: 20_000 }).toContain(`__JANET_${marker}_DONE__`);
 }
 
-test('connects to the local SSH fixture and runs ls', async () => {
+test('restores the local SSH fixture, browses remote files, and runs ls', async () => {
   const ssh = await startLocalSshServer();
   const { browser, electronProcess, page, eventsPath } = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
   try {
     await waitForShellCreateCount(eventsPath, 1);
+
+    const explorer = page.locator('.file-explorer');
+    await expect(explorer.getByText('REMOTE_README.md', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(explorer.getByRole('button', { name: 'Open folder projects' })).toBeVisible();
+    await expect(page.getByText(/remote browsing is not available yet/i)).toHaveCount(0);
+
+    await explorer.getByRole('button', { name: 'Open folder projects' }).click();
+    await expect(explorer.getByText('nested-remote.txt', { exact: true })).toBeVisible();
+
     await runMarkedLs(page, 'LS');
+
+    ssh.disconnectClients();
+    await expect(explorer.getByText(/remote filesystem disconnected/i)).toBeVisible({ timeout: 20_000 });
+    await expect(explorer.getByText('nested-remote.txt', { exact: true })).toHaveCount(0);
   } finally {
     await closeApp(browser, electronProcess);
     await ssh.close();

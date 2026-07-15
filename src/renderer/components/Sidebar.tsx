@@ -6,6 +6,7 @@ import ThemeSwitcher from './ThemeSwitcher';
 import { SavedSSHProfile, SessionInfo } from '../types';
 import { ThemeName } from '../themes';
 import { GitRepositoryState } from '../useGitRepository';
+import type { FileExplorerSource } from '../fileExplorerSource';
 
 type SidebarSection = 'files' | 'ssh' | 'git' | 'settings';
 
@@ -22,8 +23,8 @@ interface SidebarProps {
   sidebarSide: 'left' | 'right';
   onSidebarSideChange: (side: 'left' | 'right') => void;
   shortcutEditor?: React.ReactNode;
-  /** Current working directory of the focused terminal (or home if none). */
-  cwd: string;
+  /** Filesystem currently owned by the focused terminal pane. */
+  explorerSource: FileExplorerSource;
   /** True once we have a usable cwd to show. */
   cwdReady: boolean;
   /** True if the active tab is an SSH tab. Sidebar shows a notice. */
@@ -44,7 +45,7 @@ export default function Sidebar({
   sidebarSide,
   onSidebarSideChange,
   shortcutEditor,
-  cwd,
+  explorerSource,
   cwdReady,
   isRemote,
   gitRepository,
@@ -53,7 +54,7 @@ export default function Sidebar({
   return (
     <div className="sidebar">
       <div className="sidebar-content">
-        {section === 'files' && <FileExplorer cwd={cwd} cwdReady={cwdReady} isRemote={isRemote} />}
+        {section === 'files' && <FileExplorer source={explorerSource} />}
         {section === 'ssh' && (
           <SSHManager
             sshProfiles={sshProfiles}

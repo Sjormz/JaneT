@@ -8,9 +8,9 @@ Built by sjorm, for sjorm.
 
 - **Terminal Emulator** - Full-featured terminal with xterm.js and node-pty
 - **Multiple Tabs** - Open many terminals in one window
-- **File Explorer** - VS Code-style file tree sidebar with breadcrumb navigation
+- **File Explorer** - Local and remote file browsing with breadcrumb navigation and live refresh
 - **SSH Connection Manager** - Connect to remote servers with password or key auth
-- **SSH Remote File Browser** - Browse remote filesystems via SFTP
+- **SSH Remote File Browser** - Browse each connected machine from its server-resolved home via SFTP
 - **Git Integration** - See branches, status, file changes, and switch branches
 - **Drag & Drop** - Drag files from explorer into terminal (pastes the path)
 - **Tokyo Night Theme** - Beautiful dark theme inspired by Tokyo Night
@@ -98,12 +98,8 @@ Public releases are built by GitHub Actions from `vX.Y.Z` tags. See
 
 ## Coming Soon
 
-- Split panes (multiple terminals in one tab)
 - Enhanced drag & drop (file transfer via SCP/SFTP)
-- Remote file tree auto-refresh on SSH connect
 - SSH config file parsing (~/.ssh/config)
-- Customizable themes
-- Terminal search
 
 ## License
 

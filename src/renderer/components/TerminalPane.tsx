@@ -42,6 +42,7 @@ interface TerminalPaneProps {
   initialCwd?: string;
   hasSession?: boolean;
   sshShellReady?: boolean;
+  sshConnectionLost?: boolean;
   onSshRetry?: (termId: string, dimensions: { cols: number; rows: number }) => void | Promise<void>;
 }
 
@@ -126,6 +127,7 @@ export default function TerminalPane({
   initialCwd,
   hasSession,
   sshShellReady = true,
+  sshConnectionLost = false,
   onSshRetry,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -170,10 +172,15 @@ export default function TerminalPane({
   useEffect(() => {
     if (tabType !== 'ssh') {
       publishSshNoticeState({ kind: 'hidden' });
+    } else if (sshConnectionLost) {
+      publishSshNoticeState({
+        kind: 'error',
+        message: 'The SSH connection closed. Reconnect to continue.',
+      });
     } else if (!sshShellReady) {
       publishSshNoticeState({ kind: 'reconnecting' });
     }
-  }, [publishSshNoticeState, tabType, sshSessionId, sshShellReady]);
+  }, [publishSshNoticeState, sshConnectionLost, tabType, sshSessionId, sshShellReady]);
 
   const clearSearchSelection = () => {
     searchAddonRef.current?.clearDecorations();

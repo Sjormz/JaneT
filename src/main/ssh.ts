@@ -1,12 +1,20 @@
 import { Client, ClientChannel } from 'ssh2';
+import type { SFTPWrapper } from 'ssh2';
 import * as os from 'os';
 import { createHash } from 'crypto';
 import { StringDecoder } from 'string_decoder';
+import type {
+  FileEntry,
+  SSHConnectionClosedEvent,
+  SSHDirectoryListing,
+} from '../shared/files';
 
 // Host verification may pause on a native Trust/Cancel dialog while the user
 // checks the fingerprint out of band. Keep the handshake bounded, but do not
 // apply the old 10-second machine-to-machine timeout to an interactive step.
 const INTERACTIVE_READY_TIMEOUT_MS = 5 * 60 * 1000;
+const SFTP_OPERATION_TIMEOUT_MS = 30_000;
+const MAX_REMOTE_PATH_LENGTH = 8_192;
 
 export interface SSHHostKeyStore {
   lookup(host: string, port: number): string | undefined;
@@ -21,6 +29,8 @@ export type SSHHostKeyConfirmer = (
   fingerprint: string,
 ) => boolean | Promise<boolean>;
 
+export type SSHConnectionClosedHandler = (event: SSHConnectionClosedEvent) => void;
+
 interface SSHConnection {
   client: Client;
   id: string;
@@ -30,6 +40,7 @@ interface SSHConnection {
     username?: string;
   };
   shells: Map<string, ClientChannel>;
+  sftpOperations: Set<(error: Error) => void>;
   pendingWrites: Map<string, Array<string | Buffer>>;
   /** Handles already returned by createShell(), keyed by termId — lets a
    * repeat call (e.g. React 18 StrictMode's double mount-effect invoke)
@@ -64,6 +75,7 @@ export class SSHManager {
   constructor(
     private readonly hostKeyStore?: SSHHostKeyStore,
     private readonly confirmHostKey: SSHHostKeyConfirmer = () => false,
+    private readonly onConnectionClosed?: SSHConnectionClosedHandler,
   ) {}
 
   connect(id: string, config: {
@@ -110,12 +122,14 @@ export class SSHManager {
       !settled && this.pendingConnections.get(id)?.client === client
     );
 
-    const removeConnection = (reason: Error) => {
+    const removeConnection = (reason: Error): boolean => {
       const pending = this.pendingConnections.get(id);
       if (pending?.client === client) this.pendingConnections.delete(id);
       const connection = this.connections.get(id);
       if (connection?.client === client) {
         connection.pendingWrites.clear();
+        for (const cancel of connection.sftpOperations) cancel(reason);
+        connection.sftpOperations.clear();
         for (const handle of connection.shellHandles.values()) handle.cancel(reason);
         connection.shellHandles.clear();
         for (const shell of connection.shells.values()) {
@@ -123,6 +137,15 @@ export class SSHManager {
         }
         connection.shells.clear();
         this.connections.delete(id);
+        return true;
+      }
+      return false;
+    };
+    const notifyUnexpectedClose = (reason: Error) => {
+      try {
+        this.onConnectionClosed?.({ id, reason: reason.message });
+      } catch {
+        // A lifecycle observer must not interrupt SSH resource cleanup.
       }
     };
 
@@ -139,6 +162,7 @@ export class SSHManager {
           id,
           config: { host, port, username: config.username },
           shells: new Map(),
+          sftpOperations: new Set(),
           pendingWrites: new Map(),
           shellHandles: new Map(),
       });
@@ -147,13 +171,15 @@ export class SSHManager {
     });
 
     client.on('error', (error) => {
-      removeConnection(error);
+      if (removeConnection(error)) notifyUnexpectedClose(error);
       rejectPending(verificationError ?? error);
     });
     const handleConnectionClosed = () => {
       const wasPending = this.pendingConnections.get(id)?.client === client;
-      const error = verificationError ?? new Error(`SSH connection to ${host}:${port} closed before it was ready`);
-      removeConnection(error);
+      const error = verificationError ?? new Error(wasPending
+        ? `SSH connection to ${host}:${port} closed before it was ready`
+        : `SSH connection to ${host}:${port} closed unexpectedly`);
+      if (removeConnection(error)) notifyUnexpectedClose(error);
       if (wasPending) rejectPending(error);
     };
     client.on('end', handleConnectionClosed);
@@ -419,33 +445,97 @@ export class SSHManager {
     });
   }
 
-  async listDir(sessionId: string, remotePath: string): Promise<any[]> {
-    const conn = this.connections.get(sessionId);
-    if (!conn) throw new Error(`SSH session ${sessionId} not found`);
+  async listDir(
+    sessionId: string,
+    remotePath?: string,
+    showHidden: boolean = false,
+  ): Promise<SSHDirectoryListing> {
+    const requestedPath = validateRemotePath(remotePath);
+    const includeHidden = showHidden === true;
 
-    return new Promise((resolve, reject) => {
-      conn.client.sftp((err, sftp) => {
-        if (err) return reject(err);
+    return this.withSftp(sessionId, (sftp, done, isSettled) => {
+      sftp.realpath(requestedPath, (realpathError, resolvedPath) => {
+        if (isSettled()) return;
+        if (realpathError) {
+          done(realpathError);
+          return;
+        }
+        try {
+          if (!resolvedPath) {
+            done(new Error(`SFTP server returned an empty path for ${requestedPath}`));
+            return;
+          }
+          const canonicalPath = validateRemotePath(resolvedPath);
 
-        sftp.readdir(remotePath, (err, list) => {
-          sftp.end();
-          if (err) return reject(err);
+          sftp.readdir(canonicalPath, (readError, list) => {
+            if (isSettled()) return;
+            if (readError) {
+              done(readError);
+              return;
+            }
 
-          const entries = list.map((item) => {
-            const isDir = item.attrs.isDirectory();
-            return {
-              name: item.filename,
-              path: remotePath === '/' ? `/${item.filename}` : `${remotePath}/${item.filename}`,
-              isDirectory: isDir,
-              isSymlink: item.attrs.isSymbolicLink(),
-              size: item.attrs.size,
-              mode: item.attrs.mode,
-              mtime: new Date(item.attrs.mtime * 1000).toISOString(),
-            };
+            try {
+              const entries = list
+                .filter((item) => isSafeRemoteEntryName(item.filename))
+                .filter((item) => includeHidden || !item.filename.startsWith('.'))
+                .map((item): FileEntry => ({
+                  name: item.filename,
+                  path: joinRemotePath(canonicalPath, item.filename),
+                  isDirectory: item.attrs.isDirectory(),
+                  isSymlink: item.attrs.isSymbolicLink(),
+                  size: finiteNumber(item.attrs.size),
+                  mode: finiteNumber(item.attrs.mode),
+                  mtime: isoTimestamp(item.attrs.mtime),
+                }));
+
+              // readdir() returns lstat-style attributes, so a symlink to a
+              // directory normally looks like a non-directory. Resolve only
+              // symlink targets, one at a time, so those links remain
+              // navigable without flooding the server with stat requests.
+              const resolveNextSymlink = (index: number) => {
+                if (isSettled()) return;
+                while (index < entries.length && !entries[index].isSymlink) index += 1;
+                if (index >= entries.length) {
+                  sortFileEntries(entries);
+                  done(undefined, { resolvedPath: canonicalPath, entries });
+                  return;
+                }
+
+                const entry = entries[index];
+                let statSettled = false;
+                const continueAfterStat = () => {
+                  if (statSettled) return;
+                  statSettled = true;
+                  // Protect against non-conforming synchronous callbacks and
+                  // very large symlink-heavy directories growing the stack.
+                  queueMicrotask(() => resolveNextSymlink(index + 1));
+                };
+                try {
+                  sftp.stat(entry.path, (statError, targetAttrs) => {
+                    if (isSettled()) return;
+                    if (!statError && targetAttrs) {
+                      try {
+                        entry.isDirectory = targetAttrs.isDirectory();
+                      } catch {
+                        // Malformed target attributes leave the lstat result intact.
+                      }
+                    }
+                    continueAfterStat();
+                  });
+                } catch {
+                  // A broken/unsupported link remains visible as a symlink,
+                  // using the original readdir metadata.
+                  continueAfterStat();
+                }
+              };
+              resolveNextSymlink(0);
+            } catch (mappingError) {
+              done(mappingError);
+            }
           });
-
-          resolve(entries);
-        });
+        } catch (readStartError) {
+          done(readStartError);
+        }
       });
     });
   }
@@ -460,16 +550,22 @@ export class SSHManager {
 
     const conn = this.connections.get(id);
     if (conn) {
+      // Stop lifecycle events emitted synchronously by close()/end() from
+      // being reported as an unexpected connection loss.
+      this.connections.delete(id);
       conn.shells.forEach((shell) => {
         try { shell.close(); } catch {}
       });
       conn.pendingWrites.clear();
+      for (const cancel of conn.sftpOperations) {
+        cancel(new Error(`SSH connection ${id} was closed`));
+      }
+      conn.sftpOperations.clear();
       for (const handle of conn.shellHandles.values()) {
         handle.cancel(new Error(`SSH connection ${id} was closed`));
       }
       conn.shellHandles.clear();
       conn.client.end();
-      this.connections.delete(id);
     }
   }
 
@@ -492,6 +588,76 @@ export class SSHManager {
     }
     this.connections.forEach((_, id) => {
       void this.disconnect(id);
+    });
+  }
+
+  private withSftp<T>(
+    sessionId: string,
+    operation: (
+      sftp: SFTPWrapper,
+      done: (error?: unknown, result?: T) => void,
+      isSettled: () => boolean,
+    ) => void,
+  ): Promise<T> {
+    if (typeof sessionId !== 'string' || sessionId.trim().length === 0) {
+      return Promise.reject(new Error('A valid SSH session id is required'));
+    }
+    const connection = this.connections.get(sessionId);
+    if (!connection) return Promise.reject(new Error(`SSH session ${sessionId} not found`));
+
+    return new Promise<T>((resolve, reject) => {
+      let sftp: SFTPWrapper | null = null;
+      let settled = false;
+      let cancel: (error: Error) => void;
+      const timeout = setTimeout(() => {
+        finish(new Error(`SFTP operation timed out for SSH session ${sessionId}`));
+      }, SFTP_OPERATION_TIMEOUT_MS);
+      timeout.unref?.();
+
+      const finish = (error?: unknown, result?: T) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        connection.sftpOperations.delete(cancel);
+        try { sftp?.end(); } catch {}
+
+        if (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+          return;
+        }
+        if (this.connections.get(sessionId) !== connection) {
+          reject(new Error(`SSH session ${sessionId} changed during the SFTP operation`));
+          return;
+        }
+        resolve(result as T);
+      };
+      cancel = (error) => finish(error);
+      connection.sftpOperations.add(cancel);
+
+      try {
+        connection.client.sftp((error, channel) => {
+          if (settled) {
+            try { channel?.end(); } catch {}
+            return;
+          }
+          if (error || !channel) {
+            finish(error ?? new Error(`Could not open SFTP for SSH session ${sessionId}`));
+            return;
+          }
+          sftp = channel;
+          channel.on?.('error', finish);
+          channel.on?.('close', () => {
+            finish(new Error(`SFTP channel closed for SSH session ${sessionId}`));
+          });
+          try {
+            operation(channel, finish, () => settled);
+          } catch (operationError) {
+            finish(operationError);
+          }
+        });
+      } catch (sftpStartError) {
+        finish(sftpStartError);
+      }
     });
   }
 
@@ -550,6 +716,45 @@ function normalizeUsername(username: string | undefined): string {
 
 function normalizePort(port: number): number {
   return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 22;
+}
+
+function validateRemotePath(remotePath: string | undefined): string {
+  if (remotePath === undefined) return '.';
+  if (typeof remotePath !== 'string' || remotePath.length === 0) {
+    throw new Error('A valid remote path is required');
+  }
+  if (remotePath.length > MAX_REMOTE_PATH_LENGTH) {
+    throw new Error(`Remote path exceeds ${MAX_REMOTE_PATH_LENGTH} characters`);
+  }
+  if (remotePath.includes('\0')) throw new Error('Remote path cannot contain NUL characters');
+  return remotePath;
+}
+
+function joinRemotePath(directory: string, name: string): string {
+  const base = directory.replace(/\/+$/, '') || '/';
+  return base === '/' ? `/${name}` : `${base}/${name}`;
+}
+
+function isSafeRemoteEntryName(name: unknown): name is string {
+  return typeof name === 'string' && name.length > 0 && name !== '.' && name !== '..' &&
+    !name.includes('/') && !name.includes('\0');
+}
+
+function finiteNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function isoTimestamp(seconds: unknown): string {
+  const milliseconds = finiteNumber(seconds) * 1000;
+  const date = new Date(milliseconds);
+  return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
+}
+
+function sortFileEntries(entries: FileEntry[]): void {
+  entries.sort((left, right) => {
+    if (left.isDirectory !== right.isDirectory) return left.isDirectory ? -1 : 1;
+    return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
+  });
 }
 
 function hostKeyId(host: string, port: number): string {

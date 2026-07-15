@@ -1,4 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type {
+  FileEntry,
+  SSHConnectionClosedEvent,
+  SSHDirectoryListing,
+  SSHListDirParams,
+} from '../shared/files';
 
 export interface UpdateProgress {
   percent: number;
@@ -44,15 +50,22 @@ const api = {
     ipcRenderer.invoke('ssh:destroyShell', params),
   sshResizeShell: (params: { termId: string; cols: number; rows: number }) =>
     ipcRenderer.invoke('ssh:resizeShell', params),
-  sshListDir: (params: { sessionId: string; remotePath: string }) =>
+  sshListDir: (params: SSHListDirParams): Promise<SSHDirectoryListing> =>
     ipcRenderer.invoke('ssh:listDir', params),
   sshDisconnect: (params: { id: string }) =>
     ipcRenderer.invoke('ssh:disconnect', params),
   sshListConnections: () =>
     ipcRenderer.invoke('ssh:listConnections'),
+  onSSHConnectionClosed: (callback: (event: SSHConnectionClosedEvent) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: SSHConnectionClosedEvent) => callback(data);
+    ipcRenderer.on('ssh:onConnectionClosed', handler);
+    return () => {
+      ipcRenderer.removeListener('ssh:onConnectionClosed', handler);
+    };
+  },
 
   // File System
-  fsListDir: (params: { dirPath: string; showHidden?: boolean }) =>
+  fsListDir: (params: { dirPath: string; showHidden?: boolean }): Promise<FileEntry[]> =>
     ipcRenderer.invoke('fs:listDir', params),
   fsGetHome: () => ipcRenderer.invoke('fs:getHome'),
   fsGetDrives: () => ipcRenderer.invoke('fs:getDrives'),

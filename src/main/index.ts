@@ -6,6 +6,7 @@ import { isAllowedExternalUrl } from './externalUrls';
 import { FileSystemManager } from './filesystem';
 import { GitManager } from './git';
 import { SettingsManager } from './settings';
+import type { SSHListDirParams } from '../shared/files';
 
 let mainWindow: electron.BrowserWindow | null = null;
 let initializeUpdaterForWindow: ((window: electron.BrowserWindow) => void) | null = null;
@@ -147,6 +148,10 @@ electron.app.whenReady().then(() => {
       noLink: true,
     });
     return response === 0;
+  }, (event) => {
+    const window = mainWindow;
+    if (!window || window.isDestroyed()) return;
+    window.webContents.send('ssh:onConnectionClosed', event);
   });
 
   registerIpcHandlers();
@@ -259,8 +264,8 @@ function registerIpcHandlers() {
     sshManager.resizeShell(termId, cols, rows);
   });
 
-  handle('ssh:listDir', async (event, { sessionId, remotePath }) => {
-    return await sshManager.listDir(sessionId, remotePath);
+  handle('ssh:listDir', async (event, params: SSHListDirParams) => {
+    return await sshManager.listDir(params?.sessionId, params?.remotePath, params?.showHidden);
   });
 
   handle('ssh:disconnect', async (event, { id }) => {
