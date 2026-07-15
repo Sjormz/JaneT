@@ -26,7 +26,9 @@ function resolveTerminalCwd(cwd?: string): string {
   return trimmed;
 }
 
-function shellLaunch(shell: string, init: string): { args: string[]; env: NodeJS.ProcessEnv } {
+type ShellInitFile = (name: string, contents: string) => string;
+
+function shellLaunch(shell: string, init: string, initFile: ShellInitFile): { args: string[]; env: NodeJS.ProcessEnv } {
   if (!init) return { args: [], env: {} };
 
   const base = path.basename(shell).toLowerCase();
@@ -35,15 +37,13 @@ function shellLaunch(shell: string, init: string): { args: string[]; env: NodeJS
   }
 
   if (base === 'bash' || base === 'bash.exe') {
-    const rcfile = path.join(os.tmpdir(), 'janet-bashrc');
-    fs.writeFileSync(rcfile, `[ -f ~/.bashrc ] && . ~/.bashrc\n${init}\n`, 'utf8');
+    const rcfile = initFile('bashrc', `[ -f ~/.bashrc ] && . ~/.bashrc\n${init}\n`);
     return { args: ['--rcfile', rcfile, '-i'], env: {} };
   }
 
   if (base === 'zsh' || base === 'zsh.exe') {
-    const zdotdir = path.join(os.tmpdir(), 'janet-zdotdir');
-    fs.mkdirSync(zdotdir, { recursive: true });
-    fs.writeFileSync(path.join(zdotdir, '.zshrc'), `[ -f ~/.zshrc ] && . ~/.zshrc\n${init}\n`, 'utf8');
+    const zshrc = initFile('.zshrc', `[ -f ~/.zshrc ] && . ~/.zshrc\n${init}\n`);
+    const zdotdir = path.dirname(zshrc);
     return { args: ['-i'], env: { ZDOTDIR: zdotdir } };
   }
 
@@ -56,6 +56,7 @@ function shellLaunch(shell: string, init: string): { args: string[]; env: NodeJS
 
 export class TerminalManager {
   private terminals: Map<string, TerminalInstance> = new Map();
+  private shellInitDir: string | null = null;
 
   /**
    * Create (or reuse) the pty for `id`, and register `onData` as its
@@ -87,22 +88,42 @@ export class TerminalManager {
 
     const init = buildShellInit(defaultShell);
 
-    const launch = shellLaunch(defaultShell, init);
+    const launch = shellLaunch(defaultShell, init, (name, contents) => this.ensureShellInitFile(name, contents));
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      TERM: 'xterm-256color',
+      TERM_PROGRAM: 'JaneT',
+      COLORTERM: 'truecolor',
+      ...launch.env,
+      // Ensure shells that key on these (some readline configs) stay
+      // in their interactive mode.
+      SHELL: defaultShell,
+    };
+    // The Hermes graphics opt-in is applied only by the direct-shell wrapper
+    // in shell-init.ts. Keeping it out of the PTY environment prevents it from
+    // leaking into nested tmux/screen sessions that may not pass Kitty APCs.
+    delete env.JANET_KITTY_GRAPHICS;
+    // JaneT may itself have been launched from another terminal. Do not leak
+    // that parent's graphics capabilities into this independent PTY: Hermes
+    // (and similar tools) would otherwise mis-detect Kitty/iTerm/WezTerm even
+    // after the JaneT-specific opt-in is removed inside a multiplexer.
+    delete env.KITTY_WINDOW_ID;
+    delete env.WEZTERM_PANE;
+    delete env.ITERM_SESSION_ID;
+    // A JaneT PTY is also a fresh terminal boundary even if the Electron app
+    // was launched from a tmux/screen shell. Nested multiplexers created inside
+    // this PTY will set their own fresh markers.
+    delete env.TMUX;
+    delete env.TMUX_PANE;
+    delete env.STY;
 
     const pty = spawn(defaultShell, launch.args, {
       name: 'xterm-256color',
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
       cwd: defaultCwd,
-      env: {
-        ...process.env,
-        TERM: 'xterm-256color',
-        COLORTERM: 'truecolor',
-        ...launch.env,
-        // Ensure shells that key on these (some readline configs) stay
-        // in their interactive mode.
-        SHELL: defaultShell,
-      },
+      env,
     });
 
     this.terminals.set(id, { pty, id, wired: !!onData, cols: DEFAULT_COLS, rows: DEFAULT_ROWS });
@@ -144,6 +165,13 @@ export class TerminalManager {
     }
   }
 
+  writeBinary(id: string, data: string): void {
+    const term = this.terminals.get(id);
+    if (term) {
+      term.pty.write(Buffer.from(data, 'binary'));
+    }
+  }
+
   destroy(id: string): void {
     const term = this.terminals.get(id);
     if (term) {
@@ -156,5 +184,22 @@ export class TerminalManager {
     for (const [id] of this.terminals) {
       this.destroy(id);
     }
+    if (this.shellInitDir) {
+      try { fs.rmSync(this.shellInitDir, { recursive: true, force: true }); } catch {}
+      this.shellInitDir = null;
+    }
+  }
+
+  private ensureShellInitFile(name: string, contents: string): string {
+    if (!this.shellInitDir || !fs.existsSync(this.shellInitDir)) {
+      this.shellInitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-shell-init-'));
+      if (process.platform !== 'win32') fs.chmodSync(this.shellInitDir, 0o700);
+    }
+
+    const filePath = path.join(this.shellInitDir, name);
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, contents, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    }
+    return filePath;
   }
 }

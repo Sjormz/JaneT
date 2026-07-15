@@ -17,6 +17,7 @@ autoUpdater.autoInstallOnAppQuit = true;
 let mainWindowRef: BrowserWindow | null = null;
 let updateInfo: UpdateInfo | null = null;
 let suppressNoUpdateNotice = false;
+let initialized = false;
 
 function send(channel: string, ...args: unknown[]) {
   if (mainWindowRef && !mainWindowRef.isDestroyed()) {
@@ -26,6 +27,8 @@ function send(channel: string, ...args: unknown[]) {
 
 export function initUpdater(mainWindow: BrowserWindow) {
   mainWindowRef = mainWindow;
+  if (initialized) return;
+  initialized = true;
 
   // Register IPC handlers for renderer-initiated update actions
   ipcMain.handle('update:check', async () => {

@@ -92,15 +92,37 @@ export interface AppSettings {
     terminalCount: number;
     splitDirection: 'horizontal' | 'vertical';
   }>;
+  /** SHA-256 SSH host-key fingerprints, keyed by normalized host and port. */
+  sshHostKeys: Record<string, string>;
   gitWorktreeBaseDir: string;
   gitWorktreeNameTemplate: string;
   /** Last-known open workspace. Restored on next launch. */
   session: SavedSession;
 }
 
-type StoredSSHProfile = AppSettings['sshProfiles'][number] & {
+interface StoredSecretV1 {
+  version: 1;
+  scheme: 'electron-safe-storage';
+  ciphertext: string;
+}
+
+type StoredSSHProfile = Omit<AppSettings['sshProfiles'][number], 'password' | 'privateKey'> & {
+  passwordSecret?: StoredSecretV1;
+  privateKeySecret?: StoredSecretV1;
+  /** Legacy pre-v1 field. It is decrypted only when safeStorage is available. */
   passwordEncrypted?: string;
+  /** Legacy pre-v1 field. It is decrypted only when safeStorage is available. */
   privateKeyEncrypted?: string;
+  /** Legacy plaintext fields are read once and migrated on the next save. */
+  password?: string;
+  privateKey?: string;
+};
+
+type StoredSSHSecrets = Pick<StoredSSHProfile,
+  'passwordSecret' | 'privateKeySecret' | 'passwordEncrypted' | 'privateKeyEncrypted'>;
+
+type StoredAppSettings = Omit<AppSettings, 'sshProfiles'> & {
+  sshProfiles: StoredSSHProfile[];
 };
 
 const EMPTY_SESSION: SavedSession = {
@@ -119,6 +141,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   keybindings: { ...DEFAULT_KEYBINDINGS },
   sshProfiles: [],
   workspaceTabs: [],
+  sshHostKeys: {},
   gitWorktreeBaseDir: '../',
   gitWorktreeNameTemplate: '{repo}-{branch}',
   session: EMPTY_SESSION,
@@ -127,6 +150,7 @@ const DEFAULT_SETTINGS: AppSettings = {
 export class SettingsManager {
   private filePath: string;
   private cache: AppSettings;
+  private storedSshSecrets = new Map<string, StoredSSHSecrets>();
 
   constructor() {
     const userDataPath = app.getPath('userData');
@@ -135,7 +159,13 @@ export class SettingsManager {
   }
 
   get(): AppSettings {
-    return { ...this.cache };
+    return {
+      ...this.cache,
+      sshProfiles: this.cache.sshProfiles.map((profile) => ({ ...profile })),
+      workspaceTabs: this.cache.workspaceTabs.map((preset) => ({ ...preset })),
+      sshHostKeys: { ...this.cache.sshHostKeys },
+      session: { ...this.cache.session, tabs: [...this.cache.session.tabs] },
+    };
   }
 
   set(updates: Partial<AppSettings>): AppSettings {
@@ -144,53 +174,117 @@ export class SettingsManager {
     return this.get();
   }
 
+  getSshHostKey(host: string, port: number): string | undefined {
+    return this.cache.sshHostKeys[sshHostKeyId(host, port)];
+  }
+
+  rememberSshHostKey(host: string, port: number, fingerprint: string): void {
+    const key = sshHostKeyId(host, port);
+    const existing = this.cache.sshHostKeys[key];
+    if (existing && existing !== fingerprint) {
+      throw new Error(`SSH host key changed for ${host}:${port}`);
+    }
+    if (existing === fingerprint) return;
+    const previousHostKeys = this.cache.sshHostKeys;
+    this.cache = {
+      ...this.cache,
+      sshHostKeys: { ...this.cache.sshHostKeys, [key]: fingerprint },
+    };
+    if (!this.save()) {
+      this.cache = { ...this.cache, sshHostKeys: previousHostKeys };
+      throw new Error(`Could not persist SSH host key for ${host}:${port}`);
+    }
+  }
+
+  migrateSshHostKey(
+    host: string,
+    port: number,
+    expectedFingerprint: string,
+    fingerprint: string,
+  ): void {
+    const key = sshHostKeyId(host, port);
+    const existing = this.cache.sshHostKeys[key];
+    if (existing === fingerprint) return;
+    if (existing !== expectedFingerprint) {
+      throw new Error(`SSH host key changed for ${host}:${port}`);
+    }
+
+    const previousHostKeys = this.cache.sshHostKeys;
+    this.cache = {
+      ...this.cache,
+      sshHostKeys: { ...this.cache.sshHostKeys, [key]: fingerprint },
+    };
+    if (!this.save()) {
+      this.cache = { ...this.cache, sshHostKeys: previousHostKeys };
+      throw new Error(`Could not migrate SSH host key for ${host}:${port}`);
+    }
+  }
+
   private load(): AppSettings {
     try {
       const raw = fs.readFileSync(this.filePath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      return this.deserialize({ ...DEFAULT_SETTINGS, ...parsed });
+      const parsed = JSON.parse(raw) as Partial<StoredAppSettings>;
+      const stored = { ...DEFAULT_SETTINGS, ...parsed } as StoredAppSettings;
+      this.captureStoredSecrets(stored.sshProfiles);
+      return this.deserialize(stored);
     } catch {
       return { ...DEFAULT_SETTINGS, session: { ...EMPTY_SESSION } };
     }
   }
 
-  private save(): void {
+  private save(): boolean {
     try {
       const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(this.filePath, JSON.stringify(this.serialize(this.cache), null, 2), 'utf-8');
+      const serialized = this.serialize(this.cache);
+      fs.writeFileSync(this.filePath, JSON.stringify(serialized, null, 2), 'utf-8');
+      this.captureStoredSecrets(serialized.sshProfiles);
+      return true;
     } catch (err) {
       console.error('Failed to save settings:', err);
+      return false;
     }
   }
 
-  private serialize(settings: AppSettings): AppSettings {
+  private serialize(settings: AppSettings): StoredAppSettings {
     return {
       ...settings,
       sshProfiles: settings.sshProfiles.map((profile) => {
-        const stored: StoredSSHProfile = { ...profile };
-        if (profile.password) stored.passwordEncrypted = encryptSecret(profile.password);
-        if (profile.privateKey) stored.privateKeyEncrypted = encryptSecret(profile.privateKey);
-        delete stored.password;
-        delete stored.privateKey;
+        const { password, privateKey, ...publicProfile } = profile;
+        const stored: StoredSSHProfile = { ...publicProfile };
+        const previous = this.storedSshSecrets.get(profile.id);
+        const passwordSecret = password ? protectSecret(password) : undefined;
+        const privateKeySecret = privateKey ? protectSecret(privateKey) : undefined;
+        if (passwordSecret) stored.passwordSecret = passwordSecret;
+        else if (password === undefined && profile.auth === 'password') {
+          if (previous?.passwordSecret) stored.passwordSecret = previous.passwordSecret;
+          else if (previous?.passwordEncrypted) stored.passwordEncrypted = previous.passwordEncrypted;
+        }
+        if (privateKeySecret) stored.privateKeySecret = privateKeySecret;
+        else if (privateKey === undefined && profile.auth === 'key') {
+          if (previous?.privateKeySecret) stored.privateKeySecret = previous.privateKeySecret;
+          else if (previous?.privateKeyEncrypted) stored.privateKeyEncrypted = previous.privateKeyEncrypted;
+        }
         return stored;
       }),
-    } as AppSettings;
+    };
   }
 
-  private deserialize(settings: AppSettings): AppSettings {
+  private deserialize(settings: StoredAppSettings): AppSettings {
+    const profiles = Array.isArray(settings.sshProfiles) ? settings.sshProfiles : [];
     return {
       ...settings,
-      sshProfiles: settings.sshProfiles.map((profile: StoredSSHProfile) => ({
+      sshHostKeys: isStringRecord(settings.sshHostKeys) ? { ...settings.sshHostKeys } : {},
+      sshProfiles: profiles.map((profile) => ({
         id: profile.id,
         host: profile.host,
         port: profile.port,
         username: profile.username,
         auth: profile.auth,
-        password: profile.password ?? decryptSecret(profile.passwordEncrypted),
-        privateKey: profile.privateKey ?? decryptSecret(profile.privateKeyEncrypted),
+        password: profile.password ?? unprotectSecret(profile.passwordSecret) ?? decryptLegacySecret(profile.passwordEncrypted),
+        privateKey: profile.privateKey ?? unprotectSecret(profile.privateKeySecret) ?? decryptLegacySecret(profile.privateKeyEncrypted),
       })),
       session: {
         ...EMPTY_SESSION,
@@ -199,19 +293,64 @@ export class SettingsManager {
       },
     };
   }
+
+  private captureStoredSecrets(profiles: StoredSSHProfile[]): void {
+    this.storedSshSecrets.clear();
+    if (!Array.isArray(profiles)) return;
+    for (const profile of profiles) {
+      this.storedSshSecrets.set(profile.id, {
+        passwordSecret: profile.passwordSecret,
+        privateKeySecret: profile.privateKeySecret,
+        passwordEncrypted: profile.passwordEncrypted,
+        privateKeyEncrypted: profile.privateKeyEncrypted,
+      });
+    }
+  }
 }
 
-function encryptSecret(secret: string): string {
-  if (!safeStorage?.isEncryptionAvailable()) return secret;
-  return Buffer.from(safeStorage.encryptString(secret)).toString('base64');
+function protectSecret(secret: string): StoredSecretV1 | undefined {
+  if (!safeStorage?.isEncryptionAvailable()) {
+    console.warn('[settings] safeStorage unavailable; SSH credential was not persisted');
+    return undefined;
+  }
+  try {
+    return {
+      version: 1,
+      scheme: 'electron-safe-storage',
+      ciphertext: Buffer.from(safeStorage.encryptString(secret)).toString('base64'),
+    };
+  } catch (error) {
+    console.warn('[settings] safeStorage encryption failed; SSH credential was not persisted', error);
+    return undefined;
+  }
 }
 
-function decryptSecret(secret: string | undefined): string | undefined {
-  if (!secret) return undefined;
-  if (!safeStorage?.isEncryptionAvailable()) return secret;
+function unprotectSecret(secret: StoredSecretV1 | undefined): string | undefined {
+  if (!secret || secret.version !== 1 || secret.scheme !== 'electron-safe-storage' || !secret.ciphertext) {
+    return undefined;
+  }
+  if (!safeStorage?.isEncryptionAvailable()) return undefined;
+  try {
+    return safeStorage.decryptString(Buffer.from(secret.ciphertext, 'base64'));
+  } catch {
+    return undefined;
+  }
+}
+
+function decryptLegacySecret(secret: string | undefined): string | undefined {
+  if (!secret || !safeStorage?.isEncryptionAvailable()) return undefined;
   try {
     return safeStorage.decryptString(Buffer.from(secret, 'base64'));
   } catch {
     return undefined;
   }
+}
+
+function sshHostKeyId(host: string, port: number): string {
+  return `${host.trim().toLowerCase()}:${port}`;
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value) &&
+    Object.values(value as Record<string, unknown>).every((entry) => typeof entry === 'string');
 }

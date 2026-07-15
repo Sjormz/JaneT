@@ -18,6 +18,8 @@ Built by sjorm, for sjorm.
 
 ## Quick Start
 
+Prerequisite: Node.js 22.12 or newer.
+
 ```bash
 # Install dependencies
 npm install

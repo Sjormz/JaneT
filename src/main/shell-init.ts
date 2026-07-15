@@ -2,15 +2,18 @@ import * as path from 'path';
 
 /**
  * Returns a small shell-init snippet that, when sourced/eval'd by the
- * shell at startup, makes the shell emit an OSC 7 escape sequence
- * (file://HOST/PATH) before every prompt. JaneT's renderer listens for
- * OSC 7 via xterm's parser to keep the file-explorer / git-tree /
- * status-bar cwd in sync with the focused terminal.
+ * shell at startup:
  *
- * The snippets preserve the user's existing prompt: they chain to the
- * original prompt function / PROMPT_COMMAND / precmd / fish_prompt so
- * the user sees no visual difference. The only side effect is a single
- * escape sequence per prompt that the terminal consumes invisibly.
+ * - emits an OSC 7 escape sequence (file://HOST/PATH) before every prompt,
+ *   so JaneT can keep its cwd-aware UI in sync; and
+ * - in supported Unix shells, opts a directly invoked Hermes CLI into JaneT's
+ *   deliberately narrow Kitty PNG renderer without exporting that capability
+ *   to every process.
+ *
+ * The Hermes wrapper is installed only when `hermes` currently resolves to
+ * an external command, so a user's alias or function is never replaced. It
+ * scopes JANET_KITTY_GRAPHICS to that invocation and explicitly disables it
+ * behind tmux/screen, whose passthrough support is not guaranteed.
  *
  * Returns the empty string for shells we don't know how to instrument
  * (or `cmd.exe`, which has no scripting facility that can run on each
@@ -69,6 +72,14 @@ export function buildShellInit(shell: string): string {
       "__jt_osc7() { printf '\\033]7;file://%s%s\\033\\\\' \"${HOSTNAME:-localhost}\" \"$PWD\"; }",
       // Prepend to any existing PROMPT_COMMAND.
       "PROMPT_COMMAND=\"__jt_osc7${PROMPT_COMMAND:+; $PROMPT_COMMAND}\"",
+      // `type -t` is `file` only when no alias/function shadows the binary.
+      "if [ \"$(type -t hermes 2>/dev/null)\" = file ]; then",
+      // The `function name` form prevents an existing alias from expanding
+      // the name while the shell parses this skipped conditional branch.
+      "  function hermes {",
+      "    if [ -n \"${TMUX:-}${STY:-}\" ]; then JANET_KITTY_GRAPHICS= KITTY_WINDOW_ID= WEZTERM_PANE= ITERM_SESSION_ID= TERM_PROGRAM=JaneT command hermes \"$@\"; else JANET_KITTY_GRAPHICS=1 command hermes \"$@\"; fi",
+      "  }",
+      "fi",
     ].join('\n');
   }
 
@@ -77,6 +88,13 @@ export function buildShellInit(shell: string): string {
     return [
       "__jt_osc7() { print -Pn '\\e]7;file://%m%d\\a' }",
       "precmd_functions+=(__jt_osc7)",
+      "if (( $+commands[hermes] && ! $+aliases[hermes] && ! $+galiases[hermes] && ! $+functions[hermes] )); then",
+      "  function hermes {",
+      // Quote the external command name so a zsh global alias cannot expand
+      // it while this compound statement is parsed.
+      "    if [[ -n \"${TMUX:-}${STY:-}\" ]]; then JANET_KITTY_GRAPHICS= KITTY_WINDOW_ID= WEZTERM_PANE= ITERM_SESSION_ID= TERM_PROGRAM=JaneT command 'hermes' \"$@\"; else JANET_KITTY_GRAPHICS=1 command 'hermes' \"$@\"; fi",
+      "  }",
+      "fi",
     ].join('\n');
   }
 
@@ -85,6 +103,20 @@ export function buildShellInit(shell: string): string {
     return [
       "function __jt_osc7 --on-event fish_prompt",
       "  printf '\\033]7;file://%s%s\\033\\\\' (hostname) $PWD",
+      "end",
+      "if type -q hermes; and test (type -t hermes) = file",
+      "  function hermes --description 'Hermes with JaneT graphics'",
+      "    if test -n \"$TMUX$STY\"",
+      "      set -lx JANET_KITTY_GRAPHICS ''",
+      "      set -lx KITTY_WINDOW_ID ''",
+      "      set -lx WEZTERM_PANE ''",
+      "      set -lx ITERM_SESSION_ID ''",
+      "      set -lx TERM_PROGRAM JaneT",
+      "    else",
+      "      set -lx JANET_KITTY_GRAPHICS 1",
+      "    end",
+      "    command hermes $argv",
+      "  end",
       "end",
     ].join('\n');
   }

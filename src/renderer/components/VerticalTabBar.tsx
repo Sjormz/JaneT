@@ -6,6 +6,7 @@ import {
   ChevronsLeftIcon, ListIcon, PlusIcon, ChevronRightIcon, ChevronDownIcon, PlugIcon,
 } from '../icons';
 import WorkspaceTabPresetForm, { sshProfileLabel } from './WorkspaceTabPresetForm';
+import { useRefreshTask } from '../refreshCoordinator';
 
 interface VerticalTabBarProps {
   tabs: TabInfo[];
@@ -70,10 +71,11 @@ export default function VerticalTabBar({
     return map;
   });
 
-  useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 30000);
-    return () => clearInterval(interval);
-  }, []);
+  useRefreshTask({
+    key: 'ui:relative-time',
+    intervalMs: 30_000,
+    run: () => setNow(Date.now()),
+  });
 
   useEffect(() => {
     setTabTimestamps((prev) => {

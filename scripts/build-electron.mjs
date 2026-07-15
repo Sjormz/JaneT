@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
+const npxExecutable = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
 const commonArgs = [
   'esbuild',
@@ -18,20 +19,20 @@ const commonArgs = [
 
 export function buildMainProcess(options = {}) {
   const stdio = options.stdio ?? 'inherit';
-  execFileSync('npx', [
+  execFileSync(npxExecutable, [
     ...commonArgs,
     'src/main/index.ts',
     '--outfile=dist/main/index.js',
-  ], { cwd: root, stdio, shell: true });
+  ], { cwd: root, stdio, shell: false });
 }
 
 export function buildPreload(options = {}) {
   const stdio = options.stdio ?? 'inherit';
-  execFileSync('npx', [
+  execFileSync(npxExecutable, [
     ...commonArgs,
     'src/main/preload.ts',
     '--outfile=dist/main/preload.js',
-  ], { cwd: root, stdio, shell: true });
+  ], { cwd: root, stdio, shell: false });
 }
 
 export function buildElectron(options = {}) {

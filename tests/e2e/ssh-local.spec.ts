@@ -1,11 +1,11 @@
 import { test, expect, chromium, Browser, Page } from '@playwright/test';
 import { spawn, ChildProcess } from 'child_process';
-import { generateKeyPairSync } from 'crypto';
+import { createHash, generateKeyPairSync } from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
-import { Server } from 'ssh2';
+import { Server, utils } from 'ssh2';
 
 const root = path.resolve(__dirname, '../..');
 const devServerUrl = process.env.JANET_DEV_SERVER_URL || 'http://127.0.0.1:5173';
@@ -128,13 +128,19 @@ function respondToShellCommand(stream: NodeJS.WritableStream & { exit?: (code: n
   stream.write('$ ');
 }
 
-async function startLocalSshServer(): Promise<{ port: number; close: () => Promise<void> }> {
+async function startLocalSshServer(): Promise<{ port: number; fingerprint: string; close: () => Promise<void> }> {
   const port = await getFreePort();
   const { privateKey } = generateKeyPairSync('rsa', {
     modulusLength: 2048,
     privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
     publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
   });
+  const parsedHostKey = utils.parseKey(privateKey);
+  if (parsedHostKey instanceof Error) throw parsedHostKey;
+  const fingerprint = `SHA256:${createHash('sha256')
+    .update(parsedHostKey.getPublicSSH())
+    .digest('base64')
+    .replace(/=+$/, '')}`;
 
   const server = new Server({ hostKeys: [privateKey] }, (client) => {
     client.on('error', ignoreBenignSshFixtureError);
@@ -180,11 +186,12 @@ async function startLocalSshServer(): Promise<{ port: number; close: () => Promi
 
   return {
     port,
+    fingerprint,
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };
 }
 
-async function launchAppWithLocalSsh(port: number, options: { seedSession?: boolean } = {}): Promise<{
+async function launchAppWithLocalSsh(port: number, fingerprint: string, options: { seedSession?: boolean } = {}): Promise<{
   browser: Browser;
   electronProcess: ChildProcess;
   page: Page;
@@ -212,6 +219,7 @@ async function launchAppWithLocalSsh(port: number, options: { seedSession?: bool
     keybindings: {},
     workspaceTabs: [],
     sshProfiles: [profile],
+    sshHostKeys: { [`127.0.0.1:${port}`]: fingerprint },
     session: seedSession ? {
       tabs: [{
         id: 'local-ssh-tab',
@@ -283,7 +291,7 @@ async function runMarkedLs(page: Page, marker: string) {
 
 test('connects to the local SSH fixture and runs ls', async () => {
   const ssh = await startLocalSshServer();
-  const { browser, electronProcess, page, eventsPath } = await launchAppWithLocalSsh(ssh.port);
+  const { browser, electronProcess, page, eventsPath } = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
   try {
     await waitForShellCreateCount(eventsPath, 1);
     await runMarkedLs(page, 'LS');
@@ -295,7 +303,7 @@ test('connects to the local SSH fixture and runs ls', async () => {
 
 test('restores local SSH terminal after refresh and runs ls again', async () => {
   const ssh = await startLocalSshServer();
-  const { browser, electronProcess, page, eventsPath } = await launchAppWithLocalSsh(ssh.port);
+  const { browser, electronProcess, page, eventsPath } = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
   try {
     await waitForShellCreateCount(eventsPath, 1);
     await runMarkedLs(page, 'BEFORE_REFRESH');
@@ -312,7 +320,11 @@ test('restores local SSH terminal after refresh and runs ls again', async () => 
 
 test('opens saved local SSH profile, persists profile id, refreshes, and runs ls again', async () => {
   const ssh = await startLocalSshServer();
-  const { browser, electronProcess, page, eventsPath, settingsPath } = await launchAppWithLocalSsh(ssh.port, { seedSession: false });
+  const { browser, electronProcess, page, eventsPath, settingsPath } = await launchAppWithLocalSsh(
+    ssh.port,
+    ssh.fingerprint,
+    { seedSession: false },
+  );
   try {
     await page.getByRole('button', { name: 'SSH' }).click();
     await page.getByRole('button', { name: new RegExp(`connect to janet@127\\.0\\.0\\.1:${ssh.port}`, 'i') }).click();

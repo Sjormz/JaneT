@@ -5,6 +5,7 @@ import GitTree from './GitTree';
 import ThemeSwitcher from './ThemeSwitcher';
 import { SavedSSHProfile, SessionInfo } from '../types';
 import { ThemeName } from '../themes';
+import { GitRepositoryState } from '../useGitRepository';
 
 type SidebarSection = 'files' | 'ssh' | 'git' | 'settings';
 
@@ -27,6 +28,7 @@ interface SidebarProps {
   cwdReady: boolean;
   /** True if the active tab is an SSH tab. Sidebar shows a notice. */
   isRemote: boolean;
+  gitRepository: GitRepositoryState;
   onOpenLocalTabAt?: (cwd: string, title?: string) => void;
 }
 
@@ -45,6 +47,7 @@ export default function Sidebar({
   cwd,
   cwdReady,
   isRemote,
+  gitRepository,
   onOpenLocalTabAt,
 }: SidebarProps) {
   return (
@@ -60,9 +63,11 @@ export default function Sidebar({
         )}
         {section === 'git' && (
           <GitTree
-            cwd={cwd}
             cwdReady={cwdReady}
             isRemote={isRemote}
+            repoPath={gitRepository.repoPath}
+            status={gitRepository.status}
+            searching={gitRepository.searching}
             onOpenLocalTabAt={onOpenLocalTabAt}
           />
         )}

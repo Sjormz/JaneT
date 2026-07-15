@@ -1,9 +1,14 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from '../../src/renderer/App';
 
 const mountedTermIds: string[] = [];
+const rendererMocks = vi.hoisted(() => ({
+  disposeCachedTerminal: vi.fn(),
+  paletteActions: [] as Array<{ id: string; handler: () => void }>,
+  sidebarProps: null as any,
+}));
 
 vi.mock('../../src/renderer/components/Titlebar', () => ({
   default: () => <div data-testid="titlebar" />,
@@ -12,13 +17,28 @@ vi.mock('../../src/renderer/components/VerticalTabBar', () => ({
   default: () => <div data-testid="vertical-tab-bar" />,
 }));
 vi.mock('../../src/renderer/components/Sidebar', () => ({
-  default: () => <div data-testid="sidebar" />,
+  default: (props: unknown) => {
+    rendererMocks.sidebarProps = props;
+    return <div data-testid="sidebar" />;
+  },
 }));
 vi.mock('../../src/renderer/components/StatusBar', () => ({
-  default: () => <div data-testid="statusbar" />,
+  default: ({ activeTerminalsCount, sshSessions }: {
+    activeTerminalsCount: number;
+    sshSessions: unknown[];
+  }) => (
+    <div
+      data-testid="statusbar"
+      data-terminal-count={activeTerminalsCount}
+      data-ssh-count={sshSessions.length}
+    />
+  ),
 }));
 vi.mock('../../src/renderer/components/CommandPalette', () => ({
-  default: () => null,
+  default: ({ actions }: { actions: Array<{ id: string; handler: () => void }> }) => {
+    rendererMocks.paletteActions = actions;
+    return null;
+  },
 }));
 vi.mock('../../src/renderer/components/ShortcutEditor', () => ({
   default: () => null,
@@ -38,6 +58,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     sshShellReady = true,
     onReady,
     onRemoved,
+    onFocus,
   }: {
     termId: string;
     hasSession?: boolean;
@@ -47,6 +68,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     sshShellReady?: boolean;
     onReady?: (id: string) => void;
     onRemoved?: (id: string) => void;
+    onFocus?: (id: string) => void;
   }) {
     React.useEffect(() => {
       mountedTermIds.push(termId);
@@ -74,14 +96,25 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
       }
     }, [termId, hasSession, initialCwd, tabType, sshSessionId, sshShellReady, onReady]);
 
-    return <div data-testid={`terminal-${termId}`}>{termId}</div>;
+    return (
+      <div
+        data-testid={`terminal-${termId}`}
+        tabIndex={0}
+        onFocus={() => onFocus?.(termId)}
+      >
+        {termId}
+      </div>
+    );
   }
 
-  return { default: MockTerminalPane, disposeCachedTerminal: vi.fn() };
+  return { default: MockTerminalPane, disposeCachedTerminal: rendererMocks.disposeCachedTerminal };
 });
 
 beforeEach(() => {
   mountedTermIds.length = 0;
+  rendererMocks.disposeCachedTerminal.mockReset();
+  rendererMocks.paletteActions = [];
+  rendererMocks.sidebarProps = null;
   Object.defineProperty(document, 'startViewTransition', {
     configurable: true,
     value: vi.fn((update: () => void) => {
@@ -102,6 +135,7 @@ beforeEach(() => {
     sshCreateShell: vi.fn().mockResolvedValue(undefined),
     sshWriteShell: vi.fn(),
     sshResizeShell: vi.fn(),
+    sshDestroyShell: vi.fn().mockResolvedValue(true),
     sshDisconnect: vi.fn().mockResolvedValue(undefined),
     checkForUpdates: vi.fn().mockResolvedValue(undefined),
   };
@@ -183,6 +217,50 @@ describe('split panes in the app', () => {
     const survivor = document.querySelector<HTMLElement>('.split-child');
     expect(survivor).toBeTruthy();
     expect(survivor!.style.flex).toBe('1 1 0%');
+  });
+
+  it('applies the close-pane shortcut to the focused pane', async () => {
+    render(<App />);
+
+    await screen.findByRole('button', { name: /split right/i });
+    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+
+    const [firstTerminal, secondTerminal] = screen.getAllByTestId(/terminal-/);
+    const firstId = firstTerminal.textContent!;
+    const secondId = secondTerminal.textContent!;
+    fireEvent.focus(secondTerminal);
+    fireEvent.keyDown(document, { key: 'w', ctrlKey: true, shiftKey: true });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/).map((terminal) => terminal.textContent)).toEqual([firstId]);
+    });
+    expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: secondId });
+  });
+
+  it('applies the command-palette close action to the focused pane', async () => {
+    render(<App />);
+
+    await screen.findByRole('button', { name: /split right/i });
+    fireEvent.click(screen.getByRole('button', { name: /split right/i }));
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+
+    const [firstTerminal, secondTerminal] = screen.getAllByTestId(/terminal-/);
+    const firstId = firstTerminal.textContent!;
+    const secondId = secondTerminal.textContent!;
+    fireEvent.focus(secondTerminal);
+
+    await waitFor(() => {
+      expect(rendererMocks.paletteActions.find((action) => action.id === 'close-pane')).toBeTruthy();
+    });
+    act(() => {
+      rendererMocks.paletteActions.find((action) => action.id === 'close-pane')!.handler();
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/).map((terminal) => terminal.textContent)).toEqual([firstId]);
+    });
+    expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: secondId });
   });
 
   it('maximizes a single pane within the terminal area and restores it to the split layout', async () => {
@@ -306,6 +384,14 @@ describe('split panes in the app', () => {
 
   it('restores a saved SSH tab, connects it, then binds a single shell', async () => {
     const sshProfileId = 'pckpr@box.local:22:password';
+    const profile = {
+      id: sshProfileId,
+      host: 'box.local',
+      port: 22,
+      username: 'pckpr',
+      auth: 'password' as const,
+      password: 'secret',
+    };
     let resolveConnect: ((value?: unknown) => void) | undefined;
     let connectResolved = false;
     window.janet.sshConnect = vi.fn().mockImplementation(() => new Promise((resolve) => {
@@ -321,14 +407,7 @@ describe('split panes in the app', () => {
     window.janet.getSettings = vi.fn().mockResolvedValue({
       keybindings: {},
       workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId,
-        host: 'box.local',
-        port: 22,
-        username: 'pckpr',
-        auth: 'password',
-        password: 'secret',
-      }],
+      sshProfiles: [profile],
       session: {
         tabs: [
           {
@@ -368,7 +447,201 @@ describe('split panes in the app', () => {
     const shellArgs = (window.janet.sshCreateShell as any).mock.calls[0][0] as any;
     expect(connectArgs.id).toBeTruthy();
     expect(shellArgs.id).toBe(connectArgs.id);
-    expect(shellArgs.id).toBe(connectArgs.id);
+
+    act(() => {
+      rendererMocks.sidebarProps.onSSHProfilesChange([{ ...profile, host: 'renamed-box.local' }]);
+    });
+    await waitFor(() => {
+      expect(rendererMocks.sidebarProps.sshProfiles[0].host).toBe('renamed-box.local');
+    });
+    expect(window.janet.sshConnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('demotes a restored SSH tab with a missing profile to a working local shell', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [],
+      sshProfiles: [],
+      session: {
+        tabs: [{
+          id: 'missing-ssh',
+          title: 'removed host',
+          type: 'ssh',
+          sshProfileId: 'removed-profile',
+          root: { type: 'leaf', terminalType: 'ssh', sshProfileId: 'removed-profile' },
+        }],
+        activeTabId: 'missing-ssh',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1));
+    expect(window.janet.sshConnect).not.toHaveBeenCalled();
+    expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
+  });
+
+  it('demotes only a restored workspace SSH leaf whose profile is missing', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [],
+      sshProfiles: [],
+      session: {
+        tabs: [{
+          id: 'mixed-workspace',
+          title: 'mixed',
+          type: 'local',
+          root: {
+            type: 'split',
+            direction: 'vertical',
+            sizes: [1, 1],
+            children: [
+              { type: 'leaf', terminalType: 'local' },
+              { type: 'leaf', terminalType: 'ssh', sshProfileId: 'removed-profile' },
+            ],
+          },
+        }],
+        activeTabId: 'mixed-workspace',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2);
+      const createdIds = (window.janet.terminalCreate as any).mock.calls.map(
+        (call: any[]) => call[0]?.id,
+      );
+      expect(new Set(createdIds).size).toBe(2);
+    });
+    expect(window.janet.sshConnect).not.toHaveBeenCalled();
+    expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
+  });
+
+  it('releases an SSH connection that finishes after its owning tab closes', async () => {
+    const sshProfileId = 'pending@box.local:22:password';
+    let resolveConnect!: (value: unknown) => void;
+    window.janet.sshConnect = vi.fn().mockImplementation(() => new Promise((resolve) => {
+      resolveConnect = resolve;
+    }));
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId,
+        host: 'box.local',
+        port: 22,
+        username: 'pending',
+        auth: 'password',
+        password: 'secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'pending-ssh',
+          title: 'pending box',
+          type: 'ssh',
+          sshProfileId,
+          root: { type: 'leaf' },
+        }],
+        activeTabId: 'pending-ssh',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(window.janet.sshConnect).toHaveBeenCalledTimes(1);
+      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
+    });
+    const sessionId = (window.janet.sshConnect as any).mock.calls[0][0].id as string;
+
+    fireEvent.click(screen.getByRole('button', { name: /close pane/i }));
+    await waitFor(() => {
+      expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: sessionId });
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+    });
+
+    await act(async () => {
+      resolveConnect({ connected: true });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(window.janet.sshDisconnect).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+    });
+    expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
+  });
+
+  it('destroys individual SSH shells, disconnects released sessions, and disposes cached terminals', async () => {
+    const sshProfileId = 'test@box.local:22:password';
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId,
+        host: 'box.local',
+        port: 22,
+        username: 'test',
+        auth: 'password',
+        password: 'secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'ssh-split',
+          title: 'box',
+          type: 'ssh',
+          sshProfileId,
+          root: {
+            type: 'split',
+            direction: 'vertical',
+            sizes: [1, 1],
+            children: [{ type: 'leaf' }, { type: 'leaf' }],
+          },
+        }],
+        activeTabId: 'ssh-split',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2);
+      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-terminal-count', '2');
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
+    });
+
+    const sessionId = (window.janet.sshConnect as any).mock.calls[0][0].id as string;
+    const secondId = screen.getAllByTestId(/terminal-/)[1].textContent!;
+    fireEvent.click(screen.getAllByRole('button', { name: /close pane/i })[1]);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
+      expect(window.janet.sshDestroyShell).toHaveBeenCalledWith({ sessionId, termId: secondId });
+      expect(rendererMocks.disposeCachedTerminal).toHaveBeenCalledWith(secondId);
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-terminal-count', '1');
+    });
+    expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
+
+    const remainingId = screen.getByTestId(/terminal-/).textContent!;
+    fireEvent.click(screen.getByRole('button', { name: /close pane/i }));
+
+    await waitFor(() => {
+      expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: sessionId });
+      expect(rendererMocks.disposeCachedTerminal).toHaveBeenCalledWith(remainingId);
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+    });
   });
 
   it('persists the open tabs to settings after a tab change', async () => {

@@ -1119,13 +1119,31 @@ html, body, #root {
   align-items: center;
   gap: 6px;
   padding: 8px 14px;
-  cursor: pointer;
   font-size: 12px;
   color: var(--text-secondary);
   user-select: none;
   transition: background var(--transition-fast);
 }
 .git-section-header:hover { background: rgba(255, 255, 255, 0.04); }
+.git-section-toggle {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.git-section-toggle:focus-visible,
+.git-tree-dir:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
 .git-section-title {
   display: inline-flex;
   align-items: center;
@@ -1298,6 +1316,11 @@ html, body, #root {
   color: var(--text-secondary);
   cursor: pointer;
   user-select: none;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
 }
 .git-tree-dir:hover { color: var(--text-primary); }
 .git-tree-dir svg { flex-shrink: 0; }
@@ -1409,6 +1432,7 @@ html, body, #root {
 .file-status-icon.conflicted { color: var(--red); }
 .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
 .git-file-item.staged .file-name { color: var(--green); }
+.git-file-item.mixed .file-name { color: var(--yellow); }
 .git-file-item.conflicted .file-name { color: var(--red); }
 
 .git-subheader {

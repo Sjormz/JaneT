@@ -9,7 +9,7 @@ try {
   // simple-git is optional at runtime; IPC methods return null/false if absent.
 }
 
-interface GitStatusResult {
+export interface GitStatusResult {
   current: string;
   tracking: string;
   files: Array<{
@@ -17,6 +17,7 @@ interface GitStatusResult {
     working_dir: string;
     index: string;
     staged: boolean;
+    unstaged: boolean;
   }>;
   ahead: number;
   behind: number;
@@ -27,6 +28,70 @@ interface GitStatusResult {
   conflicted: string[];
 }
 
+interface SimpleGitStatusLike {
+  current?: string | null;
+  tracking?: string | null;
+  files?: Array<{ path: string; working_dir: string; index: string }>;
+  staged?: string[];
+  ahead?: number;
+  behind?: number;
+  created?: string[];
+  deleted?: string[];
+  modified?: string[];
+  renamed?: string[];
+  conflicted?: string[];
+}
+
+/** Convert simple-git's status shape into the stable renderer contract. */
+export function normalizeGitStatus(status: SimpleGitStatusLike): GitStatusResult {
+  const conflicted = [...(status.conflicted ?? [])];
+  const conflictedPaths = new Set(conflicted);
+  const explicitlyStaged = new Set(status.staged ?? []);
+  const files = (status.files ?? []).map((file) => {
+    const indexHasChange = Boolean(file.index && file.index !== ' ' && file.index !== '?' && file.index !== '!');
+    return {
+      path: file.path,
+      working_dir: file.working_dir,
+      index: file.index,
+      // FileStatusSummary has no `staged` property. Conflicts use index codes
+      // too, so keep them in their own state instead of calling them staged.
+      staged: !conflictedPaths.has(file.path) && (explicitlyStaged.has(file.path) || indexHasChange),
+      unstaged: !conflictedPaths.has(file.path) && Boolean(file.working_dir && file.working_dir !== ' '),
+    };
+  });
+
+  return {
+    current: status.current || 'HEAD',
+    tracking: status.tracking || '',
+    files,
+    ahead: status.ahead ?? 0,
+    behind: status.behind ?? 0,
+    created: [...(status.created ?? [])],
+    deleted: [...(status.deleted ?? [])],
+    modified: [...(status.modified ?? [])],
+    renamed: [...(status.renamed ?? [])],
+    conflicted,
+  };
+}
+
+export function buildAddWorktreeArgs(
+  worktreePath: string,
+  branch: string,
+  createBranch = false,
+  startPoint?: string,
+): string[] {
+  const cleanPath = worktreePath.trim();
+  const cleanBranch = branch.trim();
+  const cleanStartPoint = startPoint?.trim();
+  if (createBranch) {
+    return [
+      'worktree', 'add', '-b', cleanBranch, cleanPath,
+      ...(cleanStartPoint ? [cleanStartPoint] : []),
+    ];
+  }
+  return ['worktree', 'add', cleanPath, cleanBranch];
+}
+
 interface GitBranchInfo {
   name: string;
   current: boolean;
@@ -35,6 +100,11 @@ interface GitBranchInfo {
   worktreePath?: string;
   isRemote: boolean;
   remote?: string;
+}
+
+interface GitDetailsResult {
+  branches: GitBranchInfo[];
+  worktrees: GitWorktreeInfo[];
 }
 
 interface GitLogEntry {
@@ -53,7 +123,7 @@ export class GitManager {
     while (true) {
       const gitDir = path.join(current, '.git');
       try {
-        const stat = fs.statSync(gitDir);
+        const stat = await fs.promises.stat(gitDir);
         if (stat.isDirectory() || stat.isFile()) return current;
       } catch {}
 
@@ -69,29 +139,18 @@ export class GitManager {
     if (!simpleGit) return null;
     try {
       const status = await simpleGit(repoPath).status();
-      return {
-        current: status.current,
-        tracking: status.tracking || '',
-        files: status.files.map((f: any) => ({
-          path: f.path,
-          working_dir: f.working_dir,
-          index: f.index,
-          staged: f.staged,
-        })),
-        ahead: status.ahead,
-        behind: status.behind,
-        created: status.created,
-        deleted: status.deleted,
-        modified: status.modified,
-        renamed: status.renamed,
-        conflicted: status.conflicted,
-      };
+      return normalizeGitStatus(status);
     } catch {
       return null;
     }
   }
 
   async branches(repoPath: string): Promise<GitBranchInfo[] | null> {
+    const details = await this.details(repoPath);
+    return details?.branches ?? null;
+  }
+
+  async details(repoPath: string): Promise<GitDetailsResult | null> {
     if (!simpleGit) return null;
     try {
       const git = simpleGit(repoPath);
@@ -102,7 +161,7 @@ export class GitManager {
       const worktreeByBranch = new Map(
         (worktrees ?? []).filter((tree) => tree.branch).map((tree) => [tree.branch!, tree.path]),
       );
-      return result.all.map((name: string) => {
+      const branches = result.all.map((name: string) => {
         const isRemote = name.startsWith('remotes/');
         const cleanName = isRemote ? name.replace(/^remotes\//, '') : name;
         const remote = isRemote ? cleanName.split('/')[0] : undefined;
@@ -116,6 +175,7 @@ export class GitManager {
           remote,
         };
       });
+      return { branches, worktrees: worktrees ?? [] };
     } catch {
       return null;
     }
@@ -192,9 +252,7 @@ export class GitManager {
   ): Promise<boolean> {
     if (!simpleGit || !worktreePath.trim() || !branch.trim()) return false;
     try {
-      const args = ['worktree', 'add'];
-      if (createBranch) args.push('-b', branch.trim());
-      args.push(worktreePath.trim(), createBranch && startPoint?.trim() ? startPoint.trim() : branch.trim());
+      const args = buildAddWorktreeArgs(worktreePath, branch, createBranch, startPoint);
       await simpleGit(repoPath).raw(args);
       return true;
     } catch {

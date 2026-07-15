@@ -1,5 +1,5 @@
 import { test, expect, chromium, Browser, Page } from '@playwright/test';
-import { spawn, ChildProcess } from 'child_process';
+import { execFileSync, spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
@@ -74,35 +74,12 @@ async function connectCdp(port: number): Promise<Browser> {
   return chromium.connectOverCDP(`http://127.0.0.1:${port}`);
 }
 
-async function launchTwoPaneApp(): Promise<{ browser: Browser; electronProcess: ChildProcess; page: Page }> {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-pane-max-'));
+async function launchApp(settings: unknown, prefix: string): Promise<{ browser: Browser; electronProcess: ChildProcess; page: Page }> {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const settingsPath = path.join(userData, 'settings.json');
   const remoteDebuggingPort = await getFreePort();
 
-  fs.writeFileSync(settingsPath, JSON.stringify({
-    theme: 'tokyo-night',
-    fontSize: 14,
-    sidebarSide: 'left',
-    keybindings: {},
-    workspaceTabs: [],
-    session: {
-      tabs: [{
-        id: 'two-pane-tab',
-        title: 'two panes',
-        type: 'local',
-        root: {
-          type: 'split',
-          direction: 'vertical',
-          sizes: [1, 1],
-          children: [{ type: 'leaf', title: 'left' }, { type: 'leaf', title: 'right' }],
-        },
-      }],
-      activeTabId: 'two-pane-tab',
-      sidebarOpen: true,
-      tabsOpen: true,
-      sidebarSection: 'files',
-    },
-  }, null, 2), 'utf-8');
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
 
   const electronProcess = spawn('npx', ['electron', '.', ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
     cwd: root,
@@ -128,6 +105,33 @@ async function launchTwoPaneApp(): Promise<{ browser: Browser; electronProcess: 
   page.on('console', (message) => console.log(`[renderer:${message.type()}] ${message.text()}`));
   await page.waitForLoadState('domcontentloaded');
   return { browser, electronProcess, page };
+}
+
+async function launchTwoPaneApp(): Promise<{ browser: Browser; electronProcess: ChildProcess; page: Page }> {
+  return launchApp({
+    theme: 'tokyo-night',
+    fontSize: 14,
+    sidebarSide: 'left',
+    keybindings: {},
+    workspaceTabs: [],
+    session: {
+      tabs: [{
+        id: 'two-pane-tab',
+        title: 'two panes',
+        type: 'local',
+        root: {
+          type: 'split',
+          direction: 'vertical',
+          sizes: [1, 1],
+          children: [{ type: 'leaf', title: 'left' }, { type: 'leaf', title: 'right' }],
+        },
+      }],
+      activeTabId: 'two-pane-tab',
+      sidebarOpen: true,
+      tabsOpen: true,
+      sidebarSection: 'files',
+    },
+  }, 'janet-e2e-pane-max-');
 }
 
 async function closeApp(browser: Browser, electronProcess: ChildProcess) {
@@ -159,7 +163,65 @@ test('maximizes and restores a terminal pane in Electron', async () => {
 
     await expect(page.locator('.terminal-leaf')).toHaveCount(2);
     await expect(page.getByRole('button', { name: 'Maximize pane' })).toHaveCount(2);
+
+    // Maximizing a pane also makes it the action target. After restoring the
+    // layout, pane shortcuts must still act on the pane the user just chose.
+    await page.keyboard.press('Control+Shift+W');
+    await expect(page.locator('.terminal-leaf')).toHaveCount(1);
+    await expect(page.locator('.leaf-title')).toHaveText('left');
   } finally {
     await closeApp(browser, electronProcess);
+  }
+});
+
+test('refreshes external branch and file changes without a manual reload', async () => {
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-heartbeat-repo-'));
+  let app: Awaited<ReturnType<typeof launchApp>> | undefined;
+  try {
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repoPath });
+    execFileSync('git', ['config', 'user.email', 'janet-e2e@example.com'], { cwd: repoPath });
+    execFileSync('git', ['config', 'user.name', 'JaneT E2E'], { cwd: repoPath });
+    fs.writeFileSync(path.join(repoPath, 'base.txt'), 'base\n', 'utf-8');
+    execFileSync('git', ['add', 'base.txt'], { cwd: repoPath });
+    execFileSync('git', ['commit', '-m', 'base'], { cwd: repoPath });
+    execFileSync('git', ['branch', 'feature/heartbeat'], { cwd: repoPath });
+
+    app = await launchApp({
+      theme: 'tokyo-night',
+      fontSize: 14,
+      sidebarSide: 'left',
+      keybindings: {},
+      workspaceTabs: [],
+      session: {
+        tabs: [{
+          id: 'heartbeat-tab',
+          title: 'heartbeat repo',
+          type: 'local',
+          cwd: repoPath,
+          root: { type: 'leaf', title: 'repo', terminalType: 'local', cwd: repoPath },
+        }],
+        activeTabId: 'heartbeat-tab',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'files',
+      },
+    }, 'janet-e2e-heartbeat-app-');
+
+    await app.page.bringToFront();
+    await expect(app.page.locator('.status-git')).toContainText('main', { timeout: 10_000 });
+    await expect(app.page.locator('.explorer-tree')).toContainText('base.txt', { timeout: 10_000 });
+
+    fs.writeFileSync(path.join(repoPath, 'external.txt'), 'created outside JaneT\n', 'utf-8');
+    execFileSync('git', ['switch', 'feature/heartbeat'], { cwd: repoPath });
+
+    await expect(app.page.locator('.status-git')).toContainText('feature/heartbeat', { timeout: 8_000 });
+    await expect(app.page.locator('.explorer-tree')).toContainText('external.txt', { timeout: 8_000 });
+
+    await app.page.getByRole('button', { name: 'Source Control' }).click();
+    await expect(app.page.locator('.git-repo-path')).toContainText('feature/heartbeat', { timeout: 8_000 });
+    await expect(app.page.getByTitle('Current branch')).toContainText('feature/heartbeat', { timeout: 8_000 });
+  } finally {
+    if (app) await closeApp(app.browser, app.electronProcess);
+    fs.rmSync(repoPath, { recursive: true, force: true });
   }
 });

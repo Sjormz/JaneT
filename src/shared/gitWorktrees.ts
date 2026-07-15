@@ -53,6 +53,30 @@ export function basename(path: string): string {
   return normalized.slice(normalized.lastIndexOf('/') + 1) || normalized;
 }
 
+function normalizePath(path: string): string {
+  const normalized = path.replace(/\\/g, '/');
+  const drive = normalized.match(/^[A-Za-z]:/)?.[0] ?? '';
+  const unc = !drive && normalized.startsWith('//');
+  const remainder = unc ? normalized.slice(2) : normalized.slice(drive.length);
+  const absolute = unc || remainder.startsWith('/');
+  const protectedSegments = unc ? 2 : 0;
+  const segments: string[] = [];
+  for (const segment of remainder.split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') {
+      if (segments.length > protectedSegments && segments.at(-1) !== '..') {
+        segments.pop();
+      } else if (!absolute) {
+        segments.push('..');
+      }
+      continue;
+    }
+    segments.push(segment);
+  }
+  const prefix = unc ? '//' : `${drive}${absolute ? '/' : ''}`;
+  return `${prefix}${segments.join('/')}` || '.';
+}
+
 export function defaultWorktreePath(repoPath: string, branch: string, baseDir = '../', template = '{repo}-{branch}'): string {
   const repo = basename(repoPath);
   const branchName = sanitizeBranchForPath(branch);
@@ -60,8 +84,15 @@ export function defaultWorktreePath(repoPath: string, branch: string, baseDir = 
     .replace(/\{repo\}/g, repo)
     .replace(/\{branch\}/g, branchName);
   const base = baseDir.trim() || '../';
-  if (/^[A-Za-z]:[\\/]/.test(base) || base.startsWith('/') || base.startsWith('\\\\')) {
+  if (/^[A-Za-z]:[\\/]/.test(base) || /^[\\/]{2}/.test(base)) {
     return `${base.replace(/[\\/]+$/, '')}/${name}`;
   }
-  return `${dirname(repoPath)}/${name}`;
+  if (/^[\\/]/.test(base)) {
+    const normalizedRepo = repoPath.replace(/\\/g, '/');
+    const root = normalizedRepo.match(/^[A-Za-z]:/)?.[0]
+      ?? normalizedRepo.match(/^\/\/[^/]+\/[^/]+/)?.[0]
+      ?? '';
+    return `${root}${base.replace(/\\/g, '/').replace(/\/+$/, '')}/${name}`;
+  }
+  return normalizePath(`${repoPath}/${base}/${name}`);
 }
