@@ -170,7 +170,7 @@ function createInitialAppState(settings: any): InitialAppState {
       sshProfileId: saved.sshProfileId,
       // Allocate the runtime session id before any terminal component mounts.
       sshSessionId: saved.type === 'ssh' && saved.sshProfileId
-        ? `ssh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        ? `ssh-${crypto.randomUUID()}`
         : undefined,
       sshShellReady: saved.type !== 'ssh',
       root: tree,

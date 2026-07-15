@@ -39,6 +39,41 @@ describe('development tooling', () => {
 });
 
 describe('release tooling', () => {
+  it('builds Electron entry points through the esbuild API without an npx subprocess', async () => {
+    const { buildElectron } = await loadScript('build-electron.mjs');
+    const builds: Record<string, unknown>[] = [];
+
+    buildElectron({
+      build(options: Record<string, unknown>) {
+        builds.push(options);
+      },
+    });
+
+    expect(builds).toEqual([
+      expect.objectContaining({
+        absWorkingDir: projectRoot,
+        entryPoints: ['src/main/index.ts'],
+        outfile: 'dist/main/index.js',
+        bundle: true,
+        platform: 'node',
+        external: ['electron', 'node-pty', 'ssh2', 'ssh2-sftp-client', 'simple-git'],
+      }),
+      expect.objectContaining({
+        absWorkingDir: projectRoot,
+        entryPoints: ['src/main/preload.ts'],
+        outfile: 'dist/main/preload.js',
+        bundle: true,
+        platform: 'node',
+        external: ['electron', 'node-pty', 'ssh2', 'ssh2-sftp-client', 'simple-git'],
+      }),
+    ]);
+
+    const source = fs.readFileSync(path.join(projectRoot, 'scripts', 'build-electron.mjs'), 'utf8');
+    expect(source).toContain("require('esbuild').buildSync");
+    expect(source).not.toContain('child_process');
+    expect(source).not.toMatch(/\bnpx(?:\.cmd)?\b/);
+  });
+
   it('requires every installer and update manifest for each supported platform', async () => {
     const { expectedReleaseArtifacts } = await loadScript('verify-release-artifacts.mjs');
 

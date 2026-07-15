@@ -1,38 +1,42 @@
-import { execFileSync } from 'child_process';
+import { createRequire } from 'node:module';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
-const npxExecutable = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+const require = createRequire(import.meta.url);
 
-const commonArgs = [
-  'esbuild',
-  '--bundle',
-  '--platform=node',
-  '--external:electron',
-  '--external:node-pty',
-  '--external:ssh2',
-  '--external:ssh2-sftp-client',
-  '--external:simple-git',
+const electronExternals = [
+  'electron',
+  'node-pty',
+  'ssh2',
+  'ssh2-sftp-client',
+  'simple-git',
 ];
 
+export function electronBuildOptions(entryPoint, outfile) {
+  return {
+    absWorkingDir: root,
+    entryPoints: [entryPoint],
+    outfile,
+    bundle: true,
+    platform: 'node',
+    external: [...electronExternals],
+  };
+}
+
+function buildSync(options) {
+  return require('esbuild').buildSync(options);
+}
+
 export function buildMainProcess(options = {}) {
-  const stdio = options.stdio ?? 'inherit';
-  execFileSync(npxExecutable, [
-    ...commonArgs,
-    'src/main/index.ts',
-    '--outfile=dist/main/index.js',
-  ], { cwd: root, stdio, shell: false });
+  const runBuild = options.build ?? buildSync;
+  return runBuild(electronBuildOptions('src/main/index.ts', 'dist/main/index.js'));
 }
 
 export function buildPreload(options = {}) {
-  const stdio = options.stdio ?? 'inherit';
-  execFileSync(npxExecutable, [
-    ...commonArgs,
-    'src/main/preload.ts',
-    '--outfile=dist/main/preload.js',
-  ], { cwd: root, stdio, shell: false });
+  const runBuild = options.build ?? buildSync;
+  return runBuild(electronBuildOptions('src/main/preload.ts', 'dist/main/preload.js'));
 }
 
 export function buildElectron(options = {}) {
