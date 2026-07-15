@@ -9,11 +9,18 @@ describe('SSHConnectionNotice', () => {
   });
 
   it('renders the "waiting" banner with the host label', () => {
-    render(<SSHConnectionNotice state={{ kind: 'waiting' }} label="test.example.com" />);
+    render(
+      <SSHConnectionNotice
+        state={{ kind: 'waiting' }}
+        label="test.example.com"
+        onRetry={vi.fn()}
+      />,
+    );
 
     expect(screen.getByTestId('ssh-terminal-notice')).toBeInTheDocument();
     expect(screen.getByText('Connected to test.example.com')).toBeInTheDocument();
     expect(screen.getByText('Waiting for shell output…')).toBeInTheDocument();
+    expect(screen.queryByTestId('ssh-notice-retry')).toBeNull();
   });
 
   it('renders the "stalled" banner with a retry button', () => {

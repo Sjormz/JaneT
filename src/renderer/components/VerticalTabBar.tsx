@@ -7,6 +7,7 @@ import {
 } from '../icons';
 import WorkspaceTabPresetForm, { sshProfileLabel } from './WorkspaceTabPresetForm';
 import { useRefreshTask } from '../refreshCoordinator';
+import { useModalFocus } from '../useModalFocus';
 
 interface VerticalTabBarProps {
   tabs: TabInfo[];
@@ -65,6 +66,7 @@ export default function VerticalTabBar({
   const [draftTitle, setDraftTitle] = useState('');
   const [tabMenu, setTabMenu] = useState<{ tab: TabInfo; x: number; y: number } | null>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
+  const workspaceModalRef = useRef<HTMLDivElement>(null);
   const [tabTimestamps, setTabTimestamps] = useState<Record<string, Date>>(() => {
     const map: Record<string, Date> = {};
     for (const tab of tabs) map[tab.id] = new Date();
@@ -146,6 +148,12 @@ export default function VerticalTabBar({
   };
 
   const workspaceModalOpen = showWorkspaceForm || editingPreset !== null;
+  useModalFocus({
+    open: workspaceModalOpen,
+    containerRef: workspaceModalRef,
+    onClose: closeWorkspaceForm,
+    initialFocusSelector: 'input',
+  });
 
   return (
     <div className="vtab-bar" aria-label="Tab list">
@@ -266,10 +274,10 @@ export default function VerticalTabBar({
             <button
               className="workspace-add-btn"
               onClick={openWorkspaceForm}
-              title="Save current workspace as preset"
-              aria-label="Save workspace preset"
+              title="Create a reusable workspace preset"
+              aria-label="Create workspace preset"
             >
-              <PlusIcon size="xs" /> Save workspace preset
+              <PlusIcon size="xs" /> New workspace preset
             </button>
 
             {workspaceTabs.length === 0 ? (
@@ -361,7 +369,13 @@ export default function VerticalTabBar({
             if (event.target === event.currentTarget) closeWorkspaceForm();
           }}
         >
-          <div className="workspace-modal" role="dialog" aria-modal="true" aria-labelledby="workspace-modal-title">
+          <div
+            ref={workspaceModalRef}
+            className="workspace-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="workspace-modal-title"
+          >
             <div className="workspace-modal-header">
               <h2 id="workspace-modal-title">{editingPreset ? 'Edit Workspace Preset' : 'Create Workspace Preset'}</h2>
               <button onClick={closeWorkspaceForm} title="Close" aria-label="Close workspace preset dialog">

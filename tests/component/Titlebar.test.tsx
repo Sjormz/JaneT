@@ -20,6 +20,7 @@ const baseProps = {
   onSectionChange: vi.fn(),
   sidebarOpen: true,
   onOpenPalette: vi.fn(),
+  paletteShortcut: 'Ctrl+K',
 };
 
 describe('Titlebar', () => {
@@ -29,7 +30,9 @@ describe('Titlebar', () => {
 
     expect(screen.queryByRole('tablist', { name: /open terminals/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /new terminal/i })).toBeNull();
-    expect(screen.getByRole('button', { name: /search/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /open command palette \(ctrl\+k\)/i })).toBeInTheDocument();
+    expect(screen.getByText('Commands')).toBeInTheDocument();
+    expect(screen.getByText('Ctrl+K')).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /minimize/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /maximize/i })).toBeInTheDocument();

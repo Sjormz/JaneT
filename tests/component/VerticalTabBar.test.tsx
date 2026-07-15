@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import VerticalTabBar from '../../src/renderer/components/VerticalTabBar';
 import { SavedSSHProfile, TabInfo, WorkspaceTabPreset } from '../../src/renderer/types';
 
@@ -83,7 +83,7 @@ describe('VerticalTabBar', () => {
     // Expand the workspaces section first (collapsed by default)
     fireEvent.click(screen.getByRole('button', { name: /^workspaces$/i }));
 
-    fireEvent.click(screen.getByRole('button', { name: /save workspace preset/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create workspace preset/i }));
     expect(screen.getByRole('dialog', { name: /create workspace preset/i }).parentElement?.parentElement).toBe(document.body);
     fireEvent.change(screen.getByPlaceholderText(/workspace name/i), { target: { value: 'JaneT workspace' } });
     fireEvent.change(screen.getByPlaceholderText(/directory path/i), { target: { value: '~/projects/janet' } });
@@ -103,7 +103,7 @@ describe('VerticalTabBar', () => {
     renderTabs({ onWorkspaceTabsChange });
 
     fireEvent.click(screen.getByRole('button', { name: /^workspaces$/i }));
-    fireEvent.click(screen.getByRole('button', { name: /save workspace preset/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create workspace preset/i }));
     fireEvent.change(screen.getByPlaceholderText(/workspace name/i), { target: { value: 'Remote workspace' } });
     fireEvent.click(screen.getByRole('button', { name: 'SSH connection' }));
     fireEvent.click(screen.getByRole('button', { name: 'Terminal 1 SSH profile' }));
@@ -124,7 +124,7 @@ describe('VerticalTabBar', () => {
     renderTabs();
 
     fireEvent.click(screen.getByRole('button', { name: /^workspaces$/i }));
-    fireEvent.click(screen.getByRole('button', { name: /save workspace preset/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create workspace preset/i }));
     fireEvent.pointerDown(screen.getByRole('dialog').parentElement!);
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -145,7 +145,23 @@ describe('VerticalTabBar', () => {
 
     // Section header exists but content is not rendered
     expect(screen.getByRole('button', { name: /^workspaces$/i })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /save workspace preset/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /create workspace preset/i })).not.toBeInTheDocument();
+  });
+
+  it('focuses the workspace form and restores the opener on Escape', async () => {
+    renderTabs();
+
+    fireEvent.click(screen.getByRole('button', { name: /^workspaces$/i }));
+    const opener = screen.getByRole('button', { name: /create workspace preset/i });
+    opener.focus();
+    fireEvent.click(opener);
+
+    const nameInput = screen.getByPlaceholderText(/workspace name/i);
+    await waitFor(() => expect(nameInput).toHaveFocus());
+    fireEvent.keyDown(nameInput, { key: 'Escape' });
+
+    await waitFor(() => expect(opener).toHaveFocus());
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('moves secondary tab actions into a context menu', () => {

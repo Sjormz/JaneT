@@ -37,14 +37,21 @@ export default function SearchOverlay({
   if (!visible) return null;
 
   return (
-    <div className="search-overlay" data-testid="search-overlay" onMouseDown={(e) => e.stopPropagation()}>
-      <SearchIcon size="sm" className="search-leading" />
+    <div
+      className="search-overlay"
+      data-testid="search-overlay"
+      role="search"
+      aria-label="Search terminal output"
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <SearchIcon size="sm" className="search-leading" aria-hidden={true} />
       <input
         ref={inputRef}
         className="search-input"
         data-testid="search-input"
         type="text"
         placeholder="Search…"
+        aria-label="Search terminal output"
         value={query}
         onChange={(e) => onQueryChange(e.target.value)}
         onKeyDown={(e) => {
@@ -57,15 +64,21 @@ export default function SearchOverlay({
           }
         }}
       />
-      <span className="search-results" data-testid="search-results">
+      <span
+        className="search-results"
+        data-testid="search-results"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
         {results.resultCount > 0
           ? `${results.resultIndex + 1}/${results.resultCount}`
           : query ? '0/0' : ''}
       </span>
-      <button className="search-btn" data-testid="search-prev" onClick={onPrev} title="Previous (Shift+Enter)" tabIndex={-1} aria-label="Previous match">
+      <button className="search-btn" data-testid="search-prev" onClick={onPrev} title="Previous (Shift+Enter)" aria-label="Previous match">
         <ArrowUpIcon size="sm" />
       </button>
-      <button className="search-btn" data-testid="search-next" onClick={onNext} title="Next (Enter)" tabIndex={-1} aria-label="Next match">
+      <button className="search-btn" data-testid="search-next" onClick={onNext} title="Next (Enter)" aria-label="Next match">
         <ArrowDownIcon size="sm" />
       </button>
       <button className="search-btn search-close" data-testid="search-close" onClick={onClose} title="Close (Esc)" aria-label="Close search">

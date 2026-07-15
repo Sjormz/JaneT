@@ -99,9 +99,9 @@ export default function FileExplorer({ cwd, cwdReady, isRemote }: FileExplorerPr
     <div className="file-explorer">
       {isRemote && (
         <div className="explorer-remote-notice">
-          The active tab is an SSH session. The file explorer shows your
+          The active pane is an SSH session. Explorer stays on your
           <em> local </em>
-          cwd; the remote cwd is shown in the status bar.
+          filesystem; remote browsing is not available yet.
         </div>
       )}
       <div className="explorer-header">
@@ -168,31 +168,56 @@ export default function FileExplorer({ cwd, cwdReady, isRemote }: FileExplorerPr
         })}
       </div>
 
-      <div className="explorer-tree">
-        {loading && <div className="explorer-loading">Loading…</div>}
-        {error && <div className="explorer-error">{error}</div>}
+      <div className="explorer-tree" aria-busy={loading}>
+        {!cwdReady && <div className="explorer-loading" role="status">Starting terminal…</div>}
+        {loading && <div className="explorer-loading" role="status">Loading…</div>}
+        {error && <div className="explorer-error" role="alert">{error}</div>}
 
         {entries.map((entry) => {
           const Icon = fileIconFor(entry.name, entry.isDirectory, expandedDirs.has(entry.path));
+          const content = (
+            <>
+              <Icon size="md" className="item-icon" />
+              <span className="item-name">{entry.name}</span>
+            </>
+          );
+          const dragProps = {
+            draggable: true,
+            onDragStart: (e: React.DragEvent<HTMLElement>) => {
+              e.dataTransfer.setData('text/plain', entry.path);
+              e.dataTransfer.effectAllowed = 'copy';
+            },
+          };
+
+          if (entry.isDirectory) {
+            return (
+              <button
+                key={entry.path}
+                type="button"
+                className="explorer-item dir"
+                onClick={() => handleFileClick(entry)}
+                aria-label={`Open folder ${entry.name}`}
+                {...dragProps}
+              >
+                {content}
+              </button>
+            );
+          }
+
           return (
             <div
               key={entry.path}
-              className={`explorer-item ${entry.isDirectory ? 'dir' : 'file'}`}
-              onClick={() => handleFileClick(entry)}
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.setData('text/plain', entry.path);
-                e.dataTransfer.effectAllowed = 'copy';
-              }}
+              className="explorer-item file"
+              title={`${entry.name} — drag into a terminal to paste its path`}
+              {...dragProps}
             >
-              <Icon size="md" className="item-icon" />
-              <span className="item-name">{entry.name}</span>
+              {content}
             </div>
           );
         })}
 
-        {!loading && entries.length === 0 && !error && (
-          <div className="explorer-empty">Empty directory</div>
+        {cwdReady && !loading && entries.length === 0 && !error && (
+          <div className="explorer-empty" role="status">Empty directory</div>
         )}
       </div>
     </div>

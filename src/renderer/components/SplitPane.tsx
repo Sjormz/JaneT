@@ -43,7 +43,7 @@ interface SplitPaneProps {
   /** True once an SSH tab's transport exists and panes may open shells. */
   sshShellReady?: boolean;
   /** User clicked "Reconnect" on the SSH notice for this term. */
-  onSshRetry?: (termId: string) => void;
+  onSshRetry?: (termId: string, dimensions: { cols: number; rows: number }) => void | Promise<void>;
 }
 
 /** Wraps a TerminalLeaf with split/close action buttons */
@@ -96,7 +96,7 @@ function TerminalPaneLeaf({
   initialCwd?: string;
   hasSessionForLeaf?: (leafId: string) => boolean;
   sshShellReady?: boolean;
-  onSshRetry?: (termId: string) => void;
+  onSshRetry?: (termId: string, dimensions: { cols: number; rows: number }) => void | Promise<void>;
 }) {
   const leafType = leaf.terminalType ?? tabType;
   const dropSideAt = (event: React.DragEvent): PaneDropSide => {
