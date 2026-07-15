@@ -41,6 +41,25 @@ describe('defaultWorktreePath', () => {
 
   it('supports absolute base dirs and templates', () => {
     expect(defaultWorktreePath('C:/repo/JaneT', 'bug/fix', 'D:/trees', '{branch}')).toBe('D:/trees/bug-fix');
+    expect(defaultWorktreePath('C:/repo/JaneT', 'bug/fix', '\\worktrees')).toBe('C:/worktrees/JaneT-bug-fix');
     expect(sanitizeBranchForPath('refs/heads/feature/a b')).toBe('feature-a-b');
+  });
+
+  it('resolves configured relative base dirs from the repository', () => {
+    expect(defaultWorktreePath('/projects/JaneT', 'feature/x', '../worktrees')).toBe(
+      '/projects/worktrees/JaneT-feature-x',
+    );
+  });
+
+  it('preserves UNC roots and unresolved parents while normalizing relative bases', () => {
+    expect(defaultWorktreePath('\\\\server\\share\\JaneT', 'feature/x')).toBe(
+      '//server/share/JaneT-feature-x',
+    );
+    expect(defaultWorktreePath('\\\\server\\share\\JaneT', 'feature/x', '\\worktrees')).toBe(
+      '//server/share/worktrees/JaneT-feature-x',
+    );
+    expect(defaultWorktreePath('JaneT', 'feature/x', '../../worktrees')).toBe(
+      '../worktrees/JaneT-feature-x',
+    );
   });
 });

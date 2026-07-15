@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
 import React from 'react';
 import { KeybindingsProvider } from '../../src/renderer/KeybindingsContext';
+import { refreshCoordinator } from '../../src/renderer/refreshCoordinator';
+import { fileUrlToPath } from '../../src/renderer/osc7';
 
 class MockResizeObserver {
   static instances: MockResizeObserver[] = [];
@@ -29,9 +31,24 @@ class MockAddonFit {
 }
 
 class MockAddonSearch {
-  onDidChangeResults = vi.fn(() => ({ dispose: vi.fn() }));
+  static instances: MockAddonSearch[] = [];
+  private resultsListener: ((results: { resultIndex: number; resultCount: number }) => void) | null = null;
+
+  constructor() {
+    MockAddonSearch.instances.push(this);
+  }
+
+  onDidChangeResults = vi.fn((listener: (results: { resultIndex: number; resultCount: number }) => void) => {
+    this.resultsListener = listener;
+    return { dispose: vi.fn(() => { this.resultsListener = null; }) };
+  });
   findNext = vi.fn();
   findPrevious = vi.fn();
+  clearDecorations = vi.fn();
+
+  emitResults(results: { resultIndex: number; resultCount: number }) {
+    this.resultsListener?.(results);
+  }
 }
 
 class MockUnicode11Addon {}
@@ -41,11 +58,16 @@ class MockTerminal {
 
   options: Record<string, unknown> = {};
   element: HTMLElement | undefined;
+  oscHandlers = new Map<number, (data: string) => boolean | Promise<boolean>>();
   parser = {
-    registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })),
+    registerOscHandler: vi.fn((ident: number, handler: (data: string) => boolean | Promise<boolean>) => {
+      this.oscHandlers.set(ident, handler);
+      return { dispose: vi.fn(() => this.oscHandlers.delete(ident)) };
+    }),
   };
   unicode = { activeVersion: '6' };
   onData = vi.fn(() => ({ dispose: vi.fn() }));
+  onBinary = vi.fn(() => ({ dispose: vi.fn() }));
   loadAddon = vi.fn();
   open = vi.fn();
   focus = vi.fn();
@@ -53,6 +75,7 @@ class MockTerminal {
   attachCustomKeyEventHandler = vi.fn();
   write = vi.fn();
   refresh = vi.fn();
+  clearSelection = vi.fn();
   rows = 24;
 
   constructor(options: Record<string, unknown>) {
@@ -64,11 +87,14 @@ class MockTerminal {
 const terminalCreate = vi.fn(() => Promise.resolve({ pid: 123 }));
 const terminalResize = vi.fn(() => Promise.resolve());
 const terminalWrite = vi.fn(() => Promise.resolve());
+const terminalWriteBinary = vi.fn(() => Promise.resolve());
 const terminalDestroy = vi.fn(() => Promise.resolve());
+const openExternal = vi.fn(() => Promise.resolve(true));
 let sshCreateShellImpl: () => Promise<unknown> = () => Promise.resolve({ connected: true });
 const sshCreateShell = vi.fn(() => sshCreateShellImpl());
 const sshResizeShell = vi.fn(() => Promise.resolve());
 const sshWriteShell = vi.fn(() => Promise.resolve());
+const sshWriteShellBinary = vi.fn(() => Promise.resolve());
 let terminalDataHandler: ((params: { id: string; data: string }) => void) | null = null;
 const onTerminalData = vi.fn((cb: (params: { id: string; data: string }) => void) => {
   terminalDataHandler = cb;
@@ -87,16 +113,25 @@ vi.mock('@xterm/addon-unicode11', () => ({
   Unicode11Addon: MockUnicode11Addon,
 }));
 
-vi.mock('@xterm/addon-web-links', () => ({
-  WebLinksAddon: class MockWebLinksAddon {},
-}));
+class MockWebLinksAddon {
+  static handlers: Array<(event: MouseEvent, url: string) => void> = [];
+  constructor(handler?: (event: MouseEvent, url: string) => void) {
+    if (handler) MockWebLinksAddon.handlers.push(handler);
+  }
+}
+
+vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: MockWebLinksAddon }));
 
 vi.mock('@xterm/addon-search', () => ({
   SearchAddon: MockAddonSearch,
 }));
 
+let searchOverlayProps: any = null;
 vi.mock('../../src/renderer/components/SearchOverlay', () => ({
-  default: () => null,
+  default: (props: unknown) => {
+    searchOverlayProps = props;
+    return null;
+  },
 }));
 
 vi.mock('../../src/renderer/osc7', () => ({
@@ -106,8 +141,11 @@ vi.mock('../../src/renderer/osc7', () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   MockTerminal.instances = [];
+  MockWebLinksAddon.handlers = [];
   MockAddonFit.instances = [];
+  MockAddonSearch.instances = [];
   MockResizeObserver.instances = [];
+  searchOverlayProps = null;
   MockTerminal.prototype.open = vi.fn(function open(this: MockTerminal, parent: HTMLElement) {
     if (!this.element) this.element = document.createElement('div');
     this.element.dataset.testid = 'xterm-dom';
@@ -116,17 +154,21 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', MockResizeObserver as unknown as typeof ResizeObserver);
   sshCreateShellImpl = () => Promise.resolve({ connected: true });
   terminalDataHandler = null;
+  vi.mocked(fileUrlToPath).mockReturnValue(null);
   Object.defineProperty(window, 'janet', {
     configurable: true,
     value: {
       terminalCreate,
       terminalResize,
       terminalWrite,
+      terminalWriteBinary,
       terminalDestroy,
       onTerminalData,
       sshCreateShell,
       sshResizeShell,
       sshWriteShell,
+      sshWriteShellBinary,
+      openExternal,
     },
   });
 });
@@ -232,6 +274,35 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(term.unicode.activeVersion).toBe('11');
   });
 
+  it('enables result tracking and fully clears terminal search state', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-search" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    const searchAddon = MockAddonSearch.instances.at(-1)!;
+    const term = MockTerminal.instances.at(-1)!;
+    act(() => searchOverlayProps.onQueryChange('needle'));
+
+    expect(searchAddon.findNext).toHaveBeenCalledWith('needle', {
+      decorations: {
+        matchBorder: '#7aa2f7',
+        matchOverviewRuler: '#7aa2f7',
+        activeMatchBorder: '#e0af68',
+        activeMatchColorOverviewRuler: '#e0af68',
+      },
+    });
+
+    act(() => searchAddon.emitResults({ resultIndex: 1, resultCount: 3 }));
+    expect(searchOverlayProps.results).toEqual({ resultIndex: 1, resultCount: 3 });
+
+    act(() => searchOverlayProps.onQueryChange(''));
+    expect(searchAddon.clearDecorations).toHaveBeenCalled();
+    expect(term.clearSelection).toHaveBeenCalled();
+  });
+
   it('propagates measured window/container resizes to the local pty and repaints', async () => {
     vi.useFakeTimers();
     try {
@@ -268,6 +339,52 @@ describe('TerminalPane SSH reinitialization', () => {
     }
   });
 
+  it('refits and synchronizes backend dimensions after a font-size change', async () => {
+    vi.useFakeTimers();
+    try {
+      const { default: TerminalPane } = await loadTerminalPane();
+      const view = render(
+        <KeybindingsProvider>
+          <TerminalPane
+            termId="term-font-resize"
+            tabType="local"
+            onReady={vi.fn()}
+            onRemoved={vi.fn()}
+            themeName="tokyo-night"
+            fontSize={14}
+          />
+        </KeybindingsProvider>,
+      );
+
+      await vi.runAllTimersAsync();
+      const term = MockTerminal.instances[0];
+      const fit = MockAddonFit.instances[0];
+      terminalResize.mockClear();
+      fit.fit.mockClear();
+      fit.proposeDimensions.mockReturnValue({ cols: 91, rows: 28 });
+
+      view.rerender(
+        <KeybindingsProvider>
+          <TerminalPane
+            termId="term-font-resize"
+            tabType="local"
+            onReady={vi.fn()}
+            onRemoved={vi.fn()}
+            themeName="tokyo-night"
+            fontSize={18}
+          />
+        </KeybindingsProvider>,
+      );
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(term.options.fontSize).toBe(18);
+      expect(fit.fit).toHaveBeenCalled();
+      expect(terminalResize).toHaveBeenCalledWith({ id: 'term-font-resize', cols: 91, rows: 28 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reuses the xterm instance when the same pane remounts during a split reshape', async () => {
     vi.useFakeTimers();
     const { default: TerminalPane } = await loadTerminalPane();
@@ -290,6 +407,11 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(terminalCreate).toHaveBeenCalledTimes(1);
     expect(MockTerminal.instances[0].dispose).not.toHaveBeenCalled();
 
+    const searchAddon = MockAddonSearch.instances[0];
+    act(() => searchOverlayProps.onQueryChange('needle'));
+    searchAddon.clearDecorations.mockClear();
+    MockTerminal.instances[0].clearSelection.mockClear();
+
     unmount();
 
     expect(onRemoved).toHaveBeenCalledWith('term-reused');
@@ -310,6 +432,20 @@ describe('TerminalPane SSH reinitialization', () => {
 
     expect(MockTerminal.instances).toHaveLength(1);
     expect(terminalCreate).toHaveBeenCalledTimes(1);
+    expect(searchAddon.clearDecorations).toHaveBeenCalledTimes(1);
+    expect(MockTerminal.instances[0].clearSelection).toHaveBeenCalledTimes(1);
+    const activeKeyHandler = MockTerminal.instances[0].attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
+    const preventDefault = vi.fn();
+    act(() => activeKeyHandler({
+      key: 'f',
+      ctrlKey: true,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+      preventDefault,
+    }));
+    expect(preventDefault).toHaveBeenCalled();
+    expect(searchOverlayProps.visible).toBe(true);
     vi.advanceTimersByTime(250);
 
     expect(MockTerminal.instances[0].dispose).not.toHaveBeenCalled();
@@ -413,6 +549,75 @@ describe('TerminalPane SSH reinitialization', () => {
 });
 
 describe('TerminalPane SSH shell output', () => {
+  it('invalidates live workspace data on every valid local shell prompt', async () => {
+    vi.mocked(fileUrlToPath).mockReturnValue('/repo');
+    const invalidate = vi.spyOn(refreshCoordinator, 'invalidate');
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-prompt" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    const handler = MockTerminal.instances.at(-1)?.oscHandlers.get(7)!;
+    await handler('file://localhost/repo');
+    await handler('file://localhost/repo');
+
+    expect(invalidate).toHaveBeenCalledTimes(2);
+    expect(invalidate).toHaveBeenCalledWith('prompt');
+  });
+
+  it('opens terminal links through the default-browser bridge instead of a renderer window', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-links" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    const event = { preventDefault: vi.fn() } as unknown as MouseEvent;
+    MockWebLinksAddon.handlers[0](event, 'https://example.com/docs');
+
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(window.janet.openExternal).toHaveBeenCalledWith('https://example.com/docs');
+  });
+
+  it('does not allow remote OSC 7 output to change the local cwd', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const onCwdChange = vi.fn();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-ssh-cwd"
+          tabType="ssh"
+          sshSessionId="ssh-cwd"
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          onCwdChange={onCwdChange}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    const handler = MockTerminal.instances.at(-1)?.oscHandlers.get(7);
+    expect(handler).toBeUndefined();
+    expect(onCwdChange).not.toHaveBeenCalled();
+  });
+
+  it('forwards binary local terminal input without UTF-8 conversion', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-binary" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    const binaryHandler = (MockTerminal.instances.at(-1)?.onBinary as any).mock.calls[0][0] as (data: string) => void;
+    binaryHandler('\xff\x00');
+
+    expect(terminalWriteBinary).toHaveBeenCalledWith({ id: 'term-binary', data: '\xff\x00' });
+  });
+
   it('never renders a blocking SSH notice overlay while the remote shell opens', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     let resolveShell: (value: unknown) => void = () => {};

@@ -77,10 +77,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            platform: linux
             build-args: --linux
           - os: macos-latest
-            build-args: --mac -c.mac.identity=- -c.mac.hardenedRuntime=false
+            platform: macos
+            build-args: --mac
           - os: windows-latest
+            platform: windows
             build-args: --win
     steps:
       - uses: actions/checkout@v7
@@ -110,16 +113,51 @@ jobs:
       - name: Build app
         run: npm run build
 
+      - name: Require macOS signing and notarization secrets
+        if: matrix.platform == 'macos'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=0
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required macOS release secret: $name"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
       - name: Package installer
         run: npx electron-builder ${{ matrix.build-args }} --publish never
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.platform == 'macos' && 'true' || 'false' }}
+          CSC_LINK: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'macos' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_TEAM_ID || '' }}
+
+      - name: Verify packaged release and native terminal runtime
+        run: node scripts/verify-release-artifacts.mjs ${{ matrix.platform }}
 
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v7
         with:
           name: installer-${{ matrix.os }}-${{ env.RELEASE_TAG }}
-          path: release/
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/*.dmg
+            release/*.zip
+            release/*.zip.blockmap
+            release/*.AppImage
+            release/*.deb
+            release/latest*.yml
           if-no-files-found: error
 
   publish:
@@ -143,12 +181,14 @@ jobs:
           name: ${{ env.RELEASE_TAG }}
           generate_release_notes: true
           overwrite_files: true
+          fail_on_unmatched_files: true
           files: |
             release-artifacts/*/JaneT-Setup-*.exe
             release-artifacts/*/JaneT-Setup-*.exe.blockmap
             release-artifacts/*/JaneT-Portable-*.exe
             release-artifacts/*/JaneT-*-mac-*.dmg
             release-artifacts/*/JaneT-*-mac-*.zip
+            release-artifacts/*/JaneT-*-mac-*.zip.blockmap
             release-artifacts/*/JaneT-*-linux-*.AppImage
             release-artifacts/*/JaneT-*-linux-*.deb
             release-artifacts/*/latest*.yml

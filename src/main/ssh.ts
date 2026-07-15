@@ -1,5 +1,25 @@
 import { Client, ClientChannel } from 'ssh2';
 import * as os from 'os';
+import { createHash } from 'crypto';
+import { StringDecoder } from 'string_decoder';
+
+// Host verification may pause on a native Trust/Cancel dialog while the user
+// checks the fingerprint out of band. Keep the handshake bounded, but do not
+// apply the old 10-second machine-to-machine timeout to an interactive step.
+const INTERACTIVE_READY_TIMEOUT_MS = 5 * 60 * 1000;
+
+export interface SSHHostKeyStore {
+  lookup(host: string, port: number): string | undefined;
+  remember(host: string, port: number, fingerprint: string): void;
+  /** Atomically replaces a matching legacy fingerprint. */
+  migrate?(host: string, port: number, expectedFingerprint: string, fingerprint: string): void;
+}
+
+export type SSHHostKeyConfirmer = (
+  host: string,
+  port: number,
+  fingerprint: string,
+) => boolean | Promise<boolean>;
 
 interface SSHConnection {
   client: Client;
@@ -10,12 +30,19 @@ interface SSHConnection {
     username?: string;
   };
   shells: Map<string, ClientChannel>;
-  pendingWrites: Map<string, string[]>;
+  pendingWrites: Map<string, Array<string | Buffer>>;
   /** Handles already returned by createShell(), keyed by termId — lets a
    * repeat call (e.g. React 18 StrictMode's double mount-effect invoke)
    * reuse the in-flight/live shell instead of opening a second SSH
    * channel for the same termId. */
   shellHandles: Map<string, SSHShellHandle>;
+}
+
+interface PendingSSHConnection {
+  client: Client;
+  promise: Promise<void>;
+  reject: (error: Error) => void;
+  endpoint: string;
 }
 
 interface SSHShellHandle {
@@ -26,12 +53,20 @@ interface SSHShellHandle {
    * dispatched to two callbacks at once. */
   onData: (cb: (data: string) => void) => void;
   ready: Promise<void>;
+  cancel: (error: Error) => void;
 }
 
 export class SSHManager {
   private connections: Map<string, SSHConnection> = new Map();
+  private pendingConnections: Map<string, PendingSSHConnection> = new Map();
+  private readonly inMemoryHostKeys = new Map<string, string>();
 
-  async connect(id: string, config: {
+  constructor(
+    private readonly hostKeyStore?: SSHHostKeyStore,
+    private readonly confirmHostKey: SSHHostKeyConfirmer = () => false,
+  ) {}
+
+  connect(id: string, config: {
     host: string;
     port: number;
     username?: string;
@@ -39,46 +74,179 @@ export class SSHManager {
     password?: string;
     privateKey?: string;
   }): Promise<void> {
-    const client = new Client();
+    const host = config.host.trim();
+    const port = normalizePort(config.port);
+    const endpoint = hostKeyId(host, port);
+    const activeConnection = this.connections.get(id);
+    if (activeConnection) {
+      return hostKeyId(activeConnection.config.host, activeConnection.config.port) === endpoint
+        ? Promise.resolve()
+        : Promise.reject(new Error(`SSH session ${id} is already connected to another host`));
+    }
+    const existingAttempt = this.pendingConnections.get(id);
+    if (existingAttempt) {
+      return existingAttempt.endpoint === endpoint
+        ? existingAttempt.promise
+        : Promise.reject(new Error(`SSH session ${id} is already connecting to another host`));
+    }
 
-    return new Promise((resolve, reject) => {
-      client.on('ready', () => {
-        this.connections.set(id, {
+    const client = new Client();
+    let resolveConnection: (() => void) | null = null;
+    let rejectConnection: ((error: Error) => void) | null = null;
+    let settled = false;
+    let verificationError: Error | null = null;
+
+    const promise = new Promise<void>((resolve, reject) => {
+      resolveConnection = resolve;
+      rejectConnection = reject;
+    });
+    const rejectPending = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      rejectConnection?.(error);
+    };
+    this.pendingConnections.set(id, { client, promise, reject: rejectPending, endpoint });
+    const isCurrentPendingAttempt = () => (
+      !settled && this.pendingConnections.get(id)?.client === client
+    );
+
+    const removeConnection = (reason: Error) => {
+      const pending = this.pendingConnections.get(id);
+      if (pending?.client === client) this.pendingConnections.delete(id);
+      const connection = this.connections.get(id);
+      if (connection?.client === client) {
+        connection.pendingWrites.clear();
+        for (const handle of connection.shellHandles.values()) handle.cancel(reason);
+        connection.shellHandles.clear();
+        for (const shell of connection.shells.values()) {
+          try { shell.close(); } catch {}
+        }
+        connection.shells.clear();
+        this.connections.delete(id);
+      }
+    };
+
+    client.on('ready', () => {
+      const pending = this.pendingConnections.get(id);
+      if (pending?.client !== client) {
+        client.end();
+        return;
+      }
+
+      this.pendingConnections.delete(id);
+      this.connections.set(id, {
           client,
           id,
-          config: { host: config.host, port: config.port, username: config.username },
+          config: { host, port, username: config.username },
           shells: new Map(),
           pendingWrites: new Map(),
           shellHandles: new Map(),
-        });
-        resolve();
       });
-
-      client.on('error', (err) => {
-        reject(err);
-      });
-
-      const connectConfig: any = {
-        host: config.host,
-        port: config.port || 22,
-        username: normalizeUsername(config.username),
-        readyTimeout: 10000,
-        tryKeyboard: true,
-      };
-
-      client.on('keyboard-interactive', (_name, _instructions, _instructionsLang, prompts, finish) => {
-        const answer = config.password ?? '';
-        finish(prompts.map(() => answer));
-      });
-
-      if (config.auth === 'password' && config.password) {
-        connectConfig.password = config.password;
-      } else if (config.auth === 'key' && config.privateKey) {
-        connectConfig.privateKey = config.privateKey;
-      }
-
-      client.connect(connectConfig);
+      settled = true;
+      resolveConnection?.();
     });
+
+    client.on('error', (error) => {
+      removeConnection(error);
+      rejectPending(verificationError ?? error);
+    });
+    const handleConnectionClosed = () => {
+      const wasPending = this.pendingConnections.get(id)?.client === client;
+      const error = verificationError ?? new Error(`SSH connection to ${host}:${port} closed before it was ready`);
+      removeConnection(error);
+      if (wasPending) rejectPending(error);
+    };
+    client.on('end', handleConnectionClosed);
+    client.on('close', handleConnectionClosed);
+
+    const connectConfig: any = {
+      host,
+      port,
+      username: normalizeUsername(config.username),
+      readyTimeout: INTERACTIVE_READY_TIMEOUT_MS,
+      tryKeyboard: true,
+      hostVerifier: (hostKey: Buffer, decision: (accepted: boolean) => void) => {
+        try {
+          if (!isCurrentPendingAttempt()) return;
+          const { fingerprint, legacyFingerprint } = hostKeyFingerprints(hostKey);
+          const trusted = this.lookupHostKey(host, port);
+          if (trusted === legacyFingerprint) {
+            try {
+              this.migrateHostKey(host, port, legacyFingerprint, fingerprint);
+              decision(true);
+            } catch (error) {
+              verificationError = error instanceof Error
+                ? error
+                : new Error(`Could not migrate SSH host key for ${host}:${port}`);
+              decision(false);
+            }
+            return;
+          }
+          if (trusted && trusted !== fingerprint) {
+            verificationError = new Error(`SSH host key changed for ${host}:${port}`);
+            decision(false);
+            return;
+          }
+          if (trusted) {
+            decision(true);
+            return;
+          }
+
+          void Promise.resolve(this.confirmHostKey(host, port, fingerprint)).then((approved) => {
+            // A native confirmation can outlive the underlying handshake. A
+            // late approval must never trust a key for a timed-out/cancelled
+            // attempt, nor for a newer attempt that reused the same session id.
+            if (!isCurrentPendingAttempt()) return;
+            if (!approved) {
+              verificationError = new Error(`SSH host key was not trusted for ${host}:${port}`);
+              decision(false);
+              return;
+            }
+            try {
+              this.rememberHostKey(host, port, fingerprint);
+              decision(true);
+            } catch (error) {
+              verificationError = error instanceof Error
+                ? error
+                : new Error(`Could not remember SSH host key for ${host}:${port}`);
+              decision(false);
+            }
+          }, (error) => {
+            if (!isCurrentPendingAttempt()) return;
+            verificationError = error instanceof Error
+              ? error
+              : new Error(`Could not confirm SSH host key for ${host}:${port}`);
+            decision(false);
+          });
+        } catch (error) {
+          if (!isCurrentPendingAttempt()) return;
+          verificationError = error instanceof Error
+            ? error
+            : new Error(`Could not verify SSH host key for ${host}:${port}`);
+          decision(false);
+        }
+      },
+    };
+
+    client.on('keyboard-interactive', (_name, _instructions, _instructionsLang, prompts, finish) => {
+      const answer = config.password ?? '';
+      finish(prompts.map(() => answer));
+    });
+
+    if (config.auth === 'password' && config.password) {
+      connectConfig.password = config.password;
+    } else if (config.auth === 'key' && config.privateKey) {
+      connectConfig.privateKey = config.privateKey;
+    }
+
+    try {
+      client.connect(connectConfig);
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      removeConnection(failure);
+      rejectPending(failure);
+    }
+    return promise;
   }
 
   createShell(sessionId: string, termId: string, size: { cols: number; rows: number }): SSHShellHandle {
@@ -99,6 +267,7 @@ export class SSHManager {
     const pendingChunks: string[] = [];
     let resolveReady: (() => void) | null = null;
     let rejectReady: ((err: Error) => void) | null = null;
+    let readySettled = false;
 
     const ready = new Promise<void>((resolve, reject) => {
       resolveReady = resolve;
@@ -106,6 +275,7 @@ export class SSHManager {
     });
 
     const dispatch = (str: string) => {
+      if (!str) return;
       if (!activeCallback) {
         pendingChunks.push(str);
         return;
@@ -113,45 +283,6 @@ export class SSHManager {
 
       activeCallback(str);
     };
-
-    conn.client.shell({
-      cols: size.cols,
-      rows: size.rows,
-      term: 'xterm-256color',
-    }, (err, stream) => {
-      if (err || !stream) {
-        rejectReady?.(err || new Error('Failed to create SSH shell'));
-        return;
-      }
-
-      stream.on('data', (data: Buffer) => {
-        dispatch(data.toString('utf-8'));
-      });
-
-      if (stream.stderr) {
-        stream.stderr.on('data', (data: Buffer) => {
-          dispatch(data.toString('utf-8'));
-        });
-      }
-
-      stream.on('close', () => {
-        conn.shells.delete(termId);
-        conn.pendingWrites.delete(termId);
-        conn.shellHandles.delete(termId);
-      });
-
-      conn.shells.set(termId, stream);
-
-      const queuedWrites = conn.pendingWrites.get(termId);
-      if (queuedWrites && queuedWrites.length > 0) {
-        for (const chunk of queuedWrites) {
-          stream.write(chunk);
-        }
-        conn.pendingWrites.delete(termId);
-      }
-
-      resolveReady?.();
-    });
 
     const handle: SSHShellHandle = {
       onData: (cb: (data: string) => void) => {
@@ -164,22 +295,118 @@ export class SSHManager {
         }
       },
       ready,
+      cancel: (error: Error) => {
+        if (readySettled) return;
+        readySettled = true;
+        rejectReady?.(error);
+      },
     };
     conn.shellHandles.set(termId, handle);
+
+    conn.client.shell({
+      cols: size.cols,
+      rows: size.rows,
+      term: 'xterm-256color',
+    }, (err, stream) => {
+      if (this.connections.get(sessionId) !== conn || conn.shellHandles.get(termId) !== handle) {
+        try { stream?.close(); } catch {}
+        handle.cancel(new Error(`SSH shell ${termId} was closed before it was ready`));
+        return;
+      }
+      if (err || !stream) {
+        conn.pendingWrites.delete(termId);
+        conn.shellHandles.delete(termId);
+        handle.cancel(err || new Error('Failed to create SSH shell'));
+        return;
+      }
+
+      const stdoutDecoder = new StringDecoder('utf8');
+      const stderrDecoder = new StringDecoder('utf8');
+      let decodersEnded = false;
+      stream.on('data', (data: Buffer) => {
+        dispatch(stdoutDecoder.write(data));
+      });
+
+      if (stream.stderr) {
+        stream.stderr.on('data', (data: Buffer) => {
+          dispatch(stderrDecoder.write(data));
+        });
+      }
+
+      stream.on('close', () => {
+        if (!decodersEnded) {
+          decodersEnded = true;
+          dispatch(stdoutDecoder.end());
+          dispatch(stderrDecoder.end());
+        }
+        const ownsShell = conn.shells.get(termId) === stream;
+        const ownsHandle = conn.shellHandles.get(termId) === handle;
+        if (ownsShell) conn.shells.delete(termId);
+        if (ownsShell || ownsHandle) conn.pendingWrites.delete(termId);
+        if (ownsHandle) conn.shellHandles.delete(termId);
+      });
+
+      conn.shells.set(termId, stream);
+
+      const queuedWrites = conn.pendingWrites.get(termId);
+      if (queuedWrites && queuedWrites.length > 0) {
+        for (const chunk of queuedWrites) {
+          stream.write(chunk);
+        }
+        conn.pendingWrites.delete(termId);
+      }
+
+      readySettled = true;
+      resolveReady?.();
+    });
     return handle;
   }
 
-  writeShell(termId: string, data: string): void {
-    this.connections.forEach((conn) => {
-      const shell = conn.shells.get(termId);
-      if (shell) {
-        shell.write(data);
-        return;
-      }
-      const queued = conn.pendingWrites.get(termId) || [];
-      queued.push(data);
-      conn.pendingWrites.set(termId, queued);
-    });
+  private terminalConnection(termId: string, sessionId?: string): SSHConnection | undefined {
+    if (sessionId) {
+      const conn = this.connections.get(sessionId);
+      return conn && (conn.shells.has(termId) || conn.shellHandles.has(termId)) ? conn : undefined;
+    }
+    return Array.from(this.connections.values()).find(
+      (conn) => conn.shells.has(termId) || conn.shellHandles.has(termId),
+    );
+  }
+
+  private writeShellChunk(termId: string, data: string | Buffer, sessionId?: string): void {
+    const conn = this.terminalConnection(termId, sessionId);
+    if (!conn) return;
+    const shell = conn.shells.get(termId);
+    if (shell) {
+      shell.write(data);
+      return;
+    }
+    const queued = conn.pendingWrites.get(termId) || [];
+    queued.push(data);
+    conn.pendingWrites.set(termId, queued);
+  }
+
+  writeShell(termId: string, data: string, sessionId?: string): void {
+    this.writeShellChunk(termId, data, sessionId);
+  }
+
+  writeShellBinary(termId: string, data: string, sessionId?: string): void {
+    this.writeShellChunk(termId, Buffer.from(data, 'binary'), sessionId);
+  }
+
+  destroyShell(termId: string, sessionId?: string): boolean {
+    const conn = this.terminalConnection(termId, sessionId);
+    if (!conn) return false;
+
+    const handle = conn.shellHandles.get(termId);
+    const shell = conn.shells.get(termId);
+    if (!handle && !shell && !conn.pendingWrites.has(termId)) return false;
+
+    conn.pendingWrites.delete(termId);
+    conn.shellHandles.delete(termId);
+    conn.shells.delete(termId);
+    handle?.cancel(new Error(`SSH shell ${termId} was closed`));
+    try { shell?.close(); } catch {}
+    return true;
   }
 
   resizeShell(termId: string, cols: number, rows: number): void {
@@ -205,7 +432,7 @@ export class SSHManager {
           if (err) return reject(err);
 
           const entries = list.map((item) => {
-            const isDir = item.attrs.isDirectory;
+            const isDir = item.attrs.isDirectory();
             return {
               name: item.filename,
               path: remotePath === '/' ? `/${item.filename}` : `${remotePath}/${item.filename}`,
@@ -224,12 +451,22 @@ export class SSHManager {
   }
 
   async disconnect(id: string): Promise<void> {
+    const pending = this.pendingConnections.get(id);
+    if (pending) {
+      this.pendingConnections.delete(id);
+      pending.reject(new Error(`SSH connection ${id} was cancelled`));
+      try { pending.client.end(); } catch {}
+    }
+
     const conn = this.connections.get(id);
     if (conn) {
       conn.shells.forEach((shell) => {
         try { shell.close(); } catch {}
       });
       conn.pendingWrites.clear();
+      for (const handle of conn.shellHandles.values()) {
+        handle.cancel(new Error(`SSH connection ${id} was closed`));
+      }
       conn.shellHandles.clear();
       conn.client.end();
       this.connections.delete(id);
@@ -250,10 +487,55 @@ export class SSHManager {
   }
 
   cleanup(): void {
+    for (const id of Array.from(this.pendingConnections.keys())) {
+      void this.disconnect(id);
+    }
     this.connections.forEach((_, id) => {
-      this.disconnect(id);
+      void this.disconnect(id);
     });
   }
+
+  private lookupHostKey(host: string, port: number): string | undefined {
+    return this.hostKeyStore?.lookup(host, port) ?? this.inMemoryHostKeys.get(hostKeyId(host, port));
+  }
+
+  private rememberHostKey(host: string, port: number, fingerprint: string): void {
+    if (this.hostKeyStore) {
+      this.hostKeyStore.remember(host, port, fingerprint);
+      return;
+    }
+    this.inMemoryHostKeys.set(hostKeyId(host, port), fingerprint);
+  }
+
+  private migrateHostKey(
+    host: string,
+    port: number,
+    expectedFingerprint: string,
+    fingerprint: string,
+  ): void {
+    if (this.hostKeyStore) {
+      if (!this.hostKeyStore.migrate) {
+        throw new Error(`Stored SSH host key for ${host}:${port} uses a legacy fingerprint format`);
+      }
+      this.hostKeyStore.migrate(host, port, expectedFingerprint, fingerprint);
+      return;
+    }
+
+    const key = hostKeyId(host, port);
+    if (this.inMemoryHostKeys.get(key) !== expectedFingerprint) {
+      throw new Error(`SSH host key changed for ${host}:${port}`);
+    }
+    this.inMemoryHostKeys.set(key, fingerprint);
+  }
+}
+
+function hostKeyFingerprints(hostKey: Buffer): { fingerprint: string; legacyFingerprint: string } {
+  const base64 = createHash('sha256').update(hostKey).digest('base64').replace(/=+$/, '');
+  const hex = createHash('sha256').update(hostKey).digest('hex');
+  return {
+    fingerprint: `SHA256:${base64}`,
+    legacyFingerprint: `sha256:${hex}`,
+  };
 }
 
 function normalizeUsername(username: string | undefined): string {
@@ -264,4 +546,12 @@ function normalizeUsername(username: string | undefined): string {
     if (osUsername) return osUsername;
   } catch {}
   return process.env.USERNAME || process.env.USER || 'user';
+}
+
+function normalizePort(port: number): number {
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 22;
+}
+
+function hostKeyId(host: string, port: number): string {
+  return `${host.trim().toLowerCase()}:${port}`;
 }

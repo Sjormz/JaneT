@@ -2,7 +2,7 @@
 // and main/preload rebuild + restart.
 import { spawn } from 'child_process';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import fs from 'fs';
 import http from 'http';
 import { buildElectron } from './build-electron.mjs';
@@ -10,12 +10,49 @@ import { buildElectron } from './build-electron.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const distMain = path.join(root, 'dist/main');
-const devServerUrl = process.env.JANET_DEV_SERVER_URL || 'http://127.0.0.1:5173';
+const DEFAULT_DEV_SERVER_URL = 'http://127.0.0.1:5173';
+
+export function parseDevServerUrl(value = DEFAULT_DEV_SERVER_URL) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`JANET_DEV_SERVER_URL must be a valid URL, received ${JSON.stringify(value)}`);
+  }
+  if (parsed.protocol !== 'http:') {
+    throw new Error(`JANET_DEV_SERVER_URL must use http:, received ${parsed.protocol}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('JANET_DEV_SERVER_URL must not include credentials');
+  }
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  const safeHostname = /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(host);
+  const safeIpv6 = host.includes(':') && /^[0-9A-Fa-f:.]+$/.test(host);
+  if (!safeHostname && !safeIpv6) {
+    throw new Error(`JANET_DEV_SERVER_URL contains an unsafe hostname: ${JSON.stringify(host)}`);
+  }
+
+  return {
+    url: parsed.href,
+    host,
+    port: parsed.port ? Number(parsed.port) : 80,
+  };
+}
+
+export function mainSourceDirectories(projectRoot = root) {
+  return [path.join(projectRoot, 'src/main'), path.join(projectRoot, 'src/shared')];
+}
+
+export function npxExecutable(platform = process.platform) {
+  return platform === 'win32' ? 'npx.cmd' : 'npx';
+}
+
+let devServer = parseDevServerUrl();
 
 let viteProcess = null;
 let electronProcess = null;
 let electronLog = null;
-let mainWatcher = null;
+let mainWatchers = [];
 let isShuttingDown = false;
 let isRestartingElectron = false;
 let rebuildTimer = null;
@@ -38,8 +75,15 @@ function loadDotEnv() {
 function isHttpReady(url) {
   return new Promise((resolve) => {
     const request = http.get(url, (response) => {
-      response.resume();
-      resolve(response.statusCode >= 200 && response.statusCode < 500);
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        if (body.length < 64 * 1024) body += chunk;
+      });
+      response.on('end', () => {
+        const statusOk = response.statusCode >= 200 && response.statusCode < 400;
+        resolve(statusOk && body.includes('<title>JaneT</title>'));
+      });
     });
     request.once('error', () => resolve(false));
     request.setTimeout(500, () => {
@@ -103,14 +147,14 @@ function openElectronLog() {
 
 function launchElectron() {
   log('Starting Electron...');
-  electronProcess = spawn('npx', ['electron', '.'], {
+  electronProcess = spawn(npxExecutable(), ['electron', '.'], {
     cwd: root,
     stdio: ['ignore', openElectronLog(), electronLog],
-    shell: true,
+    shell: false,
     env: {
       ...process.env,
       NODE_ENV: 'development',
-      JANET_DEV_SERVER_URL: devServerUrl,
+      JANET_DEV_SERVER_URL: devServer.url,
     },
   });
   electronProcess.on('error', (e) => log(`Electron spawn error: ${e.message}`));
@@ -150,20 +194,24 @@ function scheduleMainRebuild(reason) {
 }
 
 function watchMainProcess() {
-  const mainDir = path.join(root, 'src/main');
-  mainWatcher = fs.watch(mainDir, { recursive: true }, (_eventType, filename) => {
-    if (!filename || !/\.(ts|js|json)$/.test(filename)) return;
-    scheduleMainRebuild(filename.replace(/\\/g, '/'));
+  mainWatchers = mainSourceDirectories().map((sourceDir) => {
+    const label = path.relative(root, sourceDir).replace(/\\/g, '/');
+    const watcher = fs.watch(sourceDir, { recursive: true }, (_eventType, filename) => {
+      if (!filename || !/\.(ts|js|json)$/.test(filename)) return;
+      scheduleMainRebuild(`${label}/${filename.replace(/\\/g, '/')}`);
+    });
+    watcher.on('error', (e) => log(`${label} watcher error: ${e.message}`));
+    return watcher;
   });
-  mainWatcher.on('error', (e) => log(`Main watcher error: ${e.message}`));
-  log('Watching src/main for main/preload changes');
+  log(`Watching ${mainSourceDirectories().map((dir) => path.relative(root, dir)).join(', ')} for main/preload changes`);
 }
 
 async function shutdown(code = 0) {
   if (isShuttingDown) return;
   isShuttingDown = true;
   clearTimeout(rebuildTimer);
-  mainWatcher?.close();
+  for (const watcher of mainWatchers) watcher.close();
+  mainWatchers = [];
   await killProcessTree(electronProcess, 'Electron');
   await killProcessTree(viteProcess, 'Vite');
   if (electronLog !== null) {
@@ -175,7 +223,12 @@ async function shutdown(code = 0) {
 
 // All-in-one log file so we can read it from outside.
 const logPath = path.join(root, '.dev-run.log');
-try { fs.unlinkSync(logPath); } catch {}
+let logInitialized = false;
+function initializeLog() {
+  if (logInitialized) return;
+  try { fs.unlinkSync(logPath); } catch {}
+  logInitialized = true;
+}
 const log = (msg) => {
   const line = `[JaneT dev ${new Date().toISOString()}] ${msg}\n`;
   fs.appendFileSync(logPath, line);
@@ -183,6 +236,7 @@ const log = (msg) => {
 };
 
 async function main() {
+  initializeLog();
   // Ensure dist/main exists
   if (!fs.existsSync(distMain)) {
     fs.mkdirSync(distMain, { recursive: true });
@@ -190,6 +244,7 @@ async function main() {
 
   log('Starting dev run');
   loadDotEnv();
+  devServer = parseDevServerUrl(process.env.JANET_DEV_SERVER_URL || DEFAULT_DEV_SERVER_URL);
 
   try {
     buildMainProcess();
@@ -199,15 +254,17 @@ async function main() {
   }
 
   // Step 2: Start Vite dev server in background unless one is already running.
-  if (await isHttpReady(devServerUrl)) {
-    log(`Reusing existing Vite dev server at ${devServerUrl}`);
+  if (await isHttpReady(devServer.url)) {
+    log(`Reusing existing JaneT Vite dev server at ${devServer.url}`);
   } else {
-    log(`Starting Vite dev server at ${devServerUrl}...`);
+    log(`Starting Vite dev server at ${devServer.url}...`);
     const viteLog = fs.openSync(path.join(root, '.vite.log'), 'w');
-    viteProcess = spawn('npx', ['vite', '--config', 'vite.config.ts', '--host', '127.0.0.1'], {
+    viteProcess = spawn(npxExecutable(), [
+      'vite', '--config', 'vite.config.ts', '--host', devServer.host, '--port', String(devServer.port),
+    ], {
       cwd: root,
       stdio: ['ignore', viteLog, viteLog],
-      shell: true,
+      shell: false,
     });
     viteProcess.on('error', (e) => log(`Vite spawn error: ${e.message}`));
     viteProcess.on('exit', (code, signal) => {
@@ -216,8 +273,8 @@ async function main() {
       if (!isShuttingDown) shutdown(code || 1);
     });
 
-    if (!(await waitForHttpReady(devServerUrl))) {
-      log(`Vite dev server did not become ready at ${devServerUrl}`);
+    if (!(await waitForHttpReady(devServer.url))) {
+      log(`Vite dev server did not become ready at ${devServer.url}`);
       await killProcessTree(viteProcess, 'Vite');
       process.exit(1);
     }
@@ -231,7 +288,9 @@ async function main() {
   process.on('SIGTERM', () => { log('SIGTERM received'); shutdown(0); });
 }
 
-main().catch(async (err) => {
-  console.error('[JaneT] Error:', err);
-  await shutdown(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  main().catch(async (err) => {
+    console.error('[JaneT] Error:', err);
+    await shutdown(1);
+  });
+}

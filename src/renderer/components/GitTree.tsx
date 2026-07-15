@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   RefreshIcon, ChevronDownIcon, ChevronRightIcon, PlusIcon,
@@ -8,17 +8,8 @@ import {
   SettingsIconCmp, MoreIcon, ListIcon,
 } from '../icons';
 import { defaultWorktreePath, GitWorktreeInfo, basename } from '../../shared/gitWorktrees';
-
-interface GitStatusResult {
-  current: string;
-  files: Array<{ path: string; working_dir: string; index: string; staged: boolean }>;
-  ahead: number;
-  behind: number;
-  created: string[];
-  modified: string[];
-  deleted: string[];
-  conflicted: string[];
-}
+import { refreshCoordinator, useRefreshTask } from '../refreshCoordinator';
+import { GitStatusResult } from '../useGitRepository';
 
 interface GitBranchInfo {
   name: string;
@@ -30,9 +21,11 @@ interface GitBranchInfo {
 }
 
 interface GitTreeProps {
-  cwd: string;
   cwdReady: boolean;
   isRemote: boolean;
+  repoPath: string | null;
+  status: GitStatusResult | null;
+  searching: boolean;
   onOpenLocalTabAt?: (cwd: string, title?: string) => void;
 }
 
@@ -53,10 +46,7 @@ interface DialogState {
   onSubmit: (values: Record<string, string>) => void;
 }
 
-export default function GitTree({ cwd, cwdReady, isRemote, onOpenLocalTabAt }: GitTreeProps) {
-  const [repoPath, setRepoPath] = useState<string | null>(null);
-  const [searching, setSearching] = useState(true);
-  const [status, setStatus] = useState<GitStatusResult | null>(null);
+export default function GitTree({ cwdReady, isRemote, repoPath, status, searching, onOpenLocalTabAt }: GitTreeProps) {
   const [branches, setBranches] = useState<GitBranchInfo[]>([]);
   const [worktrees, setWorktrees] = useState<GitWorktreeInfo[]>([]);
   const [expanded, setExpanded] = useState<Record<Section, boolean>>({
@@ -71,6 +61,11 @@ export default function GitTree({ cwd, cwdReady, isRemote, onOpenLocalTabAt }: G
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [changesView, setChangesView] = useState<'flat' | 'tree'>('flat');
   const [worktreeMenuOpen, setWorktreeMenuOpen] = useState(false);
+  const detailsGeneration = useRef(0);
+  const observedBranch = useRef<{ repoPath: string | null; branch: string | null }>({
+    repoPath: null,
+    branch: null,
+  });
 
   useEffect(() => {
     window.janet.getSettings().then((settings: any) => {
@@ -79,52 +74,50 @@ export default function GitTree({ cwd, cwdReady, isRemote, onOpenLocalTabAt }: G
     }).catch(() => {});
   }, []);
 
-  const loadGitData = useCallback(async (repo: string) => {
+  const loadGitDetails = useCallback(async (repo: string) => {
+    const generation = ++detailsGeneration.current;
     try {
-      const [statusResult, branchesResult, worktreesResult] = await Promise.all([
-        window.janet.gitStatus({ repoPath: repo }),
-        window.janet.gitBranches({ repoPath: repo }),
-        window.janet.gitWorktrees({ repoPath: repo }),
-      ]);
-      setStatus(statusResult || null);
-      setBranches(branchesResult || []);
-      setWorktrees(worktreesResult || []);
+      const details = await window.janet.gitDetails({ repoPath: repo });
+      if (generation !== detailsGeneration.current) return;
+      setBranches(details?.branches || []);
+      setWorktrees(details?.worktrees || []);
     } catch {
-      setMessage('Failed to load git data');
+      if (generation === detailsGeneration.current) setMessage('Failed to load git data');
     }
   }, []);
 
   useEffect(() => {
-    if (!cwd || !cwdReady || isRemote) {
-      setSearching(false);
-      setRepoPath(null);
-      return;
-    }
-    let cancelled = false;
-    setSearching(true);
+    detailsGeneration.current += 1;
+    setBranches([]);
+    setWorktrees([]);
     setMessage(null);
-    window.janet.gitFindRepo({ startPath: cwd }).then((repo) => {
-      if (cancelled) return;
-      setRepoPath(repo);
-      setSearching(false);
-      if (repo) loadGitData(repo);
-    }).catch(() => {
-      if (!cancelled) {
-        setRepoPath(null);
-        setSearching(false);
-      }
-    });
-    return () => { cancelled = true; };
-  }, [cwd, cwdReady, isRemote, loadGitData]);
+  }, [repoPath]);
+
+  useRefreshTask({
+    key: `git-details:${repoPath || 'none'}`,
+    intervalMs: 10_000,
+    enabled: Boolean(repoPath) && cwdReady && !isRemote,
+    run: () => repoPath ? loadGitDetails(repoPath) : undefined,
+  });
+
+  useEffect(() => {
+    const branch = status?.current || null;
+    const previous = observedBranch.current;
+    observedBranch.current = { repoPath, branch };
+    if (repoPath && branch && previous.repoPath === repoPath && previous.branch && previous.branch !== branch) {
+      refreshCoordinator.invalidate('mutation', `git-details:${repoPath}`);
+    }
+  }, [repoPath, status?.current]);
 
   const runGitAction = async (action: () => Promise<boolean>, success: string) => {
     if (!repoPath) return;
     setBusy(true);
     setMessage(null);
+    detailsGeneration.current += 1;
     try {
       const ok = await action();
       setMessage(ok ? success : 'Git action failed');
-      await loadGitData(repoPath);
+      if (ok) refreshCoordinator.invalidate('mutation');
     } catch (err: any) {
       setMessage(err?.message || 'Git action failed');
     } finally {
@@ -154,7 +147,8 @@ export default function GitTree({ cwd, cwdReady, isRemote, onOpenLocalTabAt }: G
   };
 
   const handleDeleteBranch = (branch: GitBranchInfo) => {
-    if (!repoPath || branch.current) return;
+    const isCurrent = status?.current ? branch.name === status.current : branch.current;
+    if (!repoPath || isCurrent) return;
     setDialog({
       title: `Delete ${branch.name}`,
       confirmLabel: 'Delete',
@@ -274,7 +268,7 @@ export default function GitTree({ cwd, cwdReady, isRemote, onOpenLocalTabAt }: G
     <div className="git-tree">
       <div className="git-header">
         <span className="section-title">Source Control</span>
-        <button className="icon-btn" onClick={() => loadGitData(repoPath)} disabled={busy} title="Refresh" aria-label="Refresh">
+        <button className="icon-btn" onClick={() => refreshCoordinator.invalidate('manual')} disabled={busy} title="Refresh" aria-label="Refresh">
           <RefreshIcon size="sm" />
         </button>
       </div>
@@ -299,11 +293,20 @@ export default function GitTree({ cwd, cwdReady, isRemote, onOpenLocalTabAt }: G
           {status.files.length > 0 && changesView === 'tree' ? (
             <GitFileTree files={status.files} conflicted={status.conflicted} />
           ) : (
-            <>
-              {status.conflicted.map((f) => <GitFile key={f} path={f} kind="conflicted" />)}
-              {status.files.filter((f) => f.staged).map((file) => <GitFile key={file.path} path={file.path} kind="staged" />)}
-              {status.files.filter((f) => !f.staged).map((file) => <GitFile key={file.path} path={file.path} kind="unstaged" wd={file.working_dir} />)}
-            </>
+            status.files.map((file) => (
+              <GitFile
+                key={file.path}
+                path={file.path}
+                kind={status.conflicted.includes(file.path)
+                  ? 'conflicted'
+                  : file.staged && file.unstaged
+                    ? 'mixed'
+                    : file.staged
+                      ? 'staged'
+                      : 'unstaged'}
+                wd={file.working_dir}
+              />
+            ))
           )}
         </GitSection>
       )}
@@ -337,7 +340,7 @@ export default function GitTree({ cwd, cwdReady, isRemote, onOpenLocalTabAt }: G
             <button className="git-row-main" onClick={() => onOpenLocalTabAt?.(tree.path, basename(tree.path))} title={tree.path}>
               <FolderIcon size="xs" />
               <span className="branch-name">{basename(tree.path)}</span>
-              <span className="git-row-note">{tree.branch || 'detached'}</span>
+              <span className="git-row-note">{tree.path === repoPath && status?.current ? status.current : tree.branch || 'detached'}</span>
             </button>
             {tree.path !== repoPath && <button className="git-mini-btn danger" onClick={() => handleRemoveWorktree(tree)} disabled={busy} title="Remove worktree"><TrashIcon size="xs" /></button>}
           </div>
@@ -349,16 +352,17 @@ export default function GitTree({ cwd, cwdReady, isRemote, onOpenLocalTabAt }: G
           <button className="git-action-btn" onClick={handleCreateBranch} disabled={busy}><PlusIcon size="xs" /> Branch</button>
         </div>
         {branches.filter((b) => !b.isRemote).map((branch) => {
-          const DotIcon = branch.current ? CircleDotIcon : CircleIcon;
+          const current = status?.current ? branch.name === status.current : branch.current;
+          const DotIcon = current ? CircleDotIcon : CircleIcon;
           return (
-            <div key={branch.name} className={`git-branch-item ${branch.current ? 'current' : ''}`}>
-              <button className="git-row-main" onClick={() => !branch.current && handleCheckout(branch.name)} disabled={busy || branch.current}
-                       title={branch.current ? 'Current branch' : `Switch to ${branch.name}`}>
+            <div key={branch.name} className={`git-branch-item ${current ? 'current' : ''}`}>
+              <button className="git-row-main" onClick={() => !current && handleCheckout(branch.name)} disabled={busy || current}
+                       title={current ? 'Current branch' : `Switch to ${branch.name}`}>
                 <DotIcon size="xs" className="branch-icon" />
                 <span className="branch-name">{branch.name}</span>
                 {branch.worktreePath && <span className="git-row-note">worktree</span>}
               </button>
-              {!branch.current && <button className="git-mini-btn danger" onClick={() => handleDeleteBranch(branch)} disabled={busy} title="Delete branch"><TrashIcon size="xs" /></button>}
+              {!current && <button className="git-mini-btn danger" onClick={() => handleDeleteBranch(branch)} disabled={busy} title="Delete branch"><TrashIcon size="xs" /></button>}
             </div>
           );
         })}
@@ -418,9 +422,16 @@ function GitSection({ title, count, expanded, onToggle, extra, children }: {
   const ExpandIcon = expanded ? ChevronDownIcon : ChevronRightIcon;
   return (
     <div className="git-section">
-      <div className="git-section-header" onClick={onToggle}>
-        <span className="git-section-title"><ExpandIcon size="sm" /> {title}</span>
-        <span className="badge">{count}</span>
+      <div className="git-section-header">
+        <button
+          type="button"
+          className="git-section-toggle"
+          onClick={onToggle}
+          aria-expanded={expanded}
+        >
+          <span className="git-section-title"><ExpandIcon size="sm" /> {title}</span>
+          <span className="badge">{count}</span>
+        </button>
         {extra}
       </div>
       {expanded && <div className="git-section-content">{children}</div>}
@@ -428,18 +439,22 @@ function GitSection({ title, count, expanded, onToggle, extra, children }: {
   );
 }
 
-function buildFileTree(files: Array<{ path: string; working_dir: string; index: string; staged: boolean }>, conflicted: string[]) {
+function buildFileTree(files: Array<{ path: string; working_dir: string; index: string; staged: boolean; unstaged: boolean }>, conflicted: string[]) {
   interface TreeNode {
     name: string;
     path: string;
     isDir: boolean;
     children: Map<string, TreeNode>;
-    file?: { path: string; working_dir: string; index: string; staged: boolean; conflicted: boolean };
+    file?: { path: string; working_dir: string; index: string; staged: boolean; unstaged: boolean; conflicted: boolean };
   }
   const root: TreeNode = { name: '', path: '', isDir: true, children: new Map() };
+  const conflictedPaths = new Set(conflicted);
+  const filePaths = new Set(files.map((file) => file.path));
   const all = [
-    ...conflicted.map(f => ({ path: f, working_dir: 'U', index: 'U', staged: false, conflicted: true })),
-    ...files.map(f => ({ ...f, conflicted: false })),
+    ...files.map((file) => ({ ...file, conflicted: conflictedPaths.has(file.path) })),
+    ...conflicted
+      .filter((path) => !filePaths.has(path))
+      .map((path) => ({ path, working_dir: 'U', index: 'U', staged: false, unstaged: false, conflicted: true })),
   ];
   for (const file of all) {
     const parts = file.path.split('/');
@@ -479,12 +494,12 @@ function renderTreeNode(node: any, depth: number, busy: boolean): React.ReactNod
       );
     }
     const f = child.file;
-    const kind = f.conflicted ? 'conflicted' : f.staged ? 'staged' : 'unstaged';
+    const kind = f.conflicted ? 'conflicted' : f.staged && f.unstaged ? 'mixed' : f.staged ? 'staged' : 'unstaged';
     return <GitFile key={child.path} path={child.file.path} kind={kind} wd={child.file.working_dir} depth={depth} />;
   });
 }
 
-function GitFileTree({ files, conflicted }: { files: Array<{ path: string; working_dir: string; index: string; staged: boolean }>; conflicted: string[] }) {
+function GitFileTree({ files, conflicted }: { files: Array<{ path: string; working_dir: string; index: string; staged: boolean; unstaged: boolean }>; conflicted: string[] }) {
   const tree = buildFileTree(files, conflicted);
   return <>{renderTreeNode(tree, 0, false)}</>;
 }
@@ -494,22 +509,35 @@ function GitTreeDir({ name, depth, children }: { name: string; depth: number; ch
   const ExpandIcon = open ? ChevronDownIcon : ChevronRightIcon;
   return (
     <>
-      <div className="git-tree-dir" style={{ paddingLeft: 14 + depth * 14 }} onClick={() => setOpen(o => !o)}>
+      <button
+        type="button"
+        className="git-tree-dir"
+        style={{ paddingLeft: 14 + depth * 14 }}
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+      >
         <ExpandIcon size="xs" />
         <FolderIcon size="xs" />
         <span>{name}</span>
-      </div>
+      </button>
       {open && children}
     </>
   );
 }
 
-function GitFile({ path, kind, wd, depth }: { path: string; kind: 'staged' | 'unstaged' | 'conflicted'; wd?: string; depth?: number }) {
-  const Icon = kind === 'conflicted' ? AlertIcon : wd === 'D' ? TrashIcon : wd === 'R' ? GitMergeIcon : GitCommitIcon;
+function GitFile({ path, kind, wd, depth }: { path: string; kind: 'staged' | 'unstaged' | 'mixed' | 'conflicted'; wd?: string; depth?: number }) {
+  const Icon = kind === 'conflicted' ? AlertIcon : kind === 'mixed' ? GitMergeIcon : wd === 'D' ? TrashIcon : wd === 'R' ? GitMergeIcon : GitCommitIcon;
   const FileIcon = kind === 'unstaged' && wd !== 'D' && wd !== 'R' ? fileIconFor(path, false) : Icon;
   const indent = depth !== undefined ? { paddingLeft: 14 + depth * 14 } : undefined;
+  const title = kind === 'mixed'
+    ? 'Staged and modified in working tree'
+    : kind === 'conflicted'
+      ? 'Merge conflict'
+      : kind === 'staged'
+        ? 'Staged change'
+        : 'Working-tree change';
   return (
-    <div className={`git-file-item ${kind}`} style={indent}>
+    <div className={`git-file-item ${kind}`} style={indent} title={title}>
       <FileIcon size="sm" className={`file-status-icon ${kind}`} />
       <span className="file-name">{path.split('/').pop()}</span>
     </div>

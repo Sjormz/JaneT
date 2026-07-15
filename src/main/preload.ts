@@ -21,6 +21,8 @@ const api = {
     ipcRenderer.invoke('terminal:resize', params),
   terminalWrite: (params: { id: string; data: string }) =>
     ipcRenderer.invoke('terminal:write', params),
+  terminalWriteBinary: (params: { id: string; data: string }) =>
+    ipcRenderer.invoke('terminal:writeBinary', params),
   terminalDestroy: (params: { id: string }) =>
     ipcRenderer.invoke('terminal:destroy', params),
   onTerminalData: (callback: (params: { id: string; data: string }) => void) => {
@@ -34,8 +36,12 @@ const api = {
     ipcRenderer.invoke('ssh:connect', params),
   sshCreateShell: (params: { id: string; termId: string; cols: number; rows: number }) =>
     ipcRenderer.invoke('ssh:createShell', params),
-  sshWriteShell: (params: { termId: string; data: string }) =>
+  sshWriteShell: (params: { sessionId?: string; termId: string; data: string }) =>
     ipcRenderer.invoke('ssh:writeShell', params),
+  sshWriteShellBinary: (params: { sessionId?: string; termId: string; data: string }) =>
+    ipcRenderer.invoke('ssh:writeShellBinary', params),
+  sshDestroyShell: (params: { sessionId?: string; termId: string }) =>
+    ipcRenderer.invoke('ssh:destroyShell', params),
   sshResizeShell: (params: { termId: string; cols: number; rows: number }) =>
     ipcRenderer.invoke('ssh:resizeShell', params),
   sshListDir: (params: { sessionId: string; remotePath: string }) =>
@@ -58,6 +64,8 @@ const api = {
     ipcRenderer.invoke('git:status', params),
   gitBranches: (params: { repoPath: string }) =>
     ipcRenderer.invoke('git:branches', params),
+  gitDetails: (params: { repoPath: string }) =>
+    ipcRenderer.invoke('git:details', params),
   gitLog: (params: { repoPath: string; maxCount?: number }) =>
     ipcRenderer.invoke('git:log', params),
   gitFindRepo: (params: { startPath: string }) =>
@@ -83,6 +91,7 @@ const api = {
 
   // App
   getPlatform: () => ipcRenderer.invoke('app:getPlatform'),
+  openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
 
   // Window controls (custom titlebar)
   windowMinimize: () => ipcRenderer.invoke('window:minimize'),

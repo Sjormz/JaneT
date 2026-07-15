@@ -16,12 +16,14 @@ export function runCleanup(entries: unknown[]): void {
   }
 }
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { SearchAddon } from '@xterm/addon-search';
+import { SearchAddon, type ISearchOptions } from '@xterm/addon-search';
 import SearchOverlay from './SearchOverlay';
 import { getTheme, ThemeName } from '../themes';
 import { useKeybindings } from '../KeybindingsContext';
 import { matchesShortcut } from '../keybindings';
 import { fileUrlToPath } from '../osc7';
+import { createKittyGraphicsLayer } from '../kittyGraphics';
+import { refreshCoordinator } from '../refreshCoordinator';
 import '@xterm/xterm/css/xterm.css';
 
 interface TerminalPaneProps {
@@ -44,6 +46,15 @@ interface TerminalPaneProps {
 const MIN_SSH_COLS = 120;
 const MIN_SSH_ROWS = 40;
 
+const SEARCH_OPTIONS: ISearchOptions = {
+  decorations: {
+    matchBorder: '#7aa2f7',
+    matchOverviewRuler: '#7aa2f7',
+    activeMatchBorder: '#e0af68',
+    activeMatchColorOverviewRuler: '#e0af68',
+  },
+};
+
 function sshDimensions(dims: { cols: number; rows: number } | undefined | null) {
   return {
     cols: Math.max(dims?.cols || 80, MIN_SSH_COLS),
@@ -65,6 +76,7 @@ interface CachedTerminalPane {
   term: Terminal;
   fitAddon: FitAddon;
   searchAddon: SearchAddon;
+  hasActiveSearch: boolean;
   cleanup: unknown[];
   tabType: 'local' | 'ssh';
   sshSessionId?: string;
@@ -113,7 +125,6 @@ export default function TerminalPane({
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
-  const cleanupRef = useRef<unknown[]>([]);
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
 
   const [searchVisible, setSearchVisible] = useState(false);
@@ -127,13 +138,18 @@ export default function TerminalPane({
   const kbBindingsRef = useRef(kbBindings);
   kbBindingsRef.current = kbBindings;
 
+  const clearSearchSelection = () => {
+    searchAddonRef.current?.clearDecorations();
+    termRef.current?.clearSelection();
+    const cached = terminalPaneCache.get(termId);
+    if (cached) cached.hasActiveSearch = false;
+  };
+
   const closeSearch = () => {
     setSearchVisible(false);
     setSearchQuery('');
     setSearchResults({ resultIndex: 0, resultCount: 0 });
-    if (searchAddonRef.current) {
-      searchAddonRef.current.findNext('', { decorations: {} as any } as any);
-    }
+    clearSearchSelection();
     termRef.current?.focus();
   };
 
@@ -158,17 +174,64 @@ export default function TerminalPane({
   const doSearch = (query: string, dir: 'next' | 'prev' = 'next') => {
     if (!query || !searchAddonRef.current) {
       setSearchResults({ resultIndex: 0, resultCount: 0 });
+      clearSearchSelection();
       return;
     }
-    const options = {
-      decorations: {
-        searchHighlight: true,
-        matchOverviewRuler: true,
-      } as any,
-    };
-    searchAddonRef.current[dir === 'next' ? 'findNext' : 'findPrevious'](query, options);
+    const cached = terminalPaneCache.get(termId);
+    if (cached) cached.hasActiveSearch = true;
+    searchAddonRef.current[dir === 'next' ? 'findNext' : 'findPrevious'](query, SEARCH_OPTIONS);
   };
 
+  const attachTerminal = (container: HTMLDivElement, term: Terminal, fitAddon: FitAddon, searchAddon: SearchAddon, initialDelay: number) => {
+    const mountCleanup: unknown[] = [];
+    const cached = terminalPaneCache.get(termId);
+    if (!searchQuery && cached?.hasActiveSearch) {
+      searchAddon.clearDecorations();
+      term.clearSelection();
+      cached.hasActiveSearch = false;
+    }
+    mountCleanup.push(searchAddon.onDidChangeResults((results) => setSearchResults(results)));
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const notifyResize = () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => syncTerminalSize(term, fitAddon), 50);
+    };
+    const resizeObserver = new ResizeObserver(notifyResize);
+    resizeObserver.observe(container);
+    mountCleanup.push(() => resizeObserver.disconnect());
+    const initialResizeTimer = setTimeout(notifyResize, initialDelay);
+    mountCleanup.push(() => clearTimeout(initialResizeTimer));
+    mountCleanup.push(() => { if (resizeTimer) clearTimeout(resizeTimer); });
+    window.addEventListener('resize', notifyResize);
+    mountCleanup.push(() => window.removeEventListener('resize', notifyResize));
+    const clickListener = () => term.focus();
+    container.addEventListener('click', clickListener);
+    mountCleanup.push(() => container.removeEventListener('click', clickListener));
+    const focusListener = () => onFocus?.(termId);
+    container.addEventListener('focusin', focusListener);
+    mountCleanup.push(() => container.removeEventListener('focusin', focusListener));
+    term.attachCustomKeyEventHandler((e) => {
+      const currentBindings = kbBindingsRef.current;
+      if (matchesShortcut(e, currentBindings['search-toggle'])) {
+        e.preventDefault();
+        setSearchVisible((visible) => !visible);
+        return false;
+      }
+      if (e.key === 'Escape' && searchVisibleRef.current) {
+        e.preventDefault();
+        closeSearch();
+        return false;
+      }
+      return true;
+    });
+    // xterm keeps one handler for its full lifetime. Replace the component
+    // closure while cached/detached so it cannot update an unmounted pane.
+    mountCleanup.push(() => term.attachCustomKeyEventHandler(() => true));
+    termRef.current = term;
+    fitAddonRef.current = fitAddon;
+    searchAddonRef.current = searchAddon;
+    return mountCleanup;
+  };
 
   useEffect(() => {
     const container = containerRef.current;
@@ -186,7 +249,6 @@ export default function TerminalPane({
         cached.disposeTimer = null;
       }
 
-      const mountCleanup: unknown[] = [];
       const { term, fitAddon, searchAddon } = cached;
 
       if (term.element && term.element.parentElement !== container) {
@@ -197,43 +259,8 @@ export default function TerminalPane({
 
       repaintTerminal(term, fitAddon);
       const repaintTimer = setTimeout(() => repaintTerminal(term, fitAddon), 0);
+      const mountCleanup = attachTerminal(container, term, fitAddon, searchAddon, 0);
       mountCleanup.push(() => clearTimeout(repaintTimer));
-
-      const resultsDisposable = searchAddon.onDidChangeResults((results) => {
-        setSearchResults(results);
-      });
-      mountCleanup.push(resultsDisposable);
-
-      let resizeTimer: ReturnType<typeof setTimeout> | null = null;
-      const notifyResize = () => {
-        if (resizeTimer) clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(() => {
-          syncTerminalSize(term, fitAddon);
-        }, 50);
-      };
-
-      const resizeObserver = new ResizeObserver(notifyResize);
-      resizeObserver.observe(container);
-      mountCleanup.push(() => resizeObserver.disconnect());
-
-      const initialResizeTimer = setTimeout(notifyResize, 0);
-      mountCleanup.push(() => clearTimeout(initialResizeTimer));
-      mountCleanup.push(() => { if (resizeTimer) clearTimeout(resizeTimer); });
-
-      window.addEventListener('resize', notifyResize);
-      mountCleanup.push(() => window.removeEventListener('resize', notifyResize));
-
-      const clickListener = () => term.focus();
-      container.addEventListener('click', clickListener);
-      mountCleanup.push(() => container.removeEventListener('click', clickListener));
-
-      const focusListener = () => onFocus?.(termId);
-      container.addEventListener('focusin', focusListener);
-      mountCleanup.push(() => container.removeEventListener('focusin', focusListener));
-
-      termRef.current = term;
-      fitAddonRef.current = fitAddon;
-      searchAddonRef.current = searchAddon;
       onReady(termId);
 
       return () => {
@@ -278,12 +305,17 @@ export default function TerminalPane({
         brightCyan: '#7dcfff',
         brightWhite: '#c0caf5',
       },
+      // xterm 6 still marks parser.registerOscHandler as proposed; this is
+      // needed for local shell cwd integration and must be rechecked on upgrade.
       allowProposedApi: true,
     });
 
     const fitAddon = new FitAddon();
     const unicode11Addon = new Unicode11Addon();
-    const webLinksAddon = new WebLinksAddon();
+    const webLinksAddon = new WebLinksAddon((event, url) => {
+      event.preventDefault();
+      window.janet.openExternal(url).catch(() => {});
+    });
     const searchAddon = new SearchAddon();
 
     term.loadAddon(unicode11Addon);
@@ -292,27 +324,34 @@ export default function TerminalPane({
     term.loadAddon(webLinksAddon);
     term.loadAddon(searchAddon);
 
-    searchAddon.onDidChangeResults((results) => {
-      setSearchResults(results);
-    });
-
     term.open(container);
     fitAddon.fit();
 
     const lifetimeCleanup: unknown[] = [];
-    const mountCleanup: unknown[] = [];
+    const kittyGraphics = tabType === 'local' ? createKittyGraphicsLayer(term) : null;
+    if (kittyGraphics) lifetimeCleanup.push(kittyGraphics);
 
     const disposable = term.onData((data) => {
       if (tabType === 'local') {
         window.janet.terminalWrite({ id: termId, data });
       } else if (tabType === 'ssh') {
-        window.janet.sshWriteShell({ termId, data });
+        window.janet.sshWriteShell({ sessionId: sshSessionId, termId, data });
       }
     });
     lifetimeCleanup.push(disposable);
 
+    const binaryDisposable = term.onBinary((data) => {
+      if (tabType === 'local') {
+        window.janet.terminalWriteBinary({ id: termId, data });
+      } else {
+        window.janet.sshWriteShellBinary({ sessionId: sshSessionId, termId, data });
+      }
+    });
+    lifetimeCleanup.push(binaryDisposable);
+
     const cleanupListener = window.janet.onTerminalData(({ id, data }) => {
       if (id === termId) {
+        kittyGraphics?.push(data);
         term.write(data);
       }
     });
@@ -343,85 +382,41 @@ export default function TerminalPane({
     }
 
 
-    let resizeTimer: any;
-    const notifyResize = () => {
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        syncTerminalSize(term, fitAddon);
-      }, 50);
-    };
+    const mountCleanup = attachTerminal(container, term, fitAddon, searchAddon, 100);
 
-    const resizeObserver = new ResizeObserver(notifyResize);
-    resizeObserver.observe(container);
-    mountCleanup.push(() => resizeObserver.disconnect());
-
-    const initialResizeTimer = setTimeout(notifyResize, 100);
-    mountCleanup.push(() => clearTimeout(initialResizeTimer));
-    mountCleanup.push(() => clearTimeout(resizeTimer));
-
-    window.addEventListener('resize', notifyResize);
-    mountCleanup.push(() => window.removeEventListener('resize', notifyResize));
-
-    const clickListener = () => term.focus();
-    container.addEventListener('click', clickListener);
-    mountCleanup.push(() => container.removeEventListener('click', clickListener));
-
-    const focusListener = () => onFocus?.(termId);
-    container.addEventListener('focusin', focusListener);
-    mountCleanup.push(() => container.removeEventListener('focusin', focusListener));
-
-    termRef.current = term;
-    fitAddonRef.current = fitAddon;
-    searchAddonRef.current = searchAddon;
-
-    let lastReportedCwd: string | null = initialCwd || null;
-    if (initialCwd) onCwdChange?.(termId, initialCwd);
-
-    let cwdDebounce: ReturnType<typeof setTimeout> | null = null;
-    const reportCwd = (newCwd: string) => {
-      if (newCwd === lastReportedCwd) return;
-      lastReportedCwd = newCwd;
-      if (cwdDebounce) clearTimeout(cwdDebounce);
-      cwdDebounce = setTimeout(() => {
-        onCwdChange?.(termId, newCwd);
-      }, 80);
-    };
-
-    const oscDisposable = term.parser.registerOscHandler(7, (data) => {
-      const path = fileUrlToPath(data);
-      if (path) reportCwd(path);
-      return true;
-    });
-    lifetimeCleanup.push(oscDisposable);
-    lifetimeCleanup.push(() => {
-      if (cwdDebounce) clearTimeout(cwdDebounce);
-    });
-    cleanupRef.current = lifetimeCleanup;
-
+    if (tabType === 'local') {
+      let lastReportedCwd: string | null = initialCwd || null;
+      if (initialCwd) onCwdChange?.(termId, initialCwd);
+      let cwdDebounce: ReturnType<typeof setTimeout> | null = null;
+      const reportCwd = (newCwd: string) => {
+        if (newCwd === lastReportedCwd) return;
+        lastReportedCwd = newCwd;
+        if (cwdDebounce) clearTimeout(cwdDebounce);
+        cwdDebounce = setTimeout(() => onCwdChange?.(termId, newCwd), 80);
+      };
+      lifetimeCleanup.push(term.parser.registerOscHandler(7, (data) => {
+        const path = fileUrlToPath(data);
+        if (path) {
+          // OSC 7 is emitted before every local shell prompt. Even when the
+          // cwd is unchanged, the command that just completed may have
+          // switched branches or changed files, so invalidate live UI data.
+          refreshCoordinator.invalidate('prompt');
+          reportCwd(path);
+        }
+        return true;
+      }));
+      lifetimeCleanup.push(() => { if (cwdDebounce) clearTimeout(cwdDebounce); });
+    }
     terminalPaneCache.set(termId, {
       term,
       fitAddon,
       searchAddon,
+      hasActiveSearch: false,
       cleanup: lifetimeCleanup,
       tabType,
       sshSessionId,
       sshShellReady,
       disposeTimer: null,
-    });
-
-    term.attachCustomKeyEventHandler((e) => {
-      const currentBindings = kbBindingsRef.current;
-      if (matchesShortcut(e, currentBindings['search-toggle'])) {
-        e.preventDefault();
-        setSearchVisible((v) => !v);
-        return false;
-      }
-      if (e.key === 'Escape' && searchVisibleRef.current) {
-        e.preventDefault();
-        closeSearch();
-        return false;
-      }
-      return true;
     });
 
     return () => {
@@ -444,10 +439,15 @@ export default function TerminalPane({
   useEffect(() => {
     if (termRef.current && fontSize) {
       termRef.current.options.fontSize = fontSize;
-      setTimeout(() => {
-        try { fitAddonRef.current?.fit(); } catch {}
+      const timer = setTimeout(() => {
+        const term = termRef.current;
+        const fitAddon = fitAddonRef.current;
+        if (!term || !fitAddon) return;
+        syncTerminalSize(term, fitAddon);
       }, 10);
+      return () => clearTimeout(timer);
     }
+    return undefined;
   }, [fontSize]);
 
   useEffect(() => {
@@ -471,9 +471,7 @@ export default function TerminalPane({
             doSearch(q);
           } else {
             setSearchResults({ resultIndex: 0, resultCount: 0 });
-            if (searchAddonRef.current) {
-              searchAddonRef.current.findNext('', { decorations: {} as any } as any);
-            }
+            clearSearchSelection();
           }
         }}
         onNext={() => doSearch(searchQuery, 'next')}

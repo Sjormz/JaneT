@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
+import { safeStorage } from 'electron';
 
 // Mock electron's app module
 vi.mock('electron', () => ({
@@ -34,6 +35,7 @@ vi.mock('fs', () => ({
 describe('SettingsManager', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true);
   });
 
   it('creates with default settings when no file exists', async () => {
@@ -126,11 +128,91 @@ describe('SettingsManager', () => {
 
     const savedJson = (fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string;
     expect(savedJson).not.toContain('"password": "secret"');
-    expect(savedJson).toContain('"passwordEncrypted"');
+    expect(savedJson).toContain('"passwordSecret"');
+    expect(savedJson).toContain('"version": 1');
+    expect(savedJson).toContain('"scheme": "electron-safe-storage"');
 
     (fsMock.readFileSync as any).mockImplementationOnce(() => savedJson);
     const loaded = new SettingsManager().get();
     expect(loaded.sshProfiles[0].password).toBe('secret');
+  });
+
+  it('does not persist a plaintext SSH credential when safeStorage is unavailable', async () => {
+    const fsMock = await import('fs');
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+
+    manager.set({
+      sshProfiles: [{
+        id: 'alice@box.local:22:password',
+        host: 'box.local',
+        port: 22,
+        username: 'alice',
+        auth: 'password',
+        password: 'must-not-hit-disk',
+      }],
+    });
+
+    const savedJson = (fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string;
+    expect(savedJson).not.toContain('must-not-hit-disk');
+    expect(savedJson).not.toContain('passwordSecret');
+    expect(savedJson).not.toContain('passwordEncrypted');
+    expect(warning).toHaveBeenCalled();
+    warning.mockRestore();
+  });
+
+  it('preserves an opaque encrypted credential during profile edits if safeStorage is temporarily unavailable', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const first = new SettingsManager();
+    first.set({
+      sshProfiles: [{
+        id: 'alice@box.local:22:password',
+        host: 'box.local',
+        port: 22,
+        username: 'alice',
+        auth: 'password',
+        password: 'secret',
+      }],
+    });
+    const encryptedJson = (fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string;
+    const encryptedSecret = JSON.parse(encryptedJson).sshProfiles[0].passwordSecret;
+
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    (fsMock.readFileSync as any).mockImplementationOnce(() => encryptedJson);
+    const second = new SettingsManager();
+    expect(second.get().sshProfiles[0].password).toBeUndefined();
+    second.set({
+      sshProfiles: second.get().sshProfiles.map((profile) => ({
+        ...profile,
+        username: 'renamed-alice',
+      })),
+    });
+
+    const rewritten = JSON.parse((fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string);
+    expect(rewritten.sshProfiles[0].username).toBe('renamed-alice');
+    expect(rewritten.sshProfiles[0].passwordSecret).toEqual(encryptedSecret);
+  });
+
+  it('persists, safely migrates, and rejects unexpected replacement of SSH host keys', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+
+    manager.rememberSshHostKey('Box.Local', 22, 'sha256:abc123');
+    expect(manager.getSshHostKey('box.local', 22)).toBe('sha256:abc123');
+    expect(() => manager.migrateSshHostKey(
+      'box.local', 22, 'sha256:not-the-stored-key', 'SHA256:standard',
+    )).toThrow(/host key changed/i);
+
+    manager.migrateSshHostKey('box.local', 22, 'sha256:abc123', 'SHA256:standard');
+    expect(manager.getSshHostKey('box.local', 22)).toBe('SHA256:standard');
+    expect(() => manager.rememberSshHostKey('box.local', 22, 'SHA256:different')).toThrow(/host key changed/i);
+
+    const saved = JSON.parse((fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string);
+    expect(saved.sshHostKeys['box.local:22']).toBe('SHA256:standard');
   });
 
   it('preserves a saved session across reload', async () => {

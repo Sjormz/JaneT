@@ -84,6 +84,17 @@ describe('buildShellInit', () => {
       // The actual OSC 7 escape sequence.
       expect(init).toMatch(/\\033\]7/);
     });
+
+    it('scopes Hermes graphics to direct, non-multiplexed invocations', () => {
+      const init = buildShellInit('bash');
+      expect(init).toContain('type -t hermes');
+      expect(init).toContain('JANET_KITTY_GRAPHICS=1 command hermes');
+      expect(init).toContain('JANET_KITTY_GRAPHICS= KITTY_WINDOW_ID= WEZTERM_PANE= ITERM_SESSION_ID= TERM_PROGRAM=JaneT command hermes');
+      expect(init).toContain('TMUX');
+      expect(init).toContain('STY');
+      expect(init).toContain('function hermes {');
+      expect(init).not.toContain('hermes() {');
+    });
   });
 
   describe('Zsh', () => {
@@ -91,12 +102,29 @@ describe('buildShellInit', () => {
       const init = buildShellInit('zsh');
       expect(init).toContain('precmd_functions');
     });
+
+    it('does not replace an existing Hermes alias or function', () => {
+      const init = buildShellInit('zsh');
+      expect(init).toContain('! $+aliases[hermes]');
+      expect(init).toContain('! $+galiases[hermes]');
+      expect(init).toContain('! $+functions[hermes]');
+      expect(init).toContain("command 'hermes'");
+      expect(init).toContain('function hermes {');
+      expect(init).not.toContain('hermes() {');
+    });
   });
 
   describe('Fish', () => {
     it('uses a fish_prompt event handler for fish', () => {
       const init = buildShellInit('fish');
       expect(init).toContain('--on-event fish_prompt');
+    });
+
+    it('uses a function-local exported graphics flag', () => {
+      const init = buildShellInit('fish');
+      expect(init).toContain("set -lx JANET_KITTY_GRAPHICS 1");
+      expect(init).toContain("set -lx JANET_KITTY_GRAPHICS ''");
+      expect(init).toContain("set -lx TERM_PROGRAM JaneT");
     });
   });
 

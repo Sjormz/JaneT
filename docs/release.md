@@ -16,9 +16,33 @@ When a `v*` tag is pushed, `.github/workflows/release.yml`:
    - `npm run build`
    - `npm run test:e2e` under Xvfb
 4. Builds release artifacts on Linux, macOS, and Windows.
-5. Uploads installers and update metadata to the matching GitHub Release.
+5. Verifies the exact installer/update-metadata set and starts a real PTY with
+   each runner's packaged Electron runtime.
+6. Verifies both macOS architectures use hardened Developer ID signatures.
+7. Uploads installers and update metadata to the matching GitHub Release.
 
 The app uses `electron-updater` with GitHub Releases, so the generated `latest*.yml` assets must stay attached to the release.
+The macOS ZIP blockmaps must also be published for differential updates. The
+release check executes the host-architecture macOS PTY, attempts the x64 PTY on
+Apple Silicon when Rosetta is available, and always validates both architecture
+bundles' native module/helper layout and executable permissions.
+
+### macOS release credentials
+
+Public macOS artifacts are signed and notarized. Configure these repository
+secrets before creating a release tag:
+
+- `MAC_CSC_LINK`: the Developer ID Application certificate (`.p12`) as a path,
+  URL, or base64 value accepted by electron-builder
+- `MAC_CSC_KEY_PASSWORD`: the certificate password
+- `APPLE_ID`: the Apple account used for notarization
+- `APPLE_APP_SPECIFIC_PASSWORD`: an app-specific password for that account
+- `APPLE_TEAM_ID`: the Apple Developer team identifier
+
+The release job fails before packaging when any credential is missing, and it
+rejects ad-hoc or non-hardened application bundles after packaging. For an
+explicit unsigned local smoke package, use `npm run dist:mac:test`; never
+publish artifacts from that command.
 
 ## Required repository ruleset
 
@@ -112,7 +136,7 @@ gh release view v0.2.1 --web
 Confirm the release includes the expected platform artifacts:
 
 - Windows installer and portable executable
-- macOS dmg/zip artifacts
+- macOS dmg/zip artifacts and both ZIP blockmaps
 - Linux AppImage/deb artifacts
 - `latest*.yml` update metadata files
 

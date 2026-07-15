@@ -11,6 +11,8 @@ Thanks for helping improve JaneT.
 
 ## Local setup
 
+Use Node.js 22.12 or newer. This matches Electron 43 and the release/CI runtime.
+
 ```bash
 npm install
 npm run dev

@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ArrowLeftIcon, EyeIcon, EyeOffIcon, RefreshIcon,
   fileIconFor,
 } from '../icons';
+import { refreshCoordinator, RefreshReason, useRefreshTask } from '../refreshCoordinator';
 
 interface FileEntry {
   name: string;
@@ -31,6 +32,27 @@ export default function FileExplorer({ cwd, cwdReady, isRemote }: FileExplorerPr
   const [showHidden, setShowHidden] = useState(false);
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [dirContents, setDirContents] = useState<Record<string, FileEntry[]>>({});
+  const requestGeneration = useRef(0);
+  const currentPathRef = useRef(currentPath);
+  currentPathRef.current = currentPath;
+
+  const loadDirectory = useCallback(async (dirPath: string, reason: RefreshReason = 'manual') => {
+    const generation = ++requestGeneration.current;
+    const foreground = reason === 'register' || reason === 'manual';
+    if (foreground) setLoading(true);
+    setError(null);
+    try {
+      const result = await window.janet.fsListDir({ dirPath, showHidden });
+      if (generation !== requestGeneration.current || currentPathRef.current !== dirPath) return;
+      setEntries((current) => fileEntriesEqual(current, result) ? current : result);
+    } catch (err: any) {
+      if (generation !== requestGeneration.current || currentPathRef.current !== dirPath) return;
+      setError(err.message || 'Failed to list directory');
+      if (foreground) setEntries([]);
+    } finally {
+      if (generation === requestGeneration.current && foreground) setLoading(false);
+    }
+  }, [showHidden]);
 
   // Sync the explorer's current path with the focused terminal's cwd.
   // We only auto-jump when the cwd prop changes (not when the user
@@ -43,23 +65,16 @@ export default function FileExplorer({ cwd, cwdReady, isRemote }: FileExplorerPr
   }, [cwd]);
 
   useEffect(() => {
-    if (!currentPath) return;
-    loadDirectory(currentPath);
+    requestGeneration.current += 1;
   }, [currentPath, showHidden]);
 
-  const loadDirectory = async (dirPath: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await window.janet.fsListDir({ dirPath, showHidden });
-      setEntries(result);
-    } catch (err: any) {
-      setError(err.message || 'Failed to list directory');
-      setEntries([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const refreshKey = `files:${currentPath}:${showHidden ? 'hidden' : 'visible'}`;
+  useRefreshTask({
+    key: refreshKey,
+    intervalMs: 5_000,
+    enabled: cwdReady && Boolean(currentPath),
+    run: (reason) => currentPath ? loadDirectory(currentPath, reason) : undefined,
+  });
 
   const navigateTo = (dirPath: string) => {
     setHistory((prev) => [...prev, currentPath]);
@@ -112,7 +127,7 @@ export default function FileExplorer({ cwd, cwdReady, isRemote }: FileExplorerPr
           </button>
           <button
             className="icon-btn"
-            onClick={() => loadDirectory(currentPath)}
+            onClick={() => refreshCoordinator.invalidate('manual', refreshKey)}
             title="Refresh"
             aria-label="Refresh"
           >
@@ -137,7 +152,9 @@ export default function FileExplorer({ cwd, cwdReady, isRemote }: FileExplorerPr
           </button>
         )}
         {pathSegments.map((seg, i) => {
-          const pathSoFar = currentPath.split(/[/\\]/).slice(0, i + 1).join('/');
+          const pathSoFar = currentPath.startsWith('/')
+            ? `/${pathSegments.slice(0, i + 1).join('/')}`
+            : pathSegments.slice(0, i + 1).join(currentPath.includes('\\') ? '\\' : '/');
           const isDrive = seg.match(/^[A-Z]:$/i) || seg.match(/^[A-Z]$/i);
           if (isDrive && i === 0) return null;
           return (
@@ -180,4 +197,17 @@ export default function FileExplorer({ cwd, cwdReady, isRemote }: FileExplorerPr
       </div>
     </div>
   );
+}
+
+function fileEntriesEqual(left: FileEntry[], right: FileEntry[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const candidate = right[index];
+    return candidate !== undefined &&
+      entry.path === candidate.path &&
+      entry.isDirectory === candidate.isDirectory &&
+      entry.isSymlink === candidate.isSymlink &&
+      entry.size === candidate.size &&
+      entry.mtime === candidate.mtime;
+  });
 }
