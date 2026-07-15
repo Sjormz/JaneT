@@ -85,8 +85,9 @@ async function canConnect(port: number): Promise<boolean> {
 
 async function launchSecondInstance(userData: string): Promise<void> {
   const electronPath = require('electron') as string;
+  const args = process.platform === 'linux' ? ['--no-sandbox', '.'] : ['.'];
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(electronPath, ['.'], {
+    const child = spawn(electronPath, args, {
       cwd: root,
       env: electronEnv({
         NODE_ENV: 'test',
@@ -105,9 +106,8 @@ async function launchSecondInstance(userData: string): Promise<void> {
     });
     child.once('exit', () => {
       clearTimeout(timeout);
-      // Electron can terminate the losing process by signal on Linux, which
-      // reports a null exit code. The observable contract is verified by the
-      // caller: the existing hidden workspace must become visible and stay live.
+      // The observable contract is verified by the caller: the existing hidden
+      // workspace must become visible and stay live after this process exits.
       resolve();
     });
   });
