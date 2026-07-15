@@ -4,7 +4,10 @@ import {
   KeybindingAction,
   KEYBINDING_LABELS,
   formatShortcut,
+  formatShortcutForDisplay,
 } from '../keybindings';
+import { PencilIcon } from '../icons';
+import Tooltip from './Tooltip';
 
 export default function ShortcutEditor() {
   const { bindings, setBinding, resetDefaults } = useKeybindings();
@@ -35,6 +38,7 @@ export default function ShortcutEditor() {
   );
 
   const keys = Object.keys(KEYBINDING_LABELS) as KeybindingAction[];
+  const platform = navigator.platform.toLowerCase().includes('mac') ? 'darwin' : '';
 
   return (
     <div className="shortcut-editor">
@@ -50,26 +54,31 @@ export default function ShortcutEditor() {
                 ref={captureInputRef}
                 className="shortcut-key capturing"
                 tabIndex={0}
+                role="textbox"
+                aria-label={`Press a shortcut for ${KEYBINDING_LABELS[action]}`}
                 onKeyDown={handleCaptureKey(action)}
                 onBlur={() => setCapturing(null)}
               >
-                Press keys...
+                <span>Press a shortcut…</span>
+                <small>Include Ctrl, Alt, Shift, or Command</small>
               </div>
             ) : (
-              <button
-                className="shortcut-key"
-                onClick={() => handleStartCapture(action)}
-                title="Click to rebind"
-              >
-                <span className="shortcut-keys-text">{bindings[action]}</span>
-                <span className="shortcut-edit-icon">✎</span>
-              </button>
+              <Tooltip label={`Change shortcut for ${KEYBINDING_LABELS[action]}`} shortcut={formatShortcutForDisplay(bindings[action], platform)} placement="left">
+                <button
+                  className="shortcut-key"
+                  onClick={() => handleStartCapture(action)}
+                  aria-label={`Change shortcut for ${KEYBINDING_LABELS[action]} (currently ${bindings[action]})`}
+                >
+                  <span className="shortcut-keys-text">{formatShortcutForDisplay(bindings[action], platform)}</span>
+                  <PencilIcon size="xs" className="shortcut-edit-icon" />
+                </button>
+              </Tooltip>
             )}
           </div>
         ))}
       </div>
       <button className="shortcut-reset-btn" onClick={resetDefaults}>
-        Reset All to Defaults
+        Reset shortcuts to defaults
       </button>
     </div>
   );

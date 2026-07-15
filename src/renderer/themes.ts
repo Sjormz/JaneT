@@ -173,18 +173,18 @@ const themes: Record<ThemeName, ThemeDefinition> = {
       'bg-tertiary': '#e4ddc5',
       'bg-hover': '#d9d2b8',
       'bg-active': '#cdc5ab',
-      'text-primary': '#657b83',
-      'text-secondary': '#586e75',
+      'text-primary': '#2f4850',
+      'text-secondary': '#40565d',
       'text-muted': '#93a1a1',
-      'text-accent': '#268bd2',
+      'text-accent': '#0b5d8f',
       'border-color': '#cdc5ab',
-      'border-active': '#268bd2',
-      'red': '#dc322f',
-      'green': '#859900',
-      'yellow': '#b58900',
-      'blue': '#268bd2',
-      'magenta': '#d33682',
-      'cyan': '#2aa198',
+      'border-active': '#0b5d8f',
+      'red': '#b12220',
+      'green': '#4f6f00',
+      'yellow': '#735100',
+      'blue': '#0b5d8f',
+      'magenta': '#a21f65',
+      'cyan': '#006b64',
       'glass-bg': 'rgba(253, 246, 227, 0.85)',
       'glass-bg-light': 'rgba(238, 232, 213, 0.7)',
       'glass-border': 'rgba(0, 0, 0, 0.08)',
@@ -192,8 +192,8 @@ const themes: Record<ThemeName, ThemeDefinition> = {
     },
     xterm: {
       background: '#fdf6e3',
-      foreground: '#657b83',
-      cursor: '#657b83',
+      foreground: '#2f4850',
+      cursor: '#073642',
       selectionBackground: '#cdc5ab',
       black: '#073642',
       red: '#dc322f',
@@ -275,6 +275,16 @@ export function applyCssTheme(cssVars: CssThemeVars): void {
   for (const [key, value] of Object.entries(cssVars)) {
     root.style.setProperty(`--${key}`, value);
   }
+  // Keep shared chrome opaque and theme-owned. Legacy `glass-*` entries in
+  // saved theme definitions are deliberately normalized here so light themes
+  // never inherit Tokyo Night titlebars, menus, or hover states.
+  root.style.setProperty('--glass-bg', cssVars['bg-secondary']);
+  root.style.setProperty('--glass-bg-strong', cssVars['bg-tertiary']);
+  root.style.setProperty('--glass-bg-light', cssVars['bg-tertiary']);
+  root.style.setProperty('--glass-border', cssVars['border-color']);
+  root.style.setProperty('--glass-border-active', cssVars['border-active']);
+  root.style.setProperty('--text-tertiary', cssVars['text-secondary']);
+  root.style.setProperty('--text-disabled', cssVars['text-muted']);
 }
 
 export const themeNames = Object.keys(themes) as ThemeName[];

@@ -12,10 +12,12 @@ autoUpdater.logger = {
 
 // Don't auto-download — let the user decide
 autoUpdater.autoDownload = false;
-autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.autoInstallOnAppQuit = false;
 
 let mainWindowRef: BrowserWindow | null = null;
+let prepareForInstallRef: (() => Promise<boolean>) | null = null;
 let updateInfo: UpdateInfo | null = null;
+let updateDownloaded = false;
 let suppressNoUpdateNotice = false;
 let initialized = false;
 
@@ -25,8 +27,12 @@ function send(channel: string, ...args: unknown[]) {
   }
 }
 
-export function initUpdater(mainWindow: BrowserWindow) {
+export function initUpdater(
+  mainWindow: BrowserWindow,
+  prepareForInstall: () => Promise<boolean>,
+) {
   mainWindowRef = mainWindow;
+  prepareForInstallRef = prepareForInstall;
   if (initialized) return;
   initialized = true;
 
@@ -54,8 +60,19 @@ export function initUpdater(mainWindow: BrowserWindow) {
     }
   });
 
-  ipcMain.handle('update:install', () => {
-    if (!updateInfo) return { success: false, error: 'No update downloaded' };
+  ipcMain.handle('update:install', async () => {
+    if (!updateInfo || !updateDownloaded) return { success: false, error: 'No update downloaded' };
+    if (!prepareForInstallRef) {
+      return { success: false, error: 'Update shutdown protection is unavailable' };
+    }
+    try {
+      const canInstall = await prepareForInstallRef();
+      if (!canInstall) return { success: false, cancelled: true };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[updater] failed to prepare workspace for install:', message);
+      return { success: false, error: message };
+    }
     setImmediate(() => {
       autoUpdater.quitAndInstall(true, true);
     });
@@ -71,6 +88,7 @@ export function initUpdater(mainWindow: BrowserWindow) {
   autoUpdater.on('update-available', (info: UpdateInfo) => {
     console.log('[updater] update-available:', info.version);
     updateInfo = info;
+    updateDownloaded = false;
     send('update:available', {
       version: info.version,
       releaseDate: info.releaseDate,
@@ -81,6 +99,7 @@ export function initUpdater(mainWindow: BrowserWindow) {
   autoUpdater.on('update-not-available', (info: UpdateInfo) => {
     console.log('[updater] update-not-available (current: ' + info.version + ')');
     updateInfo = null;
+    updateDownloaded = false;
     if (!suppressNoUpdateNotice) send('update:not-available');
   });
 
@@ -95,6 +114,7 @@ export function initUpdater(mainWindow: BrowserWindow) {
 
   autoUpdater.on('update-downloaded', (info) => {
     console.log('[updater] update-downloaded:', info.version);
+    updateDownloaded = true;
     send('update:downloaded', { version: info.version });
   });
 

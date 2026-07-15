@@ -47,13 +47,13 @@ describe('SearchOverlay', () => {
       />,
     );
 
-    expect(screen.getByTestId('search-results')).toHaveTextContent('2/5');
+    expect(screen.getByTestId('search-results')).toHaveTextContent('2 of 5');
   });
 
-  it('shows 0/0 when query entered but no matches', () => {
+  it('uses plain language when a query has no matches', () => {
     render(<SearchOverlay {...defaultProps} query="xyz" />);
 
-    expect(screen.getByTestId('search-results')).toHaveTextContent('0/0');
+    expect(screen.getByTestId('search-results')).toHaveTextContent('No matches');
   });
 
   it('shows empty results when no query', () => {

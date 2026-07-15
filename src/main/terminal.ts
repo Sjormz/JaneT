@@ -3,18 +3,94 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { spawn, IPty } from 'node-pty';
 import { buildShellInit } from './shell-init';
+import {
+  ProcessInfo,
+  ProcessInspector,
+  stableProcesses,
+  SystemProcessInspector,
+} from './processInspector';
 
 interface TerminalInstance {
   pty: IPty;
   id: string;
-  /** True once we've wired the single onData forwarder for this pty. */
-  wired: boolean;
+  /** The first renderer forwarder registered for this PTY. */
+  forwardData?: (data: string) => void;
   cols: number;
   rows: number;
+  shell: string;
+  cwd: string;
+  atPrompt: boolean;
+  hasSubmittedCommand: boolean;
+  promptMarkerTail: string;
+}
+
+export interface RunningTerminalWork {
+  terminalId: string;
+  rootPid: number;
+  processName: string;
+  kind: 'foreground' | 'background' | 'unknown';
+  cwd?: string;
+  descendantPids: number[];
+}
+
+export interface TerminalManagerOptions {
+  processInspector?: ProcessInspector;
+  sampleDelayMs?: number;
+  sleep?: (milliseconds: number) => Promise<void>;
+  stopGraceMs?: number;
+  terminateGraceMs?: number;
+  forceKillGraceMs?: number;
+  killProcess?: (pid: number, signal: NodeJS.Signals) => void;
 }
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+const DEFAULT_PROCESS_SAMPLE_DELAY_MS = 150;
+const DEFAULT_STOP_GRACE_MS = 300;
+const DEFAULT_TERMINATE_GRACE_MS = 750;
+const DEFAULT_FORCE_KILL_GRACE_MS = 250;
+const PROMPT_MARKER = '\x1b]7;';
+
+const SHELL_PROCESS_NAMES = new Set([
+  'bash', 'cmd', 'dash', 'fish', 'ksh', 'nu', 'nushell', 'powershell', 'pwsh', 'sh', 'tcsh', 'zsh',
+]);
+
+function processName(name: string): string {
+  const leaf = name.replace(/\\/g, '/').split('/').pop() || name;
+  return leaf.toLowerCase().replace(/^-+/, '').replace(/\.exe$/i, '');
+}
+
+function processIdentityKey(process: ProcessInfo): string {
+  return process.startTime
+    ? `${process.pid}:${process.startTime}`
+    : `${process.pid}:${process.name.toLowerCase()}`;
+}
+
+function isShellProcess(name: string): boolean {
+  return SHELL_PROCESS_NAMES.has(processName(name));
+}
+
+function descendantsOf(processes: ProcessInfo[], rootPid: number): ProcessInfo[] {
+  const children = new Map<number, ProcessInfo[]>();
+  for (const process of processes) {
+    if (process.state?.toUpperCase().startsWith('Z')) continue;
+    const siblings = children.get(process.ppid) ?? [];
+    siblings.push(process);
+    children.set(process.ppid, siblings);
+  }
+
+  const descendants: ProcessInfo[] = [];
+  const pending = [...(children.get(rootPid) ?? [])];
+  const visited = new Set<number>([rootPid]);
+  while (pending.length > 0) {
+    const process = pending.shift()!;
+    if (visited.has(process.pid)) continue;
+    visited.add(process.pid);
+    descendants.push(process);
+    pending.push(...(children.get(process.pid) ?? []));
+  }
+  return descendants;
+}
 
 function resolveTerminalCwd(cwd?: string): string {
   if (!cwd) return os.homedir();
@@ -56,7 +132,25 @@ function shellLaunch(shell: string, init: string, initFile: ShellInitFile): { ar
 
 export class TerminalManager {
   private terminals: Map<string, TerminalInstance> = new Map();
+  private pendingStopProcesses: Map<string, ProcessInfo> = new Map();
   private shellInitDir: string | null = null;
+  private readonly processInspector: ProcessInspector;
+  private readonly sampleDelayMs: number;
+  private readonly sleep: (milliseconds: number) => Promise<void>;
+  private readonly stopGraceMs: number;
+  private readonly terminateGraceMs: number;
+  private readonly forceKillGraceMs: number;
+  private readonly killProcess: (pid: number, signal: NodeJS.Signals) => void;
+
+  constructor(options: TerminalManagerOptions = {}) {
+    this.processInspector = options.processInspector ?? new SystemProcessInspector();
+    this.sampleDelayMs = Math.max(0, options.sampleDelayMs ?? DEFAULT_PROCESS_SAMPLE_DELAY_MS);
+    this.sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+    this.stopGraceMs = Math.max(0, options.stopGraceMs ?? DEFAULT_STOP_GRACE_MS);
+    this.terminateGraceMs = Math.max(0, options.terminateGraceMs ?? DEFAULT_TERMINATE_GRACE_MS);
+    this.forceKillGraceMs = Math.max(0, options.forceKillGraceMs ?? DEFAULT_FORCE_KILL_GRACE_MS);
+    this.killProcess = options.killProcess ?? ((pid, signal) => process.kill(pid, signal));
+  }
 
   /**
    * Create (or reuse) the pty for `id`, and register `onData` as its
@@ -76,10 +170,7 @@ export class TerminalManager {
   create(id: string, cwd?: string, shell?: string, onData?: (data: string) => void): IPty {
     const existing = this.terminals.get(id);
     if (existing) {
-      if (onData && !existing.wired) {
-        existing.wired = true;
-        existing.pty.onData(onData);
-      }
+      if (onData && !existing.forwardData) existing.forwardData = onData;
       return existing.pty;
     }
 
@@ -126,14 +217,33 @@ export class TerminalManager {
       env,
     });
 
-    this.terminals.set(id, { pty, id, wired: !!onData, cols: DEFAULT_COLS, rows: DEFAULT_ROWS });
+    const terminal: TerminalInstance = {
+      pty,
+      id,
+      forwardData: onData,
+      cols: DEFAULT_COLS,
+      rows: DEFAULT_ROWS,
+      shell: defaultShell,
+      cwd: defaultCwd,
+      atPrompt: true,
+      hasSubmittedCommand: false,
+      promptMarkerTail: '',
+    };
+    this.terminals.set(id, terminal);
     pty.onExit(() => {
       const current = this.terminals.get(id);
       if (current?.pty === pty) {
         this.terminals.delete(id);
       }
     });
-    if (onData) pty.onData(onData);
+    pty.onData((data) => {
+      const current = this.terminals.get(id);
+      if (current?.pty !== pty) return;
+      const promptProbe = current.promptMarkerTail + data;
+      if (promptProbe.includes(PROMPT_MARKER)) current.atPrompt = true;
+      current.promptMarkerTail = promptProbe.slice(-(PROMPT_MARKER.length - 1));
+      current.forwardData?.(data);
+    });
     return pty;
   }
 
@@ -161,6 +271,10 @@ export class TerminalManager {
   write(id: string, data: string): void {
     const term = this.terminals.get(id);
     if (term) {
+      if (data.includes('\r') || data.includes('\n')) {
+        term.atPrompt = false;
+        term.hasSubmittedCommand = true;
+      }
       term.pty.write(data);
     }
   }
@@ -168,8 +282,238 @@ export class TerminalManager {
   writeBinary(id: string, data: string): void {
     const term = this.terminals.get(id);
     if (term) {
+      if (data.includes('\r') || data.includes('\n')) {
+        term.atPrompt = false;
+        term.hasSubmittedCommand = true;
+      }
       term.pty.write(Buffer.from(data, 'binary'));
     }
+  }
+
+  async listRunningWork(): Promise<RunningTerminalWork[]> {
+    const terminals = Array.from(this.terminals.values());
+    const pendingStopProcesses = Array.from(this.pendingStopProcesses.values());
+    if (terminals.length === 0 && pendingStopProcesses.length === 0) return [];
+
+    let stable: ProcessInfo[];
+    try {
+      const first = await this.processInspector.snapshot();
+      if (this.sampleDelayMs > 0) await this.sleep(this.sampleDelayMs);
+      const second = await this.processInspector.snapshot();
+      stable = stableProcesses(first, second).filter((process) => !process.state?.toUpperCase().startsWith('Z'));
+
+      // A service can start between the two close-time samples. If the newer
+      // sample contains a meaningful new child, give it one more bounded
+      // sample so a just-started long-running task is not mistaken for a
+      // transient command and silently closed.
+      const hasNewWorkCandidate = terminals.some((terminal) => (
+        descendantsOf(second, terminal.pty.pid).some((process) => (
+          !isShellProcess(process.name) && stableProcesses(first, [process]).length === 0
+        ))
+      ));
+      if (hasNewWorkCandidate) {
+        if (this.sampleDelayMs > 0) await this.sleep(this.sampleDelayMs);
+        const third = await this.processInspector.snapshot();
+        stable = stableProcesses(second, third).filter((process) => !process.state?.toUpperCase().startsWith('Z'));
+      }
+    } catch {
+      const terminalFallback = terminals
+        .filter((terminal) => this.terminals.get(terminal.id) === terminal && terminal.hasSubmittedCommand)
+        .map((terminal) => ({
+          terminalId: terminal.id,
+          rootPid: terminal.pty.pid,
+          processName: processName(terminal.shell),
+          kind: 'unknown' as const,
+          cwd: terminal.cwd,
+          descendantPids: [],
+        }));
+      const knownPids = new Set(terminalFallback.flatMap((work) => [work.rootPid, ...work.descendantPids]));
+      return [
+        ...terminalFallback,
+        ...pendingStopProcesses
+          .filter((process) => !knownPids.has(process.pid))
+          .map((process) => ({
+            terminalId: `pending-stop-${process.pid}`,
+            rootPid: process.pid,
+            processName: processName(process.name),
+            kind: 'unknown' as const,
+            descendantPids: [],
+          })),
+      ];
+    }
+
+    const byPid = new Map(stable.map((process) => [process.pid, process]));
+    const running: RunningTerminalWork[] = [];
+    for (const terminal of terminals) {
+      if (this.terminals.get(terminal.id) !== terminal) continue;
+      const rootPid = terminal.pty.pid;
+      const root = byPid.get(rootPid);
+      const descendants = descendantsOf(stable, rootPid);
+      const meaningfulDescendants = descendants.filter((process) => !isShellProcess(process.name));
+      const rootWasReplaced = Boolean(root && processName(root.name) !== processName(terminal.shell));
+
+      if (meaningfulDescendants.length > 0 || rootWasReplaced) {
+        running.push({
+          terminalId: terminal.id,
+          rootPid,
+          processName: processName(meaningfulDescendants[0]?.name ?? root?.name ?? terminal.shell),
+          kind: terminal.atPrompt ? 'background' : 'foreground',
+          cwd: terminal.cwd,
+          descendantPids: descendants.map((process) => process.pid),
+        });
+      } else if (terminal.hasSubmittedCommand && !terminal.atPrompt) {
+        running.push({
+          terminalId: terminal.id,
+          rootPid,
+          processName: processName(root?.name ?? terminal.shell),
+          kind: 'unknown',
+          cwd: terminal.cwd,
+          descendantPids: [],
+        });
+      }
+    }
+    const knownPids = new Set(running.flatMap((work) => [work.rootPid, ...work.descendantPids]));
+    for (const process of stableProcesses(pendingStopProcesses, stable)) {
+      if (knownPids.has(process.pid)) continue;
+      running.push({
+        terminalId: `pending-stop-${process.pid}`,
+        rootPid: process.pid,
+        processName: processName(process.name),
+        kind: 'unknown',
+        descendantPids: [],
+      });
+    }
+    return running;
+  }
+
+  async stopAll(): Promise<void> {
+    const terminals = Array.from(this.terminals.values());
+    const pendingStopProcesses = Array.from(this.pendingStopProcesses.values());
+    if (terminals.length === 0 && pendingStopProcesses.length === 0) {
+      this.cleanup();
+      return;
+    }
+
+    let before: ProcessInfo[];
+    try {
+      before = await this.processInspector.snapshot();
+    } catch (error) {
+      throw new Error(`Could not inspect local processes before stopping them: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const rootPids = new Set(terminals.map((terminal) => terminal.pty.pid));
+    const tracked = new Map<string, ProcessInfo>();
+    const track = (processes: ProcessInfo[]) => {
+      for (const process of processes) tracked.set(processIdentityKey(process), process);
+    };
+    const pendingNow = stableProcesses(pendingStopProcesses, before)
+      .filter((process) => !process.state?.toUpperCase().startsWith('Z'));
+    this.pendingStopProcesses.clear();
+    track(pendingNow);
+    for (const terminal of terminals) {
+      const root = before.find((process) => process.pid === terminal.pty.pid);
+      if (root) track([root]);
+      track(descendantsOf(before, terminal.pty.pid));
+      try { terminal.pty.write('\x03'); } catch {}
+    }
+    if (this.stopGraceMs > 0) await this.sleep(this.stopGraceMs);
+
+    let afterInterrupt: ProcessInfo[];
+    try {
+      afterInterrupt = await this.processInspector.snapshot();
+    } catch (error) {
+      this.rememberPendingStops(Array.from(tracked.values()));
+      throw new Error(`Could not verify local processes after interrupting them: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const terminateTargets = new Map<string, ProcessInfo>();
+    for (const terminal of terminals) {
+      const root = afterInterrupt.find((process) => process.pid === terminal.pty.pid);
+      if (root) track([root]);
+      const descendants = descendantsOf(afterInterrupt, terminal.pty.pid).reverse();
+      track(descendants);
+      for (const descendant of descendants) {
+        terminateTargets.set(processIdentityKey(descendant), descendant);
+      }
+    }
+    const stillTracked = stableProcesses(Array.from(tracked.values()), afterInterrupt);
+    for (const process of stillTracked) {
+      if ((!rootPids.has(process.pid) || !isShellProcess(process.name)) && !terminateTargets.has(processIdentityKey(process))) {
+        terminateTargets.set(processIdentityKey(process), process);
+      }
+    }
+    for (const process of terminateTargets.values()) {
+      try { this.killProcess(process.pid, 'SIGTERM'); } catch {}
+    }
+    if (this.terminateGraceMs > 0) await this.sleep(this.terminateGraceMs);
+
+    let afterTerminate: ProcessInfo[];
+    try {
+      afterTerminate = await this.processInspector.snapshot();
+    } catch (error) {
+      this.rememberPendingStops(Array.from(tracked.values()));
+      throw new Error(`Could not verify local processes after terminating them: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const forceTargets = new Map<string, ProcessInfo>();
+    for (const process of stableProcesses(Array.from(tracked.values()), afterTerminate)) {
+      forceTargets.set(processIdentityKey(process), process);
+    }
+    for (const terminal of terminals) {
+      const root = afterTerminate.find((process) => process.pid === terminal.pty.pid);
+      if (root) {
+        track([root]);
+        forceTargets.set(processIdentityKey(root), root);
+      }
+      for (const descendant of descendantsOf(afterTerminate, terminal.pty.pid).reverse()) {
+        track([descendant]);
+        forceTargets.set(processIdentityKey(descendant), descendant);
+      }
+    }
+    track(Array.from(forceTargets.values()));
+    for (const process of forceTargets.values()) {
+      try { this.killProcess(process.pid, 'SIGKILL'); } catch {}
+    }
+
+    for (const terminal of terminals) {
+      try { terminal.pty.kill(); } catch {}
+    }
+    if (this.forceKillGraceMs > 0) await this.sleep(this.forceKillGraceMs);
+
+    let finalSnapshot: ProcessInfo[];
+    try {
+      finalSnapshot = await this.processInspector.snapshot();
+    } catch (error) {
+      this.rememberPendingStops(Array.from(tracked.values()));
+      throw new Error(`Could not verify that local processes stopped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    let remaining = stableProcesses(Array.from(tracked.values()), finalSnapshot)
+      .filter((process) => !process.state?.toUpperCase().startsWith('Z'));
+    if (remaining.length > 0) {
+      for (const process of remaining) {
+        try { this.killProcess(process.pid, 'SIGKILL'); } catch {}
+      }
+      if (this.forceKillGraceMs > 0) await this.sleep(this.forceKillGraceMs);
+      let verificationSnapshot: ProcessInfo[];
+      try {
+        verificationSnapshot = await this.processInspector.snapshot();
+      } catch (error) {
+        this.rememberPendingStops(remaining);
+        throw new Error(`Could not verify force-killed local processes: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      remaining = stableProcesses(remaining, verificationSnapshot)
+        .filter((process) => !process.state?.toUpperCase().startsWith('Z'));
+    }
+    if (remaining.length > 0) {
+      this.pendingStopProcesses.clear();
+      this.rememberPendingStops(remaining);
+      throw new Error(`These local processes did not stop: ${remaining.map((process) => `${process.name} (${process.pid})`).join(', ')}`);
+    }
+    this.pendingStopProcesses.clear();
+    for (const terminal of terminals) {
+      if (this.terminals.get(terminal.id) === terminal) this.terminals.delete(terminal.id);
+    }
+    this.cleanup();
   }
 
   destroy(id: string): void {
@@ -187,6 +531,13 @@ export class TerminalManager {
     if (this.shellInitDir) {
       try { fs.rmSync(this.shellInitDir, { recursive: true, force: true }); } catch {}
       this.shellInitDir = null;
+    }
+  }
+
+  private rememberPendingStops(processes: ProcessInfo[]): void {
+    for (const process of processes) {
+      if (process.state?.toUpperCase().startsWith('Z')) continue;
+      this.pendingStopProcesses.set(processIdentityKey(process), process);
     }
   }
 

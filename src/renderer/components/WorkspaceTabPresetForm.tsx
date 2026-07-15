@@ -2,9 +2,16 @@ import React, { useEffect, useState } from 'react';
 import { SavedSSHProfile, WorkspaceTabPreset, WorkspaceTerminal, createWorkspaceRoot } from '../types';
 import { SavedPaneNode, serializePaneTree } from '../sessionRestore';
 import { ChevronDownIcon, PlusIcon, XCloseIcon } from '../icons';
+import Tooltip from './Tooltip';
 
 export function sshProfileLabel(profile: SavedSSHProfile) {
   return `${profile.username ? `${profile.username}@` : ''}${profile.host}:${profile.port}`;
+}
+
+function selectedSshProfileLabel(terminal: WorkspaceTerminal, sshProfiles: SavedSSHProfile[]) {
+  if (!terminal.sshProfileId) return 'Choose a saved connection';
+  const profile = sshProfiles.find((candidate) => candidate.id === terminal.sshProfileId);
+  return profile ? sshProfileLabel(profile) : 'Missing saved connection';
 }
 
 function newPresetId() {
@@ -46,6 +53,11 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
   const [name, setName] = useState('');
   const [terminals, setTerminals] = useState<WorkspaceTerminal[]>([{ type: 'local' }]);
   const [openProfileIndex, setOpenProfileIndex] = useState<number | null>(null);
+  const missingSshProfileIndex = terminals.findIndex((terminal) => (
+    terminal.type === 'ssh'
+    && (!terminal.sshProfileId || !sshProfiles.some((profile) => profile.id === terminal.sshProfileId))
+  ));
+  const canSubmit = Boolean(name.trim()) && missingSshProfileIndex === -1;
 
   useEffect(() => {
     setName(preset?.name ?? '');
@@ -59,7 +71,7 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!name.trim() || terminals.some((terminal) => terminal.type === 'ssh' && !terminal.sshProfileId)) return;
+    if (!name.trim() || missingSshProfileIndex >= 0) return;
     const root = preset?.root
       ? applyTerminals(preset.root, terminals)
       : serializePaneTree(createWorkspaceRoot(terminals));
@@ -75,16 +87,21 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
 
   return (
     <form className="workspace-form" onSubmit={handleSubmit}>
-      <input className="form-input" value={name} onChange={(event) => setName(event.target.value)} placeholder="Workspace name" aria-label="Workspace name" required />
+      <label className="form-field">
+        <span>Preset name</span>
+        <input className="form-input" value={name} onChange={(event) => setName(event.target.value)} placeholder="My development setup" aria-label="Preset name" required />
+      </label>
       <div className="workspace-terminal-list">
         {terminals.map((terminal, index) => (
           <div className="workspace-terminal-entry" key={index}>
             <div className="workspace-terminal-label-row">
               <span className="workspace-terminal-label">Terminal {index + 1}</span>
               {terminals.length > 1 && (
-                <button type="button" className="workspace-terminal-remove" aria-label={`Remove terminal ${index + 1}`} onClick={() => setTerminals((current) => current.filter((_, i) => i !== index))}>
-                  <XCloseIcon size="xs" />
-                </button>
+                <Tooltip label={`Remove terminal ${index + 1}`} placement="left">
+                  <button type="button" className="workspace-terminal-remove" aria-label={`Remove terminal ${index + 1}`} onClick={() => setTerminals((current) => current.filter((_, i) => i !== index))}>
+                    <XCloseIcon size="xs" />
+                  </button>
+                </Tooltip>
               )}
             </div>
             <div className="workspace-terminal-type" role="group" aria-label={`Terminal ${index + 1} type`}>
@@ -96,12 +113,12 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
             ) : (
               <div className="workspace-profile-select">
                 <button type="button" className="workspace-profile-trigger" aria-label={`Terminal ${index + 1} SSH profile`} aria-expanded={openProfileIndex === index} aria-haspopup="listbox" onClick={() => setOpenProfileIndex((open) => open === index ? null : index)}>
-                  <span>{terminal.sshProfileId ? sshProfileLabel(sshProfiles.find((profile) => profile.id === terminal.sshProfileId)!) : 'Select saved SSH'}</span>
+                  <span>{selectedSshProfileLabel(terminal, sshProfiles)}</span>
                   <ChevronDownIcon size="xs" />
                 </button>
                 {openProfileIndex === index && (
                   <div className="workspace-profile-menu" role="listbox" aria-label={`Terminal ${index + 1} SSH profiles`}>
-                    <button type="button" role="option" aria-selected={!terminal.sshProfileId} onClick={() => { updateTerminal(index, { ...terminal, sshProfileId: undefined }); setOpenProfileIndex(null); }}>Select saved SSH</button>
+                    {sshProfiles.length === 0 && <div className="workspace-profile-empty" role="option" aria-disabled="true">No saved SSH connections</div>}
                     {sshProfiles.map((profile) => <button key={profile.id} type="button" role="option" aria-selected={terminal.sshProfileId === profile.id} onClick={() => { updateTerminal(index, { ...terminal, sshProfileId: profile.id }); setOpenProfileIndex(null); }}>{sshProfileLabel(profile)}</button>)}
                   </div>
                 )}
@@ -110,8 +127,13 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
           </div>
         ))}
       </div>
+      {missingSshProfileIndex >= 0 && (
+        <div className="workspace-form-help is-error" role="alert">
+          Terminal {missingSshProfileIndex + 1} needs a saved SSH connection.
+        </div>
+      )}
       <button className="workspace-add-btn" type="button" onClick={() => setTerminals((current) => [...current, { type: 'local' }])}><PlusIcon size="xs" /> Add terminal</button>
-      <button className="connect-btn" type="submit">{submitLabel}</button>
+      <button className="connect-btn" type="submit" disabled={!canSubmit}>{submitLabel}</button>
     </form>
   );
 }

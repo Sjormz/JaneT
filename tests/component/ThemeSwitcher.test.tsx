@@ -21,16 +21,16 @@ describe('ThemeSwitcher', () => {
   it('renders with current theme selected', () => {
     renderThemeSwitcher({ currentTheme: 'dracula' });
 
-    expect(screen.getByText(/Theme/)).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Theme' })).toBeInTheDocument();
     expect(screen.getByText('Tokyo Night')).toBeInTheDocument();
     expect(screen.getByText('Dracula')).toBeInTheDocument();
     expect(screen.getByText('One Dark')).toBeInTheDocument();
 
-    const draculaBtn = screen.getByText('Dracula');
-    expect(draculaBtn.classList.contains('active')).toBe(true);
+    const draculaBtn = screen.getByRole('button', { name: 'Dracula' });
+    expect(draculaBtn).toHaveAttribute('aria-pressed', 'true');
 
-    const tokyoBtn = screen.getByText('Tokyo Night');
-    expect(tokyoBtn.classList.contains('active')).toBe(false);
+    const tokyoBtn = screen.getByRole('button', { name: 'Tokyo Night' });
+    expect(tokyoBtn).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('calls onThemeChange when a theme is clicked', () => {
@@ -44,13 +44,14 @@ describe('ThemeSwitcher', () => {
   it('displays current font size', () => {
     renderThemeSwitcher({ fontSize: 16 });
 
-    expect(screen.getByText('Terminal Font Size: 16px')).toBeInTheDocument();
+    expect(screen.getByText('16px')).toBeInTheDocument();
+    expect(screen.getByText(/Terminal text size/)).toBeInTheDocument();
   });
 
   it('renders a font size slider with current value', () => {
     renderThemeSwitcher({ fontSize: 15 });
 
-    const slider = screen.getByLabelText('Font size') as HTMLInputElement;
+    const slider = screen.getByLabelText('Terminal text size') as HTMLInputElement;
     expect(slider).toBeInTheDocument();
     expect(slider.type).toBe('range');
     expect(slider.value).toBe('15');
@@ -62,7 +63,7 @@ describe('ThemeSwitcher', () => {
     const onFontSizeChange = vi.fn();
     renderThemeSwitcher({ onFontSizeChange });
 
-    const slider = screen.getByLabelText('Font size') as HTMLInputElement;
+    const slider = screen.getByLabelText('Terminal text size') as HTMLInputElement;
     fireEvent.change(slider, { target: { value: '18' } });
     expect(onFontSizeChange).toHaveBeenCalledWith(18);
   });

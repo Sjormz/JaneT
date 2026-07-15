@@ -3,11 +3,12 @@ import { createPortal } from 'react-dom';
 import { TabInfo, SavedSSHProfile, WorkspaceTabPreset } from '../types';
 import {
   TerminalTabIcon, LockIcon, XCloseIcon, PencilIcon, TrashIcon, CheckIcon,
-  ChevronsLeftIcon, ListIcon, PlusIcon, ChevronRightIcon, ChevronDownIcon, PlugIcon,
+  ChevronsLeftIcon, ListIcon, PlusIcon, ChevronRightIcon, ChevronDownIcon, ArrowRightIcon,
 } from '../icons';
 import WorkspaceTabPresetForm, { sshProfileLabel } from './WorkspaceTabPresetForm';
 import { useRefreshTask } from '../refreshCoordinator';
 import { useModalFocus } from '../useModalFocus';
+import Tooltip from './Tooltip';
 
 interface VerticalTabBarProps {
   tabs: TabInfo[];
@@ -156,19 +157,23 @@ export default function VerticalTabBar({
   });
 
   return (
-    <div className="vtab-bar" aria-label="Tab list">
+    <div className="vtab-bar" role="group" aria-label="Terminal tabs">
       <div className="vtab-header">
         <div className="vtab-heading">
           <span className="vtab-title">Tabs</span>
           <span className="vtab-count">{tabs.length}</span>
         </div>
         <div className="vtab-header-actions">
-          <button className="vtab-header-btn" onClick={onNewTab} title="New tab" aria-label="New tab">
-            <PlusIcon size="sm" />
-          </button>
-          <button className="vtab-header-btn" onClick={onCollapse} title="Collapse tabs" aria-label="Collapse tabs">
-            <ChevronsLeftIcon size="sm" />
-          </button>
+          <Tooltip label="New terminal tab" placement="bottom">
+            <button className="vtab-header-btn" onClick={onNewTab} aria-label="New terminal tab">
+              <PlusIcon size="sm" />
+            </button>
+          </Tooltip>
+          <Tooltip label="Collapse terminal tabs" placement="bottom">
+            <button className="vtab-header-btn" onClick={onCollapse} aria-label="Collapse terminal tabs">
+              <ChevronsLeftIcon size="sm" />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -193,6 +198,7 @@ export default function VerticalTabBar({
             <div
               key={tab.id}
               role="button"
+              aria-pressed={isActive}
               tabIndex={0}
               className={`vtab-item ${isActive ? 'active' : ''} ${isSSH ? 'ssh' : ''}`}
               onClick={() => !editing && onSelectTab(tab.id)}
@@ -229,23 +235,25 @@ export default function VerticalTabBar({
               <div className="vtab-meta">
                 <span className="vtab-time">{relTime}</span>
                 {editing && (
-                  <button
-                    className="vtab-action"
-                    onClick={(e) => { e.stopPropagation(); saveRename(); }}
-                    title="Save tab name"
-                    aria-label="Save tab name"
-                  >
-                    <CheckIcon size="xs" />
-                  </button>
+                  <Tooltip label="Save tab name" placement="left">
+                    <button
+                      className="vtab-action"
+                      onClick={(e) => { e.stopPropagation(); saveRename(); }}
+                      aria-label="Save tab name"
+                    >
+                      <CheckIcon size="xs" />
+                    </button>
+                  </Tooltip>
                 )}
-                <button
-                  className="vtab-close"
-                  onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
-                  title="Close tab"
-                  aria-label="Close tab"
-                >
-                  <XCloseIcon size="xs" />
-                </button>
+                <Tooltip label={`Close ${tab.title}`} placement="left">
+                  <button
+                    className="vtab-close"
+                    onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
+                    aria-label={`Close ${tab.title}`}
+                  >
+                    <XCloseIcon size="xs" />
+                  </button>
+                </Tooltip>
               </div>
             </div>
           );
@@ -253,35 +261,35 @@ export default function VerticalTabBar({
       </div>
 
       <div className="workspace-section">
-        <button
-          className="workspace-section-header"
-          onClick={() => setWorkspacesExpanded((expanded) => !expanded)}
-          title={workspacesExpanded ? 'Collapse workspaces' : 'Expand workspaces'}
-          aria-expanded={workspacesExpanded}
-          aria-label="Workspaces"
-        >
-          <span className="workspace-section-chevron">
-            {workspacesExpanded ? <ChevronDownIcon size="xs" /> : <ChevronRightIcon size="xs" />}
-          </span>
-          <span className="workspace-section-title">
-            <ListIcon size="xs" /> Workspaces
-          </span>
-          <span className="workspace-section-count">{workspaceTabs.length}</span>
-        </button>
+        <Tooltip label={workspacesExpanded ? 'Collapse presets' : 'Expand presets'} placement="right">
+          <button
+            className="workspace-section-header"
+            onClick={() => setWorkspacesExpanded((expanded) => !expanded)}
+            aria-expanded={workspacesExpanded}
+            aria-label="Presets"
+          >
+            <span className="workspace-section-chevron">
+              {workspacesExpanded ? <ChevronDownIcon size="xs" /> : <ChevronRightIcon size="xs" />}
+            </span>
+            <span className="workspace-section-title">
+              <ListIcon size="xs" /> Presets
+            </span>
+            <span className="workspace-section-count">{workspaceTabs.length}</span>
+          </button>
+        </Tooltip>
 
         {workspacesExpanded && (
           <div className="workspace-section-content">
             <button
               className="workspace-add-btn"
               onClick={openWorkspaceForm}
-              title="Create a reusable workspace preset"
-              aria-label="Create workspace preset"
+              aria-label="New preset"
             >
-              <PlusIcon size="xs" /> New workspace preset
+              <PlusIcon size="xs" /> New preset
             </button>
 
             {workspaceTabs.length === 0 ? (
-              <div className="workspace-empty">No workspace presets saved</div>
+              <div className="workspace-empty">No presets saved</div>
             ) : (
               <div className="workspace-list">
                 {workspaceTabs.map((preset) => {
@@ -302,35 +310,38 @@ export default function VerticalTabBar({
                         </div>
                       </div>
                       <div className="session-actions">
-                        <button
-                          type="button"
-                          className="session-action-btn"
-                          onClick={() => onWorkspaceTabLaunch(preset)}
-                          title="Open workspace"
-                          aria-label={`Open ${preset.name}`}
-                        >
-                          <PlugIcon size="sm" />
-                        </button>
+                        <Tooltip label={`Open preset ${preset.name}`} placement="top">
+                          <button
+                            type="button"
+                            className="session-action-btn"
+                            onClick={() => onWorkspaceTabLaunch(preset)}
+                            aria-label={`Open preset ${preset.name}`}
+                          >
+                            <ArrowRightIcon size="sm" />
+                          </button>
+                        </Tooltip>
 
-                        <button
-                          type="button"
-                          className="session-action-btn"
-                          onClick={() => editPreset(preset)}
-                          title="Edit workspace preset"
-                          aria-label={`Edit ${preset.name}`}
-                        >
-                          <PencilIcon size="sm" />
-                        </button>
+                        <Tooltip label={`Edit preset ${preset.name}`} placement="top">
+                          <button
+                            type="button"
+                            className="session-action-btn"
+                            onClick={() => editPreset(preset)}
+                            aria-label={`Edit preset ${preset.name}`}
+                          >
+                            <PencilIcon size="sm" />
+                          </button>
+                        </Tooltip>
 
-                        <button
-                          type="button"
-                          className="session-action-btn danger"
-                          onClick={() => deletePreset(preset.id)}
-                          title="Delete workspace preset"
-                          aria-label={`Delete ${preset.name}`}
-                        >
-                          <TrashIcon size="sm" />
-                        </button>
+                        <Tooltip label={`Delete preset ${preset.name}`} placement="top">
+                          <button
+                            type="button"
+                            className="session-action-btn danger"
+                            onClick={() => deletePreset(preset.id)}
+                            aria-label={`Delete preset ${preset.name}`}
+                          >
+                            <TrashIcon size="sm" />
+                          </button>
+                        </Tooltip>
                       </div>
                     </div>
                   );
@@ -352,11 +363,11 @@ export default function VerticalTabBar({
           </button>
           {tabMenu.tab.workspaceId && workspaceTabs.find((preset) => preset.id === tabMenu.tab.workspaceId) && (
             <button role="menuitem" onClick={() => { editPreset(workspaceTabs.find((preset) => preset.id === tabMenu.tab.workspaceId)!); setTabMenu(null); }}>
-              Edit workspace
+              Edit preset
             </button>
           )}
           <button role="menuitem" onClick={() => { onSaveWorkspaceTab(tabMenu.tab); setTabMenu(null); }}>
-            Save as workspace
+            Save as preset
           </button>
         </div>,
         document.body,
@@ -377,15 +388,17 @@ export default function VerticalTabBar({
             aria-labelledby="workspace-modal-title"
           >
             <div className="workspace-modal-header">
-              <h2 id="workspace-modal-title">{editingPreset ? 'Edit Workspace Preset' : 'Create Workspace Preset'}</h2>
-              <button onClick={closeWorkspaceForm} title="Close" aria-label="Close workspace preset dialog">
-                <XCloseIcon size="sm" />
-              </button>
+              <h2 id="workspace-modal-title">{editingPreset ? 'Edit preset' : 'Create preset'}</h2>
+              <Tooltip label="Close preset dialog" placement="left">
+                <button onClick={closeWorkspaceForm} aria-label="Close preset dialog">
+                  <XCloseIcon size="sm" />
+                </button>
+              </Tooltip>
             </div>
             <WorkspaceTabPresetForm
               sshProfiles={sshProfiles}
               preset={editingPreset ?? undefined}
-              submitLabel={editingPreset ? 'Save Workspace Preset' : 'Add Workspace Preset'}
+              submitLabel={editingPreset ? 'Save changes' : 'Create preset'}
               onSubmit={savePreset}
             />
           </div>

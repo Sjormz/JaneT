@@ -3,22 +3,31 @@ import {
   FilesIcon, SSHIcon, SourceControlIcon, SettingsIconCmp,
   MinimizeIcon, MaximizeIcon, RestoreIcon, CloseIcon,
 } from '../icons';
+import BrandMark from './BrandMark';
+import Tooltip from './Tooltip';
+import { formatShortcutForDisplay } from '../keybindings';
 
 export type SidebarSection = 'files' | 'ssh' | 'git' | 'settings';
 
 interface NavItem {
   key: SidebarSection;
   Icon: React.FC<any>;
-  label: string;
+  name: string;
   shortcut?: string;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { key: 'files',    Icon: FilesIcon,           label: 'Explorer' },
-  { key: 'ssh',      Icon: SSHIcon,             label: 'SSH' },
-  { key: 'git',      Icon: SourceControlIcon,   label: 'Source Control' },
-  { key: 'settings', Icon: SettingsIconCmp,     label: 'Settings' },
+  { key: 'files',    Icon: FilesIcon,           name: 'Explorer' },
+  { key: 'ssh',      Icon: SSHIcon,             name: 'SSH connections' },
+  { key: 'git',      Icon: SourceControlIcon,   name: 'Source Control' },
+  { key: 'settings', Icon: SettingsIconCmp,     name: 'Settings' },
 ];
+
+function initialPlatform() {
+  if (/Mac|iPhone|iPad/i.test(navigator.platform)) return 'darwin';
+  if (/Win/i.test(navigator.platform)) return 'win32';
+  return 'linux';
+}
 
 interface TitlebarProps {
   // sidebar nav
@@ -43,9 +52,8 @@ export default function Titlebar({
   paletteShortcut,
 }: TitlebarProps) {
   const [maximized, setMaximized] = useState(false);
-  const [platform, setPlatform] = useState<string>(() => (
-    navigator.platform.toLowerCase().includes('mac') ? 'darwin' : ''
-  ));
+  const [platform, setPlatform] = useState(initialPlatform);
+  const displayedPaletteShortcut = formatShortcutForDisplay(paletteShortcut, platform);
 
   const refreshMaximized = useCallback(async () => {
     try { setMaximized(await window.janet.windowIsMaximized()); } catch {}
@@ -73,72 +81,64 @@ export default function Titlebar({
     <div className={`titlebar ${platform === 'darwin' ? 'is-mac' : ''}`} role="banner">
       {/* Brand */}
       <div className="titlebar-brand">
-        <div className="titlebar-logo" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="4 17 10 11 4 5" />
-            <line x1="12" y1="19" x2="20" y2="19" />
-          </svg>
-        </div>
+        <BrandMark size={28} className="titlebar-logo" />
         <span className="titlebar-app-name">JaneT</span>
       </div>
 
       {/* Section nav (was ActivityBar) */}
       <nav className="titlebar-nav" aria-label="Sidebar section">
-        {NAV_ITEMS.map(({ key, Icon, label }) => {
+        {NAV_ITEMS.map(({ key, Icon, name }) => {
           const active = sidebarOpen && section === key;
+          const label = `${active ? 'Hide' : 'Open'} ${name}`;
           return (
-            <button
-              key={key}
-              className={`titlebar-nav-btn ${active ? 'active' : ''}`}
-              onClick={() => onSectionChange(key)}
-              title={label}
-              aria-label={label}
-              aria-pressed={active}
-            >
-              <Icon size="md" />
-            </button>
+            <Tooltip key={key} label={label} placement="bottom">
+              <button
+                className={`titlebar-nav-btn ${active ? 'active' : ''}`}
+                onClick={() => onSectionChange(key)}
+                aria-label={label}
+                aria-pressed={active}
+              >
+                <Icon size="md" />
+              </button>
+            </Tooltip>
           );
         })}
       </nav>
 
       {/* Right cluster: palette + window controls */}
       <div className="titlebar-right">
-        <button
-          className="titlebar-palette-btn"
-          onClick={onOpenPalette}
-          title={`Command palette (${paletteShortcut})`}
-          aria-label={`Open command palette (${paletteShortcut})`}
-        >
-          <span className="titlebar-palette-label">Commands</span>
-          <kbd className="titlebar-kbd" aria-hidden="true">{paletteShortcut}</kbd>
-        </button>
+        <Tooltip label="Open command palette" shortcut={displayedPaletteShortcut} placement="bottom">
+          <button
+            className="titlebar-palette-btn"
+            onClick={onOpenPalette}
+            aria-label={`Open command palette (${displayedPaletteShortcut})`}
+          >
+            <span className="titlebar-palette-label">Search commands</span>
+            <kbd className="titlebar-kbd" aria-hidden="true">{displayedPaletteShortcut}</kbd>
+          </button>
+        </Tooltip>
 
         {platform !== 'darwin' && (
           <div className="titlebar-controls">
-            <button
-              className="titlebar-control-btn"
-              onClick={() => window.janet.windowMinimize()}
-              title="Minimize"
-              aria-label="Minimize"
-            >
-              <MinimizeIcon size="md" />
-            </button>
-            <button
-              className="titlebar-control-btn"
-              onClick={() => { window.janet.windowMaximize().then(refreshMaximized); }}
-              title={maximized ? 'Restore' : 'Maximize'}
-              aria-label={maximized ? 'Restore' : 'Maximize'}
-            >
-              {maximized ? <RestoreIcon size="md" /> : <MaximizeIcon size="md" />}
-            </button>
-            <button
-              className="titlebar-control-btn close"
-              onClick={() => window.janet.windowClose()}
-              title="Close"
-              aria-label="Close"
-            >
-              <CloseIcon size="md" />
-            </button>
+            <Tooltip label="Minimize window" placement="bottom">
+              <button className="titlebar-control-btn" onClick={() => window.janet.windowMinimize()} aria-label="Minimize window">
+                <MinimizeIcon size="md" />
+              </button>
+            </Tooltip>
+            <Tooltip label={maximized ? 'Restore window' : 'Maximize window'} placement="bottom">
+              <button
+                className="titlebar-control-btn"
+                onClick={() => { window.janet.windowMaximize().then(refreshMaximized); }}
+                aria-label={maximized ? 'Restore window' : 'Maximize window'}
+              >
+                {maximized ? <RestoreIcon size="md" /> : <MaximizeIcon size="md" />}
+              </button>
+            </Tooltip>
+            <Tooltip label="Close window" placement="bottom">
+              <button className="titlebar-control-btn close" onClick={() => window.janet.windowClose()} aria-label="Close window">
+                <CloseIcon size="md" />
+              </button>
+            </Tooltip>
           </div>
         )}
       </div>

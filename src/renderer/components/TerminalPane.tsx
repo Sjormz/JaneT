@@ -26,6 +26,7 @@ import { fileUrlToPath } from '../osc7';
 import { createKittyGraphicsLayer } from '../kittyGraphics';
 import { refreshCoordinator } from '../refreshCoordinator';
 import { TERMINAL_SEARCH_REQUEST_EVENT, TerminalSearchRequestDetail } from '../terminalSearch';
+import { DEFAULT_TERMINAL_FONT_FAMILY } from '../../shared/typography';
 import '@xterm/xterm/css/xterm.css';
 
 interface TerminalPaneProps {
@@ -37,6 +38,7 @@ interface TerminalPaneProps {
   onRemoved: (termId: string) => void;
   themeName?: string;
   fontSize?: number;
+  fontFamily?: string;
   onCwdChange?: (termId: string, cwd: string) => void;
   onFocus?: (termId: string) => void;
   initialCwd?: string;
@@ -122,6 +124,7 @@ export default function TerminalPane({
   onRemoved,
   themeName,
   fontSize,
+  fontFamily,
   onCwdChange,
   onFocus,
   initialCwd,
@@ -173,10 +176,7 @@ export default function TerminalPane({
     if (tabType !== 'ssh') {
       publishSshNoticeState({ kind: 'hidden' });
     } else if (sshConnectionLost) {
-      publishSshNoticeState({
-        kind: 'error',
-        message: 'The SSH connection closed. Reconnect to continue.',
-      });
+      publishSshNoticeState({ kind: 'closed' });
     } else if (!sshShellReady) {
       publishSshNoticeState({ kind: 'reconnecting' });
     }
@@ -345,7 +345,7 @@ export default function TerminalPane({
       cursorBlink: true,
       cursorStyle: 'block',
       fontSize: fontSize || 14,
-      fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace",
+      fontFamily: fontFamily || DEFAULT_TERMINAL_FONT_FAMILY,
       lineHeight: 1.2,
       theme: resolvedTheme || {
         background: '#0f0f1a',
@@ -521,8 +521,9 @@ export default function TerminalPane({
   }, [themeName]);
 
   useEffect(() => {
-    if (termRef.current && fontSize) {
-      termRef.current.options.fontSize = fontSize;
+    if (termRef.current && (fontSize || fontFamily)) {
+      if (fontSize) termRef.current.options.fontSize = fontSize;
+      if (fontFamily) termRef.current.options.fontFamily = fontFamily;
       const timer = setTimeout(() => {
         const term = termRef.current;
         const fitAddon = fitAddonRef.current;
@@ -532,7 +533,7 @@ export default function TerminalPane({
       return () => clearTimeout(timer);
     }
     return undefined;
-  }, [fontSize]);
+  }, [fontFamily, fontSize]);
 
   useEffect(() => {
     const timer = setTimeout(() => {

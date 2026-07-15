@@ -40,10 +40,10 @@ describe('SSHManager', () => {
     renderSSHManager({ onConnected, onProfilesChange });
 
     fireEvent.click(screen.getByRole('button', { name: /new connection/i }));
-    fireEvent.change(screen.getByPlaceholderText(/host/i), { target: { value: 'box.local' } });
-    fireEvent.change(screen.getByPlaceholderText(/username/i), { target: { value: 'pckpr' } });
-    fireEvent.change(screen.getByPlaceholderText(/password/i), { target: { value: 'secret' } });
-    fireEvent.click(screen.getByRole('button', { name: /connect & save/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Host' }), { target: { value: 'box.local' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Username' }), { target: { value: 'pckpr' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
+    fireEvent.click(screen.getByRole('button', { name: /save and connect/i }));
 
     await waitFor(() => {
       expect(sshConnect).toHaveBeenCalledWith(expect.objectContaining({
@@ -79,8 +79,8 @@ describe('SSHManager', () => {
     renderSSHManager({ onConnected, onProfilesChange });
 
     fireEvent.click(screen.getByRole('button', { name: /new connection/i }));
-    fireEvent.change(screen.getByPlaceholderText(/host/i), { target: { value: 'terminal.shop' } });
-    fireEvent.click(screen.getByRole('button', { name: /connect & save/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Host' }), { target: { value: 'terminal.shop' } });
+    fireEvent.click(screen.getByRole('button', { name: /save and connect/i }));
 
     await waitFor(() => {
       expect(sshConnect).toHaveBeenCalledWith(expect.objectContaining({
@@ -167,7 +167,7 @@ describe('SSHManager', () => {
         'Couldn’t connect to pckpr@box.local:22: Authentication failed',
       );
     });
-    expect(screen.queryByPlaceholderText(/host/i)).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Host' })).toBeNull();
   });
 
   it('renders and reconnects saved host-only profiles', async () => {
@@ -215,10 +215,35 @@ describe('SSHManager', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /edit pckpr@box.local:22/i }));
 
-    expect(screen.getByPlaceholderText(/host/i)).toHaveValue('box.local');
-    expect(screen.getByPlaceholderText(/port/i)).toHaveValue('22');
-    expect(screen.getByPlaceholderText(/username/i)).toHaveValue('pckpr');
-    expect(screen.getByPlaceholderText(/password/i)).toHaveValue('secret');
+    expect(screen.getByRole('textbox', { name: 'Host' })).toHaveValue('box.local');
+    expect(screen.getByRole('textbox', { name: 'Port' })).toHaveValue('22');
+    expect(screen.getByRole('textbox', { name: 'Username' })).toHaveValue('pckpr');
+    expect(screen.getByLabelText('Password')).toHaveValue('secret');
+    expect(screen.getByRole('button', { name: 'Update and connect' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel editing' })).toBeInTheDocument();
+  });
+
+  it('replaces the original saved profile when edited identity fields change', async () => {
+    const onProfilesChange = vi.fn();
+    renderSSHManager({
+      onProfilesChange,
+      profiles: [{
+        id: 'pckpr@box.local:22:password',
+        host: 'box.local',
+        port: 22,
+        username: 'pckpr',
+        auth: 'password',
+        password: 'secret',
+      }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /edit pckpr@box.local:22/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Host' }), { target: { value: 'new-box.local' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update and connect' }));
+
+    await waitFor(() => expect(onProfilesChange).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'pckpr@new-box.local:22:password', host: 'new-box.local' }),
+    ]));
   });
 
   it('focuses and requires Host, exposes auth selection, and disables empty submission', () => {
@@ -227,9 +252,9 @@ describe('SSHManager', () => {
     fireEvent.click(screen.getByRole('button', { name: /new connection/i }));
 
     const host = screen.getByRole('textbox', { name: 'Host' });
-    const submit = screen.getByRole('button', { name: /connect & save/i });
+    const submit = screen.getByRole('button', { name: /save and connect/i });
     const passwordAuth = screen.getByRole('button', { name: 'Password' });
-    const keyAuth = screen.getByRole('button', { name: 'Key' });
+    const keyAuth = screen.getByRole('button', { name: 'Private key' });
 
     expect(host).toHaveFocus();
     expect(host).toBeRequired();
@@ -254,7 +279,7 @@ describe('SSHManager', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /new connection/i }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Host' }), { target: { value: 'box.local' } });
-    fireEvent.click(screen.getByRole('button', { name: /connect & save/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save and connect/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Host key mismatch');
   });
@@ -272,7 +297,7 @@ describe('SSHManager', () => {
       }],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /delete pckpr@box.local:22/i }));
+    fireEvent.click(screen.getByRole('button', { name: /remove pckpr@box.local:22/i }));
 
     expect(onProfilesChange).toHaveBeenCalledWith([]);
   });

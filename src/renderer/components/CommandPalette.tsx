@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useModalFocus } from '../useModalFocus';
+import { SearchIcon } from '../icons';
 
 export interface CommandAction {
   id: string;
@@ -139,13 +140,13 @@ export default function CommandPalette({ visible, onClose, actions }: CommandPal
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="command-palette-input-wrapper">
-          <span className="command-palette-icon">⟩</span>
+          <SearchIcon size="md" className="command-palette-icon" />
           <input
             ref={inputRef}
             className="command-palette-input"
             data-testid="command-palette-input"
             type="text"
-            placeholder="Type a command..."
+            placeholder="Search commands…"
             role="combobox"
             aria-label="Search commands"
             aria-autocomplete="list"

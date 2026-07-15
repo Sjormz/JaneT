@@ -5,11 +5,12 @@ import {
   GitCommitIcon, SourceControlIcon as GitBranchIcon, GitMergeIcon,
   TrashIcon, AlertIcon, CircleDotIcon, CircleIcon, FolderIcon,
   fileIconFor,
-  SettingsIconCmp, MoreIcon, ListIcon,
+  SettingsIconCmp, MoreIcon, ListIcon, ArrowUpIcon, ArrowDownIcon,
 } from '../icons';
 import { defaultWorktreePath, GitWorktreeInfo, basename } from '../../shared/gitWorktrees';
 import { refreshCoordinator, useRefreshTask } from '../refreshCoordinator';
 import { GitStatusResult } from '../useGitRepository';
+import Tooltip from './Tooltip';
 
 interface GitBranchInfo {
   name: string;
@@ -40,6 +41,7 @@ interface DialogField {
 
 interface DialogState {
   title: string;
+  description?: string;
   fields: DialogField[];
   confirmLabel: string;
   destructive?: boolean;
@@ -82,7 +84,7 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
       setBranches(details?.branches || []);
       setWorktrees(details?.worktrees || []);
     } catch {
-      if (generation === detailsGeneration.current) setMessage('Failed to load git data');
+      if (generation === detailsGeneration.current) setMessage('Couldn’t load Source Control data');
     }
   }, []);
 
@@ -130,7 +132,7 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
   const handleCreateBranch = () => {
     if (!repoPath) return;
     setDialog({
-      title: 'Create Branch',
+      title: 'Create branch',
       confirmLabel: 'Create',
       fields: [
         { key: 'branch', label: 'Branch name', placeholder: 'feature/my-branch' },
@@ -154,7 +156,7 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
       confirmLabel: 'Delete',
       destructive: true,
       fields: [
-        { key: 'force', label: 'Type FORCE to force delete (-D), leave blank for safe (-d)', placeholder: '' },
+        { key: 'force', label: 'Type FORCE to delete even with unmerged work. Leave blank for a safe delete.', placeholder: '' },
       ],
       onSubmit: (v) => {
         const force = v.force?.trim().toUpperCase() === 'FORCE';
@@ -179,7 +181,7 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
 
   const handleWorktreeSettings = () => {
     setDialog({
-      title: 'Worktree Defaults',
+      title: 'Worktree defaults',
       confirmLabel: 'Save',
       fields: [
         { key: 'baseDir', label: 'Base directory', placeholder: '../', defaultValue: worktreeBaseDir },
@@ -194,7 +196,7 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
   const handleAddWorktree = (createBranch: boolean) => {
     if (!repoPath) return;
     setDialog({
-      title: createBranch ? 'Add Worktree (New Branch)' : 'Add Worktree (Existing Branch)',
+      title: createBranch ? 'Add worktree with new branch' : 'Add worktree from existing branch',
       confirmLabel: 'Add',
       fields: [
         { key: 'branch', label: createBranch ? 'New branch name' : 'Existing branch', placeholder: 'feature/my-branch' },
@@ -233,7 +235,7 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
       confirmLabel: 'Remove',
       destructive: true,
       fields: [
-        { key: 'force', label: 'Type FORCE to discard local changes, leave blank for normal', placeholder: '' },
+        { key: 'force', label: 'Type FORCE to remove even with local changes. Leave blank for a safe removal.', placeholder: '' },
       ],
       onSubmit: (v) => {
         const force = v.force?.trim().toUpperCase() === 'FORCE';
@@ -248,7 +250,8 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
   const handlePruneWorktrees = () => {
     if (!repoPath) return;
     setDialog({
-      title: 'Prune Stale Worktrees',
+      title: 'Prune stale worktrees',
+      description: 'Remove Git records for worktrees whose directories no longer exist. Working directories are not deleted.',
       confirmLabel: 'Prune',
       destructive: true,
       fields: [],
@@ -260,33 +263,43 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
 
   const toggle = (section: Section) => setExpanded((prev) => ({ ...prev, [section]: !prev[section] }));
 
-  if (searching) return shell('Searching for git repos…');
-  if (isRemote) return shell('Git features are local-only for now', 'Open a local repo tab to manage branches/worktrees.');
-  if (!repoPath) return shell('No git repo found', 'cd into a repo to see branch and worktree controls.');
+  if (searching) return shell('Searching for Git repositories…');
+  if (isRemote) return shell('Source Control is available for local terminals', 'Open a local terminal in a Git repository to manage changes, branches, and worktrees.');
+  if (!repoPath) return shell('No Git repository found', 'Open a local terminal in a Git repository to see changes, branches, and worktrees.');
 
   return (
     <div className="git-tree">
       <div className="git-header">
         <span className="section-title">Source Control</span>
-        <button className="icon-btn" onClick={() => refreshCoordinator.invalidate('manual')} disabled={busy} title="Refresh" aria-label="Refresh">
-          <RefreshIcon size="sm" />
-        </button>
+        <Tooltip label="Refresh Source Control" placement="left">
+          <button className="icon-btn" onClick={() => refreshCoordinator.invalidate('manual')} disabled={busy} aria-label="Refresh Source Control">
+            <RefreshIcon size="sm" />
+          </button>
+        </Tooltip>
       </div>
 
-      <div className="git-repo-path" title={repoPath}>
-        <GitBranchIcon size="xs" /> {status?.current || 'HEAD'}
-        {status && status.files.length > 0 && <span className="git-pill dirty">● {status.files.length}</span>}
-        {status && status.ahead > 0 && <span className="git-pill ahead">↑{status.ahead}</span>}
-        {status && status.behind > 0 && <span className="git-pill behind">↓{status.behind}</span>}
-      </div>
+      <Tooltip label={repoPath} placement="right">
+        <div className="git-repo-path" aria-label={`${status?.current || 'HEAD'} at ${repoPath}`}>
+          <GitBranchIcon size="xs" /> {status?.current || 'HEAD'}
+          {status && status.files.length > 0 && <span className="git-pill dirty" aria-label={`${status.files.length} changed files`}><CircleIcon size="xs" /> {status.files.length}</span>}
+          {status && status.ahead > 0 && <span className="git-pill ahead" aria-label={`${status.ahead} commits ahead`}><ArrowUpIcon size="xs" />{status.ahead}</span>}
+          {status && status.behind > 0 && <span className="git-pill behind" aria-label={`${status.behind} commits behind`}><ArrowDownIcon size="xs" />{status.behind}</span>}
+        </div>
+      </Tooltip>
       {message && <div className="git-message">{message}</div>}
 
       {status && (
         <GitSection title="Changes" count={status.files.length} expanded={expanded.changes} onToggle={() => toggle('changes')}
           extra={status.files.length > 0 && (
-            <button className="git-view-toggle" onClick={(e) => { e.stopPropagation(); setChangesView(v => v === 'flat' ? 'tree' : 'flat'); }} title={changesView === 'flat' ? 'Switch to tree view' : 'Switch to flat list'}>
-              {changesView === 'flat' ? <FolderIcon size="xs" /> : <ListIcon size="xs" />}
-            </button>
+            <Tooltip label={changesView === 'flat' ? 'Show changes as a folder tree' : 'Show changes as a flat list'} placement="left">
+              <button
+                className="git-view-toggle"
+                onClick={(e) => { e.stopPropagation(); setChangesView(v => v === 'flat' ? 'tree' : 'flat'); }}
+                aria-label={changesView === 'flat' ? 'Show changes as a folder tree' : 'Show changes as a flat list'}
+              >
+                {changesView === 'flat' ? <FolderIcon size="xs" /> : <ListIcon size="xs" />}
+              </button>
+            </Tooltip>
           )}
         >
           {status.files.length === 0 && <div className="git-empty">Working tree clean</div>}
@@ -314,7 +327,9 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
 <GitSection title="Worktrees" count={worktrees.length} expanded={expanded.worktrees} onToggle={() => toggle('worktrees')}
         extra={
           <div className="git-kebab-menu">
-            <button className="git-view-toggle" onClick={(e) => { e.stopPropagation(); setWorktreeMenuOpen(o => !o); }} title="More options"><MoreIcon size="xs" /></button>
+            <Tooltip label="Worktree actions" placement="left">
+              <button className="git-view-toggle" onClick={(e) => { e.stopPropagation(); setWorktreeMenuOpen(o => !o); }} aria-label="Worktree actions"><MoreIcon size="xs" /></button>
+            </Tooltip>
             {worktreeMenuOpen && (
               <>
                 <div className="git-kebab-overlay" onClick={() => setWorktreeMenuOpen(false)} />
@@ -323,7 +338,7 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
                     <SettingsIconCmp size="xs" /> Worktree defaults
                   </button>
                   <button className="git-kebab-item danger" onClick={() => { setWorktreeMenuOpen(false); handlePruneWorktrees(); }} disabled={busy}>
-                    <TrashIcon size="xs" /> Clean stale worktrees
+                    <TrashIcon size="xs" /> Prune stale worktrees…
                   </button>
                 </div>
               </>
@@ -332,37 +347,54 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
         }
       >
         <div className="git-inline-actions">
-          <button className="git-action-btn" onClick={() => handleAddWorktree(true)} disabled={busy}><PlusIcon size="xs" /> New branch</button>
-          <button className="git-action-btn" onClick={() => handleAddWorktree(false)} disabled={busy}><PlusIcon size="xs" /> Existing</button>
+          <button className="git-action-btn" onClick={() => handleAddWorktree(true)} disabled={busy}><PlusIcon size="xs" /> Add with new branch…</button>
+          <button className="git-action-btn" onClick={() => handleAddWorktree(false)} disabled={busy}><PlusIcon size="xs" /> Add existing branch…</button>
         </div>
         {worktrees.map((tree) => (
           <div key={tree.path} className="git-worktree-item">
-            <button className="git-row-main" onClick={() => onOpenLocalTabAt?.(tree.path, basename(tree.path))} title={tree.path}>
-              <FolderIcon size="xs" />
-              <span className="branch-name">{basename(tree.path)}</span>
-              <span className="git-row-note">{tree.path === repoPath && status?.current ? status.current : tree.branch || 'detached'}</span>
-            </button>
-            {tree.path !== repoPath && <button className="git-mini-btn danger" onClick={() => handleRemoveWorktree(tree)} disabled={busy} title="Remove worktree"><TrashIcon size="xs" /></button>}
+            <Tooltip label={`Open ${tree.path} in a terminal`} placement="right">
+              <button className="git-row-main" onClick={() => onOpenLocalTabAt?.(tree.path, basename(tree.path))} aria-label={`Open worktree ${basename(tree.path)} in a terminal`}>
+                <FolderIcon size="xs" />
+                <span className="branch-name">{basename(tree.path)}</span>
+                <span className="git-row-note">{tree.path === repoPath && status?.current ? status.current : tree.branch || 'detached'}</span>
+              </button>
+            </Tooltip>
+            {tree.path !== repoPath && (
+              <Tooltip label={`Remove worktree ${basename(tree.path)}`} placement="left">
+                <button className="git-mini-btn danger" onClick={() => handleRemoveWorktree(tree)} disabled={busy} aria-label={`Remove worktree ${basename(tree.path)}`}><TrashIcon size="xs" /></button>
+              </Tooltip>
+            )}
           </div>
         ))}
       </GitSection>
 
 <GitSection title="Branches" count={branches.length} expanded={expanded.branches} onToggle={() => toggle('branches')}>
         <div className="git-inline-actions">
-          <button className="git-action-btn" onClick={handleCreateBranch} disabled={busy}><PlusIcon size="xs" /> Branch</button>
+          <button className="git-action-btn" onClick={handleCreateBranch} disabled={busy}><PlusIcon size="xs" /> Create branch…</button>
         </div>
         {branches.filter((b) => !b.isRemote).map((branch) => {
           const current = status?.current ? branch.name === status.current : branch.current;
           const DotIcon = current ? CircleDotIcon : CircleIcon;
           return (
             <div key={branch.name} className={`git-branch-item ${current ? 'current' : ''}`}>
-              <button className="git-row-main" onClick={() => !current && handleCheckout(branch.name)} disabled={busy || current}
-                       title={current ? 'Current branch' : `Switch to ${branch.name}`}>
-                <DotIcon size="xs" className="branch-icon" />
-                <span className="branch-name">{branch.name}</span>
-                {branch.worktreePath && <span className="git-row-note">worktree</span>}
-              </button>
-              {!current && <button className="git-mini-btn danger" onClick={() => handleDeleteBranch(branch)} disabled={busy} title="Delete branch"><TrashIcon size="xs" /></button>}
+              <Tooltip label={current ? `Current branch: ${branch.name}` : `Switch to branch ${branch.name}`} placement="right">
+                <button
+                  className="git-row-main"
+                  onClick={() => !current && handleCheckout(branch.name)}
+                  disabled={busy}
+                  aria-disabled={current || undefined}
+                  aria-label={current ? `Current branch ${branch.name}` : `Switch to branch ${branch.name}`}
+                >
+                  <DotIcon size="xs" className="branch-icon" />
+                  <span className="branch-name">{branch.name}</span>
+                  {branch.worktreePath && <span className="git-row-note">worktree</span>}
+                </button>
+              </Tooltip>
+              {!current && (
+                <Tooltip label={`Delete branch ${branch.name}`} placement="left">
+                  <button className="git-mini-btn danger" onClick={() => handleDeleteBranch(branch)} disabled={busy} aria-label={`Delete branch ${branch.name}`}><TrashIcon size="xs" /></button>
+                </Tooltip>
+              )}
             </div>
           );
         })}
@@ -371,10 +403,12 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
         )}
         {branches.filter((b) => b.isRemote).map((branch) => (
           <div key={branch.name} className="git-branch-item remote">
-            <button className="git-row-main" disabled title={`${branch.remote}/${branch.name}`}>
-              <CircleIcon size="xs" className="branch-icon" />
-              <span className="branch-name">{branch.name}</span>
-            </button>
+            <Tooltip label={`Remote branch ${branch.remote}/${branch.name}`} placement="right">
+              <span className="git-row-main" tabIndex={0} aria-label={`Remote branch ${branch.remote}/${branch.name}`}>
+                <CircleIcon size="xs" className="branch-icon" />
+                <span className="branch-name">{branch.name}</span>
+              </span>
+            </Tooltip>
           </div>
         ))}
       </GitSection>
@@ -382,6 +416,7 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
       {dialog && createPortal(
               <GitDialog
                 title={dialog.title}
+                description={dialog.description}
                 fields={dialog.fields}
                 confirmLabel={dialog.confirmLabel}
                 destructive={dialog.destructive}
@@ -404,8 +439,10 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
     return (
       <div className="git-tree">
         <div className="git-header"><span className="section-title">Source Control</span></div>
-        <div className="git-empty">{text}</div>
-        {hint && <div className="git-hint">{hint}</div>}
+        <div className="git-empty-state">
+          <div className="git-empty">{text}</div>
+          {hint && <div className="git-hint">{hint}</div>}
+        </div>
       </div>
     );
   }
@@ -537,15 +574,18 @@ function GitFile({ path, kind, wd, depth }: { path: string; kind: 'staged' | 'un
         ? 'Staged change'
         : 'Working-tree change';
   return (
-    <div className={`git-file-item ${kind}`} style={indent} title={title}>
-      <FileIcon size="sm" className={`file-status-icon ${kind}`} />
-      <span className="file-name">{path.split('/').pop()}</span>
-    </div>
+    <Tooltip label={`${path}: ${title}`} placement="right">
+      <div className={`git-file-item ${kind}`} style={indent} aria-label={`${path}: ${title}`}>
+        <FileIcon size="sm" className={`file-status-icon ${kind}`} />
+        <span className="file-name">{path.split('/').pop()}</span>
+      </div>
+    </Tooltip>
   );
 }
 
-function GitDialog({ title, fields, confirmLabel, destructive, busy, repoPath, worktreeBaseDir, worktreeTemplate, onSubmit, onCancel }: {
+function GitDialog({ title, description, fields, confirmLabel, destructive, busy, repoPath, worktreeBaseDir, worktreeTemplate, onSubmit, onCancel }: {
   title: string;
+  description?: string;
   fields: DialogField[];
   confirmLabel: string;
   destructive?: boolean;
@@ -594,7 +634,7 @@ function GitDialog({ title, fields, confirmLabel, destructive, busy, repoPath, w
               />
             </div>
           ))}
-          {fields.length === 0 && <div className="git-dialog-hint">Are you sure?</div>}
+          {description && <div className="git-dialog-hint">{description}</div>}
           <div className="git-dialog-actions">
             <button type="button" className="git-dialog-btn cancel" onClick={onCancel}>Cancel</button>
             <button type="submit" className={`git-dialog-btn confirm ${destructive ? 'danger' : ''}`} disabled={busy}>{confirmLabel}</button>

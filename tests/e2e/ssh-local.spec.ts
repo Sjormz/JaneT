@@ -412,7 +412,7 @@ test('restores the local SSH fixture, browses remote files, and runs ls', async 
     await runMarkedLs(page, 'LS');
 
     ssh.disconnectClients();
-    await expect(explorer.getByText(/remote filesystem disconnected/i)).toBeVisible({ timeout: 20_000 });
+    await expect(explorer.getByText(/Reconnect .* to browse its files\./i)).toBeVisible({ timeout: 20_000 });
     await expect(explorer.getByText('nested-remote.txt', { exact: true })).toHaveCount(0);
   } finally {
     await closeApp(browser, electronProcess);

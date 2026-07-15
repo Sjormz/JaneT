@@ -1,5 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { SearchIcon, ArrowUpIcon, ArrowDownIcon, SearchCloseIcon } from '../icons';
+import Tooltip from './Tooltip';
 
 interface SearchResults {
   resultIndex: number;
@@ -72,18 +73,18 @@ export default function SearchOverlay({
         aria-atomic="true"
       >
         {results.resultCount > 0
-          ? `${results.resultIndex + 1}/${results.resultCount}`
-          : query ? '0/0' : ''}
+          ? `${results.resultIndex + 1} of ${results.resultCount}`
+          : query ? 'No matches' : ''}
       </span>
-      <button className="search-btn" data-testid="search-prev" onClick={onPrev} title="Previous (Shift+Enter)" aria-label="Previous match">
-        <ArrowUpIcon size="sm" />
-      </button>
-      <button className="search-btn" data-testid="search-next" onClick={onNext} title="Next (Enter)" aria-label="Next match">
-        <ArrowDownIcon size="sm" />
-      </button>
-      <button className="search-btn search-close" data-testid="search-close" onClick={onClose} title="Close (Esc)" aria-label="Close search">
-        <SearchCloseIcon size="sm" />
-      </button>
+      <Tooltip label="Previous match" shortcut="Shift+Enter" placement="bottom">
+        <button className="search-btn" data-testid="search-prev" onClick={onPrev} aria-label="Previous match"><ArrowUpIcon size="sm" /></button>
+      </Tooltip>
+      <Tooltip label="Next match" shortcut="Enter" placement="bottom">
+        <button className="search-btn" data-testid="search-next" onClick={onNext} aria-label="Next match"><ArrowDownIcon size="sm" /></button>
+      </Tooltip>
+      <Tooltip label="Close search" shortcut="Esc" placement="bottom">
+        <button className="search-btn search-close" data-testid="search-close" onClick={onClose} aria-label="Close search"><SearchCloseIcon size="sm" /></button>
+      </Tooltip>
     </div>
   );
 }

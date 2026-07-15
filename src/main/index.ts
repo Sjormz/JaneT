@@ -7,6 +7,13 @@ import { FileSystemManager } from './filesystem';
 import { GitManager } from './git';
 import { SettingsManager } from './settings';
 import type { SSHListDirParams } from '../shared/files';
+import {
+  WorkspaceLifecycleController,
+  type WorkspaceActivity,
+  type WorkspaceCloseDecision,
+  type WorkspaceClosePrompt,
+  type WorkspaceWindow,
+} from './workspaceLifecycle';
 
 let mainWindow: electron.BrowserWindow | null = null;
 let initializeUpdaterForWindow: ((window: electron.BrowserWindow) => void) | null = null;
@@ -15,6 +22,10 @@ let sshManager: SSHManager;
 let fsManager: FileSystemManager;
 let gitManager: GitManager;
 let settingsManager: SettingsManager;
+let workspaceLifecycle: WorkspaceLifecycleController;
+let backgroundTray: electron.Tray | null = null;
+let allowWindowCloseOnce = false;
+let quittingAfterWorkspaceStop = false;
 
 const e2eEventsPath = process.env.JANET_E2E_EVENTS_PATH;
 const e2eRemoteDebuggingPort = process.env.JANET_E2E_REMOTE_DEBUGGING_PORT;
@@ -25,6 +36,19 @@ if (e2eRemoteDebuggingPort) {
 
 if (process.env.JANET_E2E_USER_DATA_DIR) {
   electron.app.setPath('userData', process.env.JANET_E2E_USER_DATA_DIR);
+}
+
+const hasSingleInstanceLock = electron.app.requestSingleInstanceLock();
+let restoreRequestedBySecondInstance = false;
+if (!hasSingleInstanceLock) {
+  electron.app.quit();
+} else {
+  electron.app.on('second-instance', () => {
+    restoreRequestedBySecondInstance = true;
+    if (!electron.app.isReady() || !workspaceLifecycle) return;
+    restoreRequestedBySecondInstance = false;
+    showOrCreateWindow();
+  });
 }
 
 function recordE2eEvent(event: Record<string, unknown>): void {
@@ -42,6 +66,160 @@ function openAllowedExternalUrl(url: string): boolean {
   return true;
 }
 
+function workspaceWindow(window: electron.BrowserWindow): WorkspaceWindow {
+  return {
+    close: () => {
+      allowWindowCloseOnce = true;
+      window.close();
+    },
+    hide: () => window.hide(),
+    show: () => {
+      if (window.isMinimized()) window.restore();
+      window.show();
+    },
+    focus: () => window.focus(),
+    isDestroyed: () => window.isDestroyed(),
+  };
+}
+
+async function getWorkspaceActivity(): Promise<WorkspaceActivity> {
+  const [localWork, sshSessions] = await Promise.all([
+    terminalManager.listRunningWork(),
+    Promise.resolve(sshManager.listRunningSessions()),
+  ]);
+  return {
+    localTerminals: localWork.length,
+    sshSessions: sshSessions.length,
+    localDetails: localWork.map((work) => (
+      `${work.processName}${work.descendantPids.length > 1 ? ` + ${work.descendantPids.length - 1} related processes` : ''}`
+    )),
+    sshDetails: sshSessions.map((session) => `${session.username ? `${session.username}@` : ''}${session.host}:${session.port}`),
+  };
+}
+
+async function chooseWorkspaceCloseDecision(prompt: WorkspaceClosePrompt): Promise<WorkspaceCloseDecision> {
+  const testDecision = process.env.JANET_E2E_CLOSE_DECISION;
+  if (testDecision === 'background' || testDecision === 'stop' || testDecision === 'cancel') {
+    recordE2eEvent({ type: 'workspace:close-decision', decision: testDecision });
+    return testDecision;
+  }
+
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) return 'cancel';
+  const defaultId = Math.max(0, prompt.actions.findIndex((action) => action.decision === prompt.defaultDecision));
+  const cancelId = Math.max(0, prompt.actions.findIndex((action) => action.decision === prompt.cancelDecision));
+  const { response } = await electron.dialog.showMessageBox(window, {
+    type: 'warning',
+    title: prompt.title,
+    message: prompt.message,
+    detail: prompt.detail,
+    buttons: prompt.actions.map((action) => action.label),
+    defaultId,
+    cancelId,
+    noLink: true,
+    normalizeAccessKeys: true,
+  });
+  return prompt.actions[response]?.decision ?? 'cancel';
+}
+
+async function stopWorkspaceResources(): Promise<void> {
+  await terminalManager.stopAll();
+  fsManager.cleanup();
+  sshManager.cleanup();
+}
+
+async function prepareForUpdateInstall(): Promise<boolean> {
+  const activity = await getWorkspaceActivity();
+  if (activity.localTerminals > 0 || activity.sshSessions > 0) {
+    const window = mainWindow;
+    if (!window || window.isDestroyed()) return false;
+    const { response } = await electron.dialog.showMessageBox(window, {
+      type: 'warning',
+      title: 'Stop terminals and install update?',
+      message: 'JaneT needs to stop active terminals and SSH connections before installing the update.',
+      detail: `${activity.localTerminals} local ${activity.localTerminals === 1 ? 'terminal has' : 'terminals have'} active work, and ${activity.sshSessions} SSH connection${activity.sshSessions === 1 ? '' : 's'} will be closed. Detached jobs on remote hosts may continue running.`,
+      buttons: ['Stop all and install', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+      normalizeAccessKeys: true,
+    });
+    if (response !== 0) return false;
+  }
+
+  await stopWorkspaceResources();
+  return true;
+}
+
+function destroyBackgroundTray(): void {
+  if (!backgroundTray) return;
+  try { backgroundTray.destroy(); } catch {}
+  backgroundTray = null;
+}
+
+function showOrCreateWindow(): void {
+  const window = mainWindow;
+  if (window && !window.isDestroyed()) {
+    workspaceLifecycle.show(workspaceWindow(window));
+    return;
+  }
+  createWindow();
+}
+
+function ensureBackgroundTray(): boolean {
+  if (backgroundTray) return true;
+  let tray: electron.Tray | null = null;
+  try {
+    const trayAsset = process.platform === 'darwin' ? 'trayTemplate.png' : 'tray.png';
+    const iconPath = path.join(electron.app.getAppPath(), 'assets', 'runtime', trayAsset);
+    let image = electron.nativeImage.createFromPath(iconPath);
+    if (image.isEmpty()) throw new Error(`Background tray icon is missing or invalid: ${iconPath}`);
+    if (process.platform === 'darwin' && !image.isEmpty()) {
+      image.setTemplateImage(true);
+    }
+    tray = new electron.Tray(image);
+    tray.setToolTip('JaneT — terminals and SSH connections are running');
+    tray.setContextMenu(electron.Menu.buildFromTemplate([
+      { label: 'Open JaneT', click: showOrCreateWindow },
+      { type: 'separator' },
+      {
+        label: 'Stop all and quit',
+        click: () => {
+          void workspaceLifecycle.stopFromTray().catch((error) => {
+            console.error('[workspace] failed to stop background services:', error);
+            electron.dialog.showErrorBox('Could not stop services', error instanceof Error ? error.message : String(error));
+          });
+        },
+      },
+    ]));
+    tray.on('click', showOrCreateWindow);
+    tray.on('double-click', showOrCreateWindow);
+    backgroundTray = tray;
+    return true;
+  } catch (error) {
+    try { tray?.destroy(); } catch {}
+    backgroundTray = null;
+    console.error('[workspace] failed to create background tray:', error);
+    return false;
+  }
+}
+
+function handleBackgroundChange(active: boolean): boolean {
+  recordE2eEvent({ type: 'workspace:background', active });
+  if (!active) {
+    destroyBackgroundTray();
+    return true;
+  }
+
+  const trayReady = ensureBackgroundTray();
+  if (trayReady || process.platform === 'darwin') return true;
+  electron.dialog.showErrorBox(
+    'Could not run JaneT in the background',
+    'JaneT could not create its background tray control, so the window will stay open. Resolve the desktop tray issue or choose Stop all and quit.',
+  );
+  return false;
+}
+
 function createWindow() {
   // Remove the default application menu (File / Edit / View / Window).
   // JaneT uses a fully custom in-renderer titlebar.
@@ -54,6 +232,9 @@ function createWindow() {
     minHeight: 600,
     title: 'JaneT',
     backgroundColor: '#0f0f1a',
+    ...(process.platform === 'darwin' ? {} : {
+      icon: path.join(electron.app.getAppPath(), 'assets', 'runtime', 'app-icon-256.png'),
+    }),
     autoHideMenuBar: true,
     // Remove the OS-level window chrome — the custom in-renderer titlebar
     // provides its own drag region and min/max/close controls.
@@ -120,9 +301,26 @@ function createWindow() {
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = null;
   });
+  window.on('close', (event) => {
+    if (quittingAfterWorkspaceStop) return;
+    if (allowWindowCloseOnce) {
+      allowWindowCloseOnce = false;
+      return;
+    }
+    event.preventDefault();
+    void workspaceLifecycle.handleClose(workspaceWindow(window)).catch((error) => {
+      console.error('[workspace] close decision failed:', error);
+      if (!window.isDestroyed()) {
+        window.show();
+        window.focus();
+      }
+      electron.dialog.showErrorBox('Could not close JaneT safely', error instanceof Error ? error.message : String(error));
+    });
+  });
 }
 
 electron.app.whenReady().then(() => {
+  if (!hasSingleInstanceLock) return;
   terminalManager = new TerminalManager();
   fsManager = new FileSystemManager();
   gitManager = new GitManager();
@@ -139,10 +337,10 @@ electron.app.whenReady().then(() => {
 
     const { response } = await electron.dialog.showMessageBox(window, {
       type: 'warning',
-      title: 'Trust SSH Host?',
-      message: `Trust SSH host ${host}:${port}?`,
-      detail: `Host: ${host}:${port}\nSHA-256 fingerprint: ${fingerprint}`,
-      buttons: ['Trust', 'Cancel'],
+      title: 'New SSH host',
+      message: `Trust and connect to ${host}:${port}?`,
+      detail: `Verify this SHA-256 fingerprint before continuing:\n\n${fingerprint}`,
+      buttons: ['Trust and connect', 'Cancel'],
       defaultId: 1,
       cancelId: 1,
       noLink: true,
@@ -154,34 +352,72 @@ electron.app.whenReady().then(() => {
     window.webContents.send('ssh:onConnectionClosed', event);
   });
 
+  workspaceLifecycle = new WorkspaceLifecycleController({
+    getActivity: getWorkspaceActivity,
+    chooseDecision: chooseWorkspaceCloseDecision,
+    stopAll: stopWorkspaceResources,
+    quit: () => {
+      quittingAfterWorkspaceStop = true;
+      electron.app.quit();
+    },
+    onBackgroundChange: handleBackgroundChange,
+  });
+
+  // Update-driven window closes happen before the normal app `before-quit`
+  // event. Only bypass the workspace close guard once Electron confirms the
+  // installer has committed to quitting; preparation alone can still fail.
+  electron.autoUpdater.on('before-quit-for-update', () => {
+    quittingAfterWorkspaceStop = true;
+    destroyBackgroundTray();
+  });
+
+  electron.app.on('before-quit', (event) => {
+    if (quittingAfterWorkspaceStop) return;
+    const window = mainWindow;
+    if (!window || window.isDestroyed()) return;
+    event.preventDefault();
+    void workspaceLifecycle.handleQuit(workspaceWindow(window)).catch((error) => {
+      console.error('[workspace] quit decision failed:', error);
+      if (!window.isDestroyed()) {
+        window.show();
+        window.focus();
+      }
+      electron.dialog.showErrorBox('Could not quit JaneT safely', error instanceof Error ? error.message : String(error));
+    });
+  });
+
   registerIpcHandlers();
   createWindow();
+  if (restoreRequestedBySecondInstance) {
+    restoreRequestedBySecondInstance = false;
+    showOrCreateWindow();
+  }
 
   // Initialize auto-updater. Keep this lazy so physical e2e launches can run
   // the built Electron app without electron-updater touching app internals at
   // module import time.
   if (mainWindow && process.env.NODE_ENV !== 'test') {
     import('./updater').then(({ initUpdater, checkForUpdates }) => {
-      initializeUpdaterForWindow = initUpdater;
+      initializeUpdaterForWindow = (nextWindow) => initUpdater(nextWindow, prepareForUpdateInstall);
       const window = mainWindow;
       if (!window || window.isDestroyed()) return;
-      initUpdater(window);
+      initUpdater(window, prepareForUpdateInstall);
       // Check for updates after a short delay so the app is fully settled
       setTimeout(() => checkForUpdates(true), 5000);
     }).catch((err) => console.error('[updater] failed to initialize:', err));
   }
 
   electron.app.on('activate', () => {
-    if (electron.BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+    showOrCreateWindow();
   });
 });
 
 electron.app.on('window-all-closed', () => {
+  if (!hasSingleInstanceLock) return;
   terminalManager.cleanup();
   fsManager.cleanup();
   sshManager.cleanup();
+  destroyBackgroundTray();
   if (process.platform !== 'darwin') {
     electron.app.quit();
   }
