@@ -616,9 +616,14 @@ describe('split panes in the app', () => {
       await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
     });
 
-    await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalled());
     expect(window.janet.sshConnect).not.toHaveBeenCalled();
-    expect((window.janet.terminalCreate as any).mock.calls[0][0]).not.toHaveProperty('startupCommands');
+    const localCreates = (window.janet.terminalCreate as any).mock.calls.map((call: any[]) => call[0]);
+    expect(new Set(localCreates.map((call: { id: string }) => call.id)).size).toBe(1);
+    for (const call of localCreates) {
+      expect(call).not.toHaveProperty('startupCommands');
+      expect(call).not.toHaveProperty('startupShellDialect');
+    }
     const launched = rendererMocks.verticalTabBarProps.tabs.find(
       (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
     );
