@@ -9,6 +9,7 @@ import { Server, utils, type SFTPWrapper } from 'ssh2';
 
 const root = path.resolve(__dirname, '../..');
 const devServerUrl = process.env.JANET_DEV_SERVER_URL || 'http://127.0.0.1:5173';
+const electronExecutable = require('electron') as string;
 const testUsername = 'janet';
 const testPassword = 'janet-test';
 const remoteHome = '/home/janet';
@@ -223,6 +224,7 @@ function respondToShellCommand(stream: NodeJS.WritableStream & { exit?: (code: n
 async function startLocalSshServer(): Promise<{
   port: number;
   fingerprint: string;
+  receivedCommands: string[];
   disconnectClients: () => void;
   close: () => Promise<void>;
 }> {
@@ -240,6 +242,7 @@ async function startLocalSshServer(): Promise<{
     .replace(/=+$/, '')}`;
 
   const clients = new Set<{ end: () => void }>();
+  const receivedCommands: string[] = [];
   const server = new Server({ hostKeys: [privateKey] }, (client) => {
     clients.add(client);
     client.on('close', () => clients.delete(client));
@@ -270,6 +273,7 @@ async function startLocalSshServer(): Promise<{
             if (!/[\r\n]$/.test(buffer)) return;
             const command = buffer.trim();
             buffer = '';
+            receivedCommands.push(command);
             if (command === 'exit') {
               stream.exit(0);
               stream.end();
@@ -290,6 +294,7 @@ async function startLocalSshServer(): Promise<{
   return {
     port,
     fingerprint,
+    receivedCommands,
     disconnectClients: () => {
       for (const client of clients) client.end();
     },
@@ -297,12 +302,17 @@ async function startLocalSshServer(): Promise<{
   };
 }
 
-async function launchAppWithLocalSsh(port: number, fingerprint: string, options: { seedSession?: boolean } = {}): Promise<{
+async function launchAppWithLocalSsh(
+  port: number,
+  fingerprint: string,
+  options: { seedSession?: boolean; seedStartupPreset?: boolean } = {},
+): Promise<{
   browser: Browser;
   electronProcess: ChildProcess;
   page: Page;
   eventsPath: string;
   settingsPath: string;
+  userData: string;
 }> {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-local-ssh-'));
   const eventsPath = path.join(userData, 'events.ndjson');
@@ -323,7 +333,21 @@ async function launchAppWithLocalSsh(port: number, fingerprint: string, options:
     fontSize: 14,
     sidebarSide: 'left',
     keybindings: {},
-    workspaceTabs: [],
+    workspaceTabs: options.seedStartupPreset ? [{
+      id: 'remote-startup-preset',
+      name: 'Remote startup',
+      type: 'local',
+      terminalCount: 1,
+      splitDirection: 'vertical',
+      root: {
+        type: 'leaf',
+        title: 'remote automation',
+        terminalType: 'ssh',
+        sshProfileId: profile.id,
+        startupCommands: ['printf __JANET_REMOTE_ONE__', 'printf __JANET_REMOTE_TWO__'],
+        startupShellDialect: 'posix',
+      },
+    }] : [],
     sshProfiles: [profile],
     sshHostKeys: { [`127.0.0.1:${port}`]: fingerprint },
     session: seedSession ? {
@@ -341,8 +365,7 @@ async function launchAppWithLocalSsh(port: number, fingerprint: string, options:
     } : undefined,
   }, null, 2), 'utf-8');
 
-  const electronArgs = ['electron', '.', ...(process.platform === 'linux' ? ['--no-sandbox'] : [])];
-  const electronProcess = spawn('npx', electronArgs, {
+  const electronProcess = spawn(electronExecutable, ['.', ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
     cwd: root,
     env: electronEnv({
       NODE_ENV: 'test',
@@ -352,24 +375,32 @@ async function launchAppWithLocalSsh(port: number, fingerprint: string, options:
       JANET_E2E_REMOTE_DEBUGGING_PORT: String(remoteDebuggingPort),
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
-    shell: true,
+    shell: false,
   });
   electronProcess.stdout?.on('data', (chunk) => console.log(`[electron] ${chunk}`));
   electronProcess.stderr?.on('data', (chunk) => console.error(`[electron] ${chunk}`));
 
-  const browser = await connectCdp(remoteDebuggingPort);
-  const context = browser.contexts()[0] ?? await browser.newContext();
-  let page = context.pages().find((candidate) => isAppUrl(candidate.url()));
-  if (!page) page = await context.waitForEvent('page', { timeout: 10_000 });
-  if (!isAppUrl(page.url())) {
-    await page.waitForURL((url) => isAppUrl(url.href), { timeout: 10_000 }).catch(() => {});
+  let browser: Browser | undefined;
+  try {
+    browser = await connectCdp(remoteDebuggingPort);
+    const context = browser.contexts()[0] ?? await browser.newContext();
+    let page = context.pages().find((candidate) => isAppUrl(candidate.url()));
+    if (!page) page = await context.waitForEvent('page', { timeout: 10_000 });
+    if (!isAppUrl(page.url())) {
+      await page.waitForURL((url) => isAppUrl(url.href), { timeout: 10_000 }).catch(() => {});
+    }
+    page.on('console', (message) => console.log(`[renderer:${message.type()}] ${message.text()}`));
+    await page.waitForLoadState('domcontentloaded');
+    return { browser, electronProcess, page, eventsPath, settingsPath, userData };
+  } catch (error) {
+    await browser?.close().catch(() => {});
+    await killProcessTree(electronProcess);
+    fs.rmSync(userData, { recursive: true, force: true });
+    throw error;
   }
-  page.on('console', (message) => console.log(`[renderer:${message.type()}] ${message.text()}`));
-  await page.waitForLoadState('domcontentloaded');
-  return { browser, electronProcess, page, eventsPath, settingsPath };
 }
 
-async function closeApp(browser: Browser, electronProcess: ChildProcess) {
+async function closeApp(browser: Browser, electronProcess: ChildProcess, userData?: string) {
   try {
     for (const context of browser.contexts()) {
       for (const page of context.pages()) {
@@ -379,6 +410,7 @@ async function closeApp(browser: Browser, electronProcess: ChildProcess) {
     await browser.close().catch(() => {});
   } finally {
     await killProcessTree(electronProcess);
+    if (userData) fs.rmSync(userData, { recursive: true, force: true });
   }
 }
 
@@ -397,7 +429,7 @@ async function runMarkedLs(page: Page, marker: string) {
 
 test('restores the local SSH fixture, browses remote files, and runs ls', async () => {
   const ssh = await startLocalSshServer();
-  const { browser, electronProcess, page, eventsPath } = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
+  const { browser, electronProcess, page, eventsPath, userData } = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
   try {
     await waitForShellCreateCount(eventsPath, 1);
 
@@ -415,14 +447,14 @@ test('restores the local SSH fixture, browses remote files, and runs ls', async 
     await expect(explorer.getByText(/Reconnect .* to browse its files\./i)).toBeVisible({ timeout: 20_000 });
     await expect(explorer.getByText('nested-remote.txt', { exact: true })).toHaveCount(0);
   } finally {
-    await closeApp(browser, electronProcess);
+    await closeApp(browser, electronProcess, userData);
     await ssh.close();
   }
 });
 
 test('restores local SSH terminal after refresh and runs ls again', async () => {
   const ssh = await startLocalSshServer();
-  const { browser, electronProcess, page, eventsPath } = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
+  const { browser, electronProcess, page, eventsPath, userData } = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
   try {
     await waitForShellCreateCount(eventsPath, 1);
     await runMarkedLs(page, 'BEFORE_REFRESH');
@@ -432,14 +464,64 @@ test('restores local SSH terminal after refresh and runs ls again', async () => 
     await waitForShellCreateCount(eventsPath, 2);
     await runMarkedLs(page, 'AFTER_REFRESH');
   } finally {
-    await closeApp(browser, electronProcess);
+    await closeApp(browser, electronProcess, userData);
+    await ssh.close();
+  }
+});
+
+test('runs startup commands only for fresh launches of a saved SSH preset', async () => {
+  const ssh = await startLocalSshServer();
+  const { browser, electronProcess, page, eventsPath, settingsPath, userData } = await launchAppWithLocalSsh(
+    ssh.port,
+    ssh.fingerprint,
+    { seedSession: false, seedStartupPreset: true },
+  );
+  try {
+    const presetsButton = page.getByRole('button', { name: 'Presets' });
+    if (await presetsButton.getAttribute('aria-expanded') !== 'true') await presetsButton.click();
+    await page.getByRole('button', { name: 'Open preset Remote startup' }).click();
+
+    const expectedExpression = "eval 'printf __JANET_REMOTE_ONE__' && eval 'printf __JANET_REMOTE_TWO__'";
+    await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 }).toEqual([expectedExpression]);
+
+    // A durable renderer reload reconnects the saved SSH pane with a fresh
+    // transport, but session serialization intentionally removed automation.
+    await expect.poll(() => {
+      const session = readSettings(settingsPath).session;
+      const savedTab = session?.tabs?.find((tab: Record<string, any>) => tab.title === 'Remote startup');
+      if (!savedTab) return null;
+      return {
+        terminalType: savedTab.root?.terminalType,
+        startupCommands: savedTab.root?.startupCommands,
+        startupShellDialect: savedTab.root?.startupShellDialect,
+      };
+    }, { timeout: 10_000 }).toEqual({
+      terminalType: 'ssh',
+      startupCommands: undefined,
+      startupShellDialect: undefined,
+    });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await waitForShellCreateCount(eventsPath, 2);
+    await page.waitForTimeout(750);
+    expect(ssh.receivedCommands).toEqual([expectedExpression]);
+
+    // An explicit second preset launch creates a new pane and runs it again.
+    const reloadedPresetsButton = page.getByRole('button', { name: 'Presets' });
+    if (await reloadedPresetsButton.getAttribute('aria-expanded') !== 'true') {
+      await reloadedPresetsButton.click();
+    }
+    await page.getByRole('button', { name: 'Open preset Remote startup' }).click();
+    await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 })
+      .toEqual([expectedExpression, expectedExpression]);
+  } finally {
+    await closeApp(browser, electronProcess, userData);
     await ssh.close();
   }
 });
 
 test('opens saved local SSH profile, persists profile id, refreshes, and runs ls again', async () => {
   const ssh = await startLocalSshServer();
-  const { browser, electronProcess, page, eventsPath, settingsPath } = await launchAppWithLocalSsh(
+  const { browser, electronProcess, page, eventsPath, settingsPath, userData } = await launchAppWithLocalSsh(
     ssh.port,
     ssh.fingerprint,
     { seedSession: false },
@@ -461,7 +543,7 @@ test('opens saved local SSH profile, persists profile id, refreshes, and runs ls
     await waitForShellCreateCount(eventsPath, 2);
     await runMarkedLs(page, 'OPENED_PROFILE_AFTER_REFRESH');
   } finally {
-    await closeApp(browser, electronProcess);
+    await closeApp(browser, electronProcess, userData);
     await ssh.close();
   }
 });

@@ -71,6 +71,7 @@ function processInspector(...snapshots: Array<ProcessInfo[] | Error>): ProcessIn
 }
 
 const prompt = '\x1b]7;file://localhost/tmp\x1b\\';
+const startupReady = '\x1b]777;janet-ready\x1b\\';
 
 beforeEach(() => {
   mocks.spawnMock.mockReset();
@@ -78,6 +79,148 @@ beforeEach(() => {
 });
 
 describe('TerminalManager', () => {
+  it('dispatches startup commands once after the first integrated prompt', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    const commands = ['hermes doctor', 'hermes --tui'];
+
+    manager.create('term-startup', undefined, '/bin/zsh', () => {}, commands);
+    manager.create('term-startup', undefined, '/bin/zsh', () => {}, commands);
+
+    expect(pty.write).not.toHaveBeenCalled();
+    pty.emit(prompt);
+    pty.emit(prompt);
+    expect(pty.write).not.toHaveBeenCalled();
+    pty.emit(startupReady);
+    pty.emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    expect(pty.write).toHaveBeenCalledWith(
+      "eval 'hermes doctor' && eval 'hermes --tui'\r",
+    );
+  });
+
+  it('skips startup and forwards input when a prompt hook needs an early answer', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    manager.create('term-startup-input', undefined, '/bin/zsh', () => {}, ['git pull']);
+
+    manager.write('term-startup-input', 'echo after startup\r');
+    manager.writeBinary('term-startup-input', 'x');
+    expect(pty.write.mock.calls).toEqual([
+      ['echo after startup\r'],
+      [Buffer.from('x', 'binary')],
+    ]);
+
+    pty.emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(pty.write.mock.calls).toEqual([
+      ['echo after startup\r'],
+      [Buffer.from('x', 'binary')],
+    ]);
+  });
+
+  it('forwards terminal protocol replies without cancelling pending startup', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    manager.create('term-startup-cpr', undefined, '/bin/zsh', () => {}, ['git pull']);
+
+    manager.write('term-startup-cpr', '\x1b[1;1R', false);
+    expect(pty.write).toHaveBeenCalledWith('\x1b[1;1R');
+
+    pty.emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(pty.write.mock.calls).toEqual([
+      ['\x1b[1;1R'],
+      ["eval 'git pull'\r"],
+    ]);
+  });
+
+  it('does not append startup commands to a partially typed user line', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    manager.create('term-startup-partial', undefined, '/bin/zsh', () => {}, ['git pull']);
+
+    manager.write('term-startup-partial', 'ls');
+    pty.emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(pty.write.mock.calls).toEqual([['ls']]);
+  });
+
+  it('uses a bounded fallback when the first prompt marker never arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager();
+      manager.create('term-startup-fallback', undefined, '/bin/sh', () => {}, ['hermes --tui']);
+
+      expect(pty.write).not.toHaveBeenCalled();
+      await vi.runAllTimersAsync();
+      manager.write('term-startup-fallback', 'q');
+      expect(pty.write.mock.calls).toEqual([
+        ["eval 'hermes --tui'\r"],
+        ['q'],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the local startup ledger only when the pane is explicitly destroyed', async () => {
+    const ptys = [new MockPty(), new MockPty()];
+    mocks.spawnMock.mockImplementation(() => ptys.shift()!);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+
+    const first = manager.create('term-startup-recreate', undefined, '/bin/zsh', () => {}, ['first']);
+    (first as unknown as MockPty).emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    manager.destroy('term-startup-recreate');
+    const second = manager.create('term-startup-recreate', undefined, '/bin/zsh', () => {}, ['second']);
+    (second as unknown as MockPty).emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect((first as unknown as MockPty).write).toHaveBeenCalledWith("eval 'first'\r");
+    expect((second as unknown as MockPty).write).toHaveBeenCalledWith("eval 'second'\r");
+  });
+
+  it('does not replay startup commands when a PTY exits without explicit pane destruction', async () => {
+    const ptys = [new MockPty(), new MockPty()];
+    mocks.spawnMock.mockImplementation(() => ptys.shift()!);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+
+    const first = manager.create('term-startup-exit', undefined, '/bin/zsh', () => {}, ['first']);
+    (first as unknown as MockPty).emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    (first as unknown as MockPty).emitExit();
+    const second = manager.create('term-startup-exit', undefined, '/bin/zsh', () => {}, ['second']);
+    (second as unknown as MockPty).emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect((first as unknown as MockPty).write).toHaveBeenCalledWith("eval 'first'\r");
+    expect((second as unknown as MockPty).write).not.toHaveBeenCalled();
+  });
+
   it('spawns exactly one pty when create() is called twice for the same id (StrictMode double-mount)', async () => {
     const ptys: MockPty[] = [];
     mocks.spawnMock.mockImplementation(() => {

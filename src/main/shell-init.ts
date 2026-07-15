@@ -1,5 +1,8 @@
 import * as path from 'path';
 
+/** Complete private zero-width OSC emitted after prompt hooks complete. */
+export const STARTUP_READY_MARKER = '\x1b]777;janet-ready\x1b\\';
+
 /**
  * Returns a small shell-init snippet that, when sourced/eval'd by the
  * shell at startup:
@@ -49,6 +52,9 @@ export function buildShellInit(shell: string): string {
       "if (Test-Path Function:\\prompt) { $global:__jt_orig_prompt = ${Function:prompt} } else { $global:__jt_orig_prompt = { 'PS> ' } }",
       // Redefine prompt.
       "function global:prompt {",
+      // Capture both success forms before any integration work changes them.
+      "  $__jt_success = $?",
+      "  $__jt_last_exit_code = $global:LASTEXITCODE",
       "  $e = [char]27",
       // Convert C:\foo to C:/foo (file:// wants forward slashes).
       "  $urlPath = ($PWD.ProviderPath -replace '\\\\','/')",
@@ -58,8 +64,21 @@ export function buildShellInit(shell: string): string {
       // is [char]92 — the backslash in ST. xterm's parser also accepts
       // BEL ([char]7) as an alternative terminator, but ST is canonical.
       "  $osc = $e + ']7;file://' + $env:COMPUTERNAME + '/' + $urlPath + $e + [char]92",
+      "  $ready = $e + ']777;janet-ready' + $e + [char]92",
       "  Write-Host -NoNewline $osc",
-      "  & $global:__jt_orig_prompt",
+      "  $global:LASTEXITCODE = $__jt_last_exit_code",
+      // Recreate $? immediately before the user's status-aware prompt.
+      "  if ($__jt_success) { $null = $true } else { Write-Error '__janet_status__' -ErrorAction Ignore }",
+      "  try {",
+      "    $promptText = & $global:__jt_orig_prompt",
+      "  } catch {",
+      "    Microsoft.PowerShell.Utility\\Write-Error -ErrorRecord $_ -ErrorAction Continue",
+      "    $promptText = 'PS> '",
+      "  } finally {",
+      // A broken custom prompt must not leave startup commands pending forever.
+      "    Write-Host -NoNewline $ready",
+      "  }",
+      "  $promptText",
       "}",
     ].join('\n');
     return ps;
@@ -70,8 +89,26 @@ export function buildShellInit(shell: string): string {
     return [
       // Use a namespaced function name so we don't clobber the user's.
       "__jt_osc7() { printf '\\033]7;file://%s%s\\033\\\\' \"${HOSTNAME:-localhost}\" \"$PWD\"; }",
-      // Prepend to any existing PROMPT_COMMAND.
-      "PROMPT_COMMAND=\"__jt_osc7${PROMPT_COMMAND:+; $PROMPT_COMMAND}\"",
+      "__jt_ready() { printf '\\033]777;janet-ready\\033\\\\'; }",
+      // Bash 3.2 executes only PROMPT_COMMAND[0], so capture either form and
+      // install one scalar wrapper that explicitly runs every original hook.
+      "case \"$(declare -p PROMPT_COMMAND 2>/dev/null)\" in",
+      "  'declare -a'*) __jt_orig_prompt_commands=(\"${PROMPT_COMMAND[@]}\") ;;",
+      "  *) __jt_orig_prompt_commands=(\"${PROMPT_COMMAND-}\") ;;",
+      "esac",
+      "__jt_prompt_command() {",
+      "  local __jt_status=$?",
+      "  local __jt_command",
+      "  __jt_osc7",
+      "  for __jt_command in \"${__jt_orig_prompt_commands[@]}\"; do",
+      "    (exit \"$__jt_status\")",
+      "    eval \"$__jt_command\"",
+      "    __jt_status=$?",
+      "  done",
+      "  __jt_ready",
+      "}",
+      "unset PROMPT_COMMAND",
+      "PROMPT_COMMAND=__jt_prompt_command",
       // `type -t` is `file` only when no alias/function shadows the binary.
       "if [ \"$(type -t hermes 2>/dev/null)\" = file ]; then",
       // The `function name` form prevents an existing alias from expanding
@@ -87,7 +124,8 @@ export function buildShellInit(shell: string): string {
   if (base === 'zsh' || base === 'zsh.exe') {
     return [
       "__jt_osc7() { print -Pn '\\e]7;file://%m%d\\a' }",
-      "precmd_functions+=(__jt_osc7)",
+      "__jt_ready() { print -n $'\\e]777;janet-ready\\e\\\\' }",
+      "precmd_functions+=(__jt_osc7 __jt_ready)",
       "if (( $+commands[hermes] && ! $+aliases[hermes] && ! $+galiases[hermes] && ! $+functions[hermes] )); then",
       "  function hermes {",
       // Quote the external command name so a zsh global alias cannot expand
@@ -103,6 +141,21 @@ export function buildShellInit(shell: string): string {
     return [
       "function __jt_osc7 --on-event fish_prompt",
       "  printf '\\033]7;file://%s%s\\033\\\\' (hostname) $PWD",
+      "end",
+      // fish_prompt may depend on $status, so do not wrap it. Fish evaluates
+      // fish_right_prompt afterwards; wrap that function and emit readiness
+      // through stderr so it reaches the PTY even when Fish hides an over-wide
+      // right prompt instead of rendering its captured stdout.
+      "if functions -q fish_right_prompt",
+      "  functions -c fish_right_prompt __jt_orig_fish_right_prompt",
+      "  function fish_right_prompt",
+      "    __jt_orig_fish_right_prompt $argv",
+      "    printf '\\033]777;janet-ready\\033\\\\' >&2",
+      "  end",
+      "else",
+      "  function fish_right_prompt",
+      "    printf '\\033]777;janet-ready\\033\\\\' >&2",
+      "  end",
       "end",
       "if type -q hermes; and test (type -t hermes) = file",
       "  function hermes --description 'Hermes with JaneT graphics'",

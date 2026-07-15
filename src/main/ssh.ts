@@ -8,6 +8,11 @@ import type {
   SSHConnectionClosedEvent,
   SSHDirectoryListing,
 } from '../shared/files';
+import {
+  compileStartupCommands,
+  isStartupShellDialect,
+  type StartupShellDialect,
+} from '../shared/startupCommands';
 
 // Host verification may pause on a native Trust/Cancel dialog while the user
 // checks the fingerprint out of band. Keep the handshake bounded, but do not
@@ -71,6 +76,8 @@ export class SSHManager {
   private connections: Map<string, SSHConnection> = new Map();
   private pendingConnections: Map<string, PendingSSHConnection> = new Map();
   private readonly inMemoryHostKeys = new Map<string, string>();
+  private readonly startupCommandLedger = new Set<string>();
+  private readonly pendingStartupCommandHandles = new Map<string, SSHShellHandle>();
 
   constructor(
     private readonly hostKeyStore?: SSHHostKeyStore,
@@ -275,9 +282,18 @@ export class SSHManager {
     return promise;
   }
 
-  createShell(sessionId: string, termId: string, size: { cols: number; rows: number }): SSHShellHandle {
+  createShell(
+    sessionId: string,
+    termId: string,
+    size: { cols: number; rows: number },
+    startupCommands?: unknown,
+    startupShellDialect?: StartupShellDialect,
+  ): SSHShellHandle {
     const conn = this.connections.get(sessionId);
     if (!conn) throw new Error(`SSH session ${sessionId} not found`);
+    const startupExpression = isStartupShellDialect(startupShellDialect)
+      ? compileStartupCommands(startupCommands, startupShellDialect)
+      : '';
 
     // Idempotent by termId — see the `shellHandles` doc comment on
     // SSHConnection. Without this a repeat createShell() call (StrictMode
@@ -324,10 +340,16 @@ export class SSHManager {
       cancel: (error: Error) => {
         if (readySettled) return;
         readySettled = true;
+        if (this.pendingStartupCommandHandles.get(termId) === handle) {
+          this.pendingStartupCommandHandles.delete(termId);
+        }
         rejectReady?.(error);
       },
     };
     conn.shellHandles.set(termId, handle);
+    if (startupExpression && !this.startupCommandLedger.has(termId)) {
+      this.pendingStartupCommandHandles.set(termId, handle);
+    }
 
     conn.client.shell({
       cols: size.cols,
@@ -374,6 +396,24 @@ export class SSHManager {
 
       conn.shells.set(termId, stream);
 
+      if (
+        startupExpression &&
+        !this.startupCommandLedger.has(termId) &&
+        this.pendingStartupCommandHandles.get(termId) === handle
+      ) {
+        this.startupCommandLedger.add(termId);
+        try {
+          stream.write(`${startupExpression}\r`);
+        } catch {
+          // The channel may close between the successful shell callback and
+          // the write. Do not replay an automatic command sequence after an
+          // ambiguous partial write.
+        }
+      }
+      if (this.pendingStartupCommandHandles.get(termId) === handle) {
+        this.pendingStartupCommandHandles.delete(termId);
+      }
+
       const queuedWrites = conn.pendingWrites.get(termId);
       if (queuedWrites && queuedWrites.length > 0) {
         for (const chunk of queuedWrites) {
@@ -398,9 +438,18 @@ export class SSHManager {
     );
   }
 
-  private writeShellChunk(termId: string, data: string | Buffer, sessionId?: string): void {
+  private writeShellChunk(
+    termId: string,
+    data: string | Buffer,
+    sessionId?: string,
+    userInput = true,
+  ): void {
     const conn = this.terminalConnection(termId, sessionId);
     if (!conn) return;
+    if (userInput && this.pendingStartupCommandHandles.has(termId)) {
+      this.startupCommandLedger.add(termId);
+      this.pendingStartupCommandHandles.delete(termId);
+    }
     const shell = conn.shells.get(termId);
     if (shell) {
       shell.write(data);
@@ -411,12 +460,12 @@ export class SSHManager {
     conn.pendingWrites.set(termId, queued);
   }
 
-  writeShell(termId: string, data: string, sessionId?: string): void {
-    this.writeShellChunk(termId, data, sessionId);
+  writeShell(termId: string, data: string, sessionId?: string, userInput = true): void {
+    this.writeShellChunk(termId, data, sessionId, userInput);
   }
 
-  writeShellBinary(termId: string, data: string, sessionId?: string): void {
-    this.writeShellChunk(termId, Buffer.from(data, 'binary'), sessionId);
+  writeShellBinary(termId: string, data: string, sessionId?: string, userInput = true): void {
+    this.writeShellChunk(termId, Buffer.from(data, 'binary'), sessionId, userInput);
   }
 
   destroyShell(termId: string, sessionId?: string): boolean {
@@ -427,6 +476,10 @@ export class SSHManager {
     const shell = conn.shells.get(termId);
     if (!handle && !shell && !conn.pendingWrites.has(termId)) return false;
 
+    this.startupCommandLedger.delete(termId);
+    if (this.pendingStartupCommandHandles.get(termId) === handle) {
+      this.pendingStartupCommandHandles.delete(termId);
+    }
     conn.pendingWrites.delete(termId);
     conn.shellHandles.delete(termId);
     conn.shells.delete(termId);
@@ -620,6 +673,8 @@ export class SSHManager {
     this.connections.forEach((_, id) => {
       void this.disconnect(id);
     });
+    this.pendingStartupCommandHandles.clear();
+    this.startupCommandLedger.clear();
   }
 
   private withSftp<T>(

@@ -7,6 +7,25 @@ import {
 } from '../../src/renderer/types';
 
 describe('serializePaneTree', () => {
+  it('includes startup automation only when explicitly requested', () => {
+    const tree: PaneNode = {
+      id: 'ssh-1',
+      type: 'leaf',
+      terminalType: 'ssh',
+      sshProfileId: 'profile-1',
+      startupCommands: [' hermes doctor ', 'hermes --tui'],
+    };
+
+    expect(serializePaneTree(tree)).not.toHaveProperty('startupCommands');
+    expect(serializePaneTree(tree, {}, { includeStartupCommands: true })).toEqual({
+      type: 'leaf',
+      terminalType: 'ssh',
+      sshProfileId: 'profile-1',
+      startupCommands: ['hermes doctor', 'hermes --tui'],
+      startupShellDialect: 'posix',
+    });
+  });
+
   it('keeps each local pane cwd in the portable tree', () => {
     const tree: PaneNode = {
       id: 'split-1',
@@ -79,6 +98,45 @@ describe('serializePaneTree', () => {
 });
 
 describe('restorePaneTree', () => {
+  it('fails malformed startup automation closed instead of skipping invalid rows', () => {
+    const restored = restorePaneTree({
+      type: 'leaf',
+      terminalType: 'ssh',
+      startupCommands: [' git pull ', '', 'npm\ninstall', 42],
+    });
+
+    expect(restored).toMatchObject({ type: 'leaf', terminalType: 'ssh' });
+    expect(restored).not.toHaveProperty('startupCommands');
+    expect(restored).not.toHaveProperty('startupShellDialect');
+  });
+
+  it('restores valid commands and defaults a missing SSH syntax to POSIX', () => {
+    const restored = restorePaneTree({
+      type: 'leaf',
+      terminalType: 'ssh',
+      startupCommands: [' git pull ', '', 'npm install'],
+    });
+
+    expect(restored).toMatchObject({
+      type: 'leaf',
+      terminalType: 'ssh',
+      startupCommands: ['git pull', 'npm install'],
+      startupShellDialect: 'posix',
+    });
+  });
+
+  it('refuses SSH automation with an explicitly unsupported shell dialect', () => {
+    const restored = restorePaneTree({
+      type: 'leaf',
+      terminalType: 'ssh',
+      startupCommands: ['dangerous remote command'],
+      startupShellDialect: 'cmd',
+    });
+
+    expect(restored).not.toHaveProperty('startupCommands');
+    expect(restored).not.toHaveProperty('startupShellDialect');
+  });
+
   it('returns a fresh single leaf for a leaf input', () => {
     const restored = restorePaneTree({ type: 'leaf', title: 'shell' });
     expect(restored).not.toBeNull();

@@ -59,6 +59,211 @@ beforeEach(() => {
 });
 
 describe('SSHManager', () => {
+  it('dispatches one compiled startup expression after the SSH shell is ready', async () => {
+    const stream = new MockShellStream();
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, stream?: MockShellStream) => void) => {
+      cb(undefined, stream);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    const first = manager.createShell(
+      'startup-session', 'startup-term', { cols: 80, rows: 24 },
+      ['hermes doctor', 'hermes --tui'], 'posix',
+    );
+    const second = manager.createShell(
+      'startup-session', 'startup-term', { cols: 80, rows: 24 },
+      ['hermes doctor', 'hermes --tui'], 'posix',
+    );
+    await Promise.all([first.ready, second.ready]);
+
+    expect(mocks.shellMock).toHaveBeenCalledTimes(1);
+    expect(stream.write).toHaveBeenCalledTimes(1);
+    expect(stream.write).toHaveBeenCalledWith(
+      "eval 'hermes doctor' && eval 'hermes --tui'\r",
+    );
+  });
+
+  it('cancels pending startup when the user types before the SSH channel opens', async () => {
+    const stream = new MockShellStream();
+    let openShell: ((err: Error | undefined, stream?: MockShellStream) => void) | undefined;
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: typeof openShell) => {
+      openShell = cb;
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-manual-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const handle = manager.createShell(
+      'startup-manual-session', 'startup-manual-term', { cols: 80, rows: 24 }, ['hermes --tui'], 'posix',
+    );
+
+    manager.writeShell('startup-manual-term', 'manual input', 'startup-manual-session');
+    openShell?.(undefined, stream);
+    await handle.ready;
+
+    expect(stream.write.mock.calls).toEqual([['manual input']]);
+  });
+
+  it('keeps pending startup when an automatic terminal reply arrives first', async () => {
+    const stream = new MockShellStream();
+    let openShell: ((err: Error | undefined, stream?: MockShellStream) => void) | undefined;
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: typeof openShell) => {
+      openShell = cb;
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-reply-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const handle = manager.createShell(
+      'startup-reply-session', 'startup-reply-term', { cols: 80, rows: 24 }, ['hermes --tui'], 'posix',
+    );
+
+    manager.writeShell('startup-reply-term', '\x1b[1;1R', 'startup-reply-session', false);
+    openShell?.(undefined, stream);
+    await handle.ready;
+
+    expect(stream.write.mock.calls).toEqual([
+      ["eval 'hermes --tui'\r"],
+      ['\x1b[1;1R'],
+    ]);
+  });
+
+  it('does not replay startup commands when a shell channel is recreated for the same pane', async () => {
+    const streams = [new MockShellStream(), new MockShellStream()];
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, stream?: MockShellStream) => void) => {
+      cb(undefined, streams[mocks.shellMock.mock.calls.length - 1]);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-retry-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    await manager.createShell(
+      'startup-retry-session', 'startup-retry-term', { cols: 80, rows: 24 }, ['first'], 'posix',
+    ).ready;
+    streams[0].emit('close');
+    await manager.createShell(
+      'startup-retry-session', 'startup-retry-term', { cols: 80, rows: 24 }, ['first'], 'posix',
+    ).ready;
+
+    expect(streams[0].write).toHaveBeenCalledWith("eval 'first'\r");
+    expect(streams[1].write).not.toHaveBeenCalled();
+  });
+
+  it('keeps exact-once state when a stale session tries to destroy the pane', async () => {
+    const streams = [new MockShellStream(), new MockShellStream()];
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, stream?: MockShellStream) => void) => {
+      cb(undefined, streams[mocks.shellMock.mock.calls.length - 1]);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-owned-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    await manager.createShell(
+      'startup-owned-session', 'startup-owned-term', { cols: 80, rows: 24 }, ['first'], 'posix',
+    ).ready;
+    expect(manager.destroyShell('startup-owned-term', 'stale-session')).toBe(false);
+
+    streams[0].emit('close');
+    await manager.createShell(
+      'startup-owned-session', 'startup-owned-term', { cols: 80, rows: 24 }, ['first'], 'posix',
+    ).ready;
+
+    expect(streams[0].write).toHaveBeenCalledWith("eval 'first'\r");
+    expect(streams[1].write).not.toHaveBeenCalled();
+  });
+
+  it('does not replay startup commands after the SSH transport reconnects', async () => {
+    const streams = [new MockShellStream(), new MockShellStream()];
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, stream?: MockShellStream) => void) => {
+      cb(undefined, streams[mocks.shellMock.mock.calls.length - 1]);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-transport-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell(
+      'startup-transport-session', 'startup-transport-term', { cols: 80, rows: 24 }, ['first'], 'posix',
+    ).ready;
+
+    mocks.lastClient?.emit('close');
+    await manager.connect('startup-transport-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell(
+      'startup-transport-session', 'startup-transport-term', { cols: 80, rows: 24 }, ['first'], 'posix',
+    ).ready;
+
+    expect(streams[0].write).toHaveBeenCalledWith("eval 'first'\r");
+    expect(streams[1].write).not.toHaveBeenCalled();
+  });
+
+  it('allows startup commands again after explicit pane destruction', async () => {
+    const streams = [new MockShellStream(), new MockShellStream()];
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, stream?: MockShellStream) => void) => {
+      cb(undefined, streams[mocks.shellMock.mock.calls.length - 1]);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-destroy-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    await manager.createShell(
+      'startup-destroy-session', 'startup-destroy-term', { cols: 80, rows: 24 }, ['first'], 'posix',
+    ).ready;
+    manager.destroyShell('startup-destroy-term', 'startup-destroy-session');
+    await manager.createShell(
+      'startup-destroy-session', 'startup-destroy-term', { cols: 80, rows: 24 }, ['second'], 'posix',
+    ).ready;
+
+    expect(streams[0].write).toHaveBeenCalledWith("eval 'first'\r");
+    expect(streams[1].write).toHaveBeenCalledWith("eval 'second'\r");
+  });
+
+  it('does not execute SSH startup commands without an explicit supported dialect', async () => {
+    const stream = new MockShellStream();
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, stream?: MockShellStream) => void) => {
+      cb(undefined, stream);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-no-dialect', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell(
+      'startup-no-dialect', 'startup-no-dialect-term', { cols: 80, rows: 24 }, ['never-run'],
+    ).ready;
+
+    expect(stream.write).not.toHaveBeenCalled();
+  });
+
   it('uses the local OS username at the ssh2 boundary when the UI omits username', async () => {
     mocks.connectMock.mockImplementation(() => {
       queueMicrotask(() => mocks.lastClient?.emit('ready'));

@@ -214,6 +214,8 @@ function TerminalPaneLeaf({
           onCwdChange={onCwdChange}
           onFocus={onTerminalFocus}
           initialCwd={leaf.cwd ?? initialCwd}
+          startupCommands={leaf.startupCommands}
+          startupShellDialect={leaf.startupShellDialect}
           hasSession={hasSessionForLeaf?.(leaf.id)}
           sshShellReady={leaf.sshShellReady ?? sshShellReady}
           sshConnectionLost={leafType === 'ssh' && isSshSessionDisconnected?.(effectiveSshSessionId)}

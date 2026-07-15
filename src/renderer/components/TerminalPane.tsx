@@ -27,6 +27,7 @@ import { createKittyGraphicsLayer } from '../kittyGraphics';
 import { refreshCoordinator } from '../refreshCoordinator';
 import { TERMINAL_SEARCH_REQUEST_EVENT, TerminalSearchRequestDetail } from '../terminalSearch';
 import { DEFAULT_TERMINAL_FONT_FAMILY } from '../../shared/typography';
+import type { TerminalLeaf } from '../types';
 import '@xterm/xterm/css/xterm.css';
 
 interface TerminalPaneProps {
@@ -42,6 +43,8 @@ interface TerminalPaneProps {
   onCwdChange?: (termId: string, cwd: string) => void;
   onFocus?: (termId: string) => void;
   initialCwd?: string;
+  startupCommands?: string[];
+  startupShellDialect?: TerminalLeaf['startupShellDialect'];
   hasSession?: boolean;
   sshShellReady?: boolean;
   sshConnectionLost?: boolean;
@@ -91,6 +94,7 @@ interface CachedTerminalPane {
   sshNoticeState: SshNoticeState;
   sshNoticeListener: ((state: SshNoticeState) => void) | null;
   disposeTimer: ReturnType<typeof setTimeout> | null;
+  inputSource: { userInput: boolean };
 }
 
 const terminalPaneCache = new Map<string, CachedTerminalPane>();
@@ -128,6 +132,8 @@ export default function TerminalPane({
   onCwdChange,
   onFocus,
   initialCwd,
+  startupCommands,
+  startupShellDialect,
   hasSession,
   sshShellReady = true,
   sshConnectionLost = false,
@@ -236,7 +242,14 @@ export default function TerminalPane({
     searchAddonRef.current[dir === 'next' ? 'findNext' : 'findPrevious'](query, SEARCH_OPTIONS);
   };
 
-  const attachTerminal = (container: HTMLDivElement, term: Terminal, fitAddon: FitAddon, searchAddon: SearchAddon, initialDelay: number) => {
+  const attachTerminal = (
+    container: HTMLDivElement,
+    term: Terminal,
+    fitAddon: FitAddon,
+    searchAddon: SearchAddon,
+    initialDelay: number,
+    inputSource: { userInput: boolean },
+  ) => {
     const mountCleanup: unknown[] = [];
     const cached = terminalPaneCache.get(termId);
     if (!searchQuery && cached?.hasActiveSearch) {
@@ -278,6 +291,18 @@ export default function TerminalPane({
       }
       return true;
     });
+    // Xterm's onData also includes automatic terminal replies (DA/DSR/CPR),
+    // so mark the synchronous keyboard/paste/input path separately. The main
+    // process uses this bit to cancel pending startup only for real user input.
+    mountCleanup.push(term.onKey(() => { inputSource.userInput = true; }));
+    const textarea = term.textarea;
+    const markUserInput = () => { inputSource.userInput = true; };
+    textarea?.addEventListener('paste', markUserInput, true);
+    textarea?.addEventListener('input', markUserInput, true);
+    mountCleanup.push(() => {
+      textarea?.removeEventListener('paste', markUserInput, true);
+      textarea?.removeEventListener('input', markUserInput, true);
+    });
     // xterm keeps one handler for its full lifetime. Replace the component
     // closure while cached/detached so it cannot update an unmounted pane.
     mountCleanup.push(() => term.attachCustomKeyEventHandler(() => true));
@@ -315,7 +340,7 @@ export default function TerminalPane({
 
       repaintTerminal(term, fitAddon);
       const repaintTimer = setTimeout(() => repaintTerminal(term, fitAddon), 0);
-      const mountCleanup = attachTerminal(container, term, fitAddon, searchAddon, 0);
+      const mountCleanup = attachTerminal(container, term, fitAddon, searchAddon, 0, cached.inputSource);
       mountCleanup.push(() => clearTimeout(repaintTimer));
       if (tabType !== 'ssh') {
         publishSshNoticeState({ kind: 'hidden' });
@@ -392,23 +417,28 @@ export default function TerminalPane({
     fitAddon.fit();
 
     const lifetimeCleanup: unknown[] = [];
+    const inputSource = { userInput: false };
     const kittyGraphics = tabType === 'local' ? createKittyGraphicsLayer(term) : null;
     if (kittyGraphics) lifetimeCleanup.push(kittyGraphics);
 
     const disposable = term.onData((data) => {
+      const userInput = inputSource.userInput;
+      inputSource.userInput = false;
       if (tabType === 'local') {
-        window.janet.terminalWrite({ id: termId, data });
+        window.janet.terminalWrite({ id: termId, data, userInput });
       } else if (tabType === 'ssh') {
-        window.janet.sshWriteShell({ sessionId: sshSessionId, termId, data });
+        window.janet.sshWriteShell({ sessionId: sshSessionId, termId, data, userInput });
       }
     });
     lifetimeCleanup.push(disposable);
 
     const binaryDisposable = term.onBinary((data) => {
+      const userInput = inputSource.userInput;
+      inputSource.userInput = false;
       if (tabType === 'local') {
-        window.janet.terminalWriteBinary({ id: termId, data });
+        window.janet.terminalWriteBinary({ id: termId, data, userInput });
       } else {
-        window.janet.sshWriteShellBinary({ sessionId: sshSessionId, termId, data });
+        window.janet.sshWriteShellBinary({ sessionId: sshSessionId, termId, data, userInput });
       }
     });
     lifetimeCleanup.push(binaryDisposable);
@@ -432,6 +462,8 @@ export default function TerminalPane({
         termId,
         cols: dims.cols,
         rows: dims.rows,
+        ...(startupCommands?.length ? { startupCommands } : {}),
+        ...(startupShellDialect ? { startupShellDialect } : {}),
       });
       openShell.then(() => {
         if (!effectActive) return;
@@ -449,13 +481,18 @@ export default function TerminalPane({
     } else if (hasSession) {
       onReady(termId);
     } else if (tabType === 'local') {
-      window.janet.terminalCreate({ id: termId, cwd: initialCwd }).then(() => {
+      window.janet.terminalCreate({
+        id: termId,
+        cwd: initialCwd,
+        ...(startupCommands?.length ? { startupCommands } : {}),
+        ...(startupShellDialect ? { startupShellDialect } : {}),
+      }).then(() => {
         onReady(termId);
       }).catch(console.error);
     }
 
 
-    const mountCleanup = attachTerminal(container, term, fitAddon, searchAddon, 100);
+    const mountCleanup = attachTerminal(container, term, fitAddon, searchAddon, 100, inputSource);
 
     if (tabType === 'local') {
       let lastReportedCwd: string | null = initialCwd || null;
@@ -496,6 +533,7 @@ export default function TerminalPane({
           : { kind: 'reconnecting' },
       sshNoticeListener: setSshNoticeState,
       disposeTimer: null,
+      inputSource,
     });
 
     return () => {
