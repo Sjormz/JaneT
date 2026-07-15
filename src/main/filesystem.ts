@@ -1,16 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import type { FileEntry } from '../shared/files';
 
-export interface FileEntry {
-  name: string;
-  path: string;
-  isDirectory: boolean;
-  isSymlink: boolean;
-  size: number;
-  mtime: string;
-  mode: number;
-}
+export type { FileEntry } from '../shared/files';
 
 interface DirectorySnapshot {
   entries: Map<string, FileEntry>;

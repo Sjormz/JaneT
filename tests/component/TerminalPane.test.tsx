@@ -858,6 +858,37 @@ describe('TerminalPane SSH shell output', () => {
     expect(sshCreateShell).not.toHaveBeenCalled();
   });
 
+  it('shows a reconnect action when an established SSH transport closes', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const onSshRetry = vi.fn(() => Promise.resolve());
+    const props = {
+      termId: 'term-ssh-disconnected',
+      tabType: 'ssh' as const,
+      sshSessionId: 'ssh-disconnected',
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      onSshRetry,
+      themeName: 'tokyo-night',
+    };
+
+    const view = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(1));
+
+    view.rerender(
+      <KeybindingsProvider>
+        <TerminalPane {...props} sshConnectionLost />
+      </KeybindingsProvider>,
+    );
+
+    expect(await screen.findByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'error');
+    expect(screen.getByText(/SSH connection closed/i)).toBeInTheDocument();
+    expect(screen.getByTestId('ssh-notice-retry')).toBeInTheDocument();
+  });
+
   it('opens SSH shells with terminal-app friendly minimum dimensions', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
 
