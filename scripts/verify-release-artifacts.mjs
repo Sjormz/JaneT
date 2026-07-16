@@ -3,6 +3,13 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  APP_ASAR_WORKER_REWRITE,
+  CONPTY_DEFERRED_CONNECT_MARKER,
+  CONPTY_PID_REFRESH_MARKER,
+  CONPTY_PROCESS_LIST_MARKER,
+  WINDOWS_PATCH_POSTCONDITIONS,
+} from './patch-node-pty-windows-worker.mjs';
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -10,7 +17,6 @@ const projectRoot = path.resolve(__dirname, '..');
 const PACKAGED_PTY_MARKER = '__JANET_PACKAGED_PTY_OK__';
 const PACKAGED_PTY_READY = '__JANET_PACKAGED_PTY_READY__';
 export const PACKAGED_RUNTIME_TIMEOUT_MS = 60_000;
-const WINDOWS_WORKER_ASAR_REWRITE = ".replace('app.asar', 'app.asar.unpacked')";
 
 export function normalizeReleasePlatform(value) {
   if (value === 'windows' || value === 'win32' || value === 'win') return 'windows';
@@ -114,11 +120,19 @@ export function validateMacPtyLayout(runtime) {
   }
 }
 
-export function validateWindowsPtyWorker(runtime) {
-  const workerPath = path.join(runtime.nodePtyRoot, 'lib', 'windowsConoutConnection.js');
-  const workerSource = fs.readFileSync(workerPath, 'utf8');
-  if (!workerSource.includes(WINDOWS_WORKER_ASAR_REWRITE)) {
-    throw new Error(`Packaged node-pty Windows worker cannot resolve app.asar.unpacked: ${workerPath}`);
+export function validateWindowsPtyRuntime(runtime) {
+  const requirements = [
+    ['windowsConoutConnection.js', WINDOWS_PATCH_POSTCONDITIONS.worker, 'worker cannot resolve app.asar.unpacked'],
+    ['windowsPtyAgent.js', WINDOWS_PATCH_POSTCONDITIONS.agent, 'agent is missing the deferred ConPTY connection fix'],
+    ['windowsTerminal.js', WINDOWS_PATCH_POSTCONDITIONS.terminal, 'terminal does not refresh its deferred ConPTY pid'],
+    ['conpty_console_list_agent.js', WINDOWS_PATCH_POSTCONDITIONS.consoleListAgent, 'process-list helper is not safe before ConPTY connects'],
+  ];
+  for (const [fileName, postconditions, failure] of requirements) {
+    const filePath = path.join(runtime.nodePtyRoot, 'lib', fileName);
+    const source = fs.readFileSync(filePath, 'utf8');
+    if (postconditions.some((postcondition) => !source.includes(postcondition))) {
+      throw new Error(`Packaged node-pty Windows ${failure}: ${filePath}`);
+    }
   }
 }
 
@@ -186,7 +200,7 @@ export async function smokePackagedTerminal(platform, releaseRoot) {
   }
 
   const runtime = packagedRuntime(platform, releaseRoot);
-  if (normalizeReleasePlatform(platform) === 'windows') validateWindowsPtyWorker(runtime);
+  if (normalizeReleasePlatform(platform) === 'windows') validateWindowsPtyRuntime(runtime);
   await smokeTerminalRuntime(runtime);
 }
 
@@ -198,7 +212,7 @@ function isUnavailableCrossArchRuntime(error) {
   return /bad cpu type|unsupported architecture|unknown system error -86|\b-86\b|EBADARCH|ENOEXEC/i.test(details);
 }
 
-export async function smokeTerminalRuntime(runtime) {
+export async function smokeTerminalRuntime(runtime, timeoutMs = PACKAGED_RUNTIME_TIMEOUT_MS) {
   for (const [label, target] of [
     ['executable', runtime.executable],
     ['nodePtyRoot', runtime.nodePtyRoot],
@@ -211,25 +225,24 @@ const pty = require(process.argv[1]);
 const marker = process.argv[2];
 const ready = process.argv[3];
 const platform = process.argv[4];
+const hostNodeExecutable = process.argv[5];
 const windows = platform === 'win32';
 let terminal;
 let received = '';
-let exitRequested = false;
 const timeout = setTimeout(() => {
   console.error('packaged PTY timed out: ' + JSON.stringify(received));
   process.exit(2);
 }, 5000);
 try {
   const childProgram = 'process.stdin.once("data",()=>{process.stdin.pause();process.stdout.write(' + JSON.stringify(marker) + ')});process.stdout.write(' + JSON.stringify(ready) + ')';
-  const childExecutable = windows ? (process.env.ComSpec || 'cmd.exe') : process.execPath;
-  const childArgs = windows ? ['/d', '/q'] : ['-e', childProgram];
+  const childExecutable = windows ? hostNodeExecutable : process.execPath;
+  const childArgs = ['-e', childProgram];
   terminal = pty.spawn(childExecutable, childArgs, {
     name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd(),
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
       TERM: 'xterm-256color',
-      JANET_PACKAGED_PTY_MARKER: marker,
     },
   });
 } catch (error) {
@@ -239,10 +252,6 @@ try {
 }
 terminal.onData((data) => {
   received += data;
-  if (windows && !exitRequested && received.includes(marker)) {
-    exitRequested = true;
-    terminal.write('exit\r');
-  }
 });
 terminal.onExit(({ exitCode }) => {
   setTimeout(() => {
@@ -251,26 +260,46 @@ terminal.onExit(({ exitCode }) => {
       console.error('packaged PTY failed: exit=' + exitCode + ' output=' + JSON.stringify(received));
       process.exit(4);
     }
-    process.stdout.write(marker);
+    // node-pty 1.1.0 keeps a ref'ed Conout worker after natural child exit.
+    // Once the isolated smoke has proved spawn, input, output, and exit, flush
+    // the result and terminate explicitly instead of hanging release CI.
+    process.stdout.write(marker, () => process.exit(0));
   }, 25);
 });
-// Electron is a GUI-subsystem executable on Windows, so use the real console
-// shell as the ConPTY child. The literal marker is never written as input: cmd
-// expands it from the environment, and stays alive until output is observed.
-terminal.write(windows ? 'echo %JANET_PACKAGED_PTY_MARKER%\r' : '\r');
+// Listeners are attached before input. Unix pipes can accept the trigger
+// immediately; node-pty's Windows terminal queues it until READY produces the
+// first output event and the ConPTY data pipe becomes writable.
+terminal.write('\r');
 `;
 
-  const { stdout, stderr } = await execFileAsync(runtime.executable, [
-    '-e', smokeProgram, runtime.nodePtyModule, PACKAGED_PTY_MARKER, PACKAGED_PTY_READY, runtime.platform,
-  ], {
-    cwd: projectRoot,
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-    // A cold Rosetta translation of the x64 Electron executable can exceed 15
-    // seconds. Once JavaScript starts, the inner five-second PTY timer still
-    // enforces the functional launch contract.
-    timeout: PACKAGED_RUNTIME_TIMEOUT_MS,
-    maxBuffer: 1024 * 1024,
-  });
+  let stdout;
+  let stderr;
+  try {
+    ({ stdout, stderr } = await execFileAsync(runtime.executable, [
+      '-e', smokeProgram, runtime.nodePtyModule, PACKAGED_PTY_MARKER, PACKAGED_PTY_READY,
+      runtime.platform, process.execPath,
+    ], {
+      cwd: projectRoot,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      // A cold Rosetta translation of the x64 Electron executable can exceed 15
+      // seconds. Once JavaScript starts, the inner five-second PTY timer still
+      // enforces the functional launch contract.
+      timeout: timeoutMs,
+      maxBuffer: 1024 * 1024,
+    }));
+  } catch (error) {
+    const candidate = error ?? {};
+    const details = [
+      candidate.message,
+      candidate.code !== undefined && `code: ${candidate.code}`,
+      candidate.signal && `signal: ${candidate.signal}`,
+      candidate.killed && 'killed: true',
+      `outer timeout limit: ${timeoutMs}ms`,
+      candidate.stdout && `stdout: ${candidate.stdout}`,
+      candidate.stderr && `stderr: ${candidate.stderr}`,
+    ].filter(Boolean);
+    throw new Error(details.join('\n'));
+  }
   if (!stdout.includes(PACKAGED_PTY_MARKER)) {
     throw new Error(`Packaged terminal smoke returned no marker. stderr: ${stderr}`);
   }

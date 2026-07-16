@@ -44,6 +44,20 @@ open JaneT explicitly from Finder. This is an alpha-stage distribution policy;
 a future generally trusted macOS release must restore Developer ID signing and
 Apple notarization.
 
+### Windows ConPTY packaging
+
+JaneT currently locks `node-pty` 1.1.0. Its postinstall step applies an
+idempotent backport of [upstream node-pty PR #885](https://github.com/microsoft/node-pty/pull/885),
+which defers the native ConPTY pipe connection until the output worker reports
+ready. Without that ordering fix, constrained Windows CI runners can block the
+Node event loop inside `ConnectNamedPipe` before a JavaScript timeout can run.
+
+The Windows release verifier checks that the backport and unpacked worker path
+survived packaging, then exercises the packaged module with a real ConPTY
+input/output round trip. Keep this backport guarded against dependency-source
+drift until JaneT upgrades to a stable `node-pty` release that contains the
+upstream fix.
+
 ## Required repository ruleset
 
 The `main-approval-gate` GitHub ruleset protects `refs/heads/main`.

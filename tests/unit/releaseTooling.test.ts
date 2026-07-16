@@ -122,29 +122,65 @@ describe('release tooling', () => {
     expect(macPackagedRuntimes('/release').map((runtime: { arch: string }) => runtime.arch)).toEqual(['x64', 'arm64']);
   });
 
-  it('patches and verifies node-pty Windows worker resolution from app.asar', async () => {
+  it('backports and verifies node-pty Windows ConPTY startup hardening', async () => {
     const {
       APP_ASAR_WORKER_REWRITE,
+      CONPTY_DEFERRED_CONNECT_MARKER,
+      CONPTY_PID_REFRESH_MARKER,
+      CONPTY_PROCESS_LIST_MARKER,
+      patchNodePtyConsoleListAgentSource,
+      patchNodePtyWindowsAgentSource,
+      patchNodePtyWindowsSources,
+      patchNodePtyWindowsTerminalSource,
       patchNodePtyWindowsWorkerSource,
     } = await loadScript('patch-node-pty-windows-worker.mjs');
-    const { validateWindowsPtyWorker } = await loadScript('verify-release-artifacts.mjs');
+    const { validateWindowsPtyRuntime } = await loadScript('verify-release-artifacts.mjs');
     const legacy = "var scriptPath = __dirname.replace('node_modules.asar', 'node_modules.asar.unpacked');";
     const patched = patchNodePtyWindowsWorkerSource(legacy);
 
     expect(patched).toContain(APP_ASAR_WORKER_REWRITE);
     expect(patchNodePtyWindowsWorkerSource(patched)).toBe(patched);
-    expect(() => patchNodePtyWindowsWorkerSource('unknown worker implementation')).toThrow(/expected path resolver/);
+    expect(() => patchNodePtyWindowsWorkerSource('unknown worker implementation')).toThrow(/expected worker path resolver/);
+    expect(() => patchNodePtyWindowsAgentSource('unknown agent implementation')).toThrow(/expected Conout worker readiness block/);
+    expect(() => patchNodePtyWindowsTerminalSource('unknown terminal implementation')).toThrow(/expected ready_datapipe handler/);
+    expect(() => patchNodePtyConsoleListAgentSource('unknown helper implementation')).toThrow(/expected console process-list agent call/);
+    expect(() => patchNodePtyWindowsAgentSource(`// ${CONPTY_DEFERRED_CONNECT_MARKER}`)).toThrow(/Incomplete node-pty Windows agent patch/);
+    expect(() => patchNodePtyWindowsTerminalSource(`// ${CONPTY_PID_REFRESH_MARKER}`)).toThrow(/Incomplete node-pty Windows terminal patch/);
+    expect(() => patchNodePtyConsoleListAgentSource(`// ${CONPTY_PROCESS_LIST_MARKER}`)).toThrow(/Incomplete node-pty Windows console-list agent patch/);
+
+    const installedLibRoot = path.join(projectRoot, 'node_modules', 'node-pty', 'lib');
+    const installedSources = {
+      worker: fs.readFileSync(path.join(installedLibRoot, 'windowsConoutConnection.js'), 'utf8'),
+      agent: fs.readFileSync(path.join(installedLibRoot, 'windowsPtyAgent.js'), 'utf8'),
+      terminal: fs.readFileSync(path.join(installedLibRoot, 'windowsTerminal.js'), 'utf8'),
+      consoleListAgent: fs.readFileSync(path.join(installedLibRoot, 'conpty_console_list_agent.js'), 'utf8'),
+    };
+    expect(installedSources.worker).toContain(APP_ASAR_WORKER_REWRITE);
+    expect(installedSources.agent).toContain(CONPTY_DEFERRED_CONNECT_MARKER);
+    expect(installedSources.terminal).toContain(CONPTY_PID_REFRESH_MARKER);
+    expect(installedSources.consoleListAgent).toContain(CONPTY_PROCESS_LIST_MARKER);
+    expect(patchNodePtyWindowsSources(installedSources)).toEqual(installedSources);
 
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-windows-worker-'));
     const nodePtyRoot = path.join(fixtureRoot, 'node-pty');
-    const workerPath = path.join(nodePtyRoot, 'lib', 'windowsConoutConnection.js');
+    const libRoot = path.join(nodePtyRoot, 'lib');
     try {
-      fs.mkdirSync(path.dirname(workerPath), { recursive: true });
-      fs.writeFileSync(workerPath, legacy);
-      expect(() => validateWindowsPtyWorker({ nodePtyRoot }))
+      fs.mkdirSync(libRoot, { recursive: true });
+      fs.writeFileSync(path.join(libRoot, 'windowsConoutConnection.js'), legacy);
+      for (const fileName of ['windowsPtyAgent.js', 'windowsTerminal.js', 'conpty_console_list_agent.js']) {
+        fs.writeFileSync(path.join(libRoot, fileName), 'unpatched');
+      }
+      expect(() => validateWindowsPtyRuntime({ nodePtyRoot }))
         .toThrow(/cannot resolve app\.asar\.unpacked/);
-      fs.writeFileSync(workerPath, patched);
-      expect(() => validateWindowsPtyWorker({ nodePtyRoot })).not.toThrow();
+      for (const [name, fileName] of [
+        ['worker', 'windowsConoutConnection.js'],
+        ['agent', 'windowsPtyAgent.js'],
+        ['terminal', 'windowsTerminal.js'],
+        ['consoleListAgent', 'conpty_console_list_agent.js'],
+      ] as const) {
+        fs.writeFileSync(path.join(libRoot, fileName), installedSources[name]);
+      }
+      expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).not.toThrow();
     } finally {
       fs.rmSync(fixtureRoot, { recursive: true, force: true });
     }
@@ -202,7 +238,7 @@ describe('release tooling', () => {
     )).toThrow(/team identifier/);
   });
 
-  it('tests listener-safe Unix input and a real Windows console-shell round trip', async () => {
+  it('tests a listener-safe PTY round trip and exits despite a lingering Windows worker', async () => {
     const { smokeTerminalRuntime } = await loadScript('verify-release-artifacts.mjs');
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-release-smoke-'));
     const fakePtyRoot = path.join(fixtureRoot, 'app.asar.unpacked', 'node_modules', 'node-pty');
@@ -215,56 +251,32 @@ describe('release tooling', () => {
 module.exports = {
   spawn(executable, args, options) {
     const requestedWindows = process.argv[4] === 'win32';
-    const windows = executable.toLowerCase().endsWith('cmd.exe');
-    if (windows !== requestedWindows) throw new Error('Smoke platform did not select the expected child executable');
+    const windows = requestedWindows;
+    const expectedExecutable = windows ? process.argv[5] : process.execPath;
+    if (executable !== expectedExecutable) throw new Error('Smoke platform did not select the expected child executable');
     let dataListener;
     let exitListener;
     let queuedInput;
-    let markerSeen = false;
-    if (windows) {
-      if (!args.includes('/d') || !args.includes('/q')) throw new Error('Windows smoke must disable cmd autorun and echo');
-      if (options.env.JANET_PACKAGED_PTY_MARKER !== ${JSON.stringify(marker)}) {
-        throw new Error('Windows marker must be passed through the child environment');
-      }
-    }
+    if (!Array.isArray(args) || args[0] !== '-e') throw new Error('Smoke child must run a Node program');
+    if (!args[1].includes('process.stdin.once')) throw new Error('PTY child does not wait for input');
+    if (!args[1].includes('process.stdin.pause')) throw new Error('PTY child will not exit after input');
+    if (!args[1].includes(${JSON.stringify(ready)})) throw new Error('PTY child does not emit readiness');
+    if (windows) setInterval(() => {}, 1000);
     const terminal = {
       onData(listener) { dataListener = listener; },
       onExit(listener) { exitListener = listener; },
       write(input) {
         if (!dataListener || !exitListener) throw new Error('PTY trigger ran before listeners attached');
         if (input.includes(${JSON.stringify(marker)})) throw new Error('PTY trigger must not echo the success marker');
-        if (windows && input === ${JSON.stringify('exit\r')}) {
-          if (!markerSeen) throw new Error('Windows shell exited before marker output was observed');
-          exitListener({ exitCode: 0 });
-          return;
-        }
+        if (input !== ${JSON.stringify('\r')}) throw new Error('PTY trigger must submit the readiness handshake');
         queuedInput = input;
       },
       kill() {},
     };
     queueMicrotask(() => {
       if (!dataListener || !exitListener) throw new Error('PTY readiness ran before listeners attached');
-      if (windows) {
-        dataListener('C:\\>');
-        if (queuedInput !== ${JSON.stringify('echo %JANET_PACKAGED_PTY_MARKER%\r')}) {
-          exitListener({ exitCode: 0 });
-          return;
-        }
-        markerSeen = true;
-        dataListener(${JSON.stringify(marker)});
-        return;
-      }
-      if (!args[1].includes('process.stdin.once')) throw new Error('PTY child does not wait for input');
-      if (!args[1].includes('process.stdin.pause')) throw new Error('PTY child will not exit after input');
-      if (!args[1].includes(${JSON.stringify(ready)})) {
-        exitListener({ exitCode: 0 });
-        return;
-      }
       dataListener(${JSON.stringify(ready)});
-      if (typeof queuedInput !== 'string') {
-        exitListener({ exitCode: 0 });
-        return;
-      }
+      if (queuedInput !== ${JSON.stringify('\r')}) throw new Error('PTY input was not queued before readiness');
       dataListener(${JSON.stringify(marker)});
       exitListener({ exitCode: 0 });
     });
@@ -281,12 +293,12 @@ module.exports = {
           executable: process.execPath,
           nodePtyRoot: fakePtyRoot,
           nodePtyModule: fakePtyModule,
-        })).resolves.toBeUndefined();
+        }, 10_000)).resolves.toBeUndefined();
       }
     } finally {
       fs.rmSync(fixtureRoot, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it('pins release CI to explicit ad-hoc macOS signing without Apple credentials', () => {
     const workflow = fs.readFileSync(path.join(projectRoot, '.github', 'workflows', 'release.yml'), 'utf8');
