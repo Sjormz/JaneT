@@ -51,6 +51,7 @@ export function packagedRuntime(platformValue, releaseRoot, hostArch = process.a
   if (platform === 'windows') {
     const appRoot = path.join(releaseRoot, 'win-unpacked');
     return {
+      platform: 'win32',
       executable: path.join(appRoot, 'JaneT.exe'),
       nodePtyRoot: path.join(appRoot, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty'),
       nodePtyModule: path.join(appRoot, 'resources', 'app.asar', 'node_modules', 'node-pty'),
@@ -62,6 +63,7 @@ export function packagedRuntime(platformValue, releaseRoot, hostArch = process.a
   }
   const appRoot = path.join(releaseRoot, 'linux-unpacked');
   return {
+    platform: 'linux',
     executable: path.join(appRoot, 'janet'),
     nodePtyRoot: path.join(appRoot, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty'),
     nodePtyModule: path.join(appRoot, 'resources', 'app.asar', 'node_modules', 'node-pty'),
@@ -75,6 +77,7 @@ export function macPackagedRuntimes(releaseRoot) {
   ].map(({ arch, outputDir }) => {
     const appRoot = path.join(releaseRoot, outputDir, 'JaneT.app', 'Contents');
     return {
+      platform: 'darwin',
       arch,
       executable: path.join(appRoot, 'MacOS', 'JaneT'),
       nodePtyRoot: path.join(appRoot, 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty'),
@@ -196,8 +199,11 @@ export async function smokeTerminalRuntime(runtime) {
 const pty = require(process.argv[1]);
 const marker = process.argv[2];
 const ready = process.argv[3];
+const platform = process.argv[4];
+const windows = platform === 'win32';
 let terminal;
 let received = '';
+let exitRequested = false;
 const timeout = setTimeout(() => {
   try { terminal && terminal.kill(); } catch {}
   console.error('packaged PTY timed out: ' + JSON.stringify(received));
@@ -205,16 +211,29 @@ const timeout = setTimeout(() => {
 }, 5000);
 try {
   const childProgram = 'process.stdin.once("data",()=>{process.stdin.pause();process.stdout.write(' + JSON.stringify(marker) + ')});process.stdout.write(' + JSON.stringify(ready) + ')';
-  terminal = pty.spawn(process.execPath, ['-e', childProgram], {
+  const childExecutable = windows ? (process.env.ComSpec || 'cmd.exe') : process.execPath;
+  const childArgs = windows ? ['/d', '/q'] : ['-e', childProgram];
+  terminal = pty.spawn(childExecutable, childArgs, {
     name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd(),
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', TERM: 'xterm-256color' },
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
+      TERM: 'xterm-256color',
+      JANET_PACKAGED_PTY_MARKER: marker,
+    },
   });
 } catch (error) {
   clearTimeout(timeout);
   console.error(error);
   process.exit(3);
 }
-terminal.onData((data) => { received += data; });
+terminal.onData((data) => {
+  received += data;
+  if (windows && !exitRequested && received.includes(marker)) {
+    exitRequested = true;
+    terminal.write('exit\r');
+  }
+});
 terminal.onExit(({ exitCode }) => {
   setTimeout(() => {
     clearTimeout(timeout);
@@ -225,11 +244,14 @@ terminal.onExit(({ exitCode }) => {
     process.stdout.write(marker);
   }, 25);
 });
-terminal.write('\r');
+// Electron is a GUI-subsystem executable on Windows, so use the real console
+// shell as the ConPTY child. The literal marker is never written as input: cmd
+// expands it from the environment, and stays alive until output is observed.
+terminal.write(windows ? 'echo %JANET_PACKAGED_PTY_MARKER%\r' : '\r');
 `;
 
   const { stdout, stderr } = await execFileAsync(runtime.executable, [
-    '-e', smokeProgram, runtime.nodePtyModule, PACKAGED_PTY_MARKER, PACKAGED_PTY_READY,
+    '-e', smokeProgram, runtime.nodePtyModule, PACKAGED_PTY_MARKER, PACKAGED_PTY_READY, runtime.platform,
   ], {
     cwd: projectRoot,
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },

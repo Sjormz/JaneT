@@ -109,10 +109,12 @@ describe('release tooling', () => {
     const windowsRuntime = packagedRuntime('windows', '/release', 'x64');
 
     expect(macRuntime.executable).toBe(path.join('/release', 'mac-arm64', 'JaneT.app', 'Contents', 'MacOS', 'JaneT'));
+    expect(macRuntime.platform).toBe('darwin');
     expect(macRuntime.nodePtyRoot).toContain(path.join('app.asar.unpacked', 'node_modules', 'node-pty'));
     expect(macRuntime.nodePtyModule).toContain(path.join('app.asar', 'node_modules', 'node-pty'));
     expect(macRuntime.nodePtyModule).not.toContain('app.asar.unpacked');
     expect(windowsRuntime.executable).toBe(path.join('/release', 'win-unpacked', 'JaneT.exe'));
+    expect(windowsRuntime.platform).toBe('win32');
     expect(windowsRuntime.nodePtyRoot).toContain(path.join('app.asar.unpacked', 'node_modules', 'node-pty'));
     expect(windowsRuntime.nodePtyModule).toContain(path.join('app.asar', 'node_modules', 'node-pty'));
     expect(PACKAGED_RUNTIME_TIMEOUT_MS).toBe(60_000);
@@ -168,7 +170,7 @@ describe('release tooling', () => {
     )).toThrow(/team identifier/);
   });
 
-  it('starts the packaged PTY smoke child only after data and exit listeners attach', async () => {
+  it('tests listener-safe Unix input and a real Windows console-shell round trip', async () => {
     const { smokeTerminalRuntime } = await loadScript('verify-release-artifacts.mjs');
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-release-smoke-'));
     const fakePtyRoot = path.join(fixtureRoot, 'app.asar.unpacked', 'node_modules', 'node-pty');
@@ -179,22 +181,47 @@ describe('release tooling', () => {
     fs.mkdirSync(fakePtyModule, { recursive: true });
     fs.writeFileSync(path.join(fakePtyModule, 'index.js'), `
 module.exports = {
-  spawn(_executable, args) {
+  spawn(executable, args, options) {
+    const requestedWindows = process.argv[4] === 'win32';
+    const windows = executable.toLowerCase().endsWith('cmd.exe');
+    if (windows !== requestedWindows) throw new Error('Smoke platform did not select the expected child executable');
     let dataListener;
     let exitListener;
     let queuedInput;
+    let markerSeen = false;
+    if (windows) {
+      if (!args.includes('/d') || !args.includes('/q')) throw new Error('Windows smoke must disable cmd autorun and echo');
+      if (options.env.JANET_PACKAGED_PTY_MARKER !== ${JSON.stringify(marker)}) {
+        throw new Error('Windows marker must be passed through the child environment');
+      }
+    }
     const terminal = {
       onData(listener) { dataListener = listener; },
       onExit(listener) { exitListener = listener; },
       write(input) {
         if (!dataListener || !exitListener) throw new Error('PTY trigger ran before listeners attached');
         if (input.includes(${JSON.stringify(marker)})) throw new Error('PTY trigger must not echo the success marker');
+        if (windows && input === ${JSON.stringify('exit\r')}) {
+          if (!markerSeen) throw new Error('Windows shell exited before marker output was observed');
+          exitListener({ exitCode: 0 });
+          return;
+        }
         queuedInput = input;
       },
       kill() {},
     };
     queueMicrotask(() => {
       if (!dataListener || !exitListener) throw new Error('PTY readiness ran before listeners attached');
+      if (windows) {
+        dataListener('C:\\>');
+        if (queuedInput !== ${JSON.stringify('echo %JANET_PACKAGED_PTY_MARKER%\r')}) {
+          exitListener({ exitCode: 0 });
+          return;
+        }
+        markerSeen = true;
+        dataListener(${JSON.stringify(marker)});
+        return;
+      }
       if (!args[1].includes('process.stdin.once')) throw new Error('PTY child does not wait for input');
       if (!args[1].includes('process.stdin.pause')) throw new Error('PTY child will not exit after input');
       if (!args[1].includes(${JSON.stringify(ready)})) {
@@ -215,11 +242,14 @@ module.exports = {
 `);
 
     try {
-      await expect(smokeTerminalRuntime({
-        executable: process.execPath,
-        nodePtyRoot: fakePtyRoot,
-        nodePtyModule: fakePtyModule,
-      })).resolves.toBeUndefined();
+      for (const platform of ['linux', 'win32']) {
+        await expect(smokeTerminalRuntime({
+          platform,
+          executable: process.execPath,
+          nodePtyRoot: fakePtyRoot,
+          nodePtyModule: fakePtyModule,
+        })).resolves.toBeUndefined();
+      }
     } finally {
       fs.rmSync(fixtureRoot, { recursive: true, force: true });
     }
