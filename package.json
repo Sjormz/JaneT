@@ -1,6 +1,6 @@
 {
   "name": "janet",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "A focused cross-platform terminal workspace with SSH, file browsing, Git tools, and durable sessions",
   "desktopName": "janet",
   "main": "dist/main/index.js",
@@ -25,7 +25,7 @@
     "dist": "npm run build && npx electron-builder",
     "dist:win": "npm run build && npx electron-builder --win",
     "dist:mac": "npm run build && npx electron-builder --mac",
-    "dist:mac:test": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false",
+    "dist:mac:test": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false -c.npmRebuild=false",
     "dist:linux": "npm run build && npx electron-builder --linux",
     "publish": "npm run build && npx electron-builder --publish always",
     "publish:win": "npm run build && npx electron-builder --win --publish always",
@@ -105,7 +105,10 @@
       "category": "public.app-category.utilities",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
-      "notarize": true
+      "notarize": true,
+      "signIgnore": [
+        "node_modules/node-pty/prebuilds/darwin-(?:x64|arm64)/(?:pty\\.node|spawn-helper)$"
+      ]
     },
     "dmg": {
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}",

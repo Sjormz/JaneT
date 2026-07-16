@@ -99,14 +99,23 @@ describe('release tooling', () => {
     ]);
   });
 
-  it('points packaged PTY checks at asar-unpacked production dependencies', async () => {
-    const { macPackagedRuntimes, packagedRuntime } = await loadScript('verify-release-artifacts.mjs');
+  it('validates unpacked PTY files but loads the logical asar module path', async () => {
+    const {
+      macPackagedRuntimes,
+      packagedRuntime,
+      PACKAGED_RUNTIME_TIMEOUT_MS,
+    } = await loadScript('verify-release-artifacts.mjs');
     const macRuntime = packagedRuntime('macos', '/release', 'arm64');
     const windowsRuntime = packagedRuntime('windows', '/release', 'x64');
 
     expect(macRuntime.executable).toBe(path.join('/release', 'mac-arm64', 'JaneT.app', 'Contents', 'MacOS', 'JaneT'));
     expect(macRuntime.nodePtyRoot).toContain(path.join('app.asar.unpacked', 'node_modules', 'node-pty'));
+    expect(macRuntime.nodePtyModule).toContain(path.join('app.asar', 'node_modules', 'node-pty'));
+    expect(macRuntime.nodePtyModule).not.toContain('app.asar.unpacked');
     expect(windowsRuntime.executable).toBe(path.join('/release', 'win-unpacked', 'JaneT.exe'));
+    expect(windowsRuntime.nodePtyRoot).toContain(path.join('app.asar.unpacked', 'node_modules', 'node-pty'));
+    expect(windowsRuntime.nodePtyModule).toContain(path.join('app.asar', 'node_modules', 'node-pty'));
+    expect(PACKAGED_RUNTIME_TIMEOUT_MS).toBe(60_000);
     expect(macPackagedRuntimes('/release').map((runtime: { arch: string }) => runtime.arch)).toEqual(['x64', 'arm64']);
   });
 
@@ -134,6 +143,108 @@ describe('release tooling', () => {
     } finally {
       fs.rmSync(releaseRoot, { recursive: true, force: true });
     }
+  });
+
+  it('requires valid ad-hoc macOS signatures without an authority or team identifier', async () => {
+    const { validateAdHocMacSignature } = await loadScript('verify-release-artifacts.mjs');
+    const validDetails = [
+      'Executable=/release/JaneT.app/Contents/MacOS/JaneT',
+      'Signature=adhoc',
+      'TeamIdentifier=not set',
+    ].join('\n');
+
+    expect(() => validateAdHocMacSignature(validDetails, '/release/JaneT.app')).not.toThrow();
+    expect(() => validateAdHocMacSignature(
+      validDetails.replace('Signature=adhoc', 'Authority=Developer ID Application: Example\nSignature size=9000'),
+      '/release/JaneT.app',
+    )).toThrow(/not ad-hoc signed/);
+    expect(() => validateAdHocMacSignature(
+      `${validDetails}\nAuthority=Developer ID Application: Example`,
+      '/release/JaneT.app',
+    )).toThrow(/certificate authority/);
+    expect(() => validateAdHocMacSignature(
+      validDetails.replace('TeamIdentifier=not set', 'TeamIdentifier=ABCDE12345'),
+      '/release/JaneT.app',
+    )).toThrow(/team identifier/);
+  });
+
+  it('starts the packaged PTY smoke child only after data and exit listeners attach', async () => {
+    const { smokeTerminalRuntime } = await loadScript('verify-release-artifacts.mjs');
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-release-smoke-'));
+    const fakePtyRoot = path.join(fixtureRoot, 'app.asar.unpacked', 'node_modules', 'node-pty');
+    const fakePtyModule = path.join(fixtureRoot, 'app.asar', 'node_modules', 'node-pty');
+    const marker = '__JANET_PACKAGED_PTY_OK__';
+    const ready = '__JANET_PACKAGED_PTY_READY__';
+    fs.mkdirSync(fakePtyRoot, { recursive: true });
+    fs.mkdirSync(fakePtyModule, { recursive: true });
+    fs.writeFileSync(path.join(fakePtyModule, 'index.js'), `
+module.exports = {
+  spawn(_executable, args) {
+    let dataListener;
+    let exitListener;
+    let queuedInput;
+    const terminal = {
+      onData(listener) { dataListener = listener; },
+      onExit(listener) { exitListener = listener; },
+      write(input) {
+        if (!dataListener || !exitListener) throw new Error('PTY trigger ran before listeners attached');
+        if (input.includes(${JSON.stringify(marker)})) throw new Error('PTY trigger must not echo the success marker');
+        queuedInput = input;
+      },
+      kill() {},
+    };
+    queueMicrotask(() => {
+      if (!dataListener || !exitListener) throw new Error('PTY readiness ran before listeners attached');
+      if (!args[1].includes('process.stdin.once')) throw new Error('PTY child does not wait for input');
+      if (!args[1].includes('process.stdin.pause')) throw new Error('PTY child will not exit after input');
+      if (!args[1].includes(${JSON.stringify(ready)})) {
+        exitListener({ exitCode: 0 });
+        return;
+      }
+      dataListener(${JSON.stringify(ready)});
+      if (typeof queuedInput !== 'string') {
+        exitListener({ exitCode: 0 });
+        return;
+      }
+      dataListener(${JSON.stringify(marker)});
+      exitListener({ exitCode: 0 });
+    });
+    return terminal;
+  },
+};
+`);
+
+    try {
+      await expect(smokeTerminalRuntime({
+        executable: process.execPath,
+        nodePtyRoot: fakePtyRoot,
+        nodePtyModule: fakePtyModule,
+      })).resolves.toBeUndefined();
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('pins release CI to explicit ad-hoc macOS signing without Apple credentials', () => {
+    const workflow = fs.readFileSync(path.join(projectRoot, '.github', 'workflows', 'release.yml'), 'utf8');
+    expect(workflow).toContain('build-args: --mac -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false -c.npmRebuild=false');
+    expect(workflow).toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'");
+    expect(workflow).not.toContain('Require macOS signing and notarization secrets');
+    for (const secretName of [
+      'MAC_CSC_LINK',
+      'MAC_CSC_KEY_PASSWORD',
+      'APPLE_ID',
+      'APPLE_APP_SPECIFIC_PASSWORD',
+      'APPLE_TEAM_ID',
+    ]) {
+      expect(workflow).not.toContain(secretName);
+    }
+
+    const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+    expect(packageJson.scripts['dist:mac:test']).toContain('-c.npmRebuild=false');
+    expect(packageJson.build.mac.signIgnore).toEqual([
+      'node_modules/node-pty/prebuilds/darwin-(?:x64|arm64)/(?:pty\\.node|spawn-helper)$',
+    ]);
   });
 
   it('declares the Node version required by Electron 43', () => {
