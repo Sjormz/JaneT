@@ -102,6 +102,7 @@ describe('release tooling', () => {
   it('validates unpacked PTY files but loads the logical asar module path', async () => {
     const {
       macPackagedRuntimes,
+      nativeMacRuntime,
       packagedRuntime,
       PACKAGED_RUNTIME_TIMEOUT_MS,
     } = await loadScript('verify-release-artifacts.mjs');
@@ -120,6 +121,9 @@ describe('release tooling', () => {
     expect(windowsRuntime.nodePtyModule).not.toContain('app.asar.unpacked');
     expect(PACKAGED_RUNTIME_TIMEOUT_MS).toBe(60_000);
     expect(macPackagedRuntimes('/release').map((runtime: { arch: string }) => runtime.arch)).toEqual(['x64', 'arm64']);
+    expect(nativeMacRuntime('/release', 'arm64').arch).toBe('arm64');
+    expect(nativeMacRuntime('/release', 'x64').arch).toBe('x64');
+    expect(() => nativeMacRuntime('/release', 'riscv64')).toThrow(/No packaged macOS runtime matches/);
   });
 
   it('backports and verifies node-pty Windows ConPTY startup hardening', async () => {

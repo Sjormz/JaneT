@@ -23,9 +23,10 @@ When a `v*` tag is pushed, `.github/workflows/release.yml`:
 
 The app uses `electron-updater` with GitHub Releases, so the generated `latest*.yml` assets must stay attached to the release.
 The macOS ZIP blockmaps must also be published for differential updates. The
-release check executes the host-architecture macOS PTY, attempts the x64 PTY on
-Apple Silicon when Rosetta is available, and always validates both architecture
-bundles' native module/helper layout and executable permissions.
+release check executes the runner's native macOS PTY. It avoids translated
+cross-architecture execution because Rosetta startup on disposable hosted
+runners is nondeterministic, while always validating both architecture bundles'
+signatures, native module/helper layout, and executable permissions.
 
 ### macOS release signing
 
