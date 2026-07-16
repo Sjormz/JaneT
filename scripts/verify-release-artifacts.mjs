@@ -94,6 +94,12 @@ export function macPackagedRuntimes(releaseRoot) {
   });
 }
 
+export function nativeMacRuntime(releaseRoot, hostArch = process.arch) {
+  const runtime = macPackagedRuntimes(releaseRoot).find((candidate) => candidate.arch === hostArch);
+  if (!runtime) throw new Error(`No packaged macOS runtime matches host architecture ${hostArch}`);
+  return runtime;
+}
+
 function requireNonEmptyFile(filePath, description) {
   let stat;
   try {
@@ -178,38 +184,22 @@ export async function smokePackagedTerminal(platform, releaseRoot) {
     const runtimes = macPackagedRuntimes(releaseRoot);
     for (const runtime of runtimes) validateMacPtyLayout(runtime);
 
-    const hostRuntime = runtimes.find((runtime) => runtime.arch === process.arch);
-    if (!hostRuntime) throw new Error(`No packaged macOS runtime matches host architecture ${process.arch}`);
+    const hostRuntime = nativeMacRuntime(releaseRoot);
     await smokeTerminalRuntime(hostRuntime);
 
-    // Apple Silicon runners may also have Rosetta and can exercise the x64
-    // bundle. Intel runners cannot execute arm64 code, so layout validation is
-    // the strongest deterministic check available for that non-host bundle.
-    if (process.arch === 'arm64') {
-      const x64Runtime = runtimes.find((runtime) => runtime.arch === 'x64');
-      if (x64Runtime) {
-        try {
-          await smokeTerminalRuntime(x64Runtime);
-        } catch (error) {
-          if (!isUnavailableCrossArchRuntime(error)) throw error;
-          console.log('Rosetta is unavailable; validated the x64 node-pty layout without executing it.');
-        }
-      }
-    }
+    // Execute only the runner's native architecture. Rosetta startup on fresh
+    // hosted ARM runners is nondeterministic and can stall before verifier
+    // JavaScript starts. Both bundles still receive deterministic artifact,
+    // signature, native-module, helper, and executable-permission validation.
+    console.log(
+      `Executed the native ${hostRuntime.arch} macOS PTY; validated the non-host bundle without translated execution.`,
+    );
     return;
   }
 
   const runtime = packagedRuntime(platform, releaseRoot);
   if (normalizeReleasePlatform(platform) === 'windows') validateWindowsPtyRuntime(runtime);
   await smokeTerminalRuntime(runtime);
-}
-
-function isUnavailableCrossArchRuntime(error) {
-  const candidate = error ?? {};
-  const details = [candidate.message, candidate.code, candidate.errno, candidate.stderr]
-    .filter(Boolean)
-    .join(' ');
-  return /bad cpu type|unsupported architecture|unknown system error -86|\b-86\b|EBADARCH|ENOEXEC/i.test(details);
 }
 
 export async function smokeTerminalRuntime(runtime, timeoutMs = PACKAGED_RUNTIME_TIMEOUT_MS) {
@@ -281,9 +271,9 @@ terminal.write('\r');
     ], {
       cwd: projectRoot,
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-      // A cold Rosetta translation of the x64 Electron executable can exceed 15
-      // seconds. Once JavaScript starts, the inner five-second PTY timer still
-      // enforces the functional launch contract.
+      // The outer ceiling catches a packaged runtime that never starts. Once
+      // JavaScript starts, the inner five-second PTY timer enforces the
+      // functional launch contract.
       timeout: timeoutMs,
       maxBuffer: 1024 * 1024,
     }));
