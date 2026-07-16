@@ -142,7 +142,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   theme: 'tokyo-night',
   fontSize: 14,
   fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
-  sidebarSide: 'left',
+  sidebarSide: 'right',
   keybindings: { ...DEFAULT_KEYBINDINGS },
   sshProfiles: [],
   workspaceTabs: [],

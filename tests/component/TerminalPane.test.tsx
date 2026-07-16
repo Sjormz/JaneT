@@ -5,6 +5,12 @@ import { KeybindingsProvider } from '../../src/renderer/KeybindingsContext';
 import { refreshCoordinator } from '../../src/renderer/refreshCoordinator';
 import { fileUrlToPath } from '../../src/renderer/osc7';
 import { requestTerminalSearch } from '../../src/renderer/terminalSearch';
+import {
+  beginTerminalPathDrag,
+  endTerminalPathDrag,
+  TERMINAL_PATH_MIME,
+  type TerminalPathDragPayload,
+} from '../../src/renderer/terminalPathDrag';
 
 class MockResizeObserver {
   static instances: MockResizeObserver[] = [];
@@ -67,7 +73,15 @@ class MockTerminal {
     }),
   };
   unicode = { activeVersion: '6' };
-  onData = vi.fn(() => ({ dispose: vi.fn() }));
+  dataHandler: ((data: string) => void) | null = null;
+  onData = vi.fn((handler: (data: string) => void) => {
+    this.dataHandler = handler;
+    return {
+      dispose: vi.fn(() => {
+        if (this.dataHandler === handler) this.dataHandler = null;
+      }),
+    };
+  });
   onBinary = vi.fn(() => ({ dispose: vi.fn() }));
   onKey = vi.fn(() => ({ dispose: vi.fn() }));
   loadAddon = vi.fn();
@@ -76,6 +90,7 @@ class MockTerminal {
   dispose = vi.fn();
   attachCustomKeyEventHandler = vi.fn();
   write = vi.fn();
+  paste = vi.fn((data: string) => this.dataHandler?.(data));
   refresh = vi.fn();
   clearSelection = vi.fn();
   rows = 24;
@@ -154,6 +169,7 @@ beforeEach(() => {
     parent.appendChild(this.element);
   });
   vi.stubGlobal('ResizeObserver', MockResizeObserver as unknown as typeof ResizeObserver);
+  endTerminalPathDrag();
   sshCreateShellImpl = () => Promise.resolve({ connected: true });
   terminalDataHandler = null;
   vi.mocked(fileUrlToPath).mockReturnValue(null);
@@ -174,6 +190,30 @@ beforeEach(() => {
     },
   });
 });
+
+function dataTransferWithPayload(payload: TerminalPathDragPayload): DataTransfer {
+  const values = new Map<string, string>();
+  const transfer = {
+    dropEffect: 'none',
+    effectAllowed: 'all',
+    get types() { return Array.from(values.keys()); },
+    setData: (type: string, value: string) => { values.set(type, value); },
+    getData: (type: string) => values.get(type) ?? '',
+  } as unknown as DataTransfer;
+  beginTerminalPathDrag(transfer, payload);
+  return transfer;
+}
+
+function dataTransferWithText(value: string): DataTransfer {
+  const values = new Map<string, string>([['text/plain', value]]);
+  return {
+    dropEffect: 'none',
+    effectAllowed: 'all',
+    get types() { return Array.from(values.keys()); },
+    setData: (type: string, data: string) => { values.set(type, data); },
+    getData: (type: string) => values.get(type) ?? '',
+  } as unknown as DataTransfer;
+}
 
 async function loadTerminalPane() {
   return import('../../src/renderer/components/TerminalPane');
@@ -605,6 +645,157 @@ describe('TerminalPane SSH reinitialization', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('TerminalPane path drops', () => {
+  it('pastes a compatible local path through xterm and marks it as user input', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-drop-local" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    const terminal = MockTerminal.instances.at(-1)!;
+    const container = document.querySelector('.terminal-container')!;
+    const dataTransfer = dataTransferWithPayload({
+      version: 1,
+      path: '/repo/read me.md',
+      entryKind: 'file',
+      origin: 'explorer',
+      filesystem: { kind: 'local' },
+    });
+
+    fireEvent.dragEnter(container, { dataTransfer });
+
+    expect(dataTransfer.dropEffect).toBe('copy');
+    expect(container).toHaveClass('is-path-drop-target');
+    expect(screen.getByRole('status')).toHaveTextContent('Drop to paste path');
+
+    fireEvent.drop(container, { dataTransfer });
+
+    expect(terminal.paste).toHaveBeenCalledWith("'/repo/read me.md' ");
+    expect(terminalWrite).toHaveBeenCalledWith({
+      id: 'term-drop-local',
+      data: "'/repo/read me.md' ",
+      userInput: true,
+    });
+    expect(terminal.focus).toHaveBeenCalled();
+    expect(container).not.toHaveClass('is-path-drop-target');
+    expect(screen.queryByText('Drop to paste path')).not.toBeInTheDocument();
+  });
+
+  it('routes a same-session SSH path through the SSH shell as user input', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-drop-ssh"
+          tabType="ssh"
+          sshSessionId="ssh-drop"
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalled());
+    const terminal = MockTerminal.instances.at(-1)!;
+    terminal.focus.mockClear();
+    const container = document.querySelector('.terminal-container')!;
+    const dataTransfer = dataTransferWithPayload({
+      version: 1,
+      path: '/srv/project/remote file.ts',
+      entryKind: 'file',
+      origin: 'explorer',
+      filesystem: { kind: 'ssh', sessionId: 'ssh-drop' },
+    });
+
+    fireEvent.dragOver(container, { dataTransfer });
+    expect(container).toHaveClass('is-path-drop-target');
+    fireEvent.drop(container, { dataTransfer });
+
+    expect(terminal.paste).toHaveBeenCalledWith("'/srv/project/remote file.ts' ");
+    expect(sshWriteShell).toHaveBeenCalledWith({
+      sessionId: 'ssh-drop',
+      termId: 'term-drop-ssh',
+      data: "'/srv/project/remote file.ts' ",
+      userInput: true,
+    });
+    expect(terminalWrite).not.toHaveBeenCalled();
+    expect(terminal.focus).toHaveBeenCalled();
+  });
+
+  it('shows and retains an invalid state instead of pasting an SSH path into another session', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-drop-mismatch"
+          tabType="ssh"
+          sshSessionId="ssh-target"
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalled());
+    const terminal = MockTerminal.instances.at(-1)!;
+    terminal.focus.mockClear();
+    const container = document.querySelector('.terminal-container')!;
+    const dataTransfer = dataTransferWithPayload({
+      version: 1,
+      path: '/home/source/private.txt',
+      entryKind: 'file',
+      origin: 'explorer',
+      filesystem: { kind: 'ssh', sessionId: 'ssh-source' },
+    });
+
+    fireEvent.dragEnter(container, { dataTransfer });
+
+    expect(dataTransfer.dropEffect).toBe('none');
+    expect(container).toHaveClass('is-path-drop-invalid');
+    expect(container.querySelector('.terminal-path-drop-indicator')).toHaveTextContent('Path belongs to another terminal');
+
+    fireEvent.drop(container, { dataTransfer });
+
+    expect(container).toHaveClass('is-path-drop-invalid');
+    expect(container.querySelector('.terminal-path-drop-indicator')).toHaveTextContent('Path belongs to another terminal');
+    expect(terminal.paste).not.toHaveBeenCalled();
+    expect(terminal.focus).not.toHaveBeenCalled();
+    expect(sshWriteShell).not.toHaveBeenCalled();
+  });
+
+  it('ignores plain-text and malformed custom drops', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-drop-ignore" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    const terminal = MockTerminal.instances.at(-1)!;
+    const container = document.querySelector('.terminal-container')!;
+    const plainText = dataTransferWithText('/repo/plain.txt');
+    fireEvent.dragEnter(container, { dataTransfer: plainText });
+    fireEvent.drop(container, { dataTransfer: plainText });
+
+    expect(container).not.toHaveClass('is-path-drop-target', 'is-path-drop-invalid');
+    expect(terminal.paste).not.toHaveBeenCalled();
+    expect(terminalWrite).not.toHaveBeenCalled();
+
+    const malformed = dataTransferWithText('/repo/malformed.txt');
+    malformed.setData(TERMINAL_PATH_MIME, '{not json');
+    fireEvent.dragEnter(container, { dataTransfer: malformed });
+    fireEvent.drop(container, { dataTransfer: malformed });
+
+    expect(container).not.toHaveClass('is-path-drop-target', 'is-path-drop-invalid');
+    expect(terminal.paste).not.toHaveBeenCalled();
+    expect(terminalWrite).not.toHaveBeenCalled();
   });
 });
 

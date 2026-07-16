@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { TabInfo, SavedSSHProfile, WorkspaceTabPreset } from '../types';
+import { SessionInfo, TabInfo, SavedSSHProfile, WorkspaceTabPreset } from '../types';
 import {
   TerminalTabIcon, LockIcon, XCloseIcon, PencilIcon, TrashIcon, CheckIcon,
   ChevronsLeftIcon, ListIcon, PlusIcon, ChevronRightIcon, ChevronDownIcon, ArrowRightIcon,
@@ -9,6 +9,8 @@ import WorkspaceTabPresetForm, { sshProfileLabel } from './WorkspaceTabPresetFor
 import { useRefreshTask } from '../refreshCoordinator';
 import { useModalFocus } from '../useModalFocus';
 import Tooltip from './Tooltip';
+import ConfirmationDialog from './ConfirmationDialog';
+import SSHManager from './SSHManager';
 import { sanitizeStartupCommands } from '../../shared/startupCommands';
 
 interface VerticalTabBarProps {
@@ -19,6 +21,10 @@ interface VerticalTabBarProps {
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onNewTab: () => void;
+  sshConnectionsOpen: boolean;
+  onSSHConnectionsOpenChange: (open: boolean) => void;
+  onSSHConnected: (session: SessionInfo) => void;
+  onSSHProfilesChange: (profiles: SavedSSHProfile[]) => void;
   onWorkspaceTabsChange: (presets: WorkspaceTabPreset[]) => void;
   onWorkspaceTabLaunch: (preset: WorkspaceTabPreset) => void;
   onSaveWorkspaceTab: (tab: TabInfo) => void;
@@ -60,6 +66,10 @@ export default function VerticalTabBar({
   onSelectTab,
   onCloseTab,
   onNewTab,
+  sshConnectionsOpen,
+  onSSHConnectionsOpenChange,
+  onSSHConnected,
+  onSSHProfilesChange,
   onWorkspaceTabsChange,
   onWorkspaceTabLaunch,
   onSaveWorkspaceTab,
@@ -71,10 +81,12 @@ export default function VerticalTabBar({
   const [workspacesExpanded, setWorkspacesExpanded] = useState(false);
   const [showWorkspaceForm, setShowWorkspaceForm] = useState(false);
   const [editingPreset, setEditingPreset] = useState<WorkspaceTabPreset | null>(null);
+  const [presetPendingDeletion, setPresetPendingDeletion] = useState<WorkspaceTabPreset | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
   const [tabMenu, setTabMenu] = useState<{ tab: TabInfo; x: number; y: number } | null>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
   const workspaceModalRef = useRef<HTMLDivElement>(null);
+  const workspaceAddButtonRef = useRef<HTMLButtonElement>(null);
   const [tabTimestamps, setTabTimestamps] = useState<Record<string, Date>>(() => {
     const map: Record<string, Date> = {};
     for (const tab of tabs) map[tab.id] = new Date();
@@ -151,8 +163,10 @@ export default function VerticalTabBar({
     closePresetEditor();
   };
 
-  const deletePreset = (id: string) => {
-    onWorkspaceTabsChange(workspaceTabs.filter((preset) => preset.id !== id));
+  const confirmDeletePreset = () => {
+    if (!presetPendingDeletion) return;
+    onWorkspaceTabsChange(workspaceTabs.filter((preset) => preset.id !== presetPendingDeletion.id));
+    setPresetPendingDeletion(null);
   };
 
   const workspaceModalOpen = showWorkspaceForm || editingPreset !== null;
@@ -171,11 +185,6 @@ export default function VerticalTabBar({
           <span className="vtab-count">{tabs.length}</span>
         </div>
         <div className="vtab-header-actions">
-          <Tooltip label="New terminal tab" placement="bottom">
-            <button className="vtab-header-btn" onClick={onNewTab} aria-label="New terminal tab">
-              <PlusIcon size="sm" />
-            </button>
-          </Tooltip>
           <Tooltip label="Collapse terminal tabs" placement="bottom">
             <button className="vtab-header-btn" onClick={onCollapse} aria-label="Collapse terminal tabs">
               <ChevronsLeftIcon size="sm" />
@@ -183,6 +192,39 @@ export default function VerticalTabBar({
           </Tooltip>
         </div>
       </div>
+
+      <div className="vtab-create-actions" role="group" aria-label="Create terminal">
+        <button
+          type="button"
+          className="vtab-create-btn"
+          onClick={onNewTab}
+          aria-label="New local terminal tab"
+        >
+          <TerminalTabIcon size="sm" />
+          <span>Local</span>
+        </button>
+        <button
+          type="button"
+          className={`vtab-create-btn ${sshConnectionsOpen ? 'active' : ''}`}
+          onClick={() => onSSHConnectionsOpenChange(!sshConnectionsOpen)}
+          aria-label="SSH connections"
+          aria-expanded={sshConnectionsOpen}
+          aria-controls="vtab-ssh-connections"
+        >
+          <LockIcon size="sm" />
+          <span>SSH</span>
+        </button>
+      </div>
+
+      {sshConnectionsOpen && (
+        <div id="vtab-ssh-connections" className="vtab-ssh-connections">
+          <SSHManager
+            sshProfiles={sshProfiles}
+            onConnected={onSSHConnected}
+            onProfilesChange={onSSHProfilesChange}
+          />
+        </div>
+      )}
 
       <div className="vtab-list">
         {tabs.map((tab) => {
@@ -288,6 +330,7 @@ export default function VerticalTabBar({
         {workspacesExpanded && (
           <div className="workspace-section-content">
             <button
+              ref={workspaceAddButtonRef}
               className="workspace-add-btn"
               onClick={openWorkspaceForm}
               aria-label="New preset"
@@ -345,7 +388,7 @@ export default function VerticalTabBar({
                           <button
                             type="button"
                             className="session-action-btn danger"
-                            onClick={() => deletePreset(preset.id)}
+                            onClick={() => setPresetPendingDeletion(preset)}
                             aria-label={`Delete preset ${preset.name}`}
                           >
                             <TrashIcon size="sm" />
@@ -376,7 +419,7 @@ export default function VerticalTabBar({
             </button>
           )}
           <button role="menuitem" onClick={() => { onSaveWorkspaceTab(tabMenu.tab); setTabMenu(null); }}>
-            Save as preset
+            {tabMenu.tab.workspaceId ? 'Update saved preset' : 'Save as preset'}
           </button>
         </div>,
         document.body,
@@ -414,6 +457,15 @@ export default function VerticalTabBar({
         </div>,
         document.body,
       )}
+      <ConfirmationDialog
+        open={presetPendingDeletion !== null}
+        title={presetPendingDeletion ? `Delete preset “${presetPendingDeletion.name}”?` : 'Delete preset?'}
+        description="This permanently deletes the saved preset. Existing terminal tabs will stay open."
+        confirmLabel="Delete preset"
+        fallbackFocus={() => workspaceAddButtonRef.current}
+        onConfirm={confirmDeletePreset}
+        onCancel={() => setPresetPendingDeletion(null)}
+      />
     </div>
   );
 }

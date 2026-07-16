@@ -119,6 +119,7 @@ const api = {
   // App
   getPlatform: () => ipcRenderer.invoke('app:getPlatform'),
   openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
+  copyText: (text: string): Promise<boolean> => ipcRenderer.invoke('app:copyText', text),
 
   // Window controls (custom titlebar)
   windowMinimize: () => ipcRenderer.invoke('window:minimize'),

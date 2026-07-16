@@ -6,6 +6,8 @@ import {
 import type { FileEntry } from '../../shared/files';
 import type { FileExplorerSource } from '../fileExplorerSource';
 import { refreshCoordinator, RefreshReason, useRefreshTask } from '../refreshCoordinator';
+import { beginTerminalPathDrag, endTerminalPathDrag } from '../terminalPathDrag';
+import TerminalPathCopyButton from './TerminalPathCopyButton';
 import Tooltip from './Tooltip';
 
 interface NavigationState {
@@ -15,6 +17,7 @@ interface NavigationState {
 
 interface FileExplorerProps {
   source: FileExplorerSource;
+  onCopyTerminalPath?: (path: string) => Promise<void>;
 }
 
 interface LoadedDirectory {
@@ -38,7 +41,7 @@ interface DirectoryRequest {
   path: string;
 }
 
-export default function FileExplorer({ source }: FileExplorerProps) {
+export default function FileExplorer({ source, onCopyTerminalPath }: FileExplorerProps) {
   const [navigationBySource, setNavigationBySource] = useState<Record<string, NavigationState>>(() => ({
     [source.key]: defaultNavigation(source),
   }));
@@ -328,31 +331,57 @@ export default function FileExplorer({ source }: FileExplorerProps) {
           const dragProps = {
             draggable: true,
             onDragStart: (event: React.DragEvent<HTMLElement>) => {
-              event.dataTransfer.setData('text/plain', entry.path);
-              event.dataTransfer.effectAllowed = 'copy';
+              const started = beginTerminalPathDrag(event.dataTransfer, {
+                version: 1,
+                path: entry.path,
+                entryKind: entry.isDirectory ? 'directory' : 'file',
+                origin: 'explorer',
+                filesystem: source.kind === 'ssh'
+                  ? { kind: 'ssh', sessionId: source.sessionId }
+                  : { kind: 'local' },
+              });
+              if (!started) {
+                endTerminalPathDrag();
+                event.preventDefault();
+              }
             },
+            onDragEnd: endTerminalPathDrag,
           };
 
           if (entry.isDirectory) {
             return (
-              <Tooltip key={entry.path} label={`${entry.name} · Drag into a terminal to paste its path`} placement="right">
-                <button
-                  type="button"
-                  className="explorer-item dir"
-                  onClick={() => navigateTo(entry.path)}
-                  aria-label={`Open folder ${entry.name}`}
-                  {...dragProps}
-                >
-                  {content}
-                </button>
-              </Tooltip>
+              <div key={entry.path} className="explorer-item-row">
+                <Tooltip label={`${entry.name} · Drag into a terminal to paste its path`} placement="right">
+                  <button
+                    type="button"
+                    className="explorer-item dir"
+                    onClick={() => navigateTo(entry.path)}
+                    aria-label={`Open folder ${entry.name}`}
+                    {...dragProps}
+                  >
+                    {content}
+                  </button>
+                </Tooltip>
+                <TerminalPathCopyButton
+                  path={entry.path}
+                  label={entry.name}
+                  onCopyPath={onCopyTerminalPath}
+                />
+              </div>
             );
           }
 
           return (
-            <Tooltip key={entry.path} label={`${entry.name} · Drag into a terminal to paste its path`} placement="right">
-              <div className="explorer-item file" {...dragProps}>{content}</div>
-            </Tooltip>
+            <div key={entry.path} className="explorer-item-row">
+              <Tooltip label={`${entry.name} · Drag into a terminal to paste its path`} placement="right">
+                <div className="explorer-item file" {...dragProps}>{content}</div>
+              </Tooltip>
+              <TerminalPathCopyButton
+                path={entry.path}
+                label={entry.name}
+                onCopyPath={onCopyTerminalPath}
+              />
+            </div>
           );
         })}
 

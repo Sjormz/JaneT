@@ -72,6 +72,7 @@ describe('ThemeSwitcher', () => {
     const onSidebarSideChange = vi.fn();
     renderThemeSwitcher({ sidebarSide: 'left', onSidebarSideChange });
 
+    expect(screen.getByRole('group', { name: 'Workspace tools position' })).toBeInTheDocument();
     fireEvent.click(screen.getByText('Right'));
     expect(onSidebarSideChange).toHaveBeenCalledWith('right');
     expect(screen.getByRole('button', { name: 'Right' })).toHaveAttribute('aria-pressed', 'false');

@@ -238,3 +238,50 @@ describe('WorkspaceLifecycleController', () => {
     expect(harness.chooseDecision).not.toHaveBeenCalled();
   });
 });
+
+describe('tray stop confirmation', () => {
+  it('uses Cancel as the safe default and only stops after explicit confirmation', async () => {
+    const showMessageBox = vi.fn()
+      .mockResolvedValueOnce({ response: 0 })
+      .mockResolvedValueOnce({ response: 1 });
+    vi.doMock('electron', () => ({
+      app: {
+        commandLine: { appendSwitch: vi.fn() },
+        requestSingleInstanceLock: vi.fn(() => false),
+        quit: vi.fn(),
+        on: vi.fn(),
+        whenReady: vi.fn(() => Promise.resolve()),
+        setPath: vi.fn(),
+      },
+      dialog: {
+        showMessageBox,
+        showErrorBox: vi.fn(),
+      },
+      shell: { openExternal: vi.fn() },
+    }));
+    vi.resetModules();
+
+    const { backgroundTrayMenuTemplate, confirmStopAllFromTray } = await import('../../src/main/index');
+    const stopAllAndQuit = vi.fn().mockResolvedValue(undefined);
+
+    await expect(confirmStopAllFromTray(stopAllAndQuit)).resolves.toBe(false);
+    expect(stopAllAndQuit).not.toHaveBeenCalled();
+    expect(showMessageBox).toHaveBeenLastCalledWith(expect.objectContaining({
+      buttons: ['Cancel', 'Stop all and quit'],
+      defaultId: 0,
+      cancelId: 0,
+    }));
+
+    await expect(confirmStopAllFromTray(stopAllAndQuit)).resolves.toBe(true);
+    expect(stopAllAndQuit).toHaveBeenCalledOnce();
+
+    const confirmFromMenu = vi.fn().mockResolvedValue(false);
+    const template = backgroundTrayMenuTemplate(vi.fn(), confirmFromMenu);
+    const stopItem = template.find((item) => item.label === 'Stop all and quit');
+    expect(stopItem?.click).toBeTypeOf('function');
+    stopItem?.click?.();
+    await vi.waitFor(() => expect(confirmFromMenu).toHaveBeenCalledOnce());
+
+    vi.doUnmock('electron');
+  });
+});

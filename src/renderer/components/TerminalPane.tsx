@@ -26,6 +26,14 @@ import { fileUrlToPath } from '../osc7';
 import { createKittyGraphicsLayer } from '../kittyGraphics';
 import { refreshCoordinator } from '../refreshCoordinator';
 import { TERMINAL_SEARCH_REQUEST_EVENT, TerminalSearchRequestDetail } from '../terminalSearch';
+import {
+  canDropTerminalPath,
+  endTerminalPathDrag,
+  formatTerminalPathForPaste,
+  getActiveTerminalPathDrag,
+  hasTerminalPathDrag,
+  readTerminalPathDragData,
+} from '../terminalPathDrag';
 import { DEFAULT_TERMINAL_FONT_FAMILY } from '../../shared/typography';
 import type { TerminalLeaf } from '../types';
 import '@xterm/xterm/css/xterm.css';
@@ -52,9 +60,11 @@ interface TerminalPaneProps {
 }
 
 type SshNoticeState = React.ComponentProps<typeof SSHConnectionNotice>['state'];
+type TerminalPathDropState = 'valid' | 'invalid' | null;
 
 const MIN_SSH_COLS = 120;
 const MIN_SSH_ROWS = 40;
+const INVALID_PATH_DROP_NOTICE_MS = 1_200;
 
 const SEARCH_OPTIONS: ISearchOptions = {
   decorations: {
@@ -146,6 +156,7 @@ export default function TerminalPane({
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const sshNoticeAttemptRef = useRef(0);
+  const pathDropNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -153,13 +164,17 @@ export default function TerminalPane({
   const [sshNoticeState, setSshNoticeState] = useState<SshNoticeState>(
     () => terminalPaneCache.get(termId)?.sshNoticeState ?? { kind: 'hidden' },
   );
+  const [pathDropState, setPathDropState] = useState<TerminalPathDropState>(null);
   const componentMountedRef = useRef(false);
   const searchVisibleRef = useRef(false);
   searchVisibleRef.current = searchVisible;
 
   useEffect(() => {
     componentMountedRef.current = true;
-    return () => { componentMountedRef.current = false; };
+    return () => {
+      componentMountedRef.current = false;
+      if (pathDropNoticeTimerRef.current) clearTimeout(pathDropNoticeTimerRef.current);
+    };
   }, []);
 
   const publishSshNoticeState = useCallback((next: SshNoticeState) => {
@@ -598,8 +613,89 @@ export default function TerminalPane({
       });
   };
 
+  const pathDropTarget = tabType === 'local'
+    ? { kind: 'local' as const }
+    : { kind: 'ssh' as const, sessionId: sshSessionId };
+
+  const clearPathDropNoticeTimer = () => {
+    if (!pathDropNoticeTimerRef.current) return;
+    clearTimeout(pathDropNoticeTimerRef.current);
+    pathDropNoticeTimerRef.current = null;
+  };
+
+  const inspectTerminalPathDrag = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!hasTerminalPathDrag(event.dataTransfer)) return;
+    const payload = getActiveTerminalPathDrag();
+    if (!payload) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    clearPathDropNoticeTimer();
+    const valid = canDropTerminalPath(payload, pathDropTarget);
+    event.dataTransfer.dropEffect = valid ? 'copy' : 'none';
+    setPathDropState(valid ? 'valid' : 'invalid');
+  };
+
+  const handleTerminalPathDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!hasTerminalPathDrag(event.dataTransfer)) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    clearPathDropNoticeTimer();
+    const payload = readTerminalPathDragData(event.dataTransfer);
+    endTerminalPathDrag();
+    if (!payload) {
+      setPathDropState(null);
+      return;
+    }
+
+    if (!canDropTerminalPath(payload, pathDropTarget)) {
+      setPathDropState('invalid');
+      pathDropNoticeTimerRef.current = setTimeout(() => {
+        pathDropNoticeTimerRef.current = null;
+        setPathDropState(null);
+      }, INVALID_PATH_DROP_NOTICE_MS);
+      return;
+    }
+
+    const formattedPath = formatTerminalPathForPaste(payload.path, startupShellDialect);
+    const cached = terminalPaneCache.get(termId);
+    if (!formattedPath || !cached) {
+      setPathDropState(null);
+      return;
+    }
+
+    cached.inputSource.userInput = true;
+    try {
+      cached.term.paste(formattedPath);
+      cached.term.focus();
+    } catch {
+      cached.inputSource.userInput = false;
+    }
+    setPathDropState(null);
+  };
+
   return (
-    <div className="terminal-container" ref={containerRef}>
+    <div
+      className={`terminal-container${pathDropState === 'valid' ? ' is-path-drop-target' : ''}${pathDropState === 'invalid' ? ' is-path-drop-invalid' : ''}`}
+      ref={containerRef}
+      data-terminal-focus-target
+      tabIndex={-1}
+      onDragEnter={inspectTerminalPathDrag}
+      onDragOver={inspectTerminalPathDrag}
+      onDragLeave={(event) => {
+        if (!pathDropState || event.currentTarget.contains(event.relatedTarget as Node)) return;
+        event.stopPropagation();
+        clearPathDropNoticeTimer();
+        setPathDropState(null);
+      }}
+      onDrop={handleTerminalPathDrop}
+    >
+      {pathDropState && (
+        <div className="terminal-path-drop-indicator" role="status" aria-live="polite">
+          {pathDropState === 'valid' ? 'Drop to paste path' : 'Path belongs to another terminal'}
+        </div>
+      )}
       <SSHConnectionNotice
         state={sshNoticeState}
         label={sshSessionLabel}

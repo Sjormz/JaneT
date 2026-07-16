@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   RefreshIcon, ChevronDownIcon, ChevronRightIcon, PlusIcon,
@@ -10,6 +10,9 @@ import {
 import { defaultWorktreePath, GitWorktreeInfo, basename } from '../../shared/gitWorktrees';
 import { refreshCoordinator, useRefreshTask } from '../refreshCoordinator';
 import { GitStatusResult } from '../useGitRepository';
+import { useModalFocus } from '../useModalFocus';
+import { beginTerminalPathDrag, endTerminalPathDrag, resolveRepositoryPath } from '../terminalPathDrag';
+import TerminalPathCopyButton from './TerminalPathCopyButton';
 import Tooltip from './Tooltip';
 
 interface GitBranchInfo {
@@ -28,6 +31,7 @@ interface GitTreeProps {
   status: GitStatusResult | null;
   searching: boolean;
   onOpenLocalTabAt?: (cwd: string, title?: string) => void;
+  onCopyTerminalPath?: (path: string) => Promise<void>;
 }
 
 type Section = 'branches' | 'changes' | 'worktrees';
@@ -48,7 +52,15 @@ interface DialogState {
   onSubmit: (values: Record<string, string>) => void;
 }
 
-export default function GitTree({ cwdReady, isRemote, repoPath, status, searching, onOpenLocalTabAt }: GitTreeProps) {
+export default function GitTree({
+  cwdReady,
+  isRemote,
+  repoPath,
+  status,
+  searching,
+  onOpenLocalTabAt,
+  onCopyTerminalPath,
+}: GitTreeProps) {
   const [branches, setBranches] = useState<GitBranchInfo[]>([]);
   const [worktrees, setWorktrees] = useState<GitWorktreeInfo[]>([]);
   const [expanded, setExpanded] = useState<Record<Section, boolean>>({
@@ -232,6 +244,7 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
     if (!repoPath || tree.path === repoPath) return;
     setDialog({
       title: `Remove ${basename(tree.path)}`,
+      description: `Remove the Git worktree at ${tree.path}. This deletes that worktree directory; uncommitted files are preserved only if Git refuses the safe removal.`,
       confirmLabel: 'Remove',
       destructive: true,
       fields: [
@@ -304,12 +317,19 @@ export default function GitTree({ cwdReady, isRemote, repoPath, status, searchin
         >
           {status.files.length === 0 && <div className="git-empty">Working tree clean</div>}
           {status.files.length > 0 && changesView === 'tree' ? (
-            <GitFileTree files={status.files} conflicted={status.conflicted} />
+            <GitFileTree
+              repoPath={repoPath}
+              files={status.files}
+              conflicted={status.conflicted}
+              onCopyTerminalPath={onCopyTerminalPath}
+            />
           ) : (
             status.files.map((file) => (
               <GitFile
                 key={file.path}
+                repoPath={repoPath}
                 path={file.path}
+                onCopyTerminalPath={onCopyTerminalPath}
                 kind={status.conflicted.includes(file.path)
                   ? 'conflicted'
                   : file.staged && file.unstaged
@@ -517,7 +537,13 @@ function buildFileTree(files: Array<{ path: string; working_dir: string; index: 
   return root;
 }
 
-function renderTreeNode(node: any, depth: number, busy: boolean): React.ReactNode {
+function renderTreeNode(
+  node: any,
+  depth: number,
+  busy: boolean,
+  repoPath: string,
+  onCopyTerminalPath?: (path: string) => Promise<void>,
+): React.ReactNode {
   const entries = Array.from(node.children.values()).sort((a: any, b: any) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
     return a.name.localeCompare(b.name);
@@ -526,19 +552,34 @@ function renderTreeNode(node: any, depth: number, busy: boolean): React.ReactNod
     if (child.isDir) {
       return (
         <GitTreeDir key={child.path} name={child.name} depth={depth}>
-          {renderTreeNode(child, depth + 1, busy)}
+          {renderTreeNode(child, depth + 1, busy, repoPath, onCopyTerminalPath)}
         </GitTreeDir>
       );
     }
     const f = child.file;
     const kind = f.conflicted ? 'conflicted' : f.staged && f.unstaged ? 'mixed' : f.staged ? 'staged' : 'unstaged';
-    return <GitFile key={child.path} path={child.file.path} kind={kind} wd={child.file.working_dir} depth={depth} />;
+    return (
+      <GitFile
+        key={child.path}
+        repoPath={repoPath}
+        path={child.file.path}
+        kind={kind}
+        wd={child.file.working_dir}
+        depth={depth}
+        onCopyTerminalPath={onCopyTerminalPath}
+      />
+    );
   });
 }
 
-function GitFileTree({ files, conflicted }: { files: Array<{ path: string; working_dir: string; index: string; staged: boolean; unstaged: boolean }>; conflicted: string[] }) {
+function GitFileTree({ repoPath, files, conflicted, onCopyTerminalPath }: {
+  repoPath: string;
+  files: Array<{ path: string; working_dir: string; index: string; staged: boolean; unstaged: boolean }>;
+  conflicted: string[];
+  onCopyTerminalPath?: (path: string) => Promise<void>;
+}) {
   const tree = buildFileTree(files, conflicted);
-  return <>{renderTreeNode(tree, 0, false)}</>;
+  return <>{renderTreeNode(tree, 0, false, repoPath, onCopyTerminalPath)}</>;
 }
 
 function GitTreeDir({ name, depth, children }: { name: string; depth: number; children: React.ReactNode }) {
@@ -562,10 +603,18 @@ function GitTreeDir({ name, depth, children }: { name: string; depth: number; ch
   );
 }
 
-function GitFile({ path, kind, wd, depth }: { path: string; kind: 'staged' | 'unstaged' | 'mixed' | 'conflicted'; wd?: string; depth?: number }) {
+function GitFile({ repoPath, path, kind, wd, depth, onCopyTerminalPath }: {
+  repoPath: string;
+  path: string;
+  kind: 'staged' | 'unstaged' | 'mixed' | 'conflicted';
+  wd?: string;
+  depth?: number;
+  onCopyTerminalPath?: (path: string) => Promise<void>;
+}) {
   const Icon = kind === 'conflicted' ? AlertIcon : kind === 'mixed' ? GitMergeIcon : wd === 'D' ? TrashIcon : wd === 'R' ? GitMergeIcon : GitCommitIcon;
   const FileIcon = kind === 'unstaged' && wd !== 'D' && wd !== 'R' ? fileIconFor(path, false) : Icon;
   const indent = depth !== undefined ? { paddingLeft: 14 + depth * 14 } : undefined;
+  const absolutePath = resolveRepositoryPath(repoPath, path);
   const title = kind === 'mixed'
     ? 'Staged and modified in working tree'
     : kind === 'conflicted'
@@ -574,12 +623,38 @@ function GitFile({ path, kind, wd, depth }: { path: string; kind: 'staged' | 'un
         ? 'Staged change'
         : 'Working-tree change';
   return (
-    <Tooltip label={`${path}: ${title}`} placement="right">
-      <div className={`git-file-item ${kind}`} style={indent} aria-label={`${path}: ${title}`}>
-        <FileIcon size="sm" className={`file-status-icon ${kind}`} />
-        <span className="file-name">{path.split('/').pop()}</span>
-      </div>
-    </Tooltip>
+    <div className="git-file-row">
+      <Tooltip label={`${path}: ${title} · Drag into a terminal to paste its path`} placement="right">
+        <div
+          className={`git-file-item ${kind}`}
+          style={indent}
+          aria-label={`${path}: ${title}`}
+          draggable
+          onDragStart={(event) => {
+            const started = beginTerminalPathDrag(event.dataTransfer, {
+              version: 1,
+              path: absolutePath,
+              entryKind: 'file',
+              origin: 'source-control',
+              filesystem: { kind: 'local' },
+            });
+            if (!started) {
+              endTerminalPathDrag();
+              event.preventDefault();
+            }
+          }}
+          onDragEnd={endTerminalPathDrag}
+        >
+          <FileIcon size="sm" className={`file-status-icon ${kind}`} />
+          <span className="file-name">{path.split('/').pop()}</span>
+        </div>
+      </Tooltip>
+      <TerminalPathCopyButton
+        path={absolutePath}
+        label={path}
+        onCopyPath={onCopyTerminalPath}
+      />
+    </div>
   );
 }
 
@@ -601,6 +676,20 @@ function GitDialog({ title, description, fields, confirmLabel, destructive, busy
     for (const f of fields) init[f.key] = f.defaultValue || '';
     return init;
   });
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogId = useId();
+  const titleId = `${dialogId}-title`;
+  const descriptionId = `${dialogId}-description`;
+  useModalFocus({
+    open: true,
+    containerRef: dialogRef,
+    onClose: onCancel,
+    initialFocusSelector: destructive
+      ? '[data-git-dialog-cancel]'
+      : fields.length > 0
+        ? '[data-git-dialog-field="0"]'
+        : undefined,
+  });
 
   // Auto-suggest worktree path when branch field changes
   useEffect(() => {
@@ -618,25 +707,38 @@ function GitDialog({ title, description, fields, confirmLabel, destructive, busy
 
   return (
     <div className="git-dialog-overlay" onClick={onCancel}>
-      <div className="git-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={title}>
-        <div className="git-dialog-title">{title}</div>
+      <div
+        ref={dialogRef}
+        className="git-dialog"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={description ? descriptionId : undefined}
+        tabIndex={-1}
+      >
+        <div id={titleId} className="git-dialog-title">{title}</div>
         <form onSubmit={handleSubmit}>
-          {fields.map((f) => (
-            <div key={f.key} className="git-dialog-field">
-              <label className="git-dialog-label">{f.label}</label>
-              <input
-                className="git-dialog-input"
-                type="text"
-                placeholder={f.placeholder}
-                value={values[f.key] || ''}
-                onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
-                autoFocus={f.key === fields[0]?.key}
-              />
-            </div>
-          ))}
-          {description && <div className="git-dialog-hint">{description}</div>}
+          {fields.map((f, index) => {
+            const inputId = `${dialogId}-field-${index}`;
+            return (
+              <div key={f.key} className="git-dialog-field">
+                <label className="git-dialog-label" htmlFor={inputId}>{f.label}</label>
+                <input
+                  id={inputId}
+                  className="git-dialog-input"
+                  type="text"
+                  placeholder={f.placeholder}
+                  value={values[f.key] || ''}
+                  onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                  data-git-dialog-field={index}
+                />
+              </div>
+            );
+          })}
+          {description && <div id={descriptionId} className="git-dialog-hint">{description}</div>}
           <div className="git-dialog-actions">
-            <button type="button" className="git-dialog-btn cancel" onClick={onCancel}>Cancel</button>
+            <button type="button" className="git-dialog-btn cancel" data-git-dialog-cancel onClick={onCancel}>Cancel</button>
             <button type="submit" className={`git-dialog-btn confirm ${destructive ? 'danger' : ''}`} disabled={busy}>{confirmLabel}</button>
           </div>
         </form>

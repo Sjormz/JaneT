@@ -1,27 +1,11 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  FilesIcon, SSHIcon, SourceControlIcon, SettingsIconCmp,
+  SettingsIconCmp,
   MinimizeIcon, MaximizeIcon, RestoreIcon, CloseIcon,
 } from '../icons';
 import BrandMark from './BrandMark';
 import Tooltip from './Tooltip';
 import { formatShortcutForDisplay } from '../keybindings';
-
-export type SidebarSection = 'files' | 'ssh' | 'git' | 'settings';
-
-interface NavItem {
-  key: SidebarSection;
-  Icon: React.FC<any>;
-  name: string;
-  shortcut?: string;
-}
-
-const NAV_ITEMS: NavItem[] = [
-  { key: 'files',    Icon: FilesIcon,           name: 'Explorer' },
-  { key: 'ssh',      Icon: SSHIcon,             name: 'SSH connections' },
-  { key: 'git',      Icon: SourceControlIcon,   name: 'Source Control' },
-  { key: 'settings', Icon: SettingsIconCmp,     name: 'Settings' },
-];
 
 function initialPlatform() {
   if (/Mac|iPhone|iPad/i.test(navigator.platform)) return 'darwin';
@@ -30,29 +14,34 @@ function initialPlatform() {
 }
 
 interface TitlebarProps {
-  // sidebar nav
-  section: SidebarSection;
-  onSectionChange: (s: SidebarSection) => void;
-  sidebarOpen: boolean;
+  // settings
+  settingsOpen: boolean;
+  onSettingsToggle: () => void;
+  onSettingsClose: () => void;
+  settingsContent: React.ReactNode;
   // palette
   onOpenPalette: () => void;
   paletteShortcut: string;
 }
 
 /**
- * Top-of-window chrome: app brand, section nav (left), new-tab button,
- * palette hint, and window controls (right). The whole bar is a drag region
- * except for the interactive buttons.
+ * Top-of-window chrome: app brand, palette hint, settings, and window controls.
+ * The whole bar is a drag region except for the interactive buttons and
+ * settings popover.
  */
 export default function Titlebar({
-  section,
-  onSectionChange,
-  sidebarOpen,
+  settingsOpen,
+  onSettingsToggle,
+  onSettingsClose,
+  settingsContent,
   onOpenPalette,
   paletteShortcut,
 }: TitlebarProps) {
   const [maximized, setMaximized] = useState(false);
   const [platform, setPlatform] = useState(initialPlatform);
+  const settingsButtonRef = useRef<HTMLButtonElement>(null);
+  const settingsPopoverRef = useRef<HTMLDivElement>(null);
+  const previouslyOpenRef = useRef(settingsOpen);
   const displayedPaletteShortcut = formatShortcutForDisplay(paletteShortcut, platform);
 
   const refreshMaximized = useCallback(async () => {
@@ -77,6 +66,43 @@ export default function Titlebar({
     };
   }, [refreshMaximized]);
 
+  useEffect(() => {
+    if (!settingsOpen) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      // A modal launched from Settings owns Escape until it is dismissed.
+      if (document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onSettingsClose();
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      // Portaled modal content may still belong to the Settings surface.
+      if (document.querySelector('[aria-modal="true"]')) return;
+      if (
+        settingsButtonRef.current?.contains(target)
+        || settingsPopoverRef.current?.contains(target)
+      ) return;
+      onSettingsClose();
+    };
+
+    document.addEventListener('keydown', onKeyDown, true);
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      document.removeEventListener('pointerdown', onPointerDown, true);
+    };
+  }, [onSettingsClose, settingsOpen]);
+
+  useEffect(() => {
+    if (previouslyOpenRef.current && !settingsOpen) {
+      requestAnimationFrame(() => settingsButtonRef.current?.focus());
+    }
+    previouslyOpenRef.current = settingsOpen;
+  }, [settingsOpen]);
+
   return (
     <div className={`titlebar ${platform === 'darwin' ? 'is-mac' : ''}`} role="banner">
       {/* Brand */}
@@ -85,27 +111,7 @@ export default function Titlebar({
         <span className="titlebar-app-name">JaneT</span>
       </div>
 
-      {/* Section nav (was ActivityBar) */}
-      <nav className="titlebar-nav" aria-label="Sidebar section">
-        {NAV_ITEMS.map(({ key, Icon, name }) => {
-          const active = sidebarOpen && section === key;
-          const label = `${active ? 'Hide' : 'Open'} ${name}`;
-          return (
-            <Tooltip key={key} label={label} placement="bottom">
-              <button
-                className={`titlebar-nav-btn ${active ? 'active' : ''}`}
-                onClick={() => onSectionChange(key)}
-                aria-label={label}
-                aria-pressed={active}
-              >
-                <Icon size="md" />
-              </button>
-            </Tooltip>
-          );
-        })}
-      </nav>
-
-      {/* Right cluster: palette + window controls */}
+      {/* Right cluster: palette + settings + window controls */}
       <div className="titlebar-right">
         <Tooltip label="Open command palette" shortcut={displayedPaletteShortcut} placement="bottom">
           <button
@@ -117,6 +123,34 @@ export default function Titlebar({
             <kbd className="titlebar-kbd" aria-hidden="true">{displayedPaletteShortcut}</kbd>
           </button>
         </Tooltip>
+
+        <div className="titlebar-settings">
+          <Tooltip label={settingsOpen ? 'Hide settings' : 'Open settings'} placement="bottom">
+            <button
+              ref={settingsButtonRef}
+              className={`titlebar-settings-btn ${settingsOpen ? 'active' : ''}`}
+              onClick={onSettingsToggle}
+              aria-label={settingsOpen ? 'Hide settings' : 'Open settings'}
+              aria-expanded={settingsOpen}
+              aria-controls="titlebar-settings-popover"
+              aria-haspopup="dialog"
+            >
+              <SettingsIconCmp size="md" />
+            </button>
+          </Tooltip>
+          {settingsOpen && (
+            <div
+              ref={settingsPopoverRef}
+              id="titlebar-settings-popover"
+              className="titlebar-settings-popover"
+              role="dialog"
+              aria-label="Settings"
+              data-keybindings-suspended
+            >
+              {settingsContent}
+            </div>
+          )}
+        </div>
 
         {platform !== 'darwin' && (
           <div className="titlebar-controls">

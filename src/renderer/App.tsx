@@ -3,13 +3,15 @@ import Titlebar from './components/Titlebar';
 import VerticalTabBar from './components/VerticalTabBar';
 import SplitPane from './components/SplitPane';
 import { disposeCachedTerminal } from './components/TerminalPane';
-import Sidebar from './components/Sidebar';
+import Sidebar, { WorkspaceToolSection } from './components/Sidebar';
 import StatusBar from './components/StatusBar';
 import CommandPalette, { CommandAction } from './components/CommandPalette';
 import ShortcutEditor from './components/ShortcutEditor';
+import ThemeSwitcher from './components/ThemeSwitcher';
 import UpdateBanner from './components/UpdateBanner';
 import BrandMark from './components/BrandMark';
 import Tooltip from './components/Tooltip';
+import ConfirmationDialog from './components/ConfirmationDialog';
 import {
   TabInfo, SessionInfo,
   SavedSSHProfile,
@@ -24,6 +26,7 @@ import { serializePaneTree, restorePaneTree, normalizeSession, SavedSession } fr
 import { GitStatusSummary, summarizeGitStatus } from './gitStatus';
 import { useGitRepository } from './useGitRepository';
 import { requestTerminalSearch } from './terminalSearch';
+import { formatTerminalPathForPaste } from './terminalPathDrag';
 import type { FileExplorerSource } from './fileExplorerSource';
 import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
 
@@ -48,6 +51,14 @@ interface TerminalOwner {
   termId: string;
   type: 'local' | 'ssh';
   sshSessionId?: string;
+}
+
+interface PendingDestructiveAction {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  run: () => void;
+  fallbackFocus?: () => HTMLElement | null;
 }
 
 function collectTerminalOwners(tab: TabInfo): TerminalOwner[] {
@@ -79,6 +90,12 @@ function preferredLeafId(tab: TabInfo, focusedTerminalId: string | null, maximiz
   if (maximizedLeafId && leaves.includes(maximizedLeafId)) return maximizedLeafId;
   if (focusedTerminalId && leaves.includes(focusedTerminalId)) return focusedTerminalId;
   return leaves[0] ?? null;
+}
+
+function firstTerminalFocusTarget(): HTMLElement | null {
+  const containers = Array.from(document.querySelectorAll<HTMLElement>('[data-terminal-focus-target]'));
+  const container = containers.find((candidate) => candidate.offsetParent !== null) ?? containers[0];
+  return container?.querySelector<HTMLElement>('textarea') ?? container ?? null;
 }
 
 function sshSessionInfo(sessionId: string, profile: SavedSSHProfile): SessionInfo {
@@ -133,7 +150,9 @@ interface InitialAppState {
   activeTabId: string;
   sidebarOpen: boolean;
   tabsOpen: boolean;
-  sidebarSection: 'files' | 'ssh' | 'git' | 'settings';
+  sidebarSection: WorkspaceToolSection;
+  settingsOpen: boolean;
+  sshConnectionsOpen: boolean;
   sshProfiles: SavedSSHProfile[];
   workspaceTabs: WorkspaceTabPreset[];
   currentTheme: ThemeName;
@@ -187,19 +206,24 @@ function createInitialAppState(settings: any): InitialAppState {
   };
   const tabs = restored.length > 0 ? restored : [starterTab];
   const theme = getTheme(s.theme || 'tokyo-night').name;
+  const restoreLegacySettings = session.sidebarOpen && session.sidebarSection === 'settings';
+  const restoreLegacySsh = session.sidebarOpen && session.sidebarSection === 'ssh';
+  const restoreMovedLegacySurface = restoreLegacySettings || restoreLegacySsh;
 
   return {
     tabs,
     activeTabId: restoredActiveId ?? tabs[0].id,
-    sidebarOpen: session.sidebarOpen,
-    tabsOpen: session.tabsOpen,
-    sidebarSection: session.sidebarSection,
+    sidebarOpen: restoreMovedLegacySurface ? false : session.sidebarOpen,
+    tabsOpen: restoreLegacySsh ? true : session.tabsOpen,
+    sidebarSection: session.sidebarSection === 'git' ? 'git' : 'files',
+    settingsOpen: restoreLegacySettings,
+    sshConnectionsOpen: restoreLegacySsh,
     sshProfiles: Array.isArray(s.sshProfiles) ? s.sshProfiles : [],
     workspaceTabs: Array.isArray(s.workspaceTabs) ? s.workspaceTabs : [],
     currentTheme: theme,
     fontSize: typeof s.fontSize === 'number' ? s.fontSize : 14,
     fontFamily: normalizeTerminalFontFamily(s.fontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY),
-    sidebarSide: s.sidebarSide === 'right' ? 'right' : 'left',
+    sidebarSide: s.sidebarSide === 'left' ? 'left' : 'right',
   };
 }
 
@@ -215,7 +239,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [sidebarOpen, setSidebarOpen] = useState(initialState.sidebarOpen);
   const [tabsOpen, setTabsOpen] = useState(initialState.tabsOpen);
   const responsiveTabsCollapsedRef = useRef(false);
-  const [sidebarSection, setSidebarSection] = useState<'files' | 'ssh' | 'git' | 'settings'>(initialState.sidebarSection);
+  const [sidebarSection, setSidebarSection] = useState<WorkspaceToolSection>(initialState.sidebarSection);
   const [sshSessions, setSshSessions] = useState<SessionInfo[]>([]);
   const [readySshSessionIds, setReadySshSessionIds] = useState<Set<string>>(new Set());
   const [disconnectedSshSessionIds, setDisconnectedSshSessionIds] = useState<Set<string>>(new Set());
@@ -284,6 +308,21 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const restoredSshTabsStartedRef = useRef(false);
   const restoredSshLeavesStartedRef = useRef(false);
   const [paletteVisible, setPaletteVisible] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(initialState.settingsOpen);
+  const [sshConnectionsOpen, setSshConnectionsOpen] = useState(initialState.sshConnectionsOpen);
+  const [pendingDestructiveAction, setPendingDestructiveAction] = useState<PendingDestructiveAction | null>(null);
+
+  const setWorkspaceToolsExpanded = useCallback((expanded: boolean) => {
+    if (!expanded && document.activeElement instanceof HTMLElement
+      && document.activeElement.closest('.workspace-tools-panel')) {
+      document.querySelector<HTMLElement>('.workspace-tool-button[aria-selected="true"]')?.focus();
+    }
+    setSidebarOpen(expanded);
+  }, []);
+
+  const toggleWorkspaceTools = useCallback(() => {
+    setWorkspaceToolsExpanded(!sidebarOpen);
+  }, [setWorkspaceToolsExpanded, sidebarOpen]);
 
   // === CWD tracking ===
   // cwdByTerminal: latest known working directory for each terminal,
@@ -726,6 +765,37 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     [closeTab, focusedTerminalId, maximizedLeafByTab, teardownTerminalOwners],
   );
 
+  const requestCloseTab = useCallback((tabId: string) => {
+    const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
+    if (!tab) return;
+    const paneCount = getAllLeafIds(tab.root).length;
+    setPendingDestructiveAction({
+      title: `Close ${tab.title}?`,
+      description: `Close this terminal tab and its ${paneCount} pane${paneCount === 1 ? '' : 's'}? Its terminal sessions will end; detached jobs may continue outside JaneT.`,
+      confirmLabel: 'Close tab',
+      run: () => closeTab(tabId),
+      fallbackFocus: firstTerminalFocusTarget,
+    });
+  }, [closeTab]);
+
+  const requestClosePane = useCallback((tabId: string, leafId: string) => {
+    const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
+    if (!tab) return;
+    if (getAllLeafIds(tab.root).length === 1) {
+      requestCloseTab(tabId);
+      return;
+    }
+    const leaf = findLeaf(tab.root, leafId);
+    const paneTitle = leaf?.title?.trim();
+    setPendingDestructiveAction({
+      title: paneTitle ? `Close ${paneTitle}?` : 'Close terminal pane?',
+      description: 'Close this terminal pane? Its terminal session will end; detached jobs may continue outside JaneT.',
+      confirmLabel: 'Close pane',
+      run: () => handleClosePane(tabId, leafId),
+      fallbackFocus: firstTerminalFocusTarget,
+    });
+  }, [handleClosePane, requestCloseTab]);
+
   const handleResizePane = useCallback(
     (tabId: string, splitId: string, dividerIndex: number, leftFraction: number) => {
       updateTab(tabId, (tab) => ({
@@ -752,6 +822,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       ));
       markSshSessionReady(session.id);
       addTab('ssh', session.id, true, session.sshProfileId);
+      setSshConnectionsOpen(false);
     },
     [addTab, markSshSessionReady],
   );
@@ -872,6 +943,23 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     }
   }, [cwdByTerminal, updateTab]);
 
+  const requestSaveWorkspaceTab = useCallback((tab: TabInfo) => {
+    const existingPreset = tab.workspaceId
+      ? workspaceTabs.find((preset) => preset.id === tab.workspaceId)
+      : undefined;
+    if (!existingPreset) {
+      saveWorkspaceTab(tab);
+      return;
+    }
+    setPendingDestructiveAction({
+      title: `Update preset “${existingPreset.name}”?`,
+      description: 'Replace the saved preset with this tab’s current layout, directories, and startup commands?',
+      confirmLabel: 'Update preset',
+      run: () => saveWorkspaceTab(tab),
+      fallbackFocus: firstTerminalFocusTarget,
+    });
+  }, [saveWorkspaceTab, workspaceTabs]);
+
   const openWorkspaceTab = useCallback(async (preset: WorkspaceTabPreset) => {
     const restoredRoot = restorePaneTree(preset.root);
     let root = restoredRoot ?? createPaneRoot(preset.type, preset.terminalCount, preset.splitDirection);
@@ -959,6 +1047,12 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     () => sidebarTerminalId ? findLeaf(activeTab.root, sidebarTerminalId) : null,
     [activeTab, sidebarTerminalId],
   );
+  const copyTerminalPath = useCallback(async (path: string) => {
+    const pasteToken = formatTerminalPathForPaste(path, sidebarLeaf?.startupShellDialect);
+    if (!pasteToken) throw new Error('Path cannot be pasted safely');
+    const copied = await window.janet.copyText(pasteToken);
+    if (!copied) throw new Error('Path could not be copied');
+  }, [sidebarLeaf?.startupShellDialect]);
   const sidebarIsRemote = (sidebarLeaf?.terminalType ?? activeTab.type) === 'ssh';
   const sidebarSshSessionId = sidebarLeaf?.sshSessionId ?? (
     activeTab.type === 'ssh' ? activeTab.sshSessionId : undefined
@@ -1033,14 +1127,14 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       setPaletteVisible((v) => !v);
     });
     const unsub2 = on('new-terminal', () => addTab('local'));
-    const unsub3 = on('close-tab', () => closeTab(activeTabId));
-    const unsub4 = on('toggle-sidebar', () => setSidebarOpen((v) => !v));
+    const unsub3 = on('close-tab', () => requestCloseTab(activeTabId));
+    const unsub4 = on('toggle-sidebar', toggleWorkspaceTools);
     const unsub5 = on('font-increase', () => persistFontSize(Math.min(24, fontSize + 1)));
     const unsub6 = on('font-decrease', () => persistFontSize(Math.max(10, fontSize - 1)));
     return () => {
       unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6();
     };
-  }, [on, addTab, closeTab, activeTabId, persistFontSize, fontSize]);
+  }, [on, addTab, requestCloseTab, activeTabId, toggleWorkspaceTools, persistFontSize, fontSize]);
 
   // Split/close-pane handlers depend on activeTab so register separately
   useEffect(() => {
@@ -1052,10 +1146,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     });
     const unsub3 = on('close-pane', () => {
       const leaves = getAllLeafIds(activeTab.root);
-      if (sidebarTerminalId && leaves.length > 1) handleClosePane(activeTab.id, sidebarTerminalId);
+      if (sidebarTerminalId && leaves.length > 1) requestClosePane(activeTab.id, sidebarTerminalId);
     });
     return () => { unsub1(); unsub2(); unsub3(); };
-  }, [on, activeTab, sidebarTerminalId, handleSplitPane, handleClosePane]);
+  }, [on, activeTab, sidebarTerminalId, handleSplitPane, requestClosePane]);
 
   // === Escape handler for palette ===
   useEffect(() => {
@@ -1077,27 +1171,31 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       },
       {
         id: 'close-tab', label: 'Close current tab', category: 'Tabs',
-        shortcut: bindings['close-tab'], handler: () => closeTab(activeTabId),
+        shortcut: bindings['close-tab'], handler: () => requestCloseTab(activeTabId),
       },
       {
-        id: 'toggle-sidebar', label: 'Show or hide sidebar', category: 'View',
-        shortcut: bindings['toggle-sidebar'], handler: () => setSidebarOpen((v) => !v),
+        id: 'toggle-sidebar', label: 'Show or hide workspace tools', category: 'View',
+        shortcut: bindings['toggle-sidebar'], handler: toggleWorkspaceTools,
       },
       {
         id: 'sidebar-files', label: 'Open Explorer', category: 'View',
-        handler: () => { setSidebarOpen(true); setSidebarSection('files'); },
+        handler: () => { setWorkspaceToolsExpanded(true); setSidebarSection('files'); },
       },
       {
         id: 'sidebar-ssh', label: 'Open SSH connections', category: 'View',
-        handler: () => { setSidebarOpen(true); setSidebarSection('ssh'); },
+        handler: () => {
+          responsiveTabsCollapsedRef.current = false;
+          setTabsOpen(true);
+          setSshConnectionsOpen(true);
+        },
       },
       {
         id: 'sidebar-git', label: 'Open Source Control', category: 'View',
-        handler: () => { setSidebarOpen(true); setSidebarSection('git'); },
+        handler: () => { setWorkspaceToolsExpanded(true); setSidebarSection('git'); },
       },
       {
         id: 'sidebar-settings', label: 'Open Settings', category: 'View',
-        handler: () => { setSidebarOpen(true); setSidebarSection('settings'); },
+        handler: () => setSettingsOpen(true),
       },
       {
         id: 'font-increase', label: 'Increase terminal text size', category: 'Settings',
@@ -1159,7 +1257,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         if (leaves.length > 1) {
           actions.push({
             id: 'close-pane', label: 'Close current pane', category: 'Pane',
-            shortcut: bindings['close-pane'], handler: () => handleClosePane(activeTab.id, sidebarTerminalId),
+            shortcut: bindings['close-pane'], handler: () => requestClosePane(activeTab.id, sidebarTerminalId),
           });
         }
       }
@@ -1167,60 +1265,71 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
 
     return actions;
   }, [
-    activeTab, activeTabId, sidebarTerminalId, addTab, closeTab, handleSplitPane, handleClosePane,
-    fontSize, persistFontSize, persistTheme, bindings,
+    activeTab, activeTabId, sidebarTerminalId, addTab, requestCloseTab, handleSplitPane, requestClosePane,
+    fontSize, persistFontSize, persistTheme, setWorkspaceToolsExpanded, toggleWorkspaceTools, bindings,
   ]);
+
+  const workspaceTools = (
+    <Sidebar
+      key="workspace-tools"
+      section={sidebarSection}
+      onSectionChange={setSidebarSection}
+      side={sidebarSide}
+      expanded={sidebarOpen}
+      onExpandedChange={setWorkspaceToolsExpanded}
+      explorerSource={explorerSource}
+      cwdReady={Boolean(effectiveCwd)}
+      isRemote={sidebarIsRemote}
+      gitRepository={gitRepository}
+      onOpenLocalTabAt={openLocalTabAt}
+      onCopyTerminalPath={copyTerminalPath}
+    />
+  );
 
   return (
     <div className="app">
       <Titlebar
-        section={sidebarSection}
-        onSectionChange={(section) => {
-          if (section === sidebarSection && sidebarOpen) {
-            setSidebarOpen(false);
-          } else {
-            setSidebarSection(section);
-            setSidebarOpen(true);
-          }
+        onOpenPalette={() => {
+          setSettingsOpen(false);
+          setPaletteVisible(true);
         }}
-        sidebarOpen={sidebarOpen}
-        onOpenPalette={() => setPaletteVisible(true)}
         paletteShortcut={bindings['palette-toggle']}
+        settingsOpen={settingsOpen}
+        onSettingsToggle={() => setSettingsOpen((open) => !open)}
+        onSettingsClose={() => setSettingsOpen(false)}
+        settingsContent={(
+          <div className="titlebar-settings-content">
+            <ThemeSwitcher
+              currentTheme={currentTheme}
+              onThemeChange={persistTheme}
+              fontSize={fontSize}
+              onFontSizeChange={persistFontSize}
+              sidebarSide={sidebarSide}
+              onSidebarSideChange={persistSidebarSide}
+            />
+            <ShortcutEditor />
+          </div>
+        )}
       />
       <div className={`app-body sidebar-${sidebarSide}`}>
-        {sidebarOpen && (
-          <Sidebar
-            section={sidebarSection}
-            onSectionChange={setSidebarSection}
-            sshProfiles={sshProfiles}
-            onSSHConnected={handleSSHConnected}
-            onSSHProfilesChange={handleSSHProfilesChange}
-            currentTheme={currentTheme}
-            onThemeChange={persistTheme}
-            fontSize={fontSize}
-            onFontSizeChange={persistFontSize}
-            sidebarSide={sidebarSide}
-            onSidebarSideChange={persistSidebarSide}
-            shortcutEditor={<ShortcutEditor />}
-            explorerSource={explorerSource}
-            cwdReady={Boolean(effectiveCwd)}
-            isRemote={sidebarIsRemote}
-            gitRepository={gitRepository}
-            onOpenLocalTabAt={openLocalTabAt}
-          />
-        )}
+        {sidebarSide === 'left' && workspaceTools}
         {tabsOpen ? (
           <VerticalTabBar
+            key="terminal-tabs"
             tabs={tabs}
             activeTabId={activeTabId}
             sshProfiles={sshProfiles}
+            sshConnectionsOpen={sshConnectionsOpen}
+            onSSHConnectionsOpenChange={setSshConnectionsOpen}
+            onSSHConnected={handleSSHConnected}
+            onSSHProfilesChange={handleSSHProfilesChange}
             workspaceTabs={workspaceTabs}
             onSelectTab={setActiveTabId}
-            onCloseTab={closeTab}
+            onCloseTab={requestCloseTab}
             onNewTab={() => addTab('local')}
             onWorkspaceTabsChange={handleWorkspaceTabsChange}
             onWorkspaceTabLaunch={openWorkspaceTab}
-            onSaveWorkspaceTab={saveWorkspaceTab}
+            onSaveWorkspaceTab={requestSaveWorkspaceTab}
             onRenameTab={renameTab}
             onCollapse={() => {
               responsiveTabsCollapsedRef.current = false;
@@ -1228,7 +1337,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
             }}
           />
         ) : (
-          <Tooltip label="Show terminal tabs" placement="right">
+          <Tooltip key="terminal-tabs" label="Show terminal tabs" placement="right">
             <button className="tabs-rail" onClick={() => {
               responsiveTabsCollapsedRef.current = false;
               setTabsOpen(true);
@@ -1237,7 +1346,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
             </button>
           </Tooltip>
         )}
-        <div className="terminal-area">
+        <div key="terminal" className="terminal-area">
           <SplitPane
             node={activeTab.root}
             tabId={activeTab.id}
@@ -1247,7 +1356,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
             onTerminalReady={handleTerminalReady}
             onTerminalRemoved={handleTerminalRemoved}
             onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}
-            onClosePane={(leafId) => handleClosePane(activeTab.id, leafId)}
+            onClosePane={(leafId) => requestClosePane(activeTab.id, leafId)}
             onResizePane={(splitId, dividerIndex, leftFraction) => handleResizePane(activeTab.id, splitId, dividerIndex, leftFraction)}
             onMovePane={(draggedLeafId, targetLeafId, side) => handleMovePane(activeTab.id, draggedLeafId, targetLeafId, side)}
             draggedLeafId={draggedPaneId}
@@ -1268,6 +1377,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
             onSshRetry={handleSshRetry}
           />
         </div>
+        {sidebarSide === 'right' && workspaceTools}
       </div>
       <StatusBar
         sshSessions={sshSessions}
@@ -1282,6 +1392,19 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         actions={paletteActions}
       />
       <UpdateBanner />
+      <ConfirmationDialog
+        open={pendingDestructiveAction !== null}
+        title={pendingDestructiveAction?.title ?? ''}
+        description={pendingDestructiveAction?.description ?? ''}
+        confirmLabel={pendingDestructiveAction?.confirmLabel ?? 'Continue'}
+        fallbackFocus={pendingDestructiveAction?.fallbackFocus}
+        onCancel={() => setPendingDestructiveAction(null)}
+        onConfirm={() => {
+          const action = pendingDestructiveAction;
+          setPendingDestructiveAction(null);
+          action?.run();
+        }}
+      />
     </div>
   );
 }
@@ -1289,6 +1412,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
 export default function App() {
   const [settings, setSettings] = useState<any | null>(null);
   const [settingsError, setSettingsError] = useState(false);
+  const [confirmDefaults, setConfirmDefaults] = useState(false);
 
   const loadSettings = useCallback(() => {
     setSettingsError(false);
@@ -1313,21 +1437,35 @@ export default function App() {
 
   if (!settings) {
     return (
-      <div className="app-startup" role={settingsError ? 'alert' : 'status'} aria-live="polite">
-        <BrandMark size={56} className="app-startup-mark" />
-        <div className="app-startup-name">JaneT</div>
-        {settingsError ? (
-          <>
-            <p>JaneT could not load your workspace settings.</p>
-            <div className="app-startup-actions">
-              <button type="button" onClick={loadSettings}>Try again</button>
-              <button type="button" onClick={() => setSettings({})}>Use defaults</button>
-            </div>
-          </>
-        ) : (
-          <p>Restoring your workspace…</p>
-        )}
-      </div>
+      <>
+        <div className="app-startup" role={settingsError ? 'alert' : 'status'} aria-live="polite">
+          <BrandMark size={56} className="app-startup-mark" />
+          <div className="app-startup-name">JaneT</div>
+          {settingsError ? (
+            <>
+              <p>JaneT could not load your workspace settings.</p>
+              <div className="app-startup-actions">
+                <button type="button" onClick={loadSettings}>Try again</button>
+                <button type="button" onClick={() => setConfirmDefaults(true)}>Use defaults</button>
+              </div>
+            </>
+          ) : (
+            <p>Restoring your workspace…</p>
+          )}
+        </div>
+        <ConfirmationDialog
+          open={confirmDefaults}
+          title="Use default settings?"
+          description="Start a new default workspace? JaneT will replace saved tabs and custom shortcuts as the default workspace starts and saves."
+          confirmLabel="Use defaults"
+          fallbackFocus={firstTerminalFocusTarget}
+          onCancel={() => setConfirmDefaults(false)}
+          onConfirm={() => {
+            setConfirmDefaults(false);
+            setSettings({});
+          }}
+        />
+      </>
     );
   }
 

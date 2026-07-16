@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type React from 'react';
+import React, { useState } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import VerticalTabBar from '../../src/renderer/components/VerticalTabBar';
 import { SavedSSHProfile, TabInfo, WorkspaceTabPreset } from '../../src/renderer/types';
@@ -50,6 +50,10 @@ function renderTabs(overrides?: Partial<React.ComponentProps<typeof VerticalTabB
       onSelectTab={vi.fn()}
       onCloseTab={vi.fn()}
       onNewTab={vi.fn()}
+      sshConnectionsOpen={false}
+      onSSHConnectionsOpenChange={vi.fn()}
+      onSSHConnected={vi.fn()}
+      onSSHProfilesChange={vi.fn()}
       onWorkspaceTabsChange={vi.fn()}
       onWorkspaceTabLaunch={vi.fn()}
       onRenameTab={vi.fn()}
@@ -67,13 +71,86 @@ describe('VerticalTabBar', () => {
     expect(screen.getByRole('button', { name: /close main app/i })).toBeInTheDocument();
   });
 
-  it('labels the section as Tabs and creates new tabs from the header', () => {
+  it('labels the section as Tabs and creates a local terminal from its visible action', () => {
     const onNewTab = vi.fn();
     renderTabs({ onNewTab });
 
     expect(screen.getByText('Tabs')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^new terminal tab$/i }));
+    expect(screen.getByRole('button', { name: 'SSH connections' })).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(screen.getByRole('button', { name: /^new local terminal tab$/i }));
     expect(onNewTab).toHaveBeenCalledOnce();
+  });
+
+  it('opens and closes SSH connection management from the Tabs section', () => {
+    const onSSHConnectionsOpenChange = vi.fn();
+
+    function Harness() {
+      const [sshConnectionsOpen, setSSHConnectionsOpen] = useState(false);
+      return (
+        <VerticalTabBar
+          tabs={tabs}
+          activeTabId="tab-1"
+          sshProfiles={sshProfiles}
+          workspaceTabs={[]}
+          onSelectTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onNewTab={vi.fn()}
+          sshConnectionsOpen={sshConnectionsOpen}
+          onSSHConnectionsOpenChange={(open) => {
+            onSSHConnectionsOpenChange(open);
+            setSSHConnectionsOpen(open);
+          }}
+          onSSHConnected={vi.fn()}
+          onSSHProfilesChange={vi.fn()}
+          onWorkspaceTabsChange={vi.fn()}
+          onWorkspaceTabLaunch={vi.fn()}
+          onSaveWorkspaceTab={vi.fn()}
+          onRenameTab={vi.fn()}
+          onCollapse={vi.fn()}
+        />
+      );
+    }
+
+    render(<Harness />);
+    const toggle = screen.getByRole('button', { name: 'SSH connections' });
+    fireEvent.click(toggle);
+
+    expect(onSSHConnectionsOpenChange).toHaveBeenLastCalledWith(true);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Saved connections')).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(onSSHConnectionsOpenChange).toHaveBeenLastCalledWith(false);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Saved connections')).not.toBeInTheDocument();
+  });
+
+  it('forwards SSH sessions and saved-profile changes from the embedded manager', async () => {
+    const sshConnect = vi.fn().mockResolvedValue({ connected: true });
+    Object.defineProperty(window, 'janet', {
+      configurable: true,
+      value: { sshConnect },
+    });
+    const onSSHConnected = vi.fn();
+    const onSSHProfilesChange = vi.fn();
+    renderTabs({
+      sshConnectionsOpen: true,
+      onSSHConnected,
+      onSSHProfilesChange,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /connect to pckpr@box\.local:22/i }));
+    await waitFor(() => expect(onSSHConnected).toHaveBeenCalledWith(expect.objectContaining({
+      host: 'box.local',
+      port: 22,
+      username: 'pckpr',
+      sshProfileId: sshProfiles[0].id,
+    })));
+
+    fireEvent.click(screen.getByRole('button', { name: /remove pckpr@box\.local:22/i }));
+    expect(onSSHProfilesChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove connection' }));
+    expect(onSSHProfilesChange).toHaveBeenCalledWith([]);
   });
 
   it('creates a saved workspace preset from the presets section', () => {
@@ -146,7 +223,7 @@ describe('VerticalTabBar', () => {
     expect(screen.getByRole('button', { name: /^add command$/i })).toBeDisabled();
   });
 
-  it('moves focus to the next safe control after removing a startup command', async () => {
+  it('confirms startup-command removal and keeps the parent editor open on Escape', async () => {
     renderTabs();
 
     fireEvent.click(screen.getByRole('button', { name: /^presets$/i }));
@@ -156,11 +233,21 @@ describe('VerticalTabBar', () => {
     fireEvent.click(screen.getByRole('button', { name: /^add command$/i }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove startup command 1' }));
+    const confirmation = screen.getByRole('alertdialog', { name: 'Remove startup command 1?' });
+    expect(screen.getAllByRole('textbox', { name: /terminal 1 startup command/i })).toHaveLength(2);
+    fireEvent.keyDown(confirmation, { key: 'Escape' });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: /create preset/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('textbox', { name: /terminal 1 startup command/i })).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove startup command 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove command' }));
     await waitFor(() => expect(document.activeElement).toBe(
       screen.getByRole('textbox', { name: 'Terminal 1 startup command 1' }),
     ));
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove startup command 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove command' }));
     await waitFor(() => expect(document.activeElement).toBe(
       screen.getByRole('button', { name: /^add command$/i }),
     ));
@@ -174,6 +261,8 @@ describe('VerticalTabBar', () => {
     fireEvent.click(screen.getByRole('button', { name: /^add terminal$/i }));
     fireEvent.click(screen.getAllByRole('button', { name: /startup commands/i })[1]);
     fireEvent.click(screen.getByRole('button', { name: 'Remove terminal 1' }));
+    expect(screen.getAllByRole('button', { name: 'Local terminal' })).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove terminal' }));
 
     const remainingTypeButton = screen.getByRole('button', { name: 'Local terminal' });
     await waitFor(() => expect(document.activeElement).toBe(remainingTypeButton));
@@ -236,6 +325,7 @@ describe('VerticalTabBar', () => {
     expect(screen.getByRole('button', { name: /startup commands/i })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('textbox', { name: 'Terminal 1 startup command 1' })).toHaveValue('git pull');
     fireEvent.click(screen.getByRole('button', { name: 'Remove startup command 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove command' }));
     expect(screen.getByRole('textbox', { name: 'Terminal 1 startup command 1' })).toHaveValue('npm install');
   });
 
@@ -361,6 +451,70 @@ describe('VerticalTabBar', () => {
     expect(onWorkspaceTabLaunch).toHaveBeenCalledWith(workspaceTabs[0]);
   });
 
+  it('requires confirmation before deleting a saved preset', async () => {
+    const onWorkspaceTabsChange = vi.fn();
+    renderTabs({ workspaceTabs, onWorkspaceTabsChange });
+
+    fireEvent.click(screen.getByRole('button', { name: /^presets$/i }));
+    const deleteButton = screen.getByRole('button', { name: /delete preset janet dev/i });
+    fireEvent.click(deleteButton);
+
+    expect(onWorkspaceTabsChange).not.toHaveBeenCalled();
+    expect(screen.getByRole('alertdialog', { name: /delete preset “janet dev”/i })).toBeInTheDocument();
+    expect(screen.getByText(/permanently deletes the saved preset/i)).toBeInTheDocument();
+    expect(screen.getByText(/existing terminal tabs will stay open/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(onWorkspaceTabsChange).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+
+    fireEvent.click(deleteButton);
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' });
+    expect(onWorkspaceTabsChange).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+
+    fireEvent.click(deleteButton);
+    fireEvent.click(screen.getByRole('button', { name: /^delete preset$/i }));
+
+    expect(onWorkspaceTabsChange).toHaveBeenCalledOnce();
+    expect(onWorkspaceTabsChange).toHaveBeenCalledWith([]);
+  });
+
+  it('moves focus to New preset after the deleted preset row disappears', async () => {
+    function Harness() {
+      const [presets, setPresets] = useState(workspaceTabs);
+      return (
+        <VerticalTabBar
+          tabs={tabs}
+          activeTabId="tab-1"
+          sshProfiles={sshProfiles}
+          workspaceTabs={presets}
+          onSelectTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onNewTab={vi.fn()}
+          sshConnectionsOpen={false}
+          onSSHConnectionsOpenChange={vi.fn()}
+          onSSHConnected={vi.fn()}
+          onSSHProfilesChange={vi.fn()}
+          onWorkspaceTabsChange={setPresets}
+          onWorkspaceTabLaunch={vi.fn()}
+          onSaveWorkspaceTab={vi.fn()}
+          onRenameTab={vi.fn()}
+          onCollapse={vi.fn()}
+        />
+      );
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: /^presets$/i }));
+    const remove = screen.getByRole('button', { name: /delete preset janet dev/i });
+    remove.focus();
+    fireEvent.click(remove);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete preset' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: /delete preset janet dev/i })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New preset' })).toHaveFocus());
+  });
+
   it('presets section is collapsed by default', () => {
     renderTabs({ workspaceTabs });
 
@@ -402,6 +556,15 @@ describe('VerticalTabBar', () => {
     fireEvent.contextMenu(screen.getAllByRole('button', { name: /^close /i })[0].closest('.vtab-item')!);
     fireEvent.click(screen.getByRole('menuitem', { name: /save as preset/i }));
     expect(onSaveWorkspaceTab).toHaveBeenCalledWith(tabs[0]);
+  });
+
+  it('labels saving a linked tab as a preset update', () => {
+    const linkedTab = { ...tabs[0], workspaceId: workspaceTabs[0].id };
+    renderTabs({ tabs: [linkedTab], workspaceTabs });
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^close /i }).closest('.vtab-item')!);
+    expect(screen.getByRole('menuitem', { name: 'Update saved preset' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Save as preset' })).not.toBeInTheDocument();
   });
 
   it('closes the tab context menu when clicking outside it', () => {

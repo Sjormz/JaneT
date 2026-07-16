@@ -25,7 +25,7 @@ export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   'palette-toggle': 'Open command palette',
   'new-terminal': 'New terminal tab',
   'close-tab': 'Close current tab',
-  'toggle-sidebar': 'Show or hide sidebar',
+  'toggle-sidebar': 'Show or hide workspace tools',
   'font-increase': 'Increase terminal text size',
   'font-decrease': 'Decrease terminal text size',
   'split-right': 'Split pane right',

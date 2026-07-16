@@ -1,12 +1,13 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import App from '../../src/renderer/App';
 
 const mountedTermIds: string[] = [];
 const rendererMocks = vi.hoisted(() => ({
   disposeCachedTerminal: vi.fn(),
   paletteActions: [] as Array<{ id: string; handler: () => void }>,
+  titlebarProps: null as any,
   sidebarProps: null as any,
   verticalTabBarProps: null as any,
   sshConnectionClosedHandler: null as null | ((event: { id: string; reason: string }) => void),
@@ -17,7 +18,10 @@ const rendererMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/renderer/components/Titlebar', () => ({
-  default: () => <div data-testid="titlebar" />,
+  default: (props: any) => {
+    rendererMocks.titlebarProps = props;
+    return <div data-testid="titlebar">{props.settingsOpen ? props.settingsContent : null}</div>;
+  },
 }));
 vi.mock('../../src/renderer/components/VerticalTabBar', () => ({
   default: (props: unknown) => {
@@ -26,9 +30,20 @@ vi.mock('../../src/renderer/components/VerticalTabBar', () => ({
   },
 }));
 vi.mock('../../src/renderer/components/Sidebar', () => ({
-  default: (props: unknown) => {
+  default: (props: any) => {
     rendererMocks.sidebarProps = props;
-    return <div data-testid="sidebar" />;
+    return (
+      <aside data-testid="sidebar">
+        <button type="button" className="workspace-tool-button" aria-selected="true">
+          Mock workspace tool
+        </button>
+        {props.expanded && (
+          <div className="workspace-tools-panel">
+            <button type="button">Mock tool content</button>
+          </div>
+        )}
+      </aside>
+    );
   },
 }));
 vi.mock('../../src/renderer/components/StatusBar', () => ({
@@ -131,6 +146,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     return (
       <div
         data-testid={`terminal-${termId}`}
+        data-terminal-focus-target
         data-ssh-connection-lost={sshConnectionLost ? 'true' : 'false'}
         tabIndex={0}
         onFocus={() => onFocus?.(termId)}
@@ -147,6 +163,7 @@ beforeEach(() => {
   mountedTermIds.length = 0;
   rendererMocks.disposeCachedTerminal.mockReset();
   rendererMocks.paletteActions = [];
+  rendererMocks.titlebarProps = null;
   rendererMocks.sidebarProps = null;
   rendererMocks.verticalTabBarProps = null;
   rendererMocks.sshConnectionClosedHandler = null;
@@ -184,6 +201,11 @@ beforeEach(() => {
     checkForUpdates: vi.fn().mockResolvedValue(undefined),
   };
 });
+
+async function confirmPendingAction(name: RegExp) {
+  const dialog = await screen.findByRole('alertdialog');
+  fireEvent.click(within(dialog).getByRole('button', { name }));
+}
 
 describe('split panes in the app', () => {
   it('keeps existing terminals alive when splitting deeper panes', async () => {
@@ -255,8 +277,11 @@ describe('split panes in the app', () => {
     // Close the second pane
     const closeButtons = screen.getAllByRole('button', { name: /close (?:pane|terminal tab)/i });
     fireEvent.click(closeButtons[1]);
+    expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
+    await confirmPendingAction(/^close pane$/i);
 
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+    await waitFor(() => expect(screen.getByTestId(/terminal-/)).toHaveFocus());
 
     // Survivor must be sized from React state, not from stale inline styles.
     const survivor = document.querySelector<HTMLElement>('.split-child');
@@ -276,11 +301,77 @@ describe('split panes in the app', () => {
     const secondId = secondTerminal.textContent!;
     fireEvent.focus(secondTerminal);
     fireEvent.keyDown(document, { key: 'w', ctrlKey: true, shiftKey: true });
+    expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.keyDown(document, { key: 'w', ctrlKey: true });
+    expect(within(dialog).getByRole('button', { name: 'Close pane' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Close tab' })).not.toBeInTheDocument();
+    await confirmPendingAction(/^close pane$/i);
 
     await waitFor(() => {
       expect(screen.getAllByTestId(/terminal-/).map((terminal) => terminal.textContent)).toEqual([firstId]);
     });
     expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: secondId });
+  });
+
+  it('requires confirmation before the close-tab shortcut destroys its terminal', async () => {
+    render(<App />);
+
+    const terminal = await screen.findByTestId(/terminal-/);
+    const terminalId = terminal.textContent!;
+    fireEvent.focus(terminal);
+    fireEvent.keyDown(document, { key: 'w', ctrlKey: true });
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByTestId(`terminal-${terminalId}`)).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'w', ctrlKey: true });
+    await confirmPendingAction(/^close tab$/i);
+    await waitFor(() => {
+      expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
+    });
+  });
+
+  it('routes the terminal-tab close control through the same confirmation gate', async () => {
+    render(<App />);
+
+    const terminal = await screen.findByTestId(/terminal-/);
+    const terminalId = terminal.textContent!;
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onCloseTab).toBeTypeOf('function'));
+
+    act(() => {
+      rendererMocks.verticalTabBarProps.onCloseTab(rendererMocks.verticalTabBarProps.tabs[0].id);
+    });
+
+    expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
+    await confirmPendingAction(/^close tab$/i);
+    await waitFor(() => {
+      expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
+    });
+    await waitFor(() => expect(screen.getByTestId(/terminal-/)).toHaveFocus());
+  });
+
+  it('routes the command-palette close-tab action through confirmation', async () => {
+    render(<App />);
+
+    const terminal = await screen.findByTestId(/terminal-/);
+    const terminalId = terminal.textContent!;
+    await waitFor(() => {
+      expect(rendererMocks.paletteActions.find((action) => action.id === 'close-tab')).toBeTruthy();
+    });
+
+    act(() => {
+      rendererMocks.paletteActions.find((action) => action.id === 'close-tab')!.handler();
+    });
+
+    expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
+    await confirmPendingAction(/^close tab$/i);
+    await waitFor(() => {
+      expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
+      expect(screen.getByTestId(/terminal-/)).toHaveFocus();
+    });
   });
 
   it('applies the command-palette close action to the focused pane', async () => {
@@ -301,6 +392,8 @@ describe('split panes in the app', () => {
     act(() => {
       rendererMocks.paletteActions.find((action) => action.id === 'close-pane')!.handler();
     });
+    expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
+    await confirmPendingAction(/^close pane$/i);
 
     await waitFor(() => {
       expect(screen.getAllByTestId(/terminal-/).map((terminal) => terminal.textContent)).toEqual([firstId]);
@@ -337,6 +430,123 @@ describe('split panes in the app', () => {
     }
   });
 
+  it('routes workspace view commands to their new layout owners', async () => {
+    render(<App />);
+
+    await screen.findByTestId('titlebar');
+    await waitFor(() => {
+      expect(rendererMocks.sidebarProps?.section).toBe('files');
+      expect(rendererMocks.sidebarProps?.side).toBe('right');
+      expect(rendererMocks.verticalTabBarProps?.sshConnectionsOpen).toBe(false);
+      expect(rendererMocks.titlebarProps?.settingsOpen).toBe(false);
+    });
+    const appBody = document.querySelector('.app-body')!;
+    expect(appBody).toHaveClass('sidebar-right');
+    expect(appBody.firstElementChild).toBe(screen.getByTestId('vertical-tab-bar'));
+    expect(appBody.lastElementChild).toBe(screen.getByTestId('sidebar'));
+
+    act(() => {
+      rendererMocks.paletteActions.find((action) => action.id === 'sidebar-git')!.handler();
+    });
+    await waitFor(() => {
+      expect(rendererMocks.sidebarProps.section).toBe('git');
+      expect(rendererMocks.sidebarProps.expanded).toBe(true);
+    });
+
+    act(() => {
+      rendererMocks.sidebarProps.onExpandedChange(false);
+      rendererMocks.paletteActions.find((action) => action.id === 'sidebar-files')!.handler();
+    });
+    await waitFor(() => {
+      expect(rendererMocks.sidebarProps.section).toBe('files');
+      expect(rendererMocks.sidebarProps.expanded).toBe(true);
+    });
+
+    act(() => {
+      rendererMocks.paletteActions.find((action) => action.id === 'sidebar-ssh')!.handler();
+    });
+    await waitFor(() => {
+      expect(rendererMocks.verticalTabBarProps.sshConnectionsOpen).toBe(true);
+    });
+
+    act(() => {
+      rendererMocks.paletteActions.find((action) => action.id === 'sidebar-settings')!.handler();
+    });
+    await waitFor(() => {
+      expect(rendererMocks.titlebarProps.settingsOpen).toBe(true);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Left' }));
+    await waitFor(() => {
+      expect(appBody).toHaveClass('sidebar-left');
+      expect(rendererMocks.sidebarProps.side).toBe('left');
+      expect(appBody.firstElementChild).toBe(screen.getByTestId('sidebar'));
+      expect(window.janet.setSettings).toHaveBeenCalledWith({ sidebarSide: 'left' });
+    });
+  });
+
+  it('moves focus to the persistent tool button before shortcut collapse hides its panel', async () => {
+    render(<App />);
+
+    const panelControl = await screen.findByRole('button', { name: 'Mock tool content' });
+    panelControl.focus();
+    expect(panelControl).toHaveFocus();
+
+    act(() => {
+      rendererMocks.paletteActions.find((action) => action.id === 'toggle-sidebar')!.handler();
+    });
+
+    await waitFor(() => {
+      expect(rendererMocks.sidebarProps.expanded).toBe(false);
+      expect(screen.queryByRole('button', { name: 'Mock tool content' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Mock workspace tool' })).toHaveFocus();
+    });
+  });
+
+  it('migrates a previously open SSH sidebar into the Tabs connection view', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [],
+      session: {
+        tabs: [],
+        sidebarOpen: true,
+        tabsOpen: false,
+        sidebarSection: 'ssh',
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(rendererMocks.sidebarProps?.expanded).toBe(false);
+      expect(rendererMocks.verticalTabBarProps?.sshConnectionsOpen).toBe(true);
+      expect(rendererMocks.titlebarProps?.settingsOpen).toBe(false);
+    });
+    expect(screen.getByTestId('vertical-tab-bar')).toBeInTheDocument();
+  });
+
+  it('migrates a previously open Settings sidebar into the titlebar popover', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [],
+      session: {
+        tabs: [],
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'settings',
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(rendererMocks.sidebarProps?.expanded).toBe(false);
+      expect(rendererMocks.titlebarProps?.settingsOpen).toBe(true);
+      expect(rendererMocks.verticalTabBarProps?.sshConnectionsOpen).toBe(false);
+    });
+    expect(screen.getByRole('group', { name: 'Workspace tools position' })).toBeInTheDocument();
+  });
+
   it('shows a recoverable startup state when settings cannot be loaded', async () => {
     window.janet.getSettings = vi.fn().mockRejectedValue(new Error('settings unavailable'));
 
@@ -346,7 +556,15 @@ describe('split panes in the app', () => {
       'JaneT could not load your workspace settings.',
     );
     fireEvent.click(screen.getByRole('button', { name: 'Use defaults' }));
+    const dialog = await screen.findByRole('alertdialog', { name: 'Use default settings?' });
+    expect(screen.queryByTestId('titlebar')).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('could not load');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use defaults' }));
+    await confirmPendingAction(/^use defaults$/i);
     expect(await screen.findByTestId('titlebar')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId(/terminal-/)).toHaveFocus());
   });
 
   it('maximizes a single pane within the terminal area and restores it to the split layout', async () => {
@@ -392,6 +610,7 @@ describe('split panes in the app', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    await confirmPendingAction(/^close pane$/i);
 
     await waitFor(() => {
       expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
@@ -532,7 +751,13 @@ describe('split panes in the app', () => {
       (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
     );
     expect(launchedTab).toBeTruthy();
+    (window.janet.setSettings as any).mockClear();
     act(() => rendererMocks.verticalTabBarProps.onSaveWorkspaceTab(launchedTab));
+    expect(window.janet.setSettings).not.toHaveBeenCalled();
+    expect(screen.getByRole('alertdialog', { name: 'Update preset “Forge workspace”?' })).toHaveTextContent(
+      'Replace the saved preset with this tab’s current layout',
+    );
+    await confirmPendingAction(/^update preset$/i);
     await waitFor(() => {
       const workspaceUpdates = (window.janet.setSettings as any).mock.calls
         .map((call: any[]) => call[0])
@@ -826,10 +1051,10 @@ describe('split panes in the app', () => {
     }));
 
     act(() => {
-      rendererMocks.sidebarProps.onSSHProfilesChange([{ ...profile, host: 'renamed-box.local' }]);
+      rendererMocks.verticalTabBarProps.onSSHProfilesChange([{ ...profile, host: 'renamed-box.local' }]);
     });
     await waitFor(() => {
-      expect(rendererMocks.sidebarProps.sshProfiles[0].host).toBe('renamed-box.local');
+      expect(rendererMocks.verticalTabBarProps.sshProfiles[0].host).toBe('renamed-box.local');
     });
     expect(window.janet.sshConnect).toHaveBeenCalledTimes(1);
 
@@ -1091,6 +1316,8 @@ describe('split panes in the app', () => {
     const sessionId = (window.janet.sshConnect as any).mock.calls[0][0].id as string;
 
     fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
+    await confirmPendingAction(/^close tab$/i);
     await waitFor(() => {
       expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: sessionId });
       expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
@@ -1151,6 +1378,8 @@ describe('split panes in the app', () => {
     const sessionId = (window.janet.sshConnect as any).mock.calls[0][0].id as string;
     const secondId = screen.getAllByTestId(/terminal-/)[1].textContent!;
     fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal tab)/i })[1]);
+    expect(window.janet.sshDestroyShell).not.toHaveBeenCalled();
+    await confirmPendingAction(/^close pane$/i);
 
     await waitFor(() => {
       expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
@@ -1161,6 +1390,8 @@ describe('split panes in the app', () => {
 
     const remainingId = screen.getByTestId(/terminal-/).textContent!;
     fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
+    await confirmPendingAction(/^close tab$/i);
 
     await waitFor(() => {
       expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: sessionId });

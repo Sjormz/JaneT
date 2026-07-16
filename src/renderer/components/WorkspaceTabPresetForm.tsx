@@ -19,6 +19,11 @@ import {
   MAX_STARTUP_COMMAND_TOTAL_LENGTH,
   sanitizeStartupCommands,
 } from '../../shared/startupCommands';
+import ConfirmationDialog from './ConfirmationDialog';
+
+type PendingPresetRemoval =
+  | { kind: 'terminal'; terminalIndex: number }
+  | { kind: 'command'; terminalIndex: number; commandIndex: number };
 
 export function sshProfileLabel(profile: SavedSSHProfile) {
   return `${profile.username ? `${profile.username}@` : ''}${profile.host}:${profile.port}`;
@@ -103,6 +108,7 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
   const [terminals, setTerminals] = useState<WorkspaceTerminal[]>([{ type: 'local' }]);
   const [openProfileIndex, setOpenProfileIndex] = useState<number | null>(null);
   const [openStartupIndices, setOpenStartupIndices] = useState<Set<number>>(new Set());
+  const [pendingRemoval, setPendingRemoval] = useState<PendingPresetRemoval | null>(null);
   const missingSshProfileIndex = terminals.findIndex((terminal) => (
     terminal.type === 'ssh'
     && (!terminal.sshProfileId || !sshProfiles.some((profile) => profile.id === terminal.sshProfileId))
@@ -121,6 +127,7 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
       sanitizeStartupCommands(terminal.startupCommands).length > 0 ? [index] : []
     ))));
     setOpenProfileIndex(null);
+    setPendingRemoval(null);
   }, [preset]);
 
   const updateTerminal = (index: number, next: WorkspaceTerminal) => {
@@ -199,6 +206,17 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
     });
   };
 
+  const confirmRemoval = () => {
+    const removal = pendingRemoval;
+    if (!removal) return;
+    setPendingRemoval(null);
+    if (removal.kind === 'terminal') {
+      removeTerminal(removal.terminalIndex);
+      return;
+    }
+    removeStartupCommand(removal.terminalIndex, removal.commandIndex);
+  };
+
   const moveStartupCommand = (terminalIndex: number, commandIndex: number, offset: -1 | 1) => {
     const terminal = terminals[terminalIndex];
     const commands = [...(terminal?.startupCommands ?? [])];
@@ -251,6 +269,7 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
   };
 
   return (
+    <>
     <form className="workspace-form" onSubmit={handleSubmit}>
       <label className="form-field">
         <span>Preset name</span>
@@ -263,7 +282,7 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
               <span className="workspace-terminal-label">Terminal {index + 1}</span>
               {terminals.length > 1 && (
                 <Tooltip label={`Remove terminal ${index + 1}`} placement="left">
-                  <button type="button" className="workspace-terminal-remove" aria-label={`Remove terminal ${index + 1}`} onClick={() => removeTerminal(index)}>
+                  <button type="button" className="workspace-terminal-remove" aria-label={`Remove terminal ${index + 1}`} onClick={() => setPendingRemoval({ kind: 'terminal', terminalIndex: index })}>
                     <XCloseIcon size="xs" />
                   </button>
                 </Tooltip>
@@ -345,7 +364,7 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
                               <button type="button" disabled={commandIndex === (terminal.startupCommands?.length ?? 0) - 1} aria-label={`Move startup command ${commandIndex + 1} down`} onClick={() => moveStartupCommand(index, commandIndex, 1)}><ArrowDownIcon size="xs" /></button>
                             </Tooltip>
                             <Tooltip label={`Remove startup command ${commandIndex + 1}`} placement="top">
-                              <button type="button" className="danger" aria-label={`Remove startup command ${commandIndex + 1}`} onClick={() => removeStartupCommand(index, commandIndex)}><XCloseIcon size="xs" /></button>
+                              <button type="button" className="danger" aria-label={`Remove startup command ${commandIndex + 1}`} onClick={() => setPendingRemoval({ kind: 'command', terminalIndex: index, commandIndex })}><XCloseIcon size="xs" /></button>
                             </Tooltip>
                           </div>
                         </li>
@@ -383,5 +402,20 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
       <button id={`${formId}-add-terminal`} className="workspace-add-btn" type="button" onClick={() => setTerminals((current) => [...current, { type: 'local' }])}><PlusIcon size="xs" /> Add terminal</button>
       <button className="connect-btn" type="submit" disabled={!canSubmit}>{submitLabel}</button>
     </form>
+    <ConfirmationDialog
+      open={pendingRemoval !== null}
+      title={pendingRemoval?.kind === 'terminal'
+        ? `Remove terminal ${pendingRemoval.terminalIndex + 1}?`
+        : pendingRemoval?.kind === 'command'
+          ? `Remove startup command ${pendingRemoval.commandIndex + 1}?`
+          : 'Remove preset item?'}
+      description={pendingRemoval?.kind === 'terminal'
+        ? 'Remove this terminal and its startup commands from the preset draft? The saved preset changes only after you save.'
+        : 'Remove this startup command from the preset draft? The saved preset changes only after you save.'}
+      confirmLabel={pendingRemoval?.kind === 'terminal' ? 'Remove terminal' : 'Remove command'}
+      onCancel={() => setPendingRemoval(null)}
+      onConfirm={confirmRemoval}
+    />
+    </>
   );
 }

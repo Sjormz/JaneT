@@ -138,6 +138,7 @@ export const PencilIcon = make(Pencil);
 export const TrashIcon = make(Trash2);
 export const SlidersIcon = make(Sliders);
 export const TypeIcon = make(Type);
+export const CopyIcon = make(Copy);
 export const ChevronsRightIcon = make(ChevronsRight);
 export const ChevronsDownIcon = make(ChevronsDown);
 export const ChevronsUpIcon = make(ChevronsUp);

@@ -14,6 +14,7 @@ interface ModalFocusOptions {
   containerRef: RefObject<HTMLElement | null>;
   onClose: () => void;
   initialFocusSelector?: string;
+  fallbackFocus?: () => HTMLElement | null;
 }
 
 /**
@@ -26,21 +27,31 @@ export function useModalFocus({
   containerRef,
   onClose,
   initialFocusSelector,
+  fallbackFocus,
 }: ModalFocusOptions): void {
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const fallbackFocusRef = useRef(fallbackFocus);
+  fallbackFocusRef.current = fallbackFocus;
 
   useEffect(() => {
     if (!open) return undefined;
 
     const container = containerRef.current;
     if (!container) return undefined;
+    const fallbackFocusAtOpen = fallbackFocusRef.current;
 
     const previousFocus = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
 
+    const isTopmostModal = () => {
+      const modals = Array.from(document.querySelectorAll<HTMLElement>('[aria-modal="true"]'));
+      return modals.length === 0 || modals[modals.length - 1] === container;
+    };
+
     const focusInitial = () => {
+      if (!isTopmostModal()) return;
       const preferred = initialFocusSelector
         ? container.querySelector<HTMLElement>(initialFocusSelector)
         : null;
@@ -50,6 +61,7 @@ export function useModalFocus({
     const focusFrame = requestAnimationFrame(focusInitial);
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isTopmostModal()) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
@@ -90,12 +102,15 @@ export function useModalFocus({
           active === document.body ||
           active === container ||
           (active instanceof HTMLElement && !active.isConnected);
+        const restoreTarget = previousFocus?.isConnected
+          ? previousFocus
+          : fallbackFocusAtOpen?.();
         if (
-          previousFocus?.isConnected &&
+          restoreTarget?.isConnected &&
           focusIsUnclaimed &&
           document.activeElement === active
         ) {
-          previousFocus.focus();
+          restoreTarget.focus();
         }
       });
     };

@@ -2,9 +2,13 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import GitTree from '../../src/renderer/components/GitTree';
 import { refreshCoordinator } from '../../src/renderer/refreshCoordinator';
+import { TERMINAL_PATH_MIME } from '../../src/renderer/terminalPathDrag';
 import type { GitStatusResult } from '../../src/renderer/useGitRepository';
 
 const gitDetails = vi.fn();
+const gitDeleteBranch = vi.fn();
+const gitRemoveWorktree = vi.fn();
+const gitPruneWorktrees = vi.fn();
 const getSettings = vi.fn(() => Promise.resolve({}));
 
 const cleanStatus: GitStatusResult = {
@@ -25,12 +29,42 @@ function details(branch: string) {
   };
 }
 
+const destructiveDetails = {
+  branches: [
+    { name: 'main', current: true, label: 'main', isRemote: false },
+    { name: 'feature/cleanup', current: false, label: 'feature/cleanup', isRemote: false },
+  ],
+  worktrees: [
+    { path: '/repo', head: 'abc123', branch: 'main', bare: false, detached: false },
+    { path: '/worktrees/repo-feature', head: 'def456', branch: 'feature/cleanup', bare: false, detached: false },
+  ],
+};
+
+function createDataTransfer() {
+  const data = new Map<string, string>();
+  const dataTransfer = {
+    effectAllowed: 'none',
+    setData: vi.fn((type: string, value: string) => data.set(type, value)),
+    getData: vi.fn((type: string) => data.get(type) ?? ''),
+  } as unknown as DataTransfer;
+  return { data, dataTransfer };
+}
+
 beforeEach(() => {
   gitDetails.mockReset();
+  gitDeleteBranch.mockReset().mockResolvedValue(true);
+  gitRemoveWorktree.mockReset().mockResolvedValue(true);
+  gitPruneWorktrees.mockReset().mockResolvedValue(true);
   getSettings.mockClear();
   Object.defineProperty(window, 'janet', {
     configurable: true,
-    value: { gitDetails, getSettings },
+    value: {
+      gitDetails,
+      gitDeleteBranch,
+      gitRemoveWorktree,
+      gitPruneWorktrees,
+      getSettings,
+    },
   });
 });
 
@@ -149,5 +183,175 @@ describe('GitTree live refresh', () => {
     expect(file.closest('.git-file-item')).toHaveClass('mixed');
     expect(file.closest('.git-file-item')).toHaveAttribute('aria-label', 'src/mixed.ts: Staged and modified in working tree');
     view.unmount();
+  });
+
+  it('drags flat changed files with an absolute local Source Control payload', () => {
+    gitDetails.mockResolvedValue(details('main'));
+    const changedStatus: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'src/mixed.ts', working_dir: 'M', index: 'M', staged: true, unstaged: true }],
+    };
+    const onCopyTerminalPath = vi.fn().mockResolvedValue(undefined);
+    const view = render(
+      <GitTree
+        cwdReady
+        isRemote={false}
+        repoPath="/repo"
+        status={changedStatus}
+        searching={false}
+        onCopyTerminalPath={onCopyTerminalPath}
+      />,
+    );
+    const row = screen.getByText('mixed.ts').closest('.git-file-item')!;
+    const { data, dataTransfer } = createDataTransfer();
+
+    expect(row).toHaveAttribute('draggable', 'true');
+    fireEvent.dragStart(row, { dataTransfer });
+
+    expect(dataTransfer.effectAllowed).toBe('copy');
+    expect(data.get('text/plain')).toBe('/repo/src/mixed.ts');
+    expect(JSON.parse(data.get(TERMINAL_PATH_MIME)!)).toEqual({
+      version: 1,
+      path: '/repo/src/mixed.ts',
+      entryKind: 'file',
+      origin: 'source-control',
+      filesystem: { kind: 'local' },
+    });
+    expect(row).toHaveAttribute('aria-label', 'src/mixed.ts: Staged and modified in working tree');
+    const copyButton = screen.getByRole('button', { name: 'Copy path for src/mixed.ts' });
+    expect(copyButton).not.toHaveAttribute('draggable', 'true');
+    fireEvent.click(copyButton);
+    expect(onCopyTerminalPath).toHaveBeenCalledWith('/repo/src/mixed.ts');
+
+    fireEvent.dragEnd(row, { dataTransfer });
+    view.unmount();
+  });
+
+  it('keeps the same changed-file drag payload in tree view without making action controls draggable', async () => {
+    gitDetails.mockResolvedValue(details('main'));
+    const changedStatus: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'src/nested/app.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
+    };
+    const onCopyTerminalPath = vi.fn().mockResolvedValue(undefined);
+    const view = render(
+      <GitTree
+        cwdReady
+        isRemote={false}
+        repoPath="C:/repo"
+        status={changedStatus}
+        searching={false}
+        onCopyTerminalPath={onCopyTerminalPath}
+      />,
+    );
+
+    const viewToggle = screen.getByRole('button', { name: 'Show changes as a folder tree' });
+    fireEvent.click(viewToggle);
+    const folder = screen.getByRole('button', { name: 'src' });
+    const row = screen.getByText('app.ts').closest('.git-file-item')!;
+    const { data, dataTransfer } = createDataTransfer();
+
+    fireEvent.dragStart(row, { dataTransfer });
+    expect(JSON.parse(data.get(TERMINAL_PATH_MIME)!)).toEqual({
+      version: 1,
+      path: 'C:/repo/src/nested/app.ts',
+      entryKind: 'file',
+      origin: 'source-control',
+      filesystem: { kind: 'local' },
+    });
+    expect(data.get('text/plain')).toBe('C:/repo/src/nested/app.ts');
+
+    expect(folder).not.toHaveAttribute('draggable');
+    expect(screen.getByRole('button', { name: 'Show changes as a flat list' })).not.toHaveAttribute('draggable');
+    expect(await screen.findByRole('button', { name: 'Current branch main' })).not.toHaveAttribute('draggable');
+    expect(await screen.findByRole('button', { name: 'Open worktree repo in a terminal' })).not.toHaveAttribute('draggable');
+    fireEvent.click(screen.getByRole('button', { name: 'Copy path for src/nested/app.ts' }));
+    expect(onCopyTerminalPath).toHaveBeenCalledWith('C:/repo/src/nested/app.ts');
+
+    fireEvent.dragEnd(row, { dataTransfer });
+    view.unmount();
+  });
+});
+
+describe('GitTree destructive actions', () => {
+  it('keeps branch deletion behind the dialog and restores its opener on Escape', async () => {
+    gitDetails.mockResolvedValue(destructiveDetails);
+    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={cleanStatus} searching={false} />);
+
+    const opener = await screen.findByRole('button', { name: 'Delete branch feature/cleanup' });
+    opener.focus();
+    fireEvent.click(opener);
+
+    const forceInput = screen.getByLabelText('Type FORCE to delete even with unmerged work. Leave blank for a safe delete.');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus());
+    expect(gitDeleteBranch).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(forceInput, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Delete feature/cleanup' })).not.toBeInTheDocument();
+    expect(gitDeleteBranch).not.toHaveBeenCalled();
+    await waitFor(() => expect(opener).toHaveFocus());
+
+    fireEvent.click(opener);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(gitDeleteBranch).toHaveBeenCalledWith({
+      repoPath: '/repo',
+      branch: 'feature/cleanup',
+      force: false,
+    }));
+  });
+
+  it('keeps worktree removal behind cancel and forwards explicit force confirmation', async () => {
+    gitDetails.mockResolvedValue(destructiveDetails);
+    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={cleanStatus} searching={false} />);
+
+    const opener = await screen.findByRole('button', { name: 'Remove worktree repo-feature' });
+    fireEvent.click(opener);
+
+    const forceInput = screen.getByLabelText('Type FORCE to remove even with local changes. Leave blank for a safe removal.');
+    expect(screen.getByRole('dialog', { name: 'Remove repo-feature' })).toHaveAccessibleDescription(
+      /Remove the Git worktree at \/worktrees\/repo-feature.*deletes that worktree directory/i,
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus());
+    expect(gitRemoveWorktree).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(gitRemoveWorktree).not.toHaveBeenCalled();
+
+    fireEvent.click(opener);
+    fireEvent.change(screen.getByLabelText('Type FORCE to remove even with local changes. Leave blank for a safe removal.'), {
+      target: { value: 'FORCE' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(gitRemoveWorktree).toHaveBeenCalledWith({
+      repoPath: '/repo',
+      worktreePath: '/worktrees/repo-feature',
+      force: true,
+    }));
+  });
+
+  it('focuses Cancel and keeps pruning behind a descriptive confirmation', async () => {
+    gitDetails.mockResolvedValue(destructiveDetails);
+    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={cleanStatus} searching={false} />);
+
+    const openPruneDialog = () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Worktree actions' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Prune stale worktrees…' }));
+    };
+
+    openPruneDialog();
+    const dialog = screen.getByRole('dialog', { name: 'Prune stale worktrees' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAccessibleDescription(/Working directories are not deleted/i);
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    await waitFor(() => expect(cancel).toHaveFocus());
+    expect(gitPruneWorktrees).not.toHaveBeenCalled();
+
+    fireEvent.click(cancel);
+    expect(gitPruneWorktrees).not.toHaveBeenCalled();
+
+    openPruneDialog();
+    fireEvent.click(screen.getByRole('button', { name: 'Prune' }));
+    await waitFor(() => expect(gitPruneWorktrees).toHaveBeenCalledWith({ repoPath: '/repo' }));
   });
 });

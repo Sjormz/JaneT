@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { SavedSSHProfile, SessionInfo } from '../types';
 import { PlusIcon, XCloseIcon, ServerIcon, AlertIcon, PlugIcon, PencilIcon, TrashIcon } from '../icons';
+import ConfirmationDialog from './ConfirmationDialog';
 import Tooltip from './Tooltip';
 
 interface SSHManagerProps {
@@ -48,6 +49,8 @@ export default function SSHManager({
   const [formError, setFormError] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<{ label: string; message: string } | null>(null);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const [profilePendingRemoval, setProfilePendingRemoval] = useState<SavedSSHProfile | null>(null);
+  const newConnectionButtonRef = useRef<HTMLButtonElement>(null);
 
   const resetForm = () => {
     setHost('');
@@ -155,8 +158,10 @@ export default function SSHManager({
     }
   };
 
-  const forgetProfile = (profileIdToRemove: string) => {
-    onProfilesChange(sshProfiles.filter((profile) => profile.id !== profileIdToRemove));
+  const forgetProfile = () => {
+    if (!profilePendingRemoval) return;
+    onProfilesChange(sshProfiles.filter((profile) => profile.id !== profilePendingRemoval.id));
+    setProfilePendingRemoval(null);
   };
 
   const hasSavedProfiles = sshProfiles.length > 0;
@@ -182,6 +187,7 @@ export default function SSHManager({
         <span className="section-title">SSH connections</span>
         <Tooltip label={formToggleLabel} placement="left">
           <button
+            ref={newConnectionButtonRef}
             className="icon-btn"
             onClick={toggleForm}
             aria-label={formToggleLabel}
@@ -319,7 +325,7 @@ export default function SSHManager({
                       </button>
                     </Tooltip>
                     <Tooltip label={`Remove ${connectionLabel(profile)}`} placement="top">
-                      <button type="button" className="session-action-btn danger" onClick={() => forgetProfile(profile.id)} aria-label={`Remove ${connectionLabel(profile)}`}>
+                      <button type="button" className="session-action-btn danger" onClick={() => setProfilePendingRemoval(profile)} aria-label={`Remove ${connectionLabel(profile)}`}>
                         <TrashIcon size="sm" />
                       </button>
                     </Tooltip>
@@ -341,6 +347,17 @@ export default function SSHManager({
           </div>
         )}
       </div>
+      <ConfirmationDialog
+        open={profilePendingRemoval !== null}
+        title="Remove saved connection?"
+        description={profilePendingRemoval
+          ? `Remove ${connectionLabel(profilePendingRemoval)} and its saved credentials? Active sessions stay open, but saved tabs and presets cannot reconnect until you save this connection again.`
+          : ''}
+        confirmLabel="Remove connection"
+        fallbackFocus={() => newConnectionButtonRef.current}
+        onConfirm={forgetProfile}
+        onCancel={() => setProfilePendingRemoval(null)}
+      />
     </div>
   );
 }

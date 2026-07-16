@@ -66,6 +66,27 @@ function openAllowedExternalUrl(url: string): boolean {
   return true;
 }
 
+// A validated 32,768-character path can expand up to 4x when POSIX single
+// quotes are escaped, plus the surrounding quotes and trailing separator.
+const MAX_CLIPBOARD_TEXT_LENGTH = 131_075;
+const UNSAFE_CLIPBOARD_TEXT = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
+
+export function copyTextToClipboard(
+  text: unknown,
+  writeText: (safeText: string) => void = (safeText) => electron.clipboard.writeText(safeText),
+): boolean {
+  if (
+    typeof text !== 'string'
+    || text.length === 0
+    || text.length > MAX_CLIPBOARD_TEXT_LENGTH
+    || UNSAFE_CLIPBOARD_TEXT.test(text)
+  ) {
+    return false;
+  }
+  writeText(text);
+  return true;
+}
+
 function workspaceWindow(window: electron.BrowserWindow): WorkspaceWindow {
   return {
     close: () => {
@@ -166,6 +187,44 @@ function showOrCreateWindow(): void {
   createWindow();
 }
 
+export async function confirmStopAllFromTray(
+  stopAllAndQuit: () => Promise<void> = () => workspaceLifecycle.stopFromTray(),
+): Promise<boolean> {
+  const { response } = await electron.dialog.showMessageBox({
+    type: 'warning',
+    title: 'Stop all terminals and quit?',
+    message: 'Stop all JaneT-managed terminals and SSH connections?',
+    detail: 'Running commands and interactive sessions will be ended. Remote jobs detached with tools such as tmux, nohup, systemd, or disown may continue on the remote machine.',
+    buttons: ['Cancel', 'Stop all and quit'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+    normalizeAccessKeys: true,
+  });
+  if (response !== 1) return false;
+  await stopAllAndQuit();
+  return true;
+}
+
+export function backgroundTrayMenuTemplate(
+  openWindow: () => void = showOrCreateWindow,
+  confirmStop: () => Promise<boolean> = () => confirmStopAllFromTray(),
+) {
+  return [
+    { label: 'Open JaneT', click: openWindow },
+    { type: 'separator' as const },
+    {
+      label: 'Stop all and quit',
+      click: () => {
+        void confirmStop().catch((error) => {
+          console.error('[workspace] failed to stop background services:', error);
+          electron.dialog.showErrorBox('Could not stop services', error instanceof Error ? error.message : String(error));
+        });
+      },
+    },
+  ];
+}
+
 function ensureBackgroundTray(): boolean {
   if (backgroundTray) return true;
   let tray: electron.Tray | null = null;
@@ -179,19 +238,7 @@ function ensureBackgroundTray(): boolean {
     }
     tray = new electron.Tray(image);
     tray.setToolTip('JaneT — terminals and SSH connections are running');
-    tray.setContextMenu(electron.Menu.buildFromTemplate([
-      { label: 'Open JaneT', click: showOrCreateWindow },
-      { type: 'separator' },
-      {
-        label: 'Stop all and quit',
-        click: () => {
-          void workspaceLifecycle.stopFromTray().catch((error) => {
-            console.error('[workspace] failed to stop background services:', error);
-            electron.dialog.showErrorBox('Could not stop services', error instanceof Error ? error.message : String(error));
-          });
-        },
-      },
-    ]));
+    tray.setContextMenu(electron.Menu.buildFromTemplate(backgroundTrayMenuTemplate()));
     tray.on('click', showOrCreateWindow);
     tray.on('double-click', showOrCreateWindow);
     backgroundTray = tray;
@@ -603,6 +650,10 @@ function registerIpcHandlers() {
     if (typeof url !== 'string' || !isAllowedExternalUrl(url)) return false;
     await electron.shell.openExternal(url);
     return true;
+  });
+
+  handle('app:copyText', (event, text: unknown) => {
+    return copyTextToClipboard(text);
   });
 
   // === Window controls (for custom titlebar) ===

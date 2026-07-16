@@ -74,8 +74,8 @@ export default function ThemeSwitcher({
       </div>
 
       <div className="theme-section">
-        <span className="theme-label">Sidebar position</span>
-        <div className="theme-options" role="group" aria-label="Sidebar position">
+        <span className="theme-label">Workspace tools position</span>
+        <div className="theme-options" role="group" aria-label="Workspace tools position">
           <button
             className={`theme-option ${sidebarSide === 'left' ? 'active' : ''}`}
             onClick={() => onSidebarSideChange('left')}

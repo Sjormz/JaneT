@@ -8,10 +8,12 @@ import {
 } from '../keybindings';
 import { PencilIcon } from '../icons';
 import Tooltip from './Tooltip';
+import ConfirmationDialog from './ConfirmationDialog';
 
 export default function ShortcutEditor() {
   const { bindings, setBinding, resetDefaults } = useKeybindings();
   const [capturing, setCapturing] = useState<KeybindingAction | null>(null);
+  const [confirmingReset, setConfirmingReset] = useState(false);
   const captureInputRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -77,9 +79,20 @@ export default function ShortcutEditor() {
           </div>
         ))}
       </div>
-      <button className="shortcut-reset-btn" onClick={resetDefaults}>
+      <button className="shortcut-reset-btn" onClick={() => setConfirmingReset(true)}>
         Reset shortcuts to defaults
       </button>
+      <ConfirmationDialog
+        open={confirmingReset}
+        title="Reset all keyboard shortcuts?"
+        description="This replaces every custom keyboard shortcut with JaneT’s defaults."
+        confirmLabel="Reset shortcuts"
+        onConfirm={() => {
+          setConfirmingReset(false);
+          resetDefaults();
+        }}
+        onCancel={() => setConfirmingReset(false)}
+      />
     </div>
   );
 }
