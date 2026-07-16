@@ -1,6 +1,6 @@
 {
   "name": "janet",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "description": "A focused cross-platform terminal workspace with SSH, file browsing, Git tools, and durable sessions",
   "desktopName": "janet",
   "main": "dist/main/index.js",
@@ -8,7 +8,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "postinstall": "node scripts/fix-node-pty-permissions.mjs",
+    "postinstall": "node scripts/fix-node-pty-permissions.mjs && node scripts/patch-node-pty-windows-worker.mjs",
     "dev": "node scripts/dev.mjs",
     "build:main": "node scripts/build-electron.mjs --main",
     "build:preload": "node scripts/build-electron.mjs --preload",
