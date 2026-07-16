@@ -8,6 +8,8 @@ const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
 const PACKAGED_PTY_MARKER = '__JANET_PACKAGED_PTY_OK__';
+const PACKAGED_PTY_READY = '__JANET_PACKAGED_PTY_READY__';
+export const PACKAGED_RUNTIME_TIMEOUT_MS = 60_000;
 
 export function normalizeReleasePlatform(value) {
   if (value === 'windows' || value === 'win32' || value === 'win') return 'windows';
@@ -51,6 +53,7 @@ export function packagedRuntime(platformValue, releaseRoot, hostArch = process.a
     return {
       executable: path.join(appRoot, 'JaneT.exe'),
       nodePtyRoot: path.join(appRoot, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty'),
+      nodePtyModule: path.join(appRoot, 'resources', 'app.asar', 'node_modules', 'node-pty'),
     };
   }
   if (platform === 'macos') {
@@ -61,6 +64,7 @@ export function packagedRuntime(platformValue, releaseRoot, hostArch = process.a
   return {
     executable: path.join(appRoot, 'janet'),
     nodePtyRoot: path.join(appRoot, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty'),
+    nodePtyModule: path.join(appRoot, 'resources', 'app.asar', 'node_modules', 'node-pty'),
   };
 }
 
@@ -74,6 +78,7 @@ export function macPackagedRuntimes(releaseRoot) {
       arch,
       executable: path.join(appRoot, 'MacOS', 'JaneT'),
       nodePtyRoot: path.join(appRoot, 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty'),
+      nodePtyModule: path.join(appRoot, 'Resources', 'app.asar', 'node_modules', 'node-pty'),
     };
   });
 }
@@ -125,16 +130,19 @@ export async function verifyMacApplications(releaseRoot) {
     if (!fs.existsSync(appPath)) throw new Error(`Missing packaged macOS application: ${appPath}`);
     await execFileAsync('codesign', ['--verify', '--deep', '--strict', appPath]);
     const { stdout, stderr } = await execFileAsync('codesign', ['-dvv', appPath]);
-    const details = `${stdout}\n${stderr}`;
-    if (!/^Authority=Developer ID Application:/m.test(details)) {
-      throw new Error(`macOS app is not signed with a Developer ID Application identity: ${appPath}`);
-    }
-    if (/^TeamIdentifier=not set$/m.test(details) || !/^TeamIdentifier=\S+/m.test(details)) {
-      throw new Error(`macOS app has no signing team identifier: ${appPath}`);
-    }
-    if (!/^CodeDirectory .*flags=.*\bruntime\b/m.test(details)) {
-      throw new Error(`macOS app is not signed with hardened runtime enabled: ${appPath}`);
-    }
+    validateAdHocMacSignature(`${stdout}\n${stderr}`, appPath);
+  }
+}
+
+export function validateAdHocMacSignature(details, appPath = 'macOS application') {
+  if (!/^Signature=adhoc$/m.test(details)) {
+    throw new Error(`macOS app is not ad-hoc signed: ${appPath}`);
+  }
+  if (/^Authority=/m.test(details)) {
+    throw new Error(`Ad-hoc macOS app unexpectedly has a certificate authority: ${appPath}`);
+  }
+  if (!/^TeamIdentifier=not set$/m.test(details)) {
+    throw new Error(`Ad-hoc macOS app unexpectedly has a team identifier: ${appPath}`);
   }
 }
 
@@ -187,6 +195,7 @@ export async function smokeTerminalRuntime(runtime) {
   const smokeProgram = String.raw`
 const pty = require(process.argv[1]);
 const marker = process.argv[2];
+const ready = process.argv[3];
 let terminal;
 let received = '';
 const timeout = setTimeout(() => {
@@ -195,7 +204,8 @@ const timeout = setTimeout(() => {
   process.exit(2);
 }, 5000);
 try {
-  terminal = pty.spawn(process.execPath, ['-e', 'process.stdout.write(' + JSON.stringify(marker) + ')'], {
+  const childProgram = 'process.stdin.once("data",()=>{process.stdin.pause();process.stdout.write(' + JSON.stringify(marker) + ')});process.stdout.write(' + JSON.stringify(ready) + ')';
+  terminal = pty.spawn(process.execPath, ['-e', childProgram], {
     name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd(),
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', TERM: 'xterm-256color' },
   });
@@ -215,14 +225,18 @@ terminal.onExit(({ exitCode }) => {
     process.stdout.write(marker);
   }, 25);
 });
+terminal.write('\r');
 `;
 
   const { stdout, stderr } = await execFileAsync(runtime.executable, [
-    '-e', smokeProgram, runtime.nodePtyRoot, PACKAGED_PTY_MARKER,
+    '-e', smokeProgram, runtime.nodePtyModule, PACKAGED_PTY_MARKER, PACKAGED_PTY_READY,
   ], {
     cwd: projectRoot,
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-    timeout: 15_000,
+    // A cold Rosetta translation of the x64 Electron executable can exceed 15
+    // seconds. Once JavaScript starts, the inner five-second PTY timer still
+    // enforces the functional launch contract.
+    timeout: PACKAGED_RUNTIME_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
   });
   if (!stdout.includes(PACKAGED_PTY_MARKER)) {

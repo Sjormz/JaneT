@@ -18,7 +18,7 @@ When a `v*` tag is pushed, `.github/workflows/release.yml`:
 4. Builds release artifacts on Linux, macOS, and Windows.
 5. Verifies the exact installer/update-metadata set and starts a real PTY with
    each runner's packaged Electron runtime.
-6. Verifies both macOS architectures use hardened Developer ID signatures.
+6. Verifies both macOS architectures use ad-hoc code signatures.
 7. Uploads installers and update metadata to the matching GitHub Release.
 
 The app uses `electron-updater` with GitHub Releases, so the generated `latest*.yml` assets must stay attached to the release.
@@ -27,22 +27,22 @@ release check executes the host-architecture macOS PTY, attempts the x64 PTY on
 Apple Silicon when Rosetta is available, and always validates both architecture
 bundles' native module/helper layout and executable permissions.
 
-### macOS release credentials
+### macOS release signing
 
-Public macOS artifacts are signed and notarized. Configure these repository
-secrets before creating a release tag:
+macOS release artifacts are deliberately ad-hoc signed and are not notarized.
+The release workflow passes `identity=-`, disables hardened runtime and
+notarization, disables automatic certificate discovery, and preserves
+node-pty's packaged Darwin prebuilds, including their existing signatures,
+instead of rebuilding or recursively re-signing those two native files. No
+Apple signing credentials are required for this release profile. `npm run
+dist:mac:test` uses the same settings for local smoke packages.
 
-- `MAC_CSC_LINK`: the Developer ID Application certificate (`.p12`) as a path,
-  URL, or base64 value accepted by electron-builder
-- `MAC_CSC_KEY_PASSWORD`: the certificate password
-- `APPLE_ID`: the Apple account used for notarization
-- `APPLE_APP_SPECIFIC_PASSWORD`: an app-specific password for that account
-- `APPLE_TEAM_ID`: the Apple Developer team identifier
-
-The release job fails before packaging when any credential is missing, and it
-rejects ad-hoc or non-hardened application bundles after packaging. For an
-explicit unsigned local smoke package, use `npm run dist:mac:test`; never
-publish artifacts from that command.
+An ad-hoc signature verifies code integrity, but it does not establish a
+trusted developer identity or satisfy Gatekeeper's normal trust checks.
+Downloaded builds can therefore show a security warning or require the user to
+open JaneT explicitly from Finder. This is an alpha-stage distribution policy;
+a future generally trusted macOS release must restore Developer ID signing and
+Apple notarization.
 
 ## Required repository ruleset
 
