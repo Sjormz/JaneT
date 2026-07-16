@@ -1,12 +1,11 @@
 import React from "react";
 import { SessionInfo } from "../types";
-import { CircleDotIcon, TerminalTabIcon, FolderIcon, SourceControlIcon } from "../icons";
+import { ArrowDownIcon, ArrowUpIcon, CircleDotIcon, CircleIcon, FolderIcon, SourceControlIcon } from "../icons";
 import { formatGitStatusTitle, GitStatusSummary } from "../gitStatus";
-import packageJson from "../../../package.json";
+import Tooltip from './Tooltip';
 
 interface StatusBarProps {
   sshSessions: SessionInfo[];
-  activeTerminalsCount: number;
   /** The cwd of the focused terminal. */
   cwd: string;
   gitStatus?: GitStatusSummary | null;
@@ -18,7 +17,6 @@ interface StatusBarProps {
 
 export default function StatusBar({
   sshSessions,
-  activeTerminalsCount,
   cwd,
   gitStatus,
   isRemote,
@@ -27,42 +25,38 @@ export default function StatusBar({
   return (
     <div className="status-bar">
       <div className="status-left">
-        <span className="status-item">
-          <TerminalTabIcon size="xs" /> v{packageJson.version}
-        </span>
         {sshSessions.length > 0 && (
           <span className="status-item">
             <CircleDotIcon size="xs" className="status-ssh-dot" />
-            {sshSessions.length} SSH
+            {sshSessions.length} SSH connection{sshSessions.length === 1 ? '' : 's'}
           </span>
         )}
-        {cwd && (
-          <span className="status-item status-cwd" title={cwd}>
-            <FolderIcon size="xs" />
-            {isRemote && remoteHost ? (
-              <span className="status-cwd-remote">
-                {remoteHost}: {cwd}
-              </span>
-            ) : (
+        {isRemote && remoteHost ? (
+          <Tooltip label={`Connected to ${remoteHost}; working directory unavailable`} placement="top">
+            <span className="status-item status-cwd status-cwd-remote" aria-label={`SSH connection to ${remoteHost}; working directory unavailable`}>
+              <FolderIcon size="xs" />
+              <span>SSH · {remoteHost}</span>
+            </span>
+          </Tooltip>
+        ) : cwd && (
+          <Tooltip label={cwd} placement="top">
+            <span className="status-item status-cwd" aria-label={`Working directory: ${cwd}`}>
+              <FolderIcon size="xs" />
               <span className="status-cwd-local">{cwd}</span>
-            )}
-          </span>
+            </span>
+          </Tooltip>
         )}
         {gitStatus && (
-          <span className="status-item status-git" title={formatGitStatusTitle(gitStatus)}>
-            <SourceControlIcon size="xs" />
-            <span>{gitStatus.branch}</span>
-            {gitStatus.changed > 0 && <span className="status-git-dirty">● {gitStatus.changed}</span>}
-            {gitStatus.ahead > 0 && <span className="status-git-ahead">↑{gitStatus.ahead}</span>}
-            {gitStatus.behind > 0 && <span className="status-git-behind">↓{gitStatus.behind}</span>}
-          </span>
+          <Tooltip label={formatGitStatusTitle(gitStatus)} placement="top">
+            <span className="status-item status-git" aria-label={formatGitStatusTitle(gitStatus)}>
+              <SourceControlIcon size="xs" />
+              <span>{gitStatus.branch}</span>
+              {gitStatus.changed > 0 && <span className="status-git-dirty"><CircleIcon size={6} /> {gitStatus.changed}</span>}
+              {gitStatus.ahead > 0 && <span className="status-git-ahead"><ArrowUpIcon size="xs" />{gitStatus.ahead}</span>}
+              {gitStatus.behind > 0 && <span className="status-git-behind"><ArrowDownIcon size="xs" />{gitStatus.behind}</span>}
+            </span>
+          </Tooltip>
         )}
-      </div>
-      <div className="status-right">
-        <span className="status-item">
-          {activeTerminalsCount} terminal{activeTerminalsCount !== 1 ? "s" : ""}
-        </span>
-        <span className="status-item platform">{navigator.platform}</span>
       </div>
     </div>
   );

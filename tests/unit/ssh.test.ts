@@ -30,6 +30,185 @@ const mocks = {
   lastClient: null as MiniEmitter | null,
 };
 
+interface MockRemoteFile {
+  bytes: Buffer;
+  mtime: number;
+  mode: number;
+  uid: number;
+  gid: number;
+}
+
+function remoteAttrs(file: MockRemoteFile) {
+  return {
+    size: file.bytes.byteLength,
+    mtime: file.mtime,
+    atime: file.mtime,
+    mode: file.mode,
+    uid: file.uid,
+    gid: file.gid,
+    isFile: () => true,
+    isDirectory: () => false,
+    isBlockDevice: () => false,
+    isCharacterDevice: () => false,
+    isSymbolicLink: () => false,
+    isFIFO: () => false,
+    isSocket: () => false,
+  };
+}
+
+function createTextFileSftp(initial: Record<string, string | Buffer>) {
+  let clock = 10;
+  let nextHandle = 1;
+  const files = new Map<string, MockRemoteFile>(
+    Object.entries(initial).map(([path, content]) => [
+      path,
+      { bytes: Buffer.from(content), mtime: clock++, mode: 0o100644, uid: 1000, gid: 1000 },
+    ]),
+  );
+  const handles = new Map<string, string>();
+  const missing = () => Object.assign(new Error('No such file'), { code: 2 });
+
+  const sftp = {
+    end: vi.fn(),
+    realpath: vi.fn((remotePath: string, callback: (error?: Error, path?: string) => void) => {
+      callback(files.has(remotePath) ? undefined : missing(), files.has(remotePath) ? remotePath : undefined);
+    }),
+    stat: vi.fn((remotePath: string, callback: (error?: Error, attrs?: ReturnType<typeof remoteAttrs>) => void) => {
+      const file = files.get(remotePath);
+      callback(file ? undefined : missing(), file ? remoteAttrs(file) : undefined);
+    }),
+    open: vi.fn((remotePath: string, flags: string, attrsOrCallback: unknown, maybeCallback?: Function) => {
+      const callback = (typeof attrsOrCallback === 'function' ? attrsOrCallback : maybeCallback) as Function;
+      if (flags === 'r') {
+        if (!files.has(remotePath)) {
+          callback(missing());
+          return;
+        }
+      } else if (flags === 'wx') {
+        if (files.has(remotePath)) {
+          callback(Object.assign(new Error('Failure'), { code: 4 }));
+          return;
+        }
+        const mode = typeof attrsOrCallback === 'object' && attrsOrCallback
+          ? Number((attrsOrCallback as { mode?: number }).mode) || 0o600
+          : 0o600;
+        files.set(remotePath, {
+          bytes: Buffer.alloc(0),
+          mtime: clock++,
+          mode: 0o100000 | mode,
+          uid: 1000,
+          gid: 1000,
+        });
+      } else {
+        callback(new Error(`Unexpected open flags: ${flags}`));
+        return;
+      }
+      const handle = Buffer.from(`handle-${nextHandle++}`);
+      handles.set(handle.toString('hex'), remotePath);
+      callback(undefined, handle);
+    }),
+    close: vi.fn((_handle: Buffer, callback: (error?: Error) => void) => callback()),
+    fstat: vi.fn((handle: Buffer, callback: (error?: Error, attrs?: ReturnType<typeof remoteAttrs>) => void) => {
+      const file = files.get(handles.get(handle.toString('hex')) || '');
+      callback(file ? undefined : missing(), file ? remoteAttrs(file) : undefined);
+    }),
+    fsetstat: vi.fn((
+      handle: Buffer,
+      attrs: { mode?: number },
+      callback: (error?: Error) => void,
+    ) => {
+      const file = files.get(handles.get(handle.toString('hex')) || '');
+      if (!file) {
+        callback(missing());
+        return;
+      }
+      if (Number.isSafeInteger(attrs.mode)) {
+        file.mode = (file.mode & ~0o7777) | (Number(attrs.mode) & 0o7777);
+      }
+      callback();
+    }),
+    read: vi.fn((
+      handle: Buffer,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number,
+      callback: (error: Error | undefined, bytesRead: number, buffer: Buffer, position: number) => void,
+    ) => {
+      const file = files.get(handles.get(handle.toString('hex')) || '');
+      if (!file) {
+        callback(missing(), 0, buffer, position);
+        return;
+      }
+      const bytesRead = Math.min(length, Math.max(0, file.bytes.byteLength - position));
+      file.bytes.copy(buffer, offset, position, position + bytesRead);
+      callback(undefined, bytesRead, buffer, position);
+    }),
+    write: vi.fn((
+      handle: Buffer,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number,
+      callback: (error?: Error) => void,
+    ) => {
+      const path = handles.get(handle.toString('hex')) || '';
+      const file = files.get(path);
+      if (!file) {
+        callback(missing());
+        return;
+      }
+      const next = Buffer.alloc(Math.max(file.bytes.byteLength, position + length));
+      file.bytes.copy(next);
+      buffer.copy(next, position, offset, offset + length);
+      file.bytes = next;
+      file.mtime = clock++;
+      callback();
+    }),
+    ext_openssh_rename: vi.fn((sourcePath: string, destinationPath: string, callback: (error?: Error) => void) => {
+      const source = files.get(sourcePath);
+      if (!source) {
+        callback(missing());
+        return;
+      }
+      files.set(destinationPath, source);
+      files.delete(sourcePath);
+      callback();
+    }),
+    ext_openssh_fsync: vi.fn((_handle: Buffer, callback: (error?: Error) => void) => callback()),
+    unlink: vi.fn((remotePath: string, callback: (error?: Error) => void) => {
+      files.delete(remotePath);
+      callback();
+    }),
+  };
+
+  return {
+    sftp,
+    files,
+    setFile(remotePath: string, content: string | Buffer) {
+      const previous = files.get(remotePath);
+      files.set(remotePath, {
+        bytes: Buffer.from(content),
+        mtime: clock++,
+        mode: previous?.mode ?? 0o100644,
+        uid: previous?.uid ?? 1000,
+        gid: previous?.gid ?? 1000,
+      });
+    },
+    setMode(remotePath: string, mode: number) {
+      const file = files.get(remotePath);
+      if (!file) throw new Error(`Missing mock remote file: ${remotePath}`);
+      file.mode = 0o100000 | mode;
+    },
+    setOwner(remotePath: string, uid: number, gid: number) {
+      const file = files.get(remotePath);
+      if (!file) throw new Error(`Missing mock remote file: ${remotePath}`);
+      file.uid = uid;
+      file.gid = gid;
+    },
+  };
+}
+
 async function loadSSHManager() {
   vi.resetModules();
   vi.doMock('ssh2', () => {
@@ -59,6 +238,211 @@ beforeEach(() => {
 });
 
 describe('SSHManager', () => {
+  it('dispatches one compiled startup expression after the SSH shell is ready', async () => {
+    const stream = new MockShellStream();
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, stream?: MockShellStream) => void) => {
+      cb(undefined, stream);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    const first = manager.createShell(
+      'startup-session', 'startup-term', { cols: 80, rows: 24 },
+      ['hermes doctor', 'hermes --tui'], 'posix',
+    );
+    const second = manager.createShell(
+      'startup-session', 'startup-term', { cols: 80, rows: 24 },
+      ['hermes doctor', 'hermes --tui'], 'posix',
+    );
+    await Promise.all([first.ready, second.ready]);
+
+    expect(mocks.shellMock).toHaveBeenCalledTimes(1);
+    expect(stream.write).toHaveBeenCalledTimes(1);
+    expect(stream.write).toHaveBeenCalledWith(
+      "eval 'hermes doctor' && eval 'hermes --tui'\r",
+    );
+  });
+
+  it('cancels pending startup when the user types before the SSH channel opens', async () => {
+    const stream = new MockShellStream();
+    let openShell: ((err: Error | undefined, stream?: MockShellStream) => void) | undefined;
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: typeof openShell) => {
+      openShell = cb;
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-manual-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const handle = manager.createShell(
+      'startup-manual-session', 'startup-manual-term', { cols: 80, rows: 24 }, ['hermes --tui'], 'posix',
+    );
+
+    manager.writeShell('startup-manual-term', 'manual input', 'startup-manual-session');
+    openShell?.(undefined, stream);
+    await handle.ready;
+
+    expect(stream.write.mock.calls).toEqual([['manual input']]);
+  });
+
+  it('keeps pending startup when an automatic terminal reply arrives first', async () => {
+    const stream = new MockShellStream();
+    let openShell: ((err: Error | undefined, stream?: MockShellStream) => void) | undefined;
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: typeof openShell) => {
+      openShell = cb;
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-reply-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const handle = manager.createShell(
+      'startup-reply-session', 'startup-reply-term', { cols: 80, rows: 24 }, ['hermes --tui'], 'posix',
+    );
+
+    manager.writeShell('startup-reply-term', '\x1b[1;1R', 'startup-reply-session', false);
+    openShell?.(undefined, stream);
+    await handle.ready;
+
+    expect(stream.write.mock.calls).toEqual([
+      ["eval 'hermes --tui'\r"],
+      ['\x1b[1;1R'],
+    ]);
+  });
+
+  it('does not replay startup commands when a shell channel is recreated for the same pane', async () => {
+    const streams = [new MockShellStream(), new MockShellStream()];
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, stream?: MockShellStream) => void) => {
+      cb(undefined, streams[mocks.shellMock.mock.calls.length - 1]);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-retry-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    await manager.createShell(
+      'startup-retry-session', 'startup-retry-term', { cols: 80, rows: 24 }, ['first'], 'posix',
+    ).ready;
+    streams[0].emit('close');
+    await manager.createShell(
+      'startup-retry-session', 'startup-retry-term', { cols: 80, rows: 24 }, ['first'], 'posix',
+    ).ready;
+
+    expect(streams[0].write).toHaveBeenCalledWith("eval 'first'\r");
+    expect(streams[1].write).not.toHaveBeenCalled();
+  });
+
+  it('keeps exact-once state when a stale session tries to destroy the pane', async () => {
+    const streams = [new MockShellStream(), new MockShellStream()];
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, stream?: MockShellStream) => void) => {
+      cb(undefined, streams[mocks.shellMock.mock.calls.length - 1]);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-owned-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    await manager.createShell(
+      'startup-owned-session', 'startup-owned-term', { cols: 80, rows: 24 }, ['first'], 'posix',
+    ).ready;
+    expect(manager.destroyShell('startup-owned-term', 'stale-session')).toBe(false);
+
+    streams[0].emit('close');
+    await manager.createShell(
+      'startup-owned-session', 'startup-owned-term', { cols: 80, rows: 24 }, ['first'], 'posix',
+    ).ready;
+
+    expect(streams[0].write).toHaveBeenCalledWith("eval 'first'\r");
+    expect(streams[1].write).not.toHaveBeenCalled();
+  });
+
+  it('does not replay startup commands after the SSH transport reconnects', async () => {
+    const streams = [new MockShellStream(), new MockShellStream()];
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, stream?: MockShellStream) => void) => {
+      cb(undefined, streams[mocks.shellMock.mock.calls.length - 1]);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-transport-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell(
+      'startup-transport-session', 'startup-transport-term', { cols: 80, rows: 24 }, ['first'], 'posix',
+    ).ready;
+
+    mocks.lastClient?.emit('close');
+    await manager.connect('startup-transport-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell(
+      'startup-transport-session', 'startup-transport-term', { cols: 80, rows: 24 }, ['first'], 'posix',
+    ).ready;
+
+    expect(streams[0].write).toHaveBeenCalledWith("eval 'first'\r");
+    expect(streams[1].write).not.toHaveBeenCalled();
+  });
+
+  it('allows startup commands again after explicit pane destruction', async () => {
+    const streams = [new MockShellStream(), new MockShellStream()];
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, stream?: MockShellStream) => void) => {
+      cb(undefined, streams[mocks.shellMock.mock.calls.length - 1]);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-destroy-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    await manager.createShell(
+      'startup-destroy-session', 'startup-destroy-term', { cols: 80, rows: 24 }, ['first'], 'posix',
+    ).ready;
+    manager.destroyShell('startup-destroy-term', 'startup-destroy-session');
+    await manager.createShell(
+      'startup-destroy-session', 'startup-destroy-term', { cols: 80, rows: 24 }, ['second'], 'posix',
+    ).ready;
+
+    expect(streams[0].write).toHaveBeenCalledWith("eval 'first'\r");
+    expect(streams[1].write).toHaveBeenCalledWith("eval 'second'\r");
+  });
+
+  it('does not execute SSH startup commands without an explicit supported dialect', async () => {
+    const stream = new MockShellStream();
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, stream?: MockShellStream) => void) => {
+      cb(undefined, stream);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('startup-no-dialect', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell(
+      'startup-no-dialect', 'startup-no-dialect-term', { cols: 80, rows: 24 }, ['never-run'],
+    ).ready;
+
+    expect(stream.write).not.toHaveBeenCalled();
+  });
+
   it('uses the local OS username at the ssh2 boundary when the UI omits username', async () => {
     mocks.connectMock.mockImplementation(() => {
       queueMicrotask(() => mocks.lastClient?.emit('ready'));
@@ -533,6 +917,148 @@ describe('SSHManager', () => {
     expect(manager.listConnections()).toHaveLength(0);
   });
 
+  it('reports an unexpected active-client close exactly once, but ignores explicit and stale closes', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const onConnectionClosed = vi.fn();
+    const manager = new SSHManager(undefined, undefined, onConnectionClosed);
+
+    await manager.connect('unexpected-session', {
+      host: 'unexpected.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const unexpectedlyClosedClient = mocks.lastClient;
+    unexpectedlyClosedClient?.emit('error', new Error('transport reset'));
+    unexpectedlyClosedClient?.emit('end');
+    unexpectedlyClosedClient?.emit('close');
+
+    expect(onConnectionClosed).toHaveBeenCalledTimes(1);
+    expect(onConnectionClosed).toHaveBeenCalledWith({
+      id: 'unexpected-session',
+      reason: 'transport reset',
+    });
+
+    await manager.connect('reused-session', {
+      host: 'old.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const explicitlyClosedClient = mocks.lastClient;
+    (explicitlyClosedClient as any).end.mockImplementation(() => explicitlyClosedClient?.emit('close'));
+    await manager.disconnect('reused-session');
+    explicitlyClosedClient?.emit('close');
+
+    await manager.connect('reused-session', {
+      host: 'new.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    explicitlyClosedClient?.emit('error', new Error('stale transport reset'));
+    explicitlyClosedClient?.emit('end');
+
+    expect(onConnectionClosed).toHaveBeenCalledTimes(1);
+    expect(manager.listConnections()).toEqual([
+      expect.objectContaining({ id: 'reused-session', host: 'new.example.com' }),
+    ]);
+  });
+
+  it('lists only SSH connections with pending or live shells', async () => {
+    let pendingShellCallback: ((err: Error | undefined, channel?: MockShellStream) => void) | undefined;
+    const liveStream = new MockShellStream();
+    mocks.shellMock.mockImplementationOnce((_opts: unknown, cb: typeof pendingShellCallback) => {
+      pendingShellCallback = cb;
+    });
+    mocks.shellMock.mockImplementationOnce((_opts: unknown, cb: (err: Error | undefined, channel?: MockShellStream) => void) => {
+      cb(undefined, liveStream);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('running-session', {
+      host: 'jobs.example.com', port: 2202, username: 'worker', auth: 'password',
+    });
+
+    expect(manager.listRunningSessions()).toEqual([]);
+
+    const pending = manager.createShell('running-session', 'pending-term', { cols: 80, rows: 24 });
+    void pending.ready.catch(() => {});
+    expect(manager.listRunningSessions()).toEqual([{
+      id: 'running-session',
+      host: 'jobs.example.com',
+      port: 2202,
+      username: 'worker',
+      shellCount: 1,
+    }]);
+
+    await manager.createShell('running-session', 'live-term', { cols: 80, rows: 24 }).ready;
+    expect(manager.listRunningSessions()).toEqual([{
+      id: 'running-session',
+      host: 'jobs.example.com',
+      port: 2202,
+      username: 'worker',
+      shellCount: 2,
+    }]);
+
+    pendingShellCallback?.(new Error('test cleanup'));
+    await expect(pending.ready).rejects.toThrow('test cleanup');
+  });
+
+  it('removes an SSH session from the running list after its last shell is destroyed', async () => {
+    const stream = new MockShellStream();
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, channel?: MockShellStream) => void) => {
+      cb(undefined, stream);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('destroy-running-session', {
+      host: 'destroy.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell('destroy-running-session', 'destroy-running-term', { cols: 80, rows: 24 }).ready;
+
+    expect(manager.listRunningSessions()).toHaveLength(1);
+    expect(manager.destroyShell('destroy-running-term', 'destroy-running-session')).toBe(true);
+    expect(manager.listRunningSessions()).toEqual([]);
+  });
+
+  it('removes unexpectedly closed SSH connections from the running list', async () => {
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, channel?: MockShellStream) => void) => {
+      cb(undefined, new MockShellStream());
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('unexpected-running-session', {
+      host: 'unstable.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell('unexpected-running-session', 'unexpected-running-term', { cols: 80, rows: 24 }).ready;
+    expect(manager.listRunningSessions()).toHaveLength(1);
+
+    mocks.lastClient?.emit('close');
+
+    expect(manager.listRunningSessions()).toEqual([]);
+  });
+
+  it('empties the running SSH session list during manager cleanup', async () => {
+    const stream = new MockShellStream();
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, channel?: MockShellStream) => void) => {
+      cb(undefined, stream);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('cleanup-running-session', {
+      host: 'cleanup.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell('cleanup-running-session', 'cleanup-running-term', { cols: 80, rows: 24 }).ready;
+    expect(manager.listRunningSessions()).toHaveLength(1);
+
+    manager.cleanup();
+
+    expect(manager.listRunningSessions()).toEqual([]);
+    expect(stream.close).toHaveBeenCalledTimes(1);
+  });
+
   it('decodes UTF-8 incrementally when a code point spans SSH data chunks', async () => {
     let stream: MockShellStream | undefined;
     mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, channel?: MockShellStream) => void) => {
@@ -576,7 +1102,594 @@ describe('SSHManager', () => {
     expect(manager.destroyShell('destroy-term', 'destroy-session')).toBe(false);
   });
 
-  it('returns cloneable boolean directory metadata from SFTP listings', async () => {
+  it('resolves and lists the remote home directory on one SFTP channel', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('home-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    const sftp = {
+      end: vi.fn(),
+      realpath: vi.fn((_remotePath: string, callback: (error: Error | undefined, path?: string) => void) => {
+        callback(undefined, '/home/alice');
+      }),
+      readdir: vi.fn((_remotePath: string, callback: (error: Error | undefined, entries?: any[]) => void) => {
+        callback(undefined, []);
+      }),
+    };
+    (mocks.lastClient as any).sftp.mockImplementation((callback: (error: Error | undefined, client?: typeof sftp) => void) => {
+      callback(undefined, sftp);
+    });
+
+    await expect(manager.listDir('home-session')).resolves.toEqual({
+      connectionId: expect.any(String),
+      resolvedPath: '/home/alice',
+      entries: [],
+    });
+    expect(sftp.realpath).toHaveBeenCalledWith('.', expect.any(Function));
+    expect(sftp.readdir).toHaveBeenCalledWith('/home/alice', expect.any(Function));
+    expect(sftp.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads a regular remote UTF-8 file through bounded SFTP handle reads', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-read-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'hello €\n' });
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-read-session').connectionId;
+
+    const result = await manager.readTextFile({
+      sessionId: 'text-read-session',
+      connectionId,
+      remotePath: '/repo/readme.md',
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: expect.objectContaining({
+        requestedPath: '/repo/readme.md',
+        resolvedPath: '/repo/readme.md',
+        content: 'hello €\n',
+        encoding: 'utf8',
+        hasUtf8Bom: false,
+        revision: expect.objectContaining({
+          token: expect.stringMatching(/^[a-f0-9]{64}$/),
+          size: Buffer.byteLength('hello €\n'),
+        }),
+      }),
+    });
+    expect(remote.sftp.read).toHaveBeenCalled();
+    expect((remote.sftp as any).readFile).toBeUndefined();
+    expect(remote.sftp.open).toHaveBeenCalledWith('/repo/readme.md', 'r', expect.any(Function));
+    expect(remote.sftp.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects malformed SSH text-read IPC requests before opening SFTP', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-read-boundary-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const client = mocks.lastClient as any;
+    const connectionId = (manager as any).connections.get('text-read-boundary-session').connectionId;
+    const valid = {
+      sessionId: 'text-read-boundary-session',
+      connectionId,
+      remotePath: '/repo/readme.md',
+    };
+    const throwingRequest: Record<string, unknown> = {
+      connectionId,
+      remotePath: '/repo/readme.md',
+    };
+    Object.defineProperty(throwingRequest, 'sessionId', {
+      enumerable: true,
+      get: () => { throw new Error('getter must be contained'); },
+    });
+
+    const malformed: unknown[] = [
+      undefined,
+      null,
+      [],
+      {},
+      { ...valid, extra: true },
+      { ...valid, sessionId: 42 },
+      { ...valid, connectionId: null },
+      { sessionId: valid.sessionId, connectionId },
+      { ...valid, remotePath: 42 },
+      { ...valid, remotePath: '' },
+      throwingRequest,
+    ];
+
+    for (const request of malformed) {
+      await expect(manager.readTextFile(request)).resolves.toEqual({
+        ok: false,
+        error: expect.objectContaining({ code: 'INVALID_REQUEST' }),
+      });
+    }
+    expect(client.sftp).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed SSH text-write IPC requests and nested revisions before SFTP', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-write-boundary-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const client = mocks.lastClient as any;
+    const connectionId = (manager as any).connections.get('text-write-boundary-session').connectionId;
+    const revision = {
+      token: 'a'.repeat(64),
+      size: 8,
+      mtime: new Date(0).toISOString(),
+    };
+    const valid = {
+      sessionId: 'text-write-boundary-session',
+      connectionId,
+      requestedPath: '/repo/readme.md',
+      resolvedPath: '/repo/readme.md',
+      expectedRevision: revision,
+      content: 'updated\n',
+      hasUtf8Bom: false,
+    };
+    const { content: _content, ...missingContent } = valid;
+
+    const malformed: unknown[] = [
+      undefined,
+      null,
+      [],
+      {},
+      missingContent,
+      { ...valid, extra: true },
+      { ...valid, sessionId: 42 },
+      { ...valid, connectionId: null },
+      { ...valid, requestedPath: 42 },
+      { ...valid, resolvedPath: '' },
+      { ...valid, content: Buffer.from('updated') },
+      { ...valid, hasUtf8Bom: 'false' },
+      { ...valid, overwrite: undefined },
+      { ...valid, overwrite: 'yes' },
+      { ...valid, expectedRevision: { ...revision, extra: true } },
+      { ...valid, expectedRevision: { ...revision, size: '8' } },
+      { ...valid, expectedRevision: { ...revision, fileId: undefined } },
+      { ...valid, expectedRevision: null },
+    ];
+
+    for (const request of malformed) {
+      await expect(manager.writeTextFile(request)).resolves.toEqual({
+        ok: false,
+        error: expect.objectContaining({ code: 'INVALID_REQUEST' }),
+      });
+    }
+    expect(client.sftp).not.toHaveBeenCalled();
+  });
+
+  it('rejects a text read bound to an older ready transport before opening SFTP', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-reuse-session', {
+      host: 'old.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const oldConnectionId = (manager as any).connections.get('text-reuse-session').connectionId;
+    await manager.disconnect('text-reuse-session');
+    await manager.connect('text-reuse-session', {
+      host: 'new.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const replacementClient = mocks.lastClient as any;
+    const newConnectionId = (manager as any).connections.get('text-reuse-session').connectionId;
+
+    await expect(manager.readTextFile({
+      sessionId: 'text-reuse-session',
+      connectionId: oldConnectionId,
+      remotePath: '/repo/readme.md',
+    })).resolves.toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'STALE_SSH_SESSION' }),
+    });
+    expect(newConnectionId).not.toBe(oldConnectionId);
+    expect(replacementClient.sftp).not.toHaveBeenCalled();
+  });
+
+  it('returns a conflict without creating a temp when the remote bytes changed after open', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-conflict-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-conflict-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-conflict-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) throw new Error('expected remote file to open');
+    remote.setFile('/repo/readme.md', 'changed elsewhere\n');
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-conflict-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'my edit\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'CONFLICT' }),
+    });
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('changed elsewhere\n');
+    expect(remote.sftp.open.mock.calls.some(([, flags]) => flags === 'wx')).toBe(false);
+    expect(remote.sftp.ext_openssh_rename).not.toHaveBeenCalled();
+  });
+
+  it('saves through an exclusive temp and atomic OpenSSH rename without truncating the destination', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-save-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    remote.setMode('/repo/readme.md', 0o750);
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-save-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-save-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-save-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'saved safely\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({
+      ok: true,
+      value: expect.objectContaining({
+        requestedPath: '/repo/readme.md',
+        resolvedPath: '/repo/readme.md',
+        revision: expect.objectContaining({ token: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+      }),
+    });
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('saved safely\n');
+    const exclusiveOpen = remote.sftp.open.mock.calls.find(([, flags]) => flags === 'wx');
+    expect(exclusiveOpen?.[0]).toMatch(/^\/repo\/\.janet-save-[a-f0-9-]+\.tmp$/);
+    expect(remote.sftp.ext_openssh_rename).toHaveBeenCalledWith(
+      exclusiveOpen?.[0], '/repo/readme.md', expect.any(Function),
+    );
+    expect(remote.sftp.fsetstat).toHaveBeenCalledWith(
+      expect.any(Buffer), { mode: 0o750 }, expect.any(Function),
+    );
+    expect(remote.sftp.ext_openssh_fsync).toHaveBeenCalledWith(
+      expect.any(Buffer), expect.any(Function),
+    );
+    expect((remote.files.get('/repo/readme.md')?.mode ?? 0) & 0o7777).toBe(0o750);
+    expect(remote.files.get('/repo/readme.md')).toMatchObject({ uid: 1000, gid: 1000 });
+    expect((remote.sftp as any).rename).toBeUndefined();
+    expect(remote.sftp.unlink).not.toHaveBeenCalled();
+  });
+
+  it('refuses to replace a remote target carrying special permission bits', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-special-mode-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/tool': 'original\n' });
+    remote.setMode('/repo/tool', 0o4755);
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-special-mode-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-special-mode-session', connectionId, remotePath: '/repo/tool',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-special-mode-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'must not replace\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'SAFE_REPLACE_UNAVAILABLE' }),
+    });
+    expect(remote.files.get('/repo/tool')?.bytes.toString()).toBe('original\n');
+    expect(remote.sftp.open.mock.calls.some(([, flags]) => flags === 'wx')).toBe(false);
+    expect(remote.sftp.fsetstat).not.toHaveBeenCalled();
+    expect(remote.sftp.ext_openssh_rename).not.toHaveBeenCalled();
+  });
+
+  it('refuses atomic replacement when the owned temp cannot preserve target ownership', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-owner-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    remote.setOwner('/repo/readme.md', 2000, 1000);
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-owner-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-owner-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-owner-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'must not replace\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'SAFE_REPLACE_UNAVAILABLE' }),
+    });
+    expect(remote.files.get('/repo/readme.md')).toMatchObject({ uid: 2000, gid: 1000 });
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('original\n');
+    expect(remote.sftp.ext_openssh_rename).not.toHaveBeenCalled();
+    expect(remote.sftp.unlink).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses replacement when fsetstat does not actually preserve ordinary permissions', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-mode-verify-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    remote.setMode('/repo/readme.md', 0o750);
+    remote.sftp.fsetstat.mockImplementation((
+      _handle: Buffer,
+      _attrs: { mode?: number },
+      callback: (error?: Error) => void,
+    ) => callback());
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-mode-verify-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-mode-verify-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-mode-verify-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'must not replace\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'SAFE_REPLACE_UNAVAILABLE' }),
+    });
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('original\n');
+    expect(remote.sftp.ext_openssh_rename).not.toHaveBeenCalled();
+    expect(remote.sftp.unlink).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps atomic replacement available when the optional OpenSSH fsync is unsupported', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-no-fsync-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    remote.sftp.ext_openssh_fsync.mockImplementation(() => {
+      throw new Error('Server does not support this extended request');
+    });
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-no-fsync-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-no-fsync-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-no-fsync-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'saved without fsync extension\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({ ok: true, value: expect.any(Object) });
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('saved without fsync extension\n');
+    expect(remote.sftp.ext_openssh_rename).toHaveBeenCalledTimes(1);
+  });
+
+  it('rechecks the destination after upload and preserves a racing remote change', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-race-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-race-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-race-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    const normalWrite = remote.sftp.write.getMockImplementation();
+    let injectedRace = false;
+    remote.sftp.write.mockImplementation((...args: any[]) => {
+      (normalWrite as Function | undefined)?.apply(remote.sftp, args);
+      if (!injectedRace) {
+        injectedRace = true;
+        remote.setFile('/repo/readme.md', 'racing change\n');
+      }
+    });
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-race-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'my edit\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'CONFLICT' }),
+    });
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('racing change\n');
+    expect(remote.sftp.ext_openssh_rename).not.toHaveBeenCalled();
+    expect(remote.sftp.unlink).toHaveBeenCalledTimes(1);
+  });
+
+  it('serializes saves to one remote file so a queued stale save conflicts', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-serialized-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    const client = mocks.lastClient as any;
+    client.sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-serialized-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-serialized-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    let finishRename!: () => void;
+    remote.sftp.ext_openssh_rename.mockImplementation((
+      sourcePath: string,
+      destinationPath: string,
+      callback: (error?: Error) => void,
+    ) => {
+      finishRename = () => {
+        const source = remote.files.get(sourcePath);
+        if (!source) throw new Error('expected owned temp');
+        remote.files.set(destinationPath, source);
+        remote.files.delete(sourcePath);
+        callback();
+      };
+    });
+    client.sftp.mockClear();
+    const first = manager.writeTextFile({
+      sessionId: 'text-serialized-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'first save\n',
+      hasUtf8Bom: false,
+    });
+    while (!finishRename) await Promise.resolve();
+    const second = manager.writeTextFile({
+      sessionId: 'text-serialized-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'stale queued save\n',
+      hasUtf8Bom: false,
+    });
+
+    await Promise.resolve();
+    expect(client.sftp).toHaveBeenCalledTimes(1);
+    finishRename();
+    await expect(first).resolves.toEqual({ ok: true, value: expect.any(Object) });
+    await expect(second).resolves.toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'CONFLICT' }),
+    });
+    expect(client.sftp).toHaveBeenCalledTimes(2);
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('first save\n');
+  });
+
+  it('refuses an unsafe replacement and cleans up only its owned temp file', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-unsafe-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    (remote.sftp as any).ext_openssh_rename = undefined;
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-unsafe-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-unsafe-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-unsafe-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'must not replace\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'SAFE_REPLACE_UNAVAILABLE' }),
+    });
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('original\n');
+    expect(remote.sftp.unlink).toHaveBeenCalledTimes(1);
+    const cleanedPath = remote.sftp.unlink.mock.calls[0][0];
+    expect(cleanedPath).toMatch(/^\/repo\/\.janet-save-/);
+    expect(remote.files.has(cleanedPath)).toBe(false);
+  });
+
+  it('returns filtered, sorted, cloneable directory metadata from SFTP listings', async () => {
     mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
 
     const { SSHManager } = await loadSSHManager();
@@ -587,6 +1700,9 @@ describe('SSHManager', () => {
 
     const sftp = {
       end: vi.fn(),
+      realpath: vi.fn((_remotePath: string, callback: (error: Error | undefined, path?: string) => void) => {
+        callback(undefined, '/repo/');
+      }),
       readdir: vi.fn((_remotePath: string, callback: (error: Error | undefined, entries?: any[]) => void) => {
         callback(undefined, [
           {
@@ -609,6 +1725,16 @@ describe('SSHManager', () => {
               mtime: 2,
             },
           },
+          {
+            filename: '.env',
+            attrs: {
+              isDirectory: () => false,
+              isSymbolicLink: () => false,
+              size: 8,
+              mode: 0o600,
+              mtime: 3,
+            },
+          },
         ]);
       }),
     };
@@ -616,12 +1742,286 @@ describe('SSHManager', () => {
       callback(undefined, sftp);
     });
 
-    const entries = await manager.listDir('sftp-session', '/repo');
+    const listing = await manager.listDir('sftp-session', '/repo', false);
 
-    expect(entries.map(({ name, isDirectory }) => ({ name, isDirectory }))).toEqual([
+    expect(listing.resolvedPath).toBe('/repo/');
+    expect(listing.entries.map(({ name, isDirectory }) => ({ name, isDirectory }))).toEqual([
       { name: 'src', isDirectory: true },
       { name: 'README.md', isDirectory: false },
     ]);
+    expect(listing.entries[0].path).toBe('/repo/src');
+
+    const withHidden = await manager.listDir('sftp-session', '/repo', true);
+    expect(withHidden.entries.map(({ name }) => name)).toEqual(['src', '.env', 'README.md']);
+    expect(sftp.end).toHaveBeenCalledTimes(2);
+  });
+
+  it('follows only symlink targets sequentially so directory links are navigable', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('symlink-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    let activeStats = 0;
+    let maxActiveStats = 0;
+    const attrs = (isDirectory: boolean, isSymlink: boolean) => ({
+      isDirectory: () => isDirectory,
+      isSymbolicLink: () => isSymlink,
+      size: 0,
+      mode: 0o755,
+      mtime: 1,
+    });
+    const sftp = {
+      end: vi.fn(),
+      realpath: vi.fn((_path: string, callback: (error: Error | undefined, path?: string) => void) => {
+        callback(undefined, '/workspace');
+      }),
+      readdir: vi.fn((_path: string, callback: (error: Error | undefined, entries?: any[]) => void) => {
+        callback(undefined, [
+          { filename: 'regular-dir', attrs: attrs(true, false) },
+          { filename: 'linked-dir', attrs: attrs(false, true) },
+          { filename: 'linked-file', attrs: attrs(false, true) },
+          { filename: 'broken-link', attrs: attrs(false, true) },
+          { filename: 'throwing-link', attrs: attrs(false, true) },
+          { filename: 'regular-file', attrs: attrs(false, false) },
+        ]);
+      }),
+      stat: vi.fn((path: string, callback: (error?: Error, targetAttrs?: any) => void) => {
+        if (path.endsWith('/throwing-link')) throw new Error('stat unavailable');
+        activeStats += 1;
+        maxActiveStats = Math.max(maxActiveStats, activeStats);
+        queueMicrotask(() => {
+          activeStats -= 1;
+          if (path.endsWith('/broken-link')) {
+            callback(new Error('dangling symlink'));
+          } else {
+            callback(undefined, attrs(path.endsWith('/linked-dir'), false));
+          }
+        });
+      }),
+    };
+    (mocks.lastClient as any).sftp.mockImplementation((callback: (error: Error | undefined, client?: typeof sftp) => void) => {
+      callback(undefined, sftp);
+    });
+
+    const listing = await manager.listDir('symlink-session', '/workspace');
+
+    expect(sftp.stat.mock.calls.map(([path]) => path)).toEqual([
+      '/workspace/linked-dir',
+      '/workspace/linked-file',
+      '/workspace/broken-link',
+      '/workspace/throwing-link',
+    ]);
+    expect(maxActiveStats).toBe(1);
+    expect(listing.entries.map(({ name, isDirectory, isSymlink }) => ({
+      name, isDirectory, isSymlink,
+    }))).toEqual([
+      { name: 'linked-dir', isDirectory: true, isSymlink: true },
+      { name: 'regular-dir', isDirectory: true, isSymlink: false },
+      { name: 'broken-link', isDirectory: false, isSymlink: true },
+      { name: 'linked-file', isDirectory: false, isSymlink: true },
+      { name: 'regular-file', isDirectory: false, isSymlink: false },
+      { name: 'throwing-link', isDirectory: false, isSymlink: true },
+    ]);
     expect(sftp.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the SFTP channel when a directory read fails', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('failed-sftp-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    const sftp = {
+      end: vi.fn(),
+      realpath: vi.fn((_remotePath: string, callback: (error: Error | undefined, path?: string) => void) => {
+        callback(undefined, '/root');
+      }),
+      readdir: vi.fn((_remotePath: string, callback: (error: Error | undefined) => void) => {
+        callback(new Error('permission denied'));
+      }),
+    };
+    (mocks.lastClient as any).sftp.mockImplementation((callback: (error: Error | undefined, client?: typeof sftp) => void) => {
+      callback(undefined, sftp);
+    });
+
+    await expect(manager.listDir('failed-sftp-session', '/root'))
+      .rejects.toThrow('permission denied');
+    expect(sftp.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects invalid remote paths before opening SFTP', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('invalid-path-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    await expect(manager.listDir('invalid-path-session', 'bad\0path'))
+      .rejects.toThrow(/NUL/i);
+    expect((mocks.lastClient as any).sftp).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an SFTP subsystem failure without closing the SSH shell connection', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('no-sftp-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    (mocks.lastClient as any).sftp.mockImplementation((callback: (error: Error) => void) => {
+      callback(new Error('subsystem unavailable'));
+    });
+
+    await expect(manager.listDir('no-sftp-session'))
+      .rejects.toThrow('subsystem unavailable');
+    expect((mocks.lastClient as any).end).not.toHaveBeenCalled();
+    expect(manager.listConnections()).toEqual([expect.objectContaining({ id: 'no-sftp-session' })]);
+  });
+
+  it('settles and cleans up immediately when opening SFTP throws synchronously', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('throwing-sftp-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    const sftp = {
+      end: vi.fn(),
+      realpath: vi.fn(() => {}),
+    };
+    (mocks.lastClient as any).sftp.mockImplementation((callback: (error: Error | undefined, client?: typeof sftp) => void) => {
+      callback(undefined, sftp);
+      throw new Error('sftp open threw');
+    });
+
+    await expect(manager.listDir('throwing-sftp-session'))
+      .rejects.toThrow('sftp open threw');
+    expect(sftp.end).toHaveBeenCalledTimes(1);
+    expect((manager as any).connections.get('throwing-sftp-session').sftpOperations.size).toBe(0);
+  });
+
+  it('does not continue resolving symlinks after an SFTP listing times out', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+      const { SSHManager } = await loadSSHManager();
+      const manager = new SSHManager();
+      const connected = manager.connect('late-stat-session', {
+        host: 'example.com', port: 22, username: 'alice', auth: 'password',
+      });
+      await vi.runAllTicks();
+      await connected;
+
+      const symlinkAttrs = {
+        isDirectory: () => false,
+        isSymbolicLink: () => true,
+        size: 0,
+        mode: 0o777,
+        mtime: 1,
+      };
+      let finishFirstStat!: (error?: Error, attrs?: any) => void;
+      const sftp = {
+        end: vi.fn(),
+        realpath: vi.fn((_path: string, callback: (error: Error | undefined, path?: string) => void) => {
+          callback(undefined, '/workspace');
+        }),
+        readdir: vi.fn((_path: string, callback: (error: Error | undefined, entries?: any[]) => void) => {
+          callback(undefined, [
+            { filename: 'first-link', attrs: symlinkAttrs },
+            { filename: 'second-link', attrs: symlinkAttrs },
+          ]);
+        }),
+        stat: vi.fn((_path: string, callback: typeof finishFirstStat) => {
+          finishFirstStat = callback;
+        }),
+      };
+      (mocks.lastClient as any).sftp.mockImplementation((callback: (error: Error | undefined, client?: typeof sftp) => void) => {
+        callback(undefined, sftp);
+      });
+
+      const listing = manager.listDir('late-stat-session', '/workspace');
+      const timedOut = expect(listing).rejects.toThrow(/timed out/i);
+      expect(sftp.stat).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await timedOut;
+      expect(sftp.end).toHaveBeenCalledTimes(1);
+
+      finishFirstStat(undefined, { isDirectory: () => true });
+      await vi.runAllTicks();
+      expect(sftp.stat).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels an in-flight listing before the session id is reused', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('reused-sftp-session', {
+      host: 'old.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    let finishRealpath!: (error: Error | undefined, path?: string) => void;
+    const oldSftp = {
+      end: vi.fn(),
+      realpath: vi.fn((_path: string, callback: typeof finishRealpath) => {
+        finishRealpath = callback;
+      }),
+      readdir: vi.fn((_path: string, callback: (error: Error | undefined, entries?: any[]) => void) => {
+        callback(undefined, []);
+      }),
+    };
+    (mocks.lastClient as any).sftp.mockImplementation((callback: (error: Error | undefined, client?: typeof oldSftp) => void) => {
+      callback(undefined, oldSftp);
+    });
+
+    const staleListing = manager.listDir('reused-sftp-session');
+    const staleRejection = expect(staleListing).rejects.toThrow(/connection reused-sftp-session was closed/i);
+    await manager.disconnect('reused-sftp-session');
+    await manager.connect('reused-sftp-session', {
+      host: 'new.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    finishRealpath(undefined, '/home/alice');
+
+    await staleRejection;
+    expect(oldSftp.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('times out an SFTP request that never opens a subsystem channel', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+      const { SSHManager } = await loadSSHManager();
+      const manager = new SSHManager();
+      const connected = manager.connect('hung-sftp-session', {
+        host: 'example.com', port: 22, username: 'alice', auth: 'password',
+      });
+      await vi.runAllTicks();
+      await connected;
+      (mocks.lastClient as any).sftp.mockImplementation(() => {});
+
+      const listing = manager.listDir('hung-sftp-session');
+      const timedOut = expect(listing).rejects.toThrow(/timed out/i);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await timedOut;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

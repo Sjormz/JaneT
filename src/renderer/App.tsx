@@ -1,13 +1,18 @@
-import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import Titlebar from './components/Titlebar';
 import VerticalTabBar from './components/VerticalTabBar';
 import SplitPane from './components/SplitPane';
 import { disposeCachedTerminal } from './components/TerminalPane';
-import Sidebar from './components/Sidebar';
+import Sidebar, { WorkspaceToolSection } from './components/Sidebar';
 import StatusBar from './components/StatusBar';
 import CommandPalette, { CommandAction } from './components/CommandPalette';
 import ShortcutEditor from './components/ShortcutEditor';
+import ThemeSwitcher from './components/ThemeSwitcher';
 import UpdateBanner from './components/UpdateBanner';
+import BrandMark from './components/BrandMark';
+import Tooltip from './components/Tooltip';
+import ConfirmationDialog from './components/ConfirmationDialog';
+import WorkspaceContent from './components/WorkspaceContent';
 import {
   TabInfo, SessionInfo,
   SavedSSHProfile,
@@ -21,6 +26,12 @@ import { KeybindingAction } from './keybindings';
 import { serializePaneTree, restorePaneTree, normalizeSession, SavedSession } from './sessionRestore';
 import { GitStatusSummary, summarizeGitStatus } from './gitStatus';
 import { useGitRepository } from './useGitRepository';
+import { requestTerminalSearch } from './terminalSearch';
+import { formatTerminalPathForPaste } from './terminalPathDrag';
+import type { FileExplorerSource } from './fileExplorerSource';
+import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
+import { useEditorDocuments } from './useEditorDocuments';
+import { emptyTabDocumentWorkspace, isEditorDocumentDirty, type EditorResource } from './editorDocuments';
 
 function createTabRoot(type: 'local' | 'ssh'): PaneNode {
   return createPaneRoot(type, 1, 'vertical');
@@ -43,6 +54,18 @@ interface TerminalOwner {
   termId: string;
   type: 'local' | 'ssh';
   sshSessionId?: string;
+}
+
+interface PendingDestructiveAction {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  run: () => void | boolean | Promise<void | boolean>;
+  secondaryLabel?: string;
+  runSecondary?: () => void | boolean | Promise<void | boolean>;
+  onCancel?: () => void;
+  destructive?: boolean;
+  fallbackFocus?: () => HTMLElement | null;
 }
 
 function collectTerminalOwners(tab: TabInfo): TerminalOwner[] {
@@ -76,6 +99,12 @@ function preferredLeafId(tab: TabInfo, focusedTerminalId: string | null, maximiz
   return leaves[0] ?? null;
 }
 
+function firstTerminalFocusTarget(): HTMLElement | null {
+  const containers = Array.from(document.querySelectorAll<HTMLElement>('[data-terminal-focus-target]'));
+  const container = containers.find((candidate) => candidate.offsetParent !== null) ?? containers[0];
+  return container?.querySelector<HTMLElement>('textarea') ?? container ?? null;
+}
+
 function sshSessionInfo(sessionId: string, profile: SavedSSHProfile): SessionInfo {
   return {
     id: sessionId,
@@ -86,8 +115,22 @@ function sshSessionInfo(sessionId: string, profile: SavedSSHProfile): SessionInf
   };
 }
 
+function stripStartupAutomation(leaf: TerminalLeaf): TerminalLeaf {
+  const {
+    startupCommands: _startupCommands,
+    startupShellDialect: _startupShellDialect,
+    ...safeLeaf
+  } = leaf;
+  return safeLeaf;
+}
+
 function localizeTerminalLeaf(leaf: TerminalLeaf): TerminalLeaf {
-  const { sshProfileId: _profile, sshSessionId: _session, sshShellReady: _ready, ...local } = leaf;
+  const {
+    sshProfileId: _profile,
+    sshSessionId: _session,
+    sshShellReady: _ready,
+    ...local
+  } = stripStartupAutomation(leaf);
   return { ...local, terminalType: 'local' };
 }
 
@@ -109,36 +152,186 @@ function demoteSshLeaf(tab: TabInfo, leafId: string): TabInfo {
   };
 }
 
-function AppInner() {
-  // Default starter tab — used only when no session has been restored.
-  const starterTab: TabInfo = useMemo(() => ({
+interface InitialAppState {
+  tabs: TabInfo[];
+  activeTabId: string;
+  sidebarOpen: boolean;
+  tabsOpen: boolean;
+  sidebarSection: WorkspaceToolSection;
+  settingsOpen: boolean;
+  sshConnectionsOpen: boolean;
+  sshProfiles: SavedSSHProfile[];
+  workspaceTabs: WorkspaceTabPreset[];
+  currentTheme: ThemeName;
+  fontSize: number;
+  fontFamily: string;
+  sidebarSide: 'left' | 'right';
+}
+
+function createInitialAppState(settings: any): InitialAppState {
+  const s = settings || {};
+  const session = normalizeSession(s.session);
+  const restored: TabInfo[] = [];
+  let restoredActiveId: string | null = null;
+
+  for (const saved of session.tabs) {
+    let tree = restorePaneTree(saved.root);
+    if (!tree) continue;
+    // Durable sessions describe terminals that already existed; startup
+    // automation belongs only to an explicit fresh preset launch. Refuse
+    // stale or manually injected startup fields on app restoration.
+    tree = mapLeaves(tree, stripStartupAutomation);
+    if (saved.type !== 'ssh') {
+      tree = mapLeaves(tree, (leaf) => leaf.terminalType === 'ssh' && leaf.sshProfileId ? {
+        ...leaf,
+        sshSessionId: `ssh-${Date.now()}-${leaf.id}`,
+        sshShellReady: false,
+      } : leaf);
+    }
+    const tab: TabInfo = {
+      id: genId('tab'),
+      title: saved.title,
+      type: saved.type,
+      cwd: saved.cwd,
+      sshProfileId: saved.sshProfileId,
+      // Allocate the runtime session id before any terminal component mounts.
+      sshSessionId: saved.type === 'ssh' && saved.sshProfileId
+        ? `ssh-${crypto.randomUUID()}`
+        : undefined,
+      sshShellReady: saved.type !== 'ssh',
+      root: tree,
+    };
+    restored.push(tab);
+    if (saved.id === session.activeTabId) restoredActiveId = tab.id;
+  }
+
+  const starterTab: TabInfo = {
     id: genId('tab'),
-    title: 'terminal',
+    title: 'Terminal',
     type: 'local',
     root: createTabRoot('local'),
-  }), []);
+  };
+  const tabs = restored.length > 0 ? restored : [starterTab];
+  const theme = getTheme(s.theme || 'tokyo-night').name;
+  const restoreLegacySettings = session.sidebarOpen && session.sidebarSection === 'settings';
+  const restoreLegacySsh = session.sidebarOpen && session.sidebarSection === 'ssh';
+  const restoreMovedLegacySurface = restoreLegacySettings || restoreLegacySsh;
 
-  const [tabs, setTabs] = useState<TabInfo[]>([starterTab]);
+  return {
+    tabs,
+    activeTabId: restoredActiveId ?? tabs[0].id,
+    sidebarOpen: restoreMovedLegacySurface ? false : session.sidebarOpen,
+    tabsOpen: restoreLegacySsh ? true : session.tabsOpen,
+    sidebarSection: session.sidebarSection === 'git' ? 'git' : 'files',
+    settingsOpen: restoreLegacySettings,
+    sshConnectionsOpen: restoreLegacySsh,
+    sshProfiles: Array.isArray(s.sshProfiles) ? s.sshProfiles : [],
+    workspaceTabs: Array.isArray(s.workspaceTabs) ? s.workspaceTabs : [],
+    currentTheme: theme,
+    fontSize: typeof s.fontSize === 'number' ? s.fontSize : 14,
+    fontFamily: normalizeTerminalFontFamily(s.fontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY),
+    sidebarSide: s.sidebarSide === 'left' ? 'left' : 'right',
+  };
+}
+
+function AppInner({ initialSettings }: { initialSettings: any }) {
+  // Settings have already loaded before AppInner mounts, so derive the first
+  // render synchronously. This prevents a disposable starter terminal from
+  // being created before a saved workspace replaces it.
+  const [initialState] = useState(() => createInitialAppState(initialSettings));
+  const [tabs, setTabs] = useState<TabInfo[]>(initialState.tabs);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
-  const [activeTabId, setActiveTabId] = useState(starterTab.id);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [tabsOpen, setTabsOpen] = useState(true);
-  const [sidebarSection, setSidebarSection] = useState<'files' | 'ssh' | 'git' | 'settings'>('files');
+  const [activeTabId, setActiveTabId] = useState(initialState.activeTabId);
+  const [sidebarOpen, setSidebarOpen] = useState(initialState.sidebarOpen);
+  const [tabsOpen, setTabsOpen] = useState(initialState.tabsOpen);
+  const responsiveTabsCollapsedRef = useRef(false);
+  const [sidebarSection, setSidebarSection] = useState<WorkspaceToolSection>(initialState.sidebarSection);
   const [sshSessions, setSshSessions] = useState<SessionInfo[]>([]);
   const [readySshSessionIds, setReadySshSessionIds] = useState<Set<string>>(new Set());
-  const [sshProfiles, setSshProfiles] = useState<SavedSSHProfile[]>([]);
-  const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>([]);
+  const [disconnectedSshSessionIds, setDisconnectedSshSessionIds] = useState<Set<string>>(new Set());
+  const [sshConnectionEpochById, setSshConnectionEpochById] = useState<Record<string, number>>({});
+  const [sshProfiles, setSshProfiles] = useState<SavedSSHProfile[]>(initialState.sshProfiles);
+  const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>(initialState.workspaceTabs);
   const [maximizedLeafByTab, setMaximizedLeafByTab] = useState<Record<string, string | null>>({});
   const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null);
   const [paneDropTarget, setPaneDropTarget] = useState<{ leafId: string; side: PaneDropSide } | null>(null);
-  const [activeTerminals, setActiveTerminals] = useState<Set<string>>(new Set());
   const liveTerminalIdsRef = useRef<Set<string>>(new Set());
   const connectingSshSessionIdsRef = useRef<Set<string>>(new Set());
   const releasedSshSessionIdsRef = useRef<Set<string>>(new Set());
 
-  const sessionRestoredRef = useRef(false);
+  useLayoutEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const narrowWindow = window.matchMedia('(max-width: 1000px)');
+    const syncResponsiveTabs = () => {
+      if (narrowWindow.matches) {
+        setTabsOpen((current) => {
+          if (!current) return current;
+          responsiveTabsCollapsedRef.current = true;
+          return false;
+        });
+      } else if (responsiveTabsCollapsedRef.current) {
+        responsiveTabsCollapsedRef.current = false;
+        setTabsOpen(true);
+      }
+    };
+    syncResponsiveTabs();
+    narrowWindow.addEventListener('change', syncResponsiveTabs);
+    return () => narrowWindow.removeEventListener('change', syncResponsiveTabs);
+  }, []);
+
+  const markSshSessionReady = useCallback((sessionId: string) => {
+    setReadySshSessionIds((current) => new Set(current).add(sessionId));
+    setDisconnectedSshSessionIds((current) => {
+      if (!current.has(sessionId)) return current;
+      const next = new Set(current);
+      next.delete(sessionId);
+      return next;
+    });
+  }, []);
+
+  const isSshSessionDisconnected = useCallback((sessionId?: string) => (
+    Boolean(sessionId && disconnectedSshSessionIds.has(sessionId))
+  ), [disconnectedSshSessionIds]);
+
+  useEffect(() => {
+    if (!window.janet.onSSHConnectionClosed) return undefined;
+    return window.janet.onSSHConnectionClosed(({ id }) => {
+      setSshSessions((current) => current.filter((session) => session.id !== id));
+      setReadySshSessionIds((current) => {
+        if (!current.has(id)) return current;
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+      setDisconnectedSshSessionIds((current) => new Set(current).add(id));
+      setSshConnectionEpochById((current) => ({
+        ...current,
+        [id]: (current[id] ?? 0) + 1,
+      }));
+    });
+  }, []);
+
+  const restoredSshTabsStartedRef = useRef(false);
+  const restoredSshLeavesStartedRef = useRef(false);
   const [paletteVisible, setPaletteVisible] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(initialState.settingsOpen);
+  const [sshConnectionsOpen, setSshConnectionsOpen] = useState(initialState.sshConnectionsOpen);
+  const [pendingDestructiveAction, setPendingDestructiveAction] = useState<PendingDestructiveAction | null>(null);
+  const [pendingDestructiveBusy, setPendingDestructiveBusy] = useState(false);
+  const editorDocuments = useEditorDocuments();
+
+  const setWorkspaceToolsExpanded = useCallback((expanded: boolean) => {
+    if (!expanded && document.activeElement instanceof HTMLElement
+      && document.activeElement.closest('.workspace-tools-panel')) {
+      document.querySelector<HTMLElement>('.workspace-tool-button[aria-selected="true"]')?.focus();
+    }
+    setSidebarOpen(expanded);
+  }, []);
+
+  const toggleWorkspaceTools = useCallback(() => {
+    setWorkspaceToolsExpanded(!sidebarOpen);
+  }, [setWorkspaceToolsExpanded, sidebarOpen]);
 
   // === CWD tracking ===
   // cwdByTerminal: latest known working directory for each terminal,
@@ -158,92 +351,13 @@ function AppInner() {
   }, []);
 
   // Settings state
-  const [currentTheme, setCurrentTheme] = useState<ThemeName>('tokyo-night');
-  const [fontSize, setFontSize] = useState(14);
-  const [sidebarSide, setSidebarSide] = useState<'left' | 'right'>('left');
-  const settingsLoadedRef = useRef(false);
+  const [currentTheme, setCurrentTheme] = useState<ThemeName>(initialState.currentTheme);
+  const [fontSize, setFontSize] = useState(initialState.fontSize);
+  const [fontFamily] = useState(initialState.fontFamily);
+  const [sidebarSide, setSidebarSide] = useState<'left' | 'right'>(initialState.sidebarSide);
+  const settingsLoadedRef = useRef(true);
 
-  const { bindings, setBinding, matches, on } = useKeybindings();
-
-  // Load settings on mount and apply saved keybindings
-  useEffect(() => {
-    if (settingsLoadedRef.current) return;
-    settingsLoadedRef.current = true;
-
-    try {
-      window.janet.getSettings().then((s: any) => {
-        setCurrentTheme(s.theme || 'tokyo-night');
-        setFontSize(s.fontSize || 14);
-        setSidebarSide(s.sidebarSide === 'right' ? 'right' : 'left');
-        setSshProfiles(Array.isArray(s.sshProfiles) ? s.sshProfiles : []);
-        setWorkspaceTabs(Array.isArray(s.workspaceTabs) ? s.workspaceTabs : []);
-        applyCssTheme(getTheme(s.theme || 'tokyo-night').css);
-
-        // Restore the last open workspace (tabs + active tab + sidebar UI).
-        // We do this in the same effect as the rest of settings so a single
-        // round-trip handles everything; both the first paint and the
-        // session shape are available here.
-        if (!sessionRestoredRef.current) {
-          sessionRestoredRef.current = true;
-          const session = normalizeSession(s.session);
-          if (session.tabs.length > 0) {
-            const restored: TabInfo[] = [];
-            let restoredActiveId: string | null = null;
-            for (const saved of session.tabs) {
-              let tree = restorePaneTree(saved.root);
-              if (!tree) continue;
-              if (saved.type !== 'ssh') {
-                tree = mapLeaves(tree, (leaf) => leaf.terminalType === 'ssh' && leaf.sshProfileId ? {
-                  ...leaf,
-                  sshSessionId: `ssh-${Date.now()}-${leaf.id}`,
-                  sshShellReady: false,
-                } : leaf);
-              }
-              const tab: TabInfo = {
-                id: genId('tab'),
-                title: saved.title,
-                type: saved.type,
-                cwd: saved.cwd,
-                sshProfileId: saved.sshProfileId,
-                // For SSH tabs, pre-allocate a session id so the
-                // TerminalPane mounts with a stable `sshSessionId` prop.
-                // Otherwise the pane would mount with `undefined`,
-                // create a dangling xterm with no shell bound, and
-                // then have to be torn down + rebuilt when the
-                // reconnect effect eventually fills in the id —
-                // leaving the user with a blank pane for a beat (or
-                // permanently, if any data arrived in between).
-                sshSessionId: saved.type === 'ssh' && saved.sshProfileId
-                  ? `ssh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-                  : undefined,
-                sshShellReady: saved.type !== 'ssh',
-                root: tree,
-              };
-              restored.push(tab);
-              if (saved.id === session.activeTabId) restoredActiveId = tab.id;
-            }
-            if (restored.length > 0) {
-              setTabs(restored);
-              setActiveTabId(restoredActiveId ?? restored[0].id);
-            }
-          }
-          setSidebarOpen(session.sidebarOpen);
-          setTabsOpen(session.tabsOpen);
-          setSidebarSection(session.sidebarSection);
-        }
-
-        // Apply saved keybindings
-        if (s.keybindings) {
-          for (const [action, shortcut] of Object.entries(s.keybindings)) {
-            if (shortcut && typeof shortcut === 'string') {
-              setBinding(action as KeybindingAction, shortcut);
-            }
-          }
-        }
-      }).catch(() => {});
-    } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const { bindings, matches, on } = useKeybindings();
 
   // Reconnect SSH tabs that were restored from the saved session.
   // The tree is rebuilt with fresh leaf ids during restore, and the
@@ -253,7 +367,8 @@ function AppInner() {
   // on the pre-allocated id, registers the session for the sidebar
   // status, and surfaces any connect error to the user.
   useEffect(() => {
-    if (!sessionRestoredRef.current) return;
+    if (restoredSshTabsStartedRef.current) return;
+    restoredSshTabsStartedRef.current = true;
     if (tabsRef.current.length === 0) return;
 
     const reconnectable = tabsRef.current.filter(
@@ -274,7 +389,7 @@ function AppInner() {
         continue;
       }
       const sessionId = tab.sshSessionId!;
-      if (readySshSessionIds.has(sessionId) || connectingSshSessionIdsRef.current.has(sessionId)) {
+      if (connectingSshSessionIdsRef.current.has(sessionId)) {
         continue;
       }
       connectingSshSessionIdsRef.current.add(sessionId);
@@ -302,7 +417,7 @@ function AppInner() {
           sshProfileId: profile.id,
         };
         setSshSessions((prev) => prev.some((s) => s.id === sessionId) ? prev : [...prev, session]);
-        setReadySshSessionIds((prev) => new Set(prev).add(sessionId));
+        markSshSessionReady(sessionId);
         setTabs((prev) => prev.map((existing) => (
           existing.id === tab.id ? { ...existing, sshShellReady: true } : existing
         )));
@@ -322,11 +437,12 @@ function AppInner() {
         connectingSshSessionIdsRef.current.delete(sessionId);
       });
     }
-  }, [readySshSessionIds, sshProfiles]);
+  }, [markSshSessionReady, sshProfiles]);
 
   // Mixed workspace tabs carry their SSH connection settings on individual leaves.
   useEffect(() => {
-    if (!sessionRestoredRef.current) return;
+    if (restoredSshLeavesStartedRef.current) return;
+    restoredSshLeavesStartedRef.current = true;
     const leaves: Array<{ tabId: string; leafId: string; sshProfileId: string; sshSessionId: string }> = [];
     const collect = (tab: TabInfo, node: PaneNode) => {
       if (node.type === 'leaf') {
@@ -344,10 +460,7 @@ function AppInner() {
           : tab));
         continue;
       }
-      if (
-        readySshSessionIds.has(leaf.sshSessionId) ||
-        connectingSshSessionIdsRef.current.has(leaf.sshSessionId)
-      ) {
+      if (connectingSshSessionIdsRef.current.has(leaf.sshSessionId)) {
         continue;
       }
       connectingSshSessionIdsRef.current.add(leaf.sshSessionId);
@@ -368,7 +481,7 @@ function AppInner() {
         setSshSessions((current) => current.some((candidate) => candidate.id === session.id)
           ? current
           : [...current, session]);
-        setReadySshSessionIds((current) => new Set(current).add(leaf.sshSessionId));
+        markSshSessionReady(leaf.sshSessionId);
         setTabs((current) => current.map((tab) => tab.id === leaf.tabId
           ? { ...tab, root: mapLeaves(tab.root, (candidate) => candidate.id === leaf.leafId ? { ...candidate, sshShellReady: true } : candidate) }
           : tab));
@@ -380,7 +493,7 @@ function AppInner() {
       })
         .finally(() => connectingSshSessionIdsRef.current.delete(leaf.sshSessionId));
     }
-  }, [readySshSessionIds, sshProfiles]);
+  }, [markSshSessionReady, sshProfiles]);
 
   // === Persist session state on changes (debounced) ===
   // We debounce so a burst of splits/renames doesn't hammer disk. Saves
@@ -400,7 +513,7 @@ function AppInner() {
         tabs: savedTabs,
         activeTabId,
         sidebarOpen,
-        tabsOpen,
+        tabsOpen: responsiveTabsCollapsedRef.current ? true : tabsOpen,
         sidebarSection,
       };
       try { window.janet.setSettings({ session }).catch(() => {}); } catch {}
@@ -408,8 +521,8 @@ function AppInner() {
     return () => clearTimeout(timer);
   }, [tabs, activeTabId, sidebarOpen, tabsOpen, sidebarSection, cwdByTerminal]);
 
-  // Apply CSS theme whenever it changes
-  useEffect(() => {
+  // Apply the loaded theme before paint and keep it synchronized thereafter.
+  useLayoutEffect(() => {
     const theme = getTheme(currentTheme);
     applyCssTheme(theme.css);
   }, [currentTheme]);
@@ -452,7 +565,6 @@ function AppInner() {
   // Track terminal registrations
   const handleTerminalReady = useCallback((termId: string) => {
     liveTerminalIdsRef.current.add(termId);
-    setActiveTerminals(new Set(liveTerminalIdsRef.current));
   }, []);
 
   // Called by TerminalPane when the shell reports a new cwd (via OSC 7
@@ -510,8 +622,17 @@ function AppInner() {
         for (const sessionId of releasedSshSessions) next.delete(sessionId);
         return next;
       });
+      setDisconnectedSshSessionIds((current) => {
+        const next = new Set(current);
+        for (const sessionId of releasedSshSessions) next.delete(sessionId);
+        return next;
+      });
+      setSshConnectionEpochById((current) => {
+        const next = { ...current };
+        for (const sessionId of releasedSshSessions) delete next[sessionId];
+        return next;
+      });
     }
-    setActiveTerminals(new Set(liveTerminalIdsRef.current));
   }, []);
 
   // Called when a TerminalPane unmounts
@@ -522,7 +643,6 @@ function AppInner() {
         if (stillRendered) return;
 
         liveTerminalIdsRef.current.delete(termId);
-        setActiveTerminals(new Set(liveTerminalIdsRef.current));
         disposeCachedTerminal(termId);
         window.janet.terminalDestroy({ id: termId }).catch(() => {});
       }, 0);
@@ -543,7 +663,7 @@ function AppInner() {
     ) => {
       const tab: TabInfo = {
         id: genId('tab'),
-        title: title || (type === 'local' ? `terminal ${tabs.length + 1}` : `ssh-${sshSessionId?.slice(0, 6)}`),
+        title: title || (type === 'local' ? `Terminal ${tabs.length + 1}` : `SSH ${tabs.length + 1}`),
         type,
         sshSessionId,
         sshProfileId,
@@ -572,7 +692,7 @@ function AppInner() {
       if (next.length === 0) {
         const replacement: TabInfo = {
           id: genId('tab'),
-          title: 'terminal',
+          title: 'Terminal',
           type: 'local',
           root: createTabRoot('local'),
         };
@@ -582,6 +702,7 @@ function AppInner() {
         setActiveTabId(next[Math.min(idx, next.length - 1)].id);
       }
 
+      editorDocuments.closeDocumentsForTab(tabId);
       teardownTerminalOwners(collectTerminalOwners(tab), next);
       if (focusedTerminalId && getAllLeafIds(tab.root).includes(focusedTerminalId)) {
         setFocusedTerminalId(null);
@@ -596,8 +717,131 @@ function AppInner() {
       tabsRef.current = next;
       setTabs(next);
     },
-    [activeTabId, focusedTerminalId, teardownTerminalOwners],
+    [activeTabId, editorDocuments.closeDocumentsForTab, focusedTerminalId, teardownTerminalOwners],
   );
+
+  const saveEditorDocument = useCallback(async (
+    key: string,
+    afterSave?: () => void,
+  ): Promise<boolean> => {
+    const documentTitle = () => (
+      editorDocuments.documents.find((candidate) => candidate.key === key)?.title ?? 'file'
+    );
+    const attempt = async (overwrite = false): Promise<boolean> => {
+      const outcome = await editorDocuments.saveDocument(key, overwrite);
+      if (outcome === 'saved') {
+        afterSave?.();
+        return true;
+      }
+      if (outcome === 'CONFLICT') {
+        setPendingDestructiveAction({
+          title: `Overwrite newer changes to ${documentTitle()}?`,
+          description: 'This file changed outside JaneT after it was opened. Overwriting will replace those newer on-disk changes with the editor contents.',
+          confirmLabel: 'Overwrite file',
+          run: () => attempt(true),
+        });
+        return false;
+      }
+
+      setPendingDestructiveAction({
+        title: `Couldn’t save ${documentTitle()}`,
+        description: 'JaneT left the file open and preserved the editor contents. Review the editor error, then try again or keep editing.',
+        confirmLabel: 'Keep editing',
+        run: () => true,
+        secondaryLabel: 'Try again',
+        runSecondary: () => attempt(overwrite),
+        destructive: false,
+      });
+      return false;
+    };
+
+    return attempt();
+  }, [editorDocuments.documents, editorDocuments.saveDocument]);
+
+  const saveEditorDocumentSequence = useCallback((
+    keys: string[],
+    onComplete: () => void | boolean | Promise<void | boolean>,
+    onCancel?: () => void,
+  ): Promise<boolean> => {
+    const showSaveFailure = (
+      title: string,
+      retry: () => Promise<boolean>,
+    ): false => {
+      setPendingDestructiveAction({
+        title: `Couldn’t save ${title}`,
+        description: 'JaneT left the file and its terminal workspace open. Review the editor error, then try the save again or keep editing.',
+        confirmLabel: 'Keep editing',
+        run: () => {
+          onCancel?.();
+        },
+        secondaryLabel: 'Try again',
+        runSecondary: retry,
+        onCancel,
+        destructive: false,
+      });
+      return false;
+    };
+
+    const promptConflict = (key: string, index: number, title: string): false => {
+      setPendingDestructiveAction({
+        title: `Overwrite newer changes to ${title}?`,
+        description: 'This file changed outside JaneT. Overwrite it and continue saving the remaining files?',
+        confirmLabel: 'Overwrite and continue',
+        run: () => overwriteAndContinue(key, index, title),
+        onCancel,
+      });
+      return false;
+    };
+
+    async function overwriteAndContinue(key: string, index: number, title: string): Promise<boolean> {
+      const outcome = await editorDocuments.saveDocument(key, true);
+      if (outcome === 'saved') return saveFrom(index + 1);
+      if (outcome === 'CONFLICT') return promptConflict(key, index, title);
+      return showSaveFailure(title, () => overwriteAndContinue(key, index, title));
+    }
+
+    const saveFrom = async (startIndex: number): Promise<boolean> => {
+      for (let index = startIndex; index < keys.length; index += 1) {
+        const key = keys[index];
+        const outcome = await editorDocuments.saveDocument(key);
+        if (outcome === 'saved') continue;
+
+        const document = editorDocuments.documents.find((candidate) => candidate.key === key);
+        const title = document?.title ?? 'file';
+        if (outcome === 'CONFLICT') {
+          return promptConflict(key, index, title);
+        }
+        return showSaveFailure(title, () => saveFrom(index));
+      }
+
+      const result = await onComplete();
+      return result !== false;
+    };
+
+    return saveFrom(0);
+  }, [editorDocuments.documents, editorDocuments.saveDocument]);
+
+  const requestCloseEditorDocument = useCallback((
+    key: string,
+    fallbackFocus: () => HTMLElement | null = firstTerminalFocusTarget,
+  ) => {
+    const document = editorDocuments.documents.find((candidate) => candidate.key === key);
+    if (!document) return;
+    if (!isEditorDocumentDirty(document)) {
+      editorDocuments.closeDocument(key);
+      requestAnimationFrame(() => fallbackFocus()?.focus());
+      return;
+    }
+    setPendingDestructiveAction({
+      title: `Save changes to ${document.title}?`,
+      description: 'This file has unsaved changes. Save them before closing, or explicitly discard the editor contents.',
+      confirmLabel: "Don't Save",
+      run: () => editorDocuments.closeDocument(key),
+      secondaryLabel: 'Save',
+      runSecondary: () => saveEditorDocument(key, () => editorDocuments.closeDocument(key)),
+      fallbackFocus,
+    });
+  }, [editorDocuments.closeDocument, editorDocuments.documents, saveEditorDocument]);
 
   const renameTab = useCallback((tabId: string, title: string) => {
     if (!title) return;
@@ -654,6 +898,110 @@ function AppInner() {
     [closeTab, focusedTerminalId, maximizedLeafByTab, teardownTerminalOwners],
   );
 
+  const requestCloseTab = useCallback((tabId: string) => {
+    const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
+    if (!tab) return;
+    const paneCount = getAllLeafIds(tab.root).length;
+    const dirtyDocuments = (editorDocuments.documentsByTab[tabId] ?? []).filter(isEditorDocumentDirty);
+    if (dirtyDocuments.length > 0) {
+      const dirtyKeys = dirtyDocuments.map((document) => document.key);
+      setPendingDestructiveAction({
+        title: `Save ${dirtyDocuments.length} changed ${dirtyDocuments.length === 1 ? 'file' : 'files'} before closing ${tab.title}?`,
+        description: `Closing this terminal tab will also close its editor documents and end ${paneCount} terminal ${paneCount === 1 ? 'session' : 'sessions'}. Save the changed files, or explicitly discard them and close.`,
+        confirmLabel: 'Discard and close',
+        run: () => closeTab(tabId),
+        secondaryLabel: 'Save all and close',
+        runSecondary: () => saveEditorDocumentSequence(dirtyKeys, () => closeTab(tabId)),
+        fallbackFocus: firstTerminalFocusTarget,
+      });
+      return;
+    }
+    setPendingDestructiveAction({
+      title: `Close ${tab.title}?`,
+      description: `Close this terminal tab and its ${paneCount} pane${paneCount === 1 ? '' : 's'}? Its terminal sessions will end; detached jobs may continue outside JaneT.`,
+      confirmLabel: 'Close tab',
+      run: () => closeTab(tabId),
+      fallbackFocus: firstTerminalFocusTarget,
+    });
+  }, [closeTab, editorDocuments.documentsByTab, saveEditorDocumentSequence]);
+
+  useEffect(() => {
+    if (!window.janet.onPrepareForClose || !window.janet.resolvePrepareForClose) return undefined;
+    return window.janet.onPrepareForClose(async (request) => {
+      if (pendingDestructiveAction || pendingDestructiveBusy) {
+        await window.janet.resolvePrepareForClose({
+          requestId: request.requestId,
+          resolution: 'cancel',
+        });
+        return;
+      }
+
+      const dirtyDocuments = editorDocuments.dirtyDocuments;
+      if (dirtyDocuments.length === 0) {
+        await window.janet.resolvePrepareForClose({
+          requestId: request.requestId,
+          resolution: 'saved',
+        });
+        return;
+      }
+
+      const reason = request.reason === 'update-install'
+        ? 'installing the update'
+        : request.reason === 'tray-stop'
+          ? 'stopping JaneT'
+          : 'closing JaneT';
+      const cancelClose = () => {
+        void window.janet.resolvePrepareForClose({
+          requestId: request.requestId,
+          resolution: 'cancel',
+        });
+      };
+      setPendingDestructiveAction({
+        title: `Save ${dirtyDocuments.length} changed ${dirtyDocuments.length === 1 ? 'file' : 'files'} before ${reason}?`,
+        description: 'JaneT can save every changed file before continuing, or you can explicitly discard the editor changes. Cancel keeps the application, terminals, and files open.',
+        confirmLabel: 'Discard changes and close',
+        run: async () => window.janet.resolvePrepareForClose({
+          requestId: request.requestId,
+          resolution: 'discarded',
+        }),
+        secondaryLabel: 'Save all and close',
+        runSecondary: () => saveEditorDocumentSequence(
+          dirtyDocuments.map((document) => document.key),
+          () => window.janet.resolvePrepareForClose({
+            requestId: request.requestId,
+            resolution: 'saved',
+          }),
+          cancelClose,
+        ),
+        onCancel: cancelClose,
+        fallbackFocus: firstTerminalFocusTarget,
+      });
+    });
+  }, [
+    editorDocuments.dirtyDocuments,
+    pendingDestructiveAction,
+    pendingDestructiveBusy,
+    saveEditorDocumentSequence,
+  ]);
+
+  const requestClosePane = useCallback((tabId: string, leafId: string) => {
+    const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
+    if (!tab) return;
+    if (getAllLeafIds(tab.root).length === 1) {
+      requestCloseTab(tabId);
+      return;
+    }
+    const leaf = findLeaf(tab.root, leafId);
+    const paneTitle = leaf?.title?.trim();
+    setPendingDestructiveAction({
+      title: paneTitle ? `Close ${paneTitle}?` : 'Close terminal pane?',
+      description: 'Close this terminal pane? Its terminal session will end; detached jobs may continue outside JaneT.',
+      confirmLabel: 'Close pane',
+      run: () => handleClosePane(tabId, leafId),
+      fallbackFocus: firstTerminalFocusTarget,
+    });
+  }, [handleClosePane, requestCloseTab]);
+
   const handleResizePane = useCallback(
     (tabId: string, splitId: string, dividerIndex: number, leftFraction: number) => {
       updateTab(tabId, (tab) => ({
@@ -678,48 +1026,60 @@ function AppInner() {
       setSshSessions((prev) => (
         prev.some((s) => s.id === session.id) ? prev : [...prev, session]
       ));
-      setReadySshSessionIds((prev) => new Set(prev).add(session.id));
+      markSshSessionReady(session.id);
       addTab('ssh', session.id, true, session.sshProfileId);
+      setSshConnectionsOpen(false);
     },
-    [addTab],
+    [addTab, markSshSessionReady],
   );
 
   // Re-open the SSH shell for a single term. Triggered by the
   // "Reconnect" button on the SSH notice. If the underlying SSH
   // session is gone (server closed the connection), reconnect the
   // session first using the tab's saved profile.
-  const handleSshRetry = useCallback(async (termId: string) => {
-    const tab = tabsRef.current.find(
-      (candidate) => candidate.type === 'ssh' && getAllLeafIds(candidate.root).includes(termId),
-    );
-    if (!tab || !tab.sshSessionId) return;
+  const handleSshRetry = useCallback(async (
+    termId: string,
+    dimensions: { cols: number; rows: number },
+  ) => {
+    const tab = tabsRef.current.find((candidate) => getAllLeafIds(candidate.root).includes(termId));
+    const leaf = tab ? findLeaf(tab.root, termId) : null;
+    const leafType = leaf?.terminalType ?? tab?.type;
+    const sessionId = leaf?.sshSessionId ?? tab?.sshSessionId;
+    const profileId = leaf?.sshProfileId ?? tab?.sshProfileId;
+    if (!tab || leafType !== 'ssh' || !sessionId) {
+      throw new Error('SSH session is no longer available');
+    }
 
-    const dims = (() => {
-      // Best-effort — falls back to 80x24 if the term isn't measured yet.
-      const el = document.querySelector(`[data-terminal-id="${termId}"]`);
-      if (!el) return { cols: 80, rows: 24 };
-      return { cols: 80, rows: 24 };
-    })();
+    const dims = {
+      cols: Math.max(dimensions?.cols || 80, 120),
+      rows: Math.max(dimensions?.rows || 24, 40),
+    };
 
     try {
-      await window.janet.sshCreateShell({ id: tab.sshSessionId, termId, ...dims });
+      await window.janet.sshCreateShell({
+        id: sessionId,
+        termId,
+        ...dims,
+        ...(leaf?.startupCommands?.length ? { startupCommands: leaf.startupCommands } : {}),
+        ...(leaf?.startupShellDialect ? { startupShellDialect: leaf.startupShellDialect } : {}),
+      });
     } catch (shellErr) {
       // Shell open failed — the session itself may be dead. Try
       // re-establishing the SSH connection from the saved profile,
       // then re-open the shell. If the profile is missing the user
       // will see the original error and can dismiss the tab.
-      const profile = tab.sshProfileId
-        ? sshProfiles.find((candidate) => candidate.id === tab.sshProfileId)
+      const profile = profileId
+        ? sshProfiles.find((candidate) => candidate.id === profileId)
         : undefined;
       if (!profile) {
         console.error('SSH retry failed and no saved profile to reconnect from:', shellErr);
-        return;
+        throw shellErr;
       }
-      releasedSshSessionIdsRef.current.delete(tab.sshSessionId);
-      connectingSshSessionIdsRef.current.add(tab.sshSessionId);
+      releasedSshSessionIdsRef.current.delete(sessionId);
+      connectingSshSessionIdsRef.current.add(sessionId);
       try {
         await window.janet.sshConnect({
-          id: tab.sshSessionId,
+          id: sessionId,
           host: profile.host,
           port: profile.port,
           ...(profile.username ? { username: profile.username } : {}),
@@ -728,21 +1088,32 @@ function AppInner() {
           privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
         });
         if (
-          releasedSshSessionIdsRef.current.has(tab.sshSessionId) ||
-          !ownsSshSession(tabsRef.current, tab.sshSessionId)
+          releasedSshSessionIdsRef.current.has(sessionId) ||
+          !ownsSshSession(tabsRef.current, sessionId)
         ) {
-          window.janet.sshDisconnect({ id: tab.sshSessionId }).catch(() => {});
+          window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
           return;
         }
-        setReadySshSessionIds((prev) => new Set(prev).add(tab.sshSessionId!));
-        await window.janet.sshCreateShell({ id: tab.sshSessionId, termId, ...dims });
+        const session = sshSessionInfo(sessionId, profile);
+        setSshSessions((current) => current.some((candidate) => candidate.id === sessionId)
+          ? current
+          : [...current, session]);
+        markSshSessionReady(sessionId);
+        await window.janet.sshCreateShell({
+          id: sessionId,
+          termId,
+          ...dims,
+          ...(leaf?.startupCommands?.length ? { startupCommands: leaf.startupCommands } : {}),
+          ...(leaf?.startupShellDialect ? { startupShellDialect: leaf.startupShellDialect } : {}),
+        });
       } catch (reconnectErr) {
         console.error('SSH retry failed:', reconnectErr);
+        throw reconnectErr;
       } finally {
-        connectingSshSessionIdsRef.current.delete(tab.sshSessionId);
+        connectingSshSessionIdsRef.current.delete(sessionId);
       }
     }
-  }, [sshProfiles]);
+  }, [markSshSessionReady, sshProfiles]);
 
   const handleSSHProfilesChange = useCallback((profiles: SavedSSHProfile[]) => {
     setSshProfiles(profiles);
@@ -762,7 +1133,7 @@ function AppInner() {
       type: tab.type,
       cwd: tab.type === 'local' ? tab.cwd : undefined,
       sshProfileId: tab.sshProfileId,
-      root: serializePaneTree(tab.root, cwdByTerminal),
+      root: serializePaneTree(tab.root, cwdByTerminal, { includeStartupCommands: true }),
       terminalCount: getAllLeafIds(tab.root).length,
       splitDirection: tab.root.type === 'split' ? tab.root.direction : 'vertical',
     };
@@ -778,8 +1149,34 @@ function AppInner() {
     }
   }, [cwdByTerminal, updateTab]);
 
+  const requestSaveWorkspaceTab = useCallback((tab: TabInfo) => {
+    const existingPreset = tab.workspaceId
+      ? workspaceTabs.find((preset) => preset.id === tab.workspaceId)
+      : undefined;
+    if (!existingPreset) {
+      saveWorkspaceTab(tab);
+      return;
+    }
+    setPendingDestructiveAction({
+      title: `Update preset “${existingPreset.name}”?`,
+      description: 'Replace the saved preset with this tab’s current layout, directories, and startup commands?',
+      confirmLabel: 'Update preset',
+      run: () => saveWorkspaceTab(tab),
+      fallbackFocus: firstTerminalFocusTarget,
+    });
+  }, [saveWorkspaceTab, workspaceTabs]);
+
   const openWorkspaceTab = useCallback(async (preset: WorkspaceTabPreset) => {
-    let root = restorePaneTree(preset.root) ?? createPaneRoot(preset.type, preset.terminalCount, preset.splitDirection);
+    const restoredRoot = restorePaneTree(preset.root);
+    let root = restoredRoot ?? createPaneRoot(preset.type, preset.terminalCount, preset.splitDirection);
+    if (!restoredRoot) {
+      // Legacy presets stored one terminal configuration at the top level.
+      // Carry it into each synthesized leaf before the preset becomes a mixed
+      // workspace tab, otherwise rootless SSH presets cannot connect.
+      root = mapLeaves(root, (leaf) => preset.type === 'ssh'
+        ? { ...leaf, terminalType: 'ssh', sshProfileId: preset.sshProfileId }
+        : { ...leaf, terminalType: 'local', cwd: preset.cwd });
+    }
     root = mapLeaves(root, (leaf) => leaf.terminalType !== 'ssh' ? leaf : {
       ...leaf,
       sshSessionId: `ssh-${Date.now()}-${leaf.id}`,
@@ -793,10 +1190,12 @@ function AppInner() {
     setTabs(nextTabs);
     setActiveTabId(tab.id);
 
-    const sshLeaves: Array<{ id: string; sshProfileId: string; sshSessionId: string }> = [];
+    const sshLeaves: Array<{ id: string; sshProfileId?: string; sshSessionId: string }> = [];
     const collect = (node: PaneNode) => {
       if (node.type === 'leaf') {
-        if (node.terminalType === 'ssh' && node.sshProfileId && node.sshSessionId) sshLeaves.push({ id: node.id, sshProfileId: node.sshProfileId, sshSessionId: node.sshSessionId });
+        if (node.terminalType === 'ssh' && node.sshSessionId) {
+          sshLeaves.push({ id: node.id, sshProfileId: node.sshProfileId, sshSessionId: node.sshSessionId });
+        }
         return;
       }
       node.children.forEach(collect);
@@ -804,7 +1203,10 @@ function AppInner() {
     collect(root);
     for (const leaf of sshLeaves) {
       const profile = sshProfiles.find((candidate) => candidate.id === leaf.sshProfileId);
-      if (!profile) continue;
+      if (!profile) {
+        updateTab(tab.id, (current) => demoteSshLeaf(current, leaf.id));
+        continue;
+      }
       releasedSshSessionIdsRef.current.delete(leaf.sshSessionId);
       connectingSshSessionIdsRef.current.add(leaf.sshSessionId);
       try {
@@ -825,40 +1227,17 @@ function AppInner() {
         setSshSessions((current) => current.some((candidate) => candidate.id === session.id)
           ? current
           : [...current, session]);
-        setReadySshSessionIds((current) => new Set(current).add(leaf.sshSessionId));
+        markSshSessionReady(leaf.sshSessionId);
         updateTab(tab.id, (current) => ({ ...current, root: mapLeaves(current.root, (candidate) => candidate.id === leaf.id ? { ...candidate, sshShellReady: true } : candidate) }));
       } catch (error) {
         console.error('Failed to open workspace SSH terminal:', error);
+        updateTab(tab.id, (current) => demoteSshLeaf(current, leaf.id));
       } finally {
         connectingSshSessionIdsRef.current.delete(leaf.sshSessionId);
       }
     }
-  }, [sshProfiles, updateTab]);
+  }, [markSshSessionReady, sshProfiles, updateTab]);
 
-
-  const handleSSHDisconnected = useCallback(
-    (sessionId: string) => {
-      setSshSessions((prev) => prev.filter((s) => s.id !== sessionId));
-      setTabs((prev) => {
-        const remaining = prev.filter((t) => t.sshSessionId !== sessionId);
-        if (remaining.length === 0) {
-          const newTab: TabInfo = {
-            id: genId('tab'),
-            title: 'terminal 1',
-            type: 'local',
-            root: createTabRoot('local'),
-          };
-          setActiveTabId(newTab.id);
-          return [newTab];
-        }
-        if (!remaining.find((t) => t.id === activeTabId)) {
-          setActiveTabId(remaining[0].id);
-        }
-        return remaining;
-      });
-    },
-    [activeTabId],
-  );
 
   const activeTab = getTab(activeTabId);
 
@@ -874,6 +1253,12 @@ function AppInner() {
     () => sidebarTerminalId ? findLeaf(activeTab.root, sidebarTerminalId) : null,
     [activeTab, sidebarTerminalId],
   );
+  const copyTerminalPath = useCallback(async (path: string) => {
+    const pasteToken = formatTerminalPathForPaste(path, sidebarLeaf?.startupShellDialect);
+    if (!pasteToken) throw new Error('Path cannot be pasted safely');
+    const copied = await window.janet.copyText(pasteToken);
+    if (!copied) throw new Error('Path could not be copied');
+  }, [sidebarLeaf?.startupShellDialect]);
   const sidebarIsRemote = (sidebarLeaf?.terminalType ?? activeTab.type) === 'ssh';
   const sidebarSshSessionId = sidebarLeaf?.sshSessionId ?? (
     activeTab.type === 'ssh' ? activeTab.sshSessionId : undefined
@@ -881,14 +1266,23 @@ function AppInner() {
   const sidebarSshProfileId = sidebarLeaf?.sshProfileId ?? (
     activeTab.type === 'ssh' ? activeTab.sshProfileId : undefined
   );
-  const sidebarRemoteHost = sidebarIsRemote
-    ? sshSessions.find((session) => session.id === sidebarSshSessionId)?.host ??
-      sshProfiles.find((profile) => profile.id === sidebarSshProfileId)?.host
+  const sidebarSshSession = sidebarIsRemote
+    ? sshSessions.find((session) => session.id === sidebarSshSessionId)
     : undefined;
+  const sidebarSshProfile = sidebarIsRemote
+    ? sshProfiles.find((profile) => profile.id === sidebarSshProfileId)
+    : undefined;
+  const sidebarRemoteHost = sidebarIsRemote
+    ? sidebarSshSession?.host ?? sidebarSshProfile?.host
+    : undefined;
+  const sidebarRemotePort = sidebarSshSession?.port ?? sidebarSshProfile?.port;
+  const sidebarRemoteUsername = sidebarSshSession?.username ?? sidebarSshProfile?.username;
+  const sidebarRemoteLabel = sidebarRemoteHost
+    ? `${sidebarRemoteUsername ? `${sidebarRemoteUsername}@` : ''}${sidebarRemoteHost}${sidebarRemotePort ? `:${sidebarRemotePort}` : ''}`
+    : 'SSH session';
 
-  // The effective cwd: prefer the focused terminal's last-known cwd, fall
-  // back to the home dir. SSH terminals always show "~" since we can't
-  // resolve a remote cwd into a local file tree.
+  // The effective cwd remains a local-only input for Git and status surfaces.
+  // Remote Explorer navigation is derived separately from SFTP below.
   const effectiveCwd = useMemo(() => {
     if (sidebarIsRemote) return homeDir;
     if (sidebarTerminalId && cwdByTerminal[sidebarTerminalId]) {
@@ -896,6 +1290,34 @@ function AppInner() {
     }
     return sidebarLeaf?.cwd || activeTab.cwd || homeDir;
   }, [activeTab.cwd, sidebarIsRemote, sidebarLeaf?.cwd, sidebarTerminalId, cwdByTerminal, homeDir]);
+  const explorerSource = useMemo<FileExplorerSource>(() => {
+    if (sidebarIsRemote) {
+      const sessionId = sidebarSshSessionId ?? '';
+      const connectionState = disconnectedSshSessionIds.has(sessionId)
+        ? 'disconnected'
+        : sessionId && readySshSessionIds.has(sessionId)
+          ? 'ready'
+          : 'connecting';
+      return {
+        kind: 'ssh',
+        key: `ssh:${sidebarTerminalId ?? activeTab.id}:${sessionId || 'pending'}:${sshConnectionEpochById[sessionId] ?? 0}`,
+        sessionId,
+        label: sidebarRemoteLabel,
+        connectionState,
+        ready: connectionState === 'ready',
+      };
+    }
+    return {
+      kind: 'local',
+      key: `local:${sidebarTerminalId ?? activeTab.id}`,
+      cwd: effectiveCwd,
+      ready: Boolean(effectiveCwd),
+    };
+  }, [
+    activeTab.id, disconnectedSshSessionIds, effectiveCwd, readySshSessionIds, sidebarIsRemote,
+    sidebarRemoteLabel, sidebarSshSessionId, sidebarTerminalId,
+    sshConnectionEpochById,
+  ]);
   const gitRepository = useGitRepository(effectiveCwd, !sidebarIsRemote);
   const gitStatus: GitStatusSummary | null = useMemo(
     () => gitRepository.repoPath && gitRepository.status
@@ -903,6 +1325,11 @@ function AppInner() {
       : null,
     [gitRepository.repoPath, gitRepository.status],
   );
+  const openEditorFile = useCallback((resource: EditorResource) => {
+    void editorDocuments.openDocument(activeTab.id, resource);
+  }, [activeTab.id, editorDocuments.openDocument]);
+  const activeDocuments = editorDocuments.documentsByTab[activeTab.id] ?? [];
+  const activeDocumentWorkspace = editorDocuments.workspaces[activeTab.id] ?? emptyTabDocumentWorkspace();
 
   // === Keyboard shortcuts via keybindings context ===
   // Register global action handlers
@@ -911,14 +1338,14 @@ function AppInner() {
       setPaletteVisible((v) => !v);
     });
     const unsub2 = on('new-terminal', () => addTab('local'));
-    const unsub3 = on('close-tab', () => closeTab(activeTabId));
-    const unsub4 = on('toggle-sidebar', () => setSidebarOpen((v) => !v));
+    const unsub3 = on('close-tab', () => requestCloseTab(activeTabId));
+    const unsub4 = on('toggle-sidebar', toggleWorkspaceTools);
     const unsub5 = on('font-increase', () => persistFontSize(Math.min(24, fontSize + 1)));
     const unsub6 = on('font-decrease', () => persistFontSize(Math.max(10, fontSize - 1)));
     return () => {
       unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6();
     };
-  }, [on, addTab, closeTab, activeTabId, persistFontSize, fontSize]);
+  }, [on, addTab, requestCloseTab, activeTabId, toggleWorkspaceTools, persistFontSize, fontSize]);
 
   // Split/close-pane handlers depend on activeTab so register separately
   useEffect(() => {
@@ -930,10 +1357,10 @@ function AppInner() {
     });
     const unsub3 = on('close-pane', () => {
       const leaves = getAllLeafIds(activeTab.root);
-      if (sidebarTerminalId && leaves.length > 1) handleClosePane(activeTab.id, sidebarTerminalId);
+      if (sidebarTerminalId && leaves.length > 1) requestClosePane(activeTab.id, sidebarTerminalId);
     });
     return () => { unsub1(); unsub2(); unsub3(); };
-  }, [on, activeTab, sidebarTerminalId, handleSplitPane, handleClosePane]);
+  }, [on, activeTab, sidebarTerminalId, handleSplitPane, requestClosePane]);
 
   // === Escape handler for palette ===
   useEffect(() => {
@@ -950,51 +1377,58 @@ function AppInner() {
   const paletteActions = useMemo<CommandAction[]>(() => {
     const actions: CommandAction[] = [
       {
-        id: 'new-terminal', label: 'New Terminal', category: 'Tab',
+        id: 'new-terminal', label: 'New terminal tab', category: 'Tabs',
         shortcut: bindings['new-terminal'], handler: () => addTab('local'),
       },
       {
-        id: 'close-tab', label: 'Close Tab', category: 'Tab',
-        shortcut: bindings['close-tab'], handler: () => closeTab(activeTabId),
+        id: 'close-tab', label: 'Close current tab', category: 'Tabs',
+        shortcut: bindings['close-tab'], handler: () => requestCloseTab(activeTabId),
       },
       {
-        id: 'toggle-sidebar', label: 'Toggle Sidebar', category: 'View',
-        shortcut: bindings['toggle-sidebar'], handler: () => setSidebarOpen((v) => !v),
+        id: 'toggle-sidebar', label: 'Show or hide workspace tools', category: 'View',
+        shortcut: bindings['toggle-sidebar'], handler: toggleWorkspaceTools,
       },
       {
-        id: 'sidebar-files', label: 'Show File Explorer', category: 'View',
-        handler: () => { setSidebarOpen(true); setSidebarSection('files'); },
+        id: 'sidebar-files', label: 'Open Explorer', category: 'View',
+        handler: () => { setWorkspaceToolsExpanded(true); setSidebarSection('files'); },
       },
       {
-        id: 'sidebar-ssh', label: 'Show SSH Connections', category: 'View',
-        handler: () => { setSidebarOpen(true); setSidebarSection('ssh'); },
+        id: 'sidebar-ssh', label: 'Open SSH connections', category: 'View',
+        handler: () => {
+          responsiveTabsCollapsedRef.current = false;
+          setTabsOpen(true);
+          setSshConnectionsOpen(true);
+        },
       },
       {
-        id: 'sidebar-git', label: 'Show Git Tree', category: 'View',
-        handler: () => { setSidebarOpen(true); setSidebarSection('git'); },
+        id: 'sidebar-git', label: 'Open Source Control', category: 'View',
+        handler: () => { setWorkspaceToolsExpanded(true); setSidebarSection('git'); },
       },
       {
-        id: 'sidebar-settings', label: 'Show Settings', category: 'View',
-        handler: () => { setSidebarOpen(true); setSidebarSection('settings'); },
+        id: 'sidebar-settings', label: 'Open Settings', category: 'View',
+        handler: () => setSettingsOpen(true),
       },
       {
-        id: 'font-increase', label: 'Increase Font Size', category: 'Settings',
+        id: 'font-increase', label: 'Increase terminal text size', category: 'Settings',
         shortcut: bindings['font-increase'], handler: () => persistFontSize(Math.min(24, fontSize + 1)),
       },
       {
-        id: 'font-decrease', label: 'Decrease Font Size', category: 'Settings',
+        id: 'font-decrease', label: 'Decrease terminal text size', category: 'Settings',
         shortcut: bindings['font-decrease'], handler: () => persistFontSize(Math.max(10, fontSize - 1)),
       },
       {
-        id: 'search-toggle', label: 'Search in Terminal', category: 'Terminal',
-        shortcut: bindings['search-toggle'], handler: () => {},
+        id: 'search-toggle', label: 'Search terminal output', category: 'Terminal',
+        shortcut: bindings['search-toggle'],
+        handler: () => {
+          if (sidebarTerminalId) requestTerminalSearch(sidebarTerminalId);
+        },
       },
       {
-        id: 'palette-toggle', label: 'Command Palette', category: 'General',
+        id: 'palette-toggle', label: 'Open command palette', category: 'General',
         shortcut: bindings['palette-toggle'], handler: () => setPaletteVisible((v) => !v),
       },
       {
-        id: 'check-updates', label: 'Check for Updates', category: 'General',
+        id: 'check-updates', label: 'Check for updates', category: 'General',
         handler: () => { window.janet.checkForUpdates().catch(() => {}); },
       },
       {
@@ -1024,17 +1458,17 @@ function AppInner() {
       const leaves = getAllLeafIds(activeTab.root);
       if (sidebarTerminalId) {
         actions.push({
-          id: 'split-right', label: 'Split Right', category: 'Pane',
+          id: 'split-right', label: 'Split pane right', category: 'Pane',
           shortcut: bindings['split-right'], handler: () => handleSplitPane(activeTab.id, sidebarTerminalId, 'vertical'),
         });
         actions.push({
-          id: 'split-down', label: 'Split Down', category: 'Pane',
+          id: 'split-down', label: 'Split pane below', category: 'Pane',
           shortcut: bindings['split-down'], handler: () => handleSplitPane(activeTab.id, sidebarTerminalId, 'horizontal'),
         });
         if (leaves.length > 1) {
           actions.push({
-            id: 'close-pane', label: 'Close Pane', category: 'Pane',
-            shortcut: bindings['close-pane'], handler: () => handleClosePane(activeTab.id, sidebarTerminalId),
+            id: 'close-pane', label: 'Close current pane', category: 'Pane',
+            shortcut: bindings['close-pane'], handler: () => requestClosePane(activeTab.id, sidebarTerminalId),
           });
         }
       }
@@ -1042,105 +1476,154 @@ function AppInner() {
 
     return actions;
   }, [
-    activeTab, activeTabId, sidebarTerminalId, addTab, closeTab, handleSplitPane, handleClosePane,
-    fontSize, persistFontSize, persistTheme, bindings,
+    activeTab, activeTabId, sidebarTerminalId, addTab, requestCloseTab, handleSplitPane, requestClosePane,
+    fontSize, persistFontSize, persistTheme, setWorkspaceToolsExpanded, toggleWorkspaceTools, bindings,
   ]);
+
+  const workspaceTools = (
+    <Sidebar
+      key="workspace-tools"
+      section={sidebarSection}
+      onSectionChange={setSidebarSection}
+      side={sidebarSide}
+      expanded={sidebarOpen}
+      onExpandedChange={setWorkspaceToolsExpanded}
+      explorerSource={explorerSource}
+      cwdReady={Boolean(effectiveCwd)}
+      isRemote={sidebarIsRemote}
+      gitRepository={gitRepository}
+      onOpenLocalTabAt={openLocalTabAt}
+      onCopyTerminalPath={copyTerminalPath}
+      onOpenFile={openEditorFile}
+    />
+  );
+
+  const runPendingDestructiveAction = async (secondary: boolean) => {
+    const action = pendingDestructiveAction;
+    const run = secondary ? action?.runSecondary : action?.run;
+    if (!action || !run || pendingDestructiveBusy) return;
+    setPendingDestructiveBusy(true);
+    try {
+      const result = await run();
+      if (result !== false) {
+        setPendingDestructiveAction((current) => current === action ? null : current);
+      }
+    } finally {
+      setPendingDestructiveBusy(false);
+    }
+  };
 
   return (
     <div className="app">
       <Titlebar
-        section={sidebarSection}
-        onSectionChange={(section) => {
-          if (section === sidebarSection && sidebarOpen) {
-            setSidebarOpen(false);
-          } else {
-            setSidebarSection(section);
-            setSidebarOpen(true);
-          }
+        onOpenPalette={() => {
+          setSettingsOpen(false);
+          setPaletteVisible(true);
         }}
-        sidebarOpen={sidebarOpen}
-        onOpenPalette={() => setPaletteVisible(true)}
+        paletteShortcut={bindings['palette-toggle']}
+        settingsOpen={settingsOpen}
+        onSettingsToggle={() => setSettingsOpen((open) => !open)}
+        onSettingsClose={() => setSettingsOpen(false)}
+        settingsContent={(
+          <div className="titlebar-settings-content">
+            <ThemeSwitcher
+              currentTheme={currentTheme}
+              onThemeChange={persistTheme}
+              fontSize={fontSize}
+              onFontSizeChange={persistFontSize}
+              sidebarSide={sidebarSide}
+              onSidebarSideChange={persistSidebarSide}
+            />
+            <ShortcutEditor />
+          </div>
+        )}
       />
       <div className={`app-body sidebar-${sidebarSide}`}>
-        {sidebarOpen && (
-          <Sidebar
-            section={sidebarSection}
-            onSectionChange={setSidebarSection}
-            sshProfiles={sshProfiles}
-            onSSHConnected={handleSSHConnected}
-            onSSHProfilesChange={handleSSHProfilesChange}
-            currentTheme={currentTheme}
-            onThemeChange={persistTheme}
-            fontSize={fontSize}
-            onFontSizeChange={persistFontSize}
-            sidebarSide={sidebarSide}
-            onSidebarSideChange={persistSidebarSide}
-            shortcutEditor={<ShortcutEditor />}
-            cwd={effectiveCwd}
-            cwdReady={Boolean(effectiveCwd)}
-            isRemote={sidebarIsRemote}
-            gitRepository={gitRepository}
-            onOpenLocalTabAt={openLocalTabAt}
-          />
-        )}
+        {sidebarSide === 'left' && workspaceTools}
         {tabsOpen ? (
           <VerticalTabBar
+            key="terminal-tabs"
             tabs={tabs}
             activeTabId={activeTabId}
+            dirtyTabIds={editorDocuments.dirtyTabIds}
             sshProfiles={sshProfiles}
+            sshConnectionsOpen={sshConnectionsOpen}
+            onSSHConnectionsOpenChange={setSshConnectionsOpen}
+            onSSHConnected={handleSSHConnected}
+            onSSHProfilesChange={handleSSHProfilesChange}
             workspaceTabs={workspaceTabs}
             onSelectTab={setActiveTabId}
-            onCloseTab={closeTab}
+            onCloseTab={requestCloseTab}
             onNewTab={() => addTab('local')}
             onWorkspaceTabsChange={handleWorkspaceTabsChange}
             onWorkspaceTabLaunch={openWorkspaceTab}
-            onSaveWorkspaceTab={saveWorkspaceTab}
+            onSaveWorkspaceTab={requestSaveWorkspaceTab}
             onRenameTab={renameTab}
-            onCollapse={() => setTabsOpen(false)}
+            onCollapse={() => {
+              responsiveTabsCollapsedRef.current = false;
+              setTabsOpen(false);
+            }}
           />
         ) : (
-          <button
-            className="tabs-rail"
-            onClick={() => setTabsOpen(true)}
-            title="Show tabs"
-            aria-label="Show tabs"
-          >
-            Tabs
-          </button>
+          <Tooltip key="terminal-tabs" label="Show terminal tabs" placement="right">
+            <button className="tabs-rail" onClick={() => {
+              responsiveTabsCollapsedRef.current = false;
+              setTabsOpen(true);
+            }} aria-label="Show terminal tabs">
+              Tabs
+            </button>
+          </Tooltip>
         )}
-        <div className="terminal-area">
-          <SplitPane
-            node={activeTab.root}
+        <div key="terminal" className="terminal-area">
+          <WorkspaceContent
             tabId={activeTab.id}
-            tabType={activeTab.type}
-            sshSessionId={activeTab.sshSessionId}
-            sshShellReady={activeTab.type !== 'ssh' || activeTab.sshShellReady === true}
-            onTerminalReady={handleTerminalReady}
-            onTerminalRemoved={handleTerminalRemoved}
-            onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}
-            onClosePane={(leafId) => handleClosePane(activeTab.id, leafId)}
-            onResizePane={(splitId, dividerIndex, leftFraction) => handleResizePane(activeTab.id, splitId, dividerIndex, leftFraction)}
-            onMovePane={(draggedLeafId, targetLeafId, side) => handleMovePane(activeTab.id, draggedLeafId, targetLeafId, side)}
-            draggedLeafId={draggedPaneId}
-            dropTarget={paneDropTarget}
-            onPaneDragStart={setDraggedPaneId}
-            onPaneDragOver={setPaneDropTarget}
-            onPaneDragEnd={() => { setDraggedPaneId(null); setPaneDropTarget(null); }}
-            maximizedLeafId={maximizedLeafByTab[activeTab.id] ?? null}
-            onToggleMaximizePane={(leafId) => handleToggleMaximizePane(activeTab.id, leafId)}
+            documents={activeDocuments}
+            activeSurface={activeDocumentWorkspace.activeSurface}
             themeName={currentTheme}
             fontSize={fontSize}
-            onCwdChange={handleCwdChange}
-            onTerminalFocus={handleTerminalFocus}
-            initialCwd={activeTab.cwd || homeDir || undefined}
-            hasSessionForLeaf={(leafId) => liveTerminalIdsRef.current.has(leafId)}
-            onSshRetry={handleSshRetry}
+            fontFamily={fontFamily}
+            onSelectSurface={(surface) => editorDocuments.selectSurface(activeTab.id, surface)}
+            onDocumentChange={editorDocuments.updateDocumentContent}
+            onSaveDocument={(key) => { void saveEditorDocument(key); }}
+            onRetryDocument={(key) => { void editorDocuments.retryDocument(key); }}
+            onCloseDocument={requestCloseEditorDocument}
+            terminal={(
+              <SplitPane
+                node={activeTab.root}
+                tabId={activeTab.id}
+                tabType={activeTab.type}
+                sshSessionId={activeTab.sshSessionId}
+                sshShellReady={activeTab.type !== 'ssh' || activeTab.sshShellReady === true}
+                onTerminalReady={handleTerminalReady}
+                onTerminalRemoved={handleTerminalRemoved}
+                onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}
+                onClosePane={(leafId) => requestClosePane(activeTab.id, leafId)}
+                onResizePane={(splitId, dividerIndex, leftFraction) => handleResizePane(activeTab.id, splitId, dividerIndex, leftFraction)}
+                onMovePane={(draggedLeafId, targetLeafId, side) => handleMovePane(activeTab.id, draggedLeafId, targetLeafId, side)}
+                draggedLeafId={draggedPaneId}
+                dropTarget={paneDropTarget}
+                onPaneDragStart={setDraggedPaneId}
+                onPaneDragOver={setPaneDropTarget}
+                onPaneDragEnd={() => { setDraggedPaneId(null); setPaneDropTarget(null); }}
+                maximizedLeafId={maximizedLeafByTab[activeTab.id] ?? null}
+                onToggleMaximizePane={(leafId) => handleToggleMaximizePane(activeTab.id, leafId)}
+                themeName={currentTheme}
+                fontSize={fontSize}
+                fontFamily={fontFamily}
+                onCwdChange={handleCwdChange}
+                onTerminalFocus={handleTerminalFocus}
+                initialCwd={activeTab.cwd || homeDir || undefined}
+                hasSessionForLeaf={(leafId) => liveTerminalIdsRef.current.has(leafId)}
+                isSshSessionDisconnected={isSshSessionDisconnected}
+                onSshRetry={handleSshRetry}
+              />
+            )}
           />
         </div>
+        {sidebarSide === 'right' && workspaceTools}
       </div>
       <StatusBar
         sshSessions={sshSessions}
-        activeTerminalsCount={activeTerminals.size}
         cwd={effectiveCwd}
         gitStatus={gitStatus}
         isRemote={sidebarIsRemote}
@@ -1152,39 +1635,96 @@ function AppInner() {
         actions={paletteActions}
       />
       <UpdateBanner />
+      <ConfirmationDialog
+        open={pendingDestructiveAction !== null}
+        title={pendingDestructiveAction?.title ?? ''}
+        description={pendingDestructiveAction?.description ?? ''}
+        confirmLabel={pendingDestructiveAction?.confirmLabel ?? 'Continue'}
+        secondaryLabel={pendingDestructiveAction?.secondaryLabel}
+        onSecondary={pendingDestructiveAction?.runSecondary
+          ? () => { void runPendingDestructiveAction(true); }
+          : undefined}
+        busy={pendingDestructiveBusy}
+        destructive={pendingDestructiveAction?.destructive ?? true}
+        fallbackFocus={pendingDestructiveAction?.fallbackFocus}
+        onCancel={() => {
+          if (pendingDestructiveBusy) return;
+          pendingDestructiveAction?.onCancel?.();
+          setPendingDestructiveAction(null);
+        }}
+        onConfirm={() => { void runPendingDestructiveAction(false); }}
+      />
     </div>
   );
 }
 
 export default function App() {
-  const [bindings, setBindings] = useState<Record<KeybindingAction, string> | null>(null);
+  const [settings, setSettings] = useState<any | null>(null);
+  const [settingsError, setSettingsError] = useState(false);
+  const [confirmDefaults, setConfirmDefaults] = useState(false);
 
-  // Load saved keybindings from settings before rendering
-  useEffect(() => {
+  const loadSettings = useCallback(() => {
+    setSettingsError(false);
     try {
       window.janet.getSettings().then((s: any) => {
-        if (s.keybindings) {
-          setBindings(s.keybindings as Record<KeybindingAction, string>);
-        } else {
-          setBindings({} as Record<KeybindingAction, string>);
-        }
-      }).catch(() => setBindings({} as Record<KeybindingAction, string>));
+        setSettings(s || {});
+      }).catch(() => setSettingsError(true));
     } catch {
-      setBindings({} as Record<KeybindingAction, string>);
+      setSettingsError(true);
     }
   }, []);
+
+  // Load one coherent settings snapshot before rendering the workspace.
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
 
   // Persist keybindings to main process
   const handleSave = useCallback((b: Record<KeybindingAction, string>) => {
     try { window.janet.setSettings({ keybindings: b }).catch(() => {}); } catch {}
   }, []);
 
-  // Don't render until bindings are loaded (avoids flash of defaults)
-  if (!bindings) return null;
+  if (!settings) {
+    return (
+      <>
+        <div className="app-startup" role={settingsError ? 'alert' : 'status'} aria-live="polite">
+          <BrandMark size={56} className="app-startup-mark" />
+          <div className="app-startup-name">JaneT</div>
+          {settingsError ? (
+            <>
+              <p>JaneT could not load your workspace settings.</p>
+              <div className="app-startup-actions">
+                <button type="button" onClick={loadSettings}>Try again</button>
+                <button type="button" onClick={() => setConfirmDefaults(true)}>Use defaults</button>
+              </div>
+            </>
+          ) : (
+            <p>Restoring your workspace…</p>
+          )}
+        </div>
+        <ConfirmationDialog
+          open={confirmDefaults}
+          title="Use default settings?"
+          description="Start a new default workspace? JaneT will replace saved tabs and custom shortcuts as the default workspace starts and saves."
+          confirmLabel="Use defaults"
+          fallbackFocus={firstTerminalFocusTarget}
+          onCancel={() => setConfirmDefaults(false)}
+          onConfirm={() => {
+            setConfirmDefaults(false);
+            setSettings({});
+          }}
+        />
+      </>
+    );
+  }
+
+  const initialBindings = settings.keybindings && typeof settings.keybindings === 'object'
+    ? settings.keybindings as Record<KeybindingAction, string>
+    : {} as Record<KeybindingAction, string>;
 
   return (
-    <KeybindingsProvider initialBindings={bindings} onSave={handleSave}>
-      <AppInner />
+    <KeybindingsProvider initialBindings={initialBindings} onSave={handleSave}>
+      <AppInner initialSettings={settings} />
     </KeybindingsProvider>
   );
 }

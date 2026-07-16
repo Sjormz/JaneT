@@ -1,4 +1,6 @@
 import { PaneNode, TerminalLeaf, SplitNode, genId } from './types';
+import type { StartupShellDialect } from '../shared/startupCommands';
+import { isStartupShellDialect, sanitizeStartupCommands } from '../shared/startupCommands';
 
 export interface SavedPaneLeaf {
   type: 'leaf';
@@ -6,6 +8,8 @@ export interface SavedPaneLeaf {
   terminalType?: 'local' | 'ssh';
   cwd?: string;
   sshProfileId?: string;
+  startupCommands?: string[];
+  startupShellDialect?: StartupShellDialect;
 }
 
 export interface SavedPaneSplit {
@@ -44,22 +48,40 @@ function normalizeSizes(sizes: unknown, count: number): number[] {
   return total > 0 ? sizes.map((size) => size / total) : new Array<number>(count).fill(1 / count);
 }
 
+export interface SerializePaneTreeOptions {
+  /** Startup automation belongs to reusable presets, not durable live sessions. */
+  includeStartupCommands?: boolean;
+}
+
 /** Strip runtime-only ids and emit a portable, JSON-safe tree. */
-export function serializePaneTree(node: PaneNode, cwdByTerminal: Record<string, string> = {}): SavedPaneNode {
+export function serializePaneTree(
+  node: PaneNode,
+  cwdByTerminal: Record<string, string> = {},
+  options: SerializePaneTreeOptions = {},
+): SavedPaneNode {
   if (node.type === 'leaf') {
+    const startupCommands = options.includeStartupCommands
+      ? sanitizeStartupCommands(node.startupCommands)
+      : [];
     return {
       type: 'leaf',
       ...(node.title ? { title: node.title } : {}),
       ...(node.terminalType ? { terminalType: node.terminalType } : {}),
       ...(cwdByTerminal[node.id] ?? node.cwd ? { cwd: cwdByTerminal[node.id] ?? node.cwd } : {}),
       ...(node.sshProfileId ? { sshProfileId: node.sshProfileId } : {}),
+      ...(startupCommands.length > 0 ? { startupCommands } : {}),
+      ...(startupCommands.length > 0 && node.terminalType === 'ssh'
+        ? { startupShellDialect: isStartupShellDialect(node.startupShellDialect) ? node.startupShellDialect : 'posix' }
+        : startupCommands.length > 0 && isStartupShellDialect(node.startupShellDialect)
+          ? { startupShellDialect: node.startupShellDialect }
+        : {}),
     };
   }
   return {
     type: 'split',
     direction: node.direction,
     sizes: normalizeSizes(node.sizes, node.children.length),
-    children: node.children.map((child) => serializePaneTree(child, cwdByTerminal)),
+    children: node.children.map((child) => serializePaneTree(child, cwdByTerminal, options)),
   };
 }
 
@@ -74,9 +96,22 @@ export function restorePaneTree(saved: unknown, prefix: 'term' | 'split' = 'term
   const node = saved as {
     type?: string; title?: string; direction?: string; sizes?: unknown; children?: unknown;
     terminalType?: string; cwd?: string; sshProfileId?: string;
+    startupCommands?: unknown; startupShellDialect?: unknown;
   };
 
   if (node.type === 'leaf') {
+    const hasExplicitStartupDialect = node.startupShellDialect !== undefined
+      && node.startupShellDialect !== null
+      && node.startupShellDialect !== '';
+    const startupShellDialect = isStartupShellDialect(node.startupShellDialect)
+      ? node.startupShellDialect
+      : undefined;
+    const validStartupDialect = startupShellDialect !== undefined;
+    const startupCommands = node.terminalType === 'ssh'
+      && hasExplicitStartupDialect
+      && !validStartupDialect
+      ? []
+      : sanitizeStartupCommands(node.startupCommands);
     const leaf: TerminalLeaf = {
       id: genId(prefix),
       type: 'leaf',
@@ -84,6 +119,12 @@ export function restorePaneTree(saved: unknown, prefix: 'term' | 'split' = 'term
       terminalType: node.terminalType === 'ssh' || node.terminalType === 'local' ? node.terminalType : undefined,
       cwd: typeof node.cwd === 'string' ? node.cwd : undefined,
       sshProfileId: typeof node.sshProfileId === 'string' ? node.sshProfileId : undefined,
+      ...(startupCommands.length > 0 ? { startupCommands } : {}),
+      ...(startupCommands.length > 0 && validStartupDialect
+        ? { startupShellDialect }
+        : startupCommands.length > 0 && node.terminalType === 'ssh'
+          ? { startupShellDialect: 'posix' }
+          : {}),
     };
     return leaf;
   }

@@ -110,6 +110,11 @@ export function KeybindingsProvider({
         return;
       }
 
+      // Modal surfaces own the keyboard while open. Suppressing application
+      // shortcuts prevents a second action from mutating state behind a
+      // confirmation or replacing the destructive target being reviewed.
+      if (document.querySelector('[aria-modal="true"], [data-keybindings-suspended]')) return;
+
       // Fire all registered handlers for matching actions
       const currentBindings = bindingsRef.current;
       for (const [action, handlerSet] of listenersRef.current.entries()) {

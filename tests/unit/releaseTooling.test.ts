@@ -39,6 +39,41 @@ describe('development tooling', () => {
 });
 
 describe('release tooling', () => {
+  it('builds Electron entry points through the esbuild API without an npx subprocess', async () => {
+    const { buildElectron } = await loadScript('build-electron.mjs');
+    const builds: Record<string, unknown>[] = [];
+
+    buildElectron({
+      build(options: Record<string, unknown>) {
+        builds.push(options);
+      },
+    });
+
+    expect(builds).toEqual([
+      expect.objectContaining({
+        absWorkingDir: projectRoot,
+        entryPoints: ['src/main/index.ts'],
+        outfile: 'dist/main/index.js',
+        bundle: true,
+        platform: 'node',
+        external: ['electron', 'node-pty', 'ssh2', 'ssh2-sftp-client', 'simple-git'],
+      }),
+      expect.objectContaining({
+        absWorkingDir: projectRoot,
+        entryPoints: ['src/main/preload.ts'],
+        outfile: 'dist/main/preload.js',
+        bundle: true,
+        platform: 'node',
+        external: ['electron', 'node-pty', 'ssh2', 'ssh2-sftp-client', 'simple-git'],
+      }),
+    ]);
+
+    const source = fs.readFileSync(path.join(projectRoot, 'scripts', 'build-electron.mjs'), 'utf8');
+    expect(source).toContain("require('esbuild').buildSync");
+    expect(source).not.toContain('child_process');
+    expect(source).not.toMatch(/\bnpx(?:\.cmd)?\b/);
+  });
+
   it('requires every installer and update manifest for each supported platform', async () => {
     const { expectedReleaseArtifacts } = await loadScript('verify-release-artifacts.mjs');
 
@@ -64,15 +99,98 @@ describe('release tooling', () => {
     ]);
   });
 
-  it('points packaged PTY checks at asar-unpacked production dependencies', async () => {
-    const { macPackagedRuntimes, packagedRuntime } = await loadScript('verify-release-artifacts.mjs');
+  it('validates unpacked PTY files but loads the logical asar module path', async () => {
+    const {
+      macPackagedRuntimes,
+      nativeMacRuntime,
+      packagedRuntime,
+      PACKAGED_RUNTIME_TIMEOUT_MS,
+    } = await loadScript('verify-release-artifacts.mjs');
     const macRuntime = packagedRuntime('macos', '/release', 'arm64');
     const windowsRuntime = packagedRuntime('windows', '/release', 'x64');
 
     expect(macRuntime.executable).toBe(path.join('/release', 'mac-arm64', 'JaneT.app', 'Contents', 'MacOS', 'JaneT'));
+    expect(macRuntime.platform).toBe('darwin');
     expect(macRuntime.nodePtyRoot).toContain(path.join('app.asar.unpacked', 'node_modules', 'node-pty'));
+    expect(macRuntime.nodePtyModule).toContain(path.join('app.asar', 'node_modules', 'node-pty'));
+    expect(macRuntime.nodePtyModule).not.toContain('app.asar.unpacked');
     expect(windowsRuntime.executable).toBe(path.join('/release', 'win-unpacked', 'JaneT.exe'));
+    expect(windowsRuntime.platform).toBe('win32');
+    expect(windowsRuntime.nodePtyRoot).toContain(path.join('app.asar.unpacked', 'node_modules', 'node-pty'));
+    expect(windowsRuntime.nodePtyModule).toContain(path.join('app.asar', 'node_modules', 'node-pty'));
+    expect(windowsRuntime.nodePtyModule).not.toContain('app.asar.unpacked');
+    expect(PACKAGED_RUNTIME_TIMEOUT_MS).toBe(60_000);
     expect(macPackagedRuntimes('/release').map((runtime: { arch: string }) => runtime.arch)).toEqual(['x64', 'arm64']);
+    expect(nativeMacRuntime('/release', 'arm64').arch).toBe('arm64');
+    expect(nativeMacRuntime('/release', 'x64').arch).toBe('x64');
+    expect(() => nativeMacRuntime('/release', 'riscv64')).toThrow(/No packaged macOS runtime matches/);
+  });
+
+  it('backports and verifies node-pty Windows ConPTY startup hardening', async () => {
+    const {
+      APP_ASAR_WORKER_REWRITE,
+      CONPTY_DEFERRED_CONNECT_MARKER,
+      CONPTY_PID_REFRESH_MARKER,
+      CONPTY_PROCESS_LIST_MARKER,
+      patchNodePtyConsoleListAgentSource,
+      patchNodePtyWindowsAgentSource,
+      patchNodePtyWindowsSources,
+      patchNodePtyWindowsTerminalSource,
+      patchNodePtyWindowsWorkerSource,
+    } = await loadScript('patch-node-pty-windows-worker.mjs');
+    const { validateWindowsPtyRuntime } = await loadScript('verify-release-artifacts.mjs');
+    const legacy = "var scriptPath = __dirname.replace('node_modules.asar', 'node_modules.asar.unpacked');";
+    const patched = patchNodePtyWindowsWorkerSource(legacy);
+
+    expect(patched).toContain(APP_ASAR_WORKER_REWRITE);
+    expect(patchNodePtyWindowsWorkerSource(patched)).toBe(patched);
+    expect(() => patchNodePtyWindowsWorkerSource('unknown worker implementation')).toThrow(/expected worker path resolver/);
+    expect(() => patchNodePtyWindowsAgentSource('unknown agent implementation')).toThrow(/expected Conout worker readiness block/);
+    expect(() => patchNodePtyWindowsTerminalSource('unknown terminal implementation')).toThrow(/expected ready_datapipe handler/);
+    expect(() => patchNodePtyConsoleListAgentSource('unknown helper implementation')).toThrow(/expected console process-list agent call/);
+    expect(() => patchNodePtyWindowsAgentSource(`// ${CONPTY_DEFERRED_CONNECT_MARKER}`)).toThrow(/Incomplete node-pty Windows agent patch/);
+    expect(() => patchNodePtyWindowsTerminalSource(`// ${CONPTY_PID_REFRESH_MARKER}`)).toThrow(/Incomplete node-pty Windows terminal patch/);
+    expect(() => patchNodePtyConsoleListAgentSource(`// ${CONPTY_PROCESS_LIST_MARKER}`)).toThrow(/Incomplete node-pty Windows console-list agent patch/);
+
+    const installedLibRoot = path.join(projectRoot, 'node_modules', 'node-pty', 'lib');
+    const installedSources = {
+      worker: fs.readFileSync(path.join(installedLibRoot, 'windowsConoutConnection.js'), 'utf8'),
+      agent: fs.readFileSync(path.join(installedLibRoot, 'windowsPtyAgent.js'), 'utf8'),
+      terminal: fs.readFileSync(path.join(installedLibRoot, 'windowsTerminal.js'), 'utf8'),
+      consoleListAgent: fs.readFileSync(path.join(installedLibRoot, 'conpty_console_list_agent.js'), 'utf8'),
+    };
+    expect(installedSources.worker).toContain(APP_ASAR_WORKER_REWRITE);
+    expect(installedSources.agent).toContain(CONPTY_DEFERRED_CONNECT_MARKER);
+    expect(installedSources.terminal).toContain(CONPTY_PID_REFRESH_MARKER);
+    expect(installedSources.consoleListAgent).toContain(CONPTY_PROCESS_LIST_MARKER);
+    expect(patchNodePtyWindowsSources(installedSources)).toEqual(installedSources);
+
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-windows-worker-'));
+    const nodePtyRoot = path.join(fixtureRoot, 'node-pty');
+    const libRoot = path.join(nodePtyRoot, 'lib');
+    try {
+      fs.mkdirSync(libRoot, { recursive: true });
+      fs.writeFileSync(path.join(libRoot, 'windowsConoutConnection.js'), legacy);
+      for (const fileName of ['windowsPtyAgent.js', 'windowsTerminal.js', 'conpty_console_list_agent.js']) {
+        fs.writeFileSync(path.join(libRoot, fileName), 'unpatched');
+      }
+      expect(() => validateWindowsPtyRuntime({ nodePtyRoot }))
+        .toThrow(/cannot resolve app\.asar\.unpacked/);
+      for (const [name, fileName] of [
+        ['worker', 'windowsConoutConnection.js'],
+        ['agent', 'windowsPtyAgent.js'],
+        ['terminal', 'windowsTerminal.js'],
+        ['consoleListAgent', 'conpty_console_list_agent.js'],
+      ] as const) {
+        fs.writeFileSync(path.join(libRoot, fileName), installedSources[name]);
+      }
+      expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).not.toThrow();
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+
+    const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+    expect(packageJson.scripts.postinstall).toContain('patch-node-pty-windows-worker.mjs');
   });
 
   it.skipIf(process.platform === 'win32')('validates both macOS native PTY layouts and helper execute bits', async () => {
@@ -99,6 +217,113 @@ describe('release tooling', () => {
     } finally {
       fs.rmSync(releaseRoot, { recursive: true, force: true });
     }
+  });
+
+  it('requires valid ad-hoc macOS signatures without an authority or team identifier', async () => {
+    const { validateAdHocMacSignature } = await loadScript('verify-release-artifacts.mjs');
+    const validDetails = [
+      'Executable=/release/JaneT.app/Contents/MacOS/JaneT',
+      'Signature=adhoc',
+      'TeamIdentifier=not set',
+    ].join('\n');
+
+    expect(() => validateAdHocMacSignature(validDetails, '/release/JaneT.app')).not.toThrow();
+    expect(() => validateAdHocMacSignature(
+      validDetails.replace('Signature=adhoc', 'Authority=Developer ID Application: Example\nSignature size=9000'),
+      '/release/JaneT.app',
+    )).toThrow(/not ad-hoc signed/);
+    expect(() => validateAdHocMacSignature(
+      `${validDetails}\nAuthority=Developer ID Application: Example`,
+      '/release/JaneT.app',
+    )).toThrow(/certificate authority/);
+    expect(() => validateAdHocMacSignature(
+      validDetails.replace('TeamIdentifier=not set', 'TeamIdentifier=ABCDE12345'),
+      '/release/JaneT.app',
+    )).toThrow(/team identifier/);
+  });
+
+  it('tests a listener-safe PTY round trip and exits despite a lingering Windows worker', async () => {
+    const { smokeTerminalRuntime } = await loadScript('verify-release-artifacts.mjs');
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-release-smoke-'));
+    const fakePtyRoot = path.join(fixtureRoot, 'app.asar.unpacked', 'node_modules', 'node-pty');
+    const fakePtyModule = path.join(fixtureRoot, 'app.asar', 'node_modules', 'node-pty');
+    const marker = '__JANET_PACKAGED_PTY_OK__';
+    const ready = '__JANET_PACKAGED_PTY_READY__';
+    fs.mkdirSync(fakePtyRoot, { recursive: true });
+    fs.mkdirSync(fakePtyModule, { recursive: true });
+    const fakePtySource = `
+module.exports = {
+  spawn(executable, args, options) {
+    const requestedWindows = process.argv[4] === 'win32';
+    const windows = requestedWindows;
+    const expectedExecutable = windows ? process.argv[5] : process.execPath;
+    if (executable !== expectedExecutable) throw new Error('Smoke platform did not select the expected child executable');
+    let dataListener;
+    let exitListener;
+    let queuedInput;
+    if (!Array.isArray(args) || args[0] !== '-e') throw new Error('Smoke child must run a Node program');
+    if (!args[1].includes('process.stdin.once')) throw new Error('PTY child does not wait for input');
+    if (!args[1].includes('process.stdin.pause')) throw new Error('PTY child will not exit after input');
+    if (!args[1].includes(${JSON.stringify(ready)})) throw new Error('PTY child does not emit readiness');
+    if (windows) setInterval(() => {}, 1000);
+    const terminal = {
+      onData(listener) { dataListener = listener; },
+      onExit(listener) { exitListener = listener; },
+      write(input) {
+        if (!dataListener || !exitListener) throw new Error('PTY trigger ran before listeners attached');
+        if (input.includes(${JSON.stringify(marker)})) throw new Error('PTY trigger must not echo the success marker');
+        if (input !== ${JSON.stringify('\r')}) throw new Error('PTY trigger must submit the readiness handshake');
+        queuedInput = input;
+      },
+      kill() {},
+    };
+    queueMicrotask(() => {
+      if (!dataListener || !exitListener) throw new Error('PTY readiness ran before listeners attached');
+      dataListener(${JSON.stringify(ready)});
+      if (queuedInput !== ${JSON.stringify('\r')}) throw new Error('PTY input was not queued before readiness');
+      dataListener(${JSON.stringify(marker)});
+      exitListener({ exitCode: 0 });
+    });
+    return terminal;
+  },
+};
+`;
+    fs.writeFileSync(path.join(fakePtyModule, 'index.js'), fakePtySource);
+
+    try {
+      for (const platform of ['linux', 'win32']) {
+        await expect(smokeTerminalRuntime({
+          platform,
+          executable: process.execPath,
+          nodePtyRoot: fakePtyRoot,
+          nodePtyModule: fakePtyModule,
+        }, 10_000)).resolves.toBeUndefined();
+      }
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('pins release CI to explicit ad-hoc macOS signing without Apple credentials', () => {
+    const workflow = fs.readFileSync(path.join(projectRoot, '.github', 'workflows', 'release.yml'), 'utf8');
+    expect(workflow).toContain('build-args: --mac -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false -c.npmRebuild=false');
+    expect(workflow).toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'");
+    expect(workflow).not.toContain('Require macOS signing and notarization secrets');
+    for (const secretName of [
+      'MAC_CSC_LINK',
+      'MAC_CSC_KEY_PASSWORD',
+      'APPLE_ID',
+      'APPLE_APP_SPECIFIC_PASSWORD',
+      'APPLE_TEAM_ID',
+    ]) {
+      expect(workflow).not.toContain(secretName);
+    }
+
+    const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+    expect(packageJson.scripts['dist:mac:test']).toContain('-c.npmRebuild=false');
+    expect(packageJson.build.mac.signIgnore).toEqual([
+      'node_modules/node-pty/prebuilds/darwin-(?:x64|arm64)/(?:pty\\.node|spawn-helper)$',
+    ]);
   });
 
   it('declares the Node version required by Electron 43', () => {

@@ -45,8 +45,8 @@ describe('SettingsManager', () => {
 
     expect(settings.theme).toBe('tokyo-night');
     expect(settings.fontSize).toBe(14);
-    expect(settings.fontFamily).toContain('Cascadia Code');
-    expect(settings.sidebarSide).toBe('left');
+    expect(settings.fontFamily).toContain('JetBrains Mono Variable');
+    expect(settings.sidebarSide).toBe('right');
     expect(settings.sshProfiles).toEqual([]);
     expect(settings.workspaceTabs).toEqual([]);
   });
@@ -255,6 +255,90 @@ describe('SettingsManager', () => {
     expect(loaded.session.sidebarSection).toBe('git');
     expect(loaded.session.tabs[0].cwd).toBe('C:/repo');
     expect(loaded.session.tabs[1].sshProfileId).toBe('pckpr@box.local:22:password');
+  });
+
+  it('round-trips per-pane startup commands and isolates returned settings', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+
+    manager.set({
+      workspaceTabs: [{
+        id: 'workspace-automation',
+        name: 'Automated workspace',
+        type: 'local',
+        terminalCount: 1,
+        splitDirection: 'vertical',
+        root: {
+          type: 'leaf',
+          terminalType: 'ssh',
+          sshProfileId: 'dev@box:22:password',
+          startupCommands: ['hermes doctor', 'hermes --tui'],
+          startupShellDialect: 'fish',
+        },
+      }],
+    });
+
+    const savedJson = (fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string;
+    (fsMock.readFileSync as any).mockImplementationOnce(() => savedJson);
+    const loaded = new SettingsManager();
+    const settings = loaded.get();
+    const leaf = settings.workspaceTabs[0].root;
+    expect(leaf).toMatchObject({
+      startupCommands: ['hermes doctor', 'hermes --tui'],
+      startupShellDialect: 'fish',
+    });
+
+    if (leaf?.type === 'leaf' && leaf.startupCommands) leaf.startupCommands[0] = 'mutated';
+    expect(loaded.get().workspaceTabs[0].root).toMatchObject({
+      startupCommands: ['hermes doctor', 'hermes --tui'],
+    });
+  });
+
+  it('defaults legacy SSH startup commands to POSIX syntax on load', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      workspaceTabs: [{
+        id: 'legacy-ssh', name: 'Legacy SSH', type: 'local', terminalCount: 1,
+        splitDirection: 'vertical',
+        root: { type: 'leaf', terminalType: 'ssh', startupCommands: ['git pull'] },
+      }],
+    }));
+
+    const { SettingsManager } = await import('../../src/main/settings');
+    expect(new SettingsManager().get().workspaceTabs[0].root).toMatchObject({
+      startupCommands: ['git pull'],
+      startupShellDialect: 'posix',
+    });
+  });
+
+  it('keeps valid settings when a preset split contains malformed children', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      theme: 'dracula',
+      workspaceTabs: [{
+        id: 'partially-valid', name: 'Partially valid', type: 'local', terminalCount: 2,
+        splitDirection: 'vertical',
+        root: {
+          type: 'split', direction: 'vertical', sizes: [1, 1],
+          children: [null, { type: 'leaf', terminalType: 'local', startupCommands: ['npm install'] }],
+        },
+      }],
+    }));
+
+    const { SettingsManager } = await import('../../src/main/settings');
+    const loaded = new SettingsManager().get();
+    expect(loaded.theme).toBe('dracula');
+    expect(loaded.workspaceTabs[0].root).toEqual({
+      type: 'split',
+      direction: 'vertical',
+      sizes: [1],
+      children: [{
+        type: 'leaf',
+        terminalType: 'local',
+        startupCommands: ['npm install'],
+      }],
+    });
   });
 
   it('falls back to an empty session when settings.json is missing it (back-compat)', async () => {

@@ -27,7 +27,7 @@ import {
   // Theme
   Palette, Sun, Moon, Monitor,
   // Misc
-  MoreHorizontal, Loader2, AlertCircle, Check,
+  MoreHorizontal, Loader2, AlertCircle, Check, Save,
   List,
 } from 'lucide-react';
 
@@ -138,6 +138,7 @@ export const PencilIcon = make(Pencil);
 export const TrashIcon = make(Trash2);
 export const SlidersIcon = make(Sliders);
 export const TypeIcon = make(Type);
+export const CopyIcon = make(Copy);
 export const ChevronsRightIcon = make(ChevronsRight);
 export const ChevronsDownIcon = make(ChevronsDown);
 export const ChevronsUpIcon = make(ChevronsUp);
@@ -164,6 +165,7 @@ export const MonitorIcon = make(Monitor);
 export const SpinnerIcon = make(Loader2);
 export const AlertIcon = make(AlertCircle);
 export const CheckIcon = make(Check);
+export const SaveIcon = make(Save);
 
 /**
  * Map a file extension to a Lucide icon component.

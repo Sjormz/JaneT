@@ -1,6 +1,13 @@
-import React, { useEffect, useState, useCallback } from 'react';
-
-interface UpdateBannerProps {}
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  AlertIcon,
+  ArrowDownIcon,
+  CheckIcon,
+  RefreshIcon,
+  SpinnerIcon,
+  XCloseIcon,
+} from '../icons';
+import Tooltip from './Tooltip';
 
 type UpdateState =
   | { status: 'idle' }
@@ -11,223 +18,146 @@ type UpdateState =
   | { status: 'not-available' }
   | { status: 'error'; message: string };
 
-export default function UpdateBanner(_props: UpdateBannerProps) {
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message.trim() ? error.message : fallback;
+}
+
+export default function UpdateBanner() {
   const [state, setState] = useState<UpdateState>({ status: 'idle' });
 
   useEffect(() => {
     const unsubs: (() => void)[] = [];
 
-    // Start in checking state only after the initial silent check triggers
-    unsubs.push(
-      window.janet.onUpdateChecking(() => {
-        setState({ status: 'checking' });
-      }),
-    );
+    unsubs.push(window.janet.onUpdateChecking(() => setState({ status: 'checking' })));
+    unsubs.push(window.janet.onUpdateAvailable((info) => {
+      setState({ status: 'available', version: info.version });
+    }));
+    unsubs.push(window.janet.onUpdateNotAvailable(() => {
+      setState({ status: 'not-available' });
+      const timer = setTimeout(() => setState({ status: 'idle' }), 3000);
+      unsubs.push(() => clearTimeout(timer));
+    }));
+    unsubs.push(window.janet.onUpdateDownloadProgress((progress) => {
+      setState({ status: 'downloading', percent: progress.percent });
+    }));
+    unsubs.push(window.janet.onUpdateDownloaded((info) => {
+      setState({ status: 'downloaded', version: info.version });
+    }));
+    unsubs.push(window.janet.onUpdateError((error) => {
+      setState({ status: 'error', message: error.message });
+      const timer = setTimeout(() => setState({ status: 'idle' }), 10000);
+      unsubs.push(() => clearTimeout(timer));
+    }));
 
-    unsubs.push(
-      window.janet.onUpdateAvailable((info) => {
-        setState({ status: 'available', version: info.version });
-      }),
-    );
-
-    unsubs.push(
-      window.janet.onUpdateNotAvailable(() => {
-        setState({ status: 'not-available' });
-        // Auto-dismiss after a moment
-        const timer = setTimeout(() => setState({ status: 'idle' }), 3000);
-        unsubs.push(() => clearTimeout(timer));
-      }),
-    );
-
-    unsubs.push(
-      window.janet.onUpdateDownloadProgress((progress) => {
-        setState({ status: 'downloading', percent: progress.percent });
-      }),
-    );
-
-    unsubs.push(
-      window.janet.onUpdateDownloaded((info) => {
-        setState({ status: 'downloaded', version: info.version });
-      }),
-    );
-
-    unsubs.push(
-      window.janet.onUpdateError((error) => {
-        setState({ status: 'error', message: error.message });
-        // Auto-dismiss errors after 10s
-        const timer = setTimeout(() => setState({ status: 'idle' }), 10000);
-        unsubs.push(() => clearTimeout(timer));
-      }),
-    );
-
-    return () => unsubs.forEach((fn) => fn());
+    return () => unsubs.forEach((unsubscribe) => unsubscribe());
   }, []);
 
   const handleDownload = useCallback(() => {
-    window.janet.downloadUpdate().catch(() => {});
+    void window.janet.downloadUpdate().catch((error) => {
+      setState({ status: 'error', message: errorMessage(error, 'The download could not start.') });
+    });
   }, []);
 
   const handleInstall = useCallback(() => {
-    window.janet.installUpdate().catch(() => {});
-  }, []);
-
-  const handleDismiss = useCallback(() => {
-    setState({ status: 'idle' });
+    void window.janet.installUpdate().catch((error) => {
+      setState({ status: 'error', message: errorMessage(error, 'JaneT could not restart to install the update.') });
+    });
   }, []);
 
   const handleForceCheck = useCallback(() => {
-    window.janet.checkForUpdates().catch(() => {});
+    setState({ status: 'checking' });
+    void window.janet.checkForUpdates().catch((error) => {
+      setState({ status: 'error', message: errorMessage(error, 'JaneT could not check for updates.') });
+    });
   }, []);
 
   if (state.status === 'idle') return null;
 
-  // --- Banner styles ---
-  const bannerStyle: React.CSSProperties = {
-    position: 'fixed',
-    bottom: 'calc(var(--status-bar-height, 28px) + 8px)',
-    right: '12px',
-    zIndex: 10000,
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    padding: '8px 14px',
-    background: 'var(--glass-bg-strong)',
-    backdropFilter: 'blur(var(--glass-blur, 18px))',
-    WebkitBackdropFilter: 'blur(var(--glass-blur, 18px))',
-    border: '1px solid var(--glass-border)',
-    borderRadius: 'var(--radius-md, 8px)',
-    boxShadow: 'var(--glass-shadow)',
-    fontSize: '13px',
-    fontFamily: 'var(--font-ui)',
-    color: 'var(--text-primary)',
-    transition: 'opacity var(--transition-fast, 0.15s)',
-  };
-
-  const buttonStyle: React.CSSProperties = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '4px',
-    padding: '4px 10px',
-    border: 'none',
-    borderRadius: 'var(--radius-sm, 6px)',
-    fontSize: '12px',
-    fontWeight: 600,
-    cursor: 'pointer',
-    fontFamily: 'var(--font-ui)',
-    transition: 'background var(--transition-fast, 0.15s)',
-  };
-
-  const primaryButton: React.CSSProperties = {
-    ...buttonStyle,
-    background: 'var(--blue, #7aa2f7)',
-    color: '#fff',
-  };
-
-  const secondaryButton: React.CSSProperties = {
-    ...buttonStyle,
-    background: 'var(--bg-hover, #2a2b42)',
-    color: 'var(--text-primary)',
-  };
-
-  // Progress bar style
-  const progressContainer: React.CSSProperties = {
-    width: '120px',
-    height: '4px',
-    background: 'var(--bg-tertiary, #24253b)',
-    borderRadius: '2px',
-    overflow: 'hidden',
-  };
-
-  const progressFill: React.CSSProperties = {
-    height: '100%',
-    width: `${state.status === 'downloading' ? state.percent : 0}%`,
-    background: 'var(--blue, #7aa2f7)',
-    borderRadius: '2px',
-    transition: 'width 0.3s ease',
-  };
-
-  const dismissStyle: React.CSSProperties = {
-    background: 'none',
-    border: 'none',
-    color: 'var(--text-muted, #565f89)',
-    cursor: 'pointer',
-    fontSize: '16px',
-    lineHeight: 1,
-    padding: '0 2px',
-    fontFamily: 'var(--font-ui)',
-  };
+  const dismiss = (
+    <Tooltip label="Dismiss update notification" placement="left">
+      <button
+        type="button"
+        className="update-banner-dismiss"
+        onClick={() => setState({ status: 'idle' })}
+        aria-label="Dismiss update notification"
+      >
+        <XCloseIcon size="sm" />
+      </button>
+    </Tooltip>
+  );
 
   switch (state.status) {
     case 'checking':
       return (
-        <div style={bannerStyle}>
-          <span style={{ color: 'var(--text-secondary)' }}>Checking for updates…</span>
-        </div>
+        <aside className="update-banner" role="status" aria-live="polite">
+          <SpinnerIcon size="md" className="update-banner-spin" />
+          <span className="update-banner-message">Checking for updates…</span>
+        </aside>
       );
 
     case 'available':
       return (
-        <div style={bannerStyle}>
-          <span style={{ color: 'var(--cyan, #7dcfff)', fontWeight: 600 }}>
-            Update v{state.version} available
-          </span>
-          <button style={primaryButton} onClick={handleDownload}>
-            Download
+        <aside className="update-banner" role="status" aria-live="polite">
+          <ArrowDownIcon size="md" className="update-banner-icon" />
+          <strong className="update-banner-message">JaneT v{state.version} is available</strong>
+          <button type="button" className="update-banner-action primary" onClick={handleDownload}>
+            Download update
           </button>
-          <button style={dismissStyle} onClick={handleDismiss} title="Dismiss">
-            &times;
-          </button>
-        </div>
+          {dismiss}
+        </aside>
       );
 
-    case 'downloading':
+    case 'downloading': {
+      const percent = Math.max(0, Math.min(100, Math.round(state.percent)));
       return (
-        <div style={bannerStyle}>
-          <span style={{ color: 'var(--text-secondary)' }}>Downloading update…</span>
-          <div style={progressContainer}>
-            <div style={progressFill} />
+        <aside className="update-banner update-banner-progress-state" role="status" aria-live="polite">
+          <ArrowDownIcon size="md" className="update-banner-icon" />
+          <span className="update-banner-message">Downloading JaneT</span>
+          <div
+            className="update-banner-progress"
+            role="progressbar"
+            aria-label="Downloading JaneT update"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent}
+          >
+            <span style={{ width: `${percent}%` }} />
           </div>
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)', minWidth: '32px' }}>
-            {state.percent}%
-          </span>
-        </div>
+          <span className="update-banner-percent">{percent}%</span>
+        </aside>
       );
+    }
 
     case 'downloaded':
       return (
-        <div style={bannerStyle}>
-          <span style={{ color: 'var(--green, #9ece6a)', fontWeight: 600 }}>
-            Update v{state.version} ready
-          </span>
-          <button style={primaryButton} onClick={handleInstall}>
-            Restart & Install
+        <aside className="update-banner is-success" role="status" aria-live="polite">
+          <CheckIcon size="md" className="update-banner-icon" />
+          <strong className="update-banner-message">JaneT v{state.version} is ready to install</strong>
+          <button type="button" className="update-banner-action primary" onClick={handleInstall}>
+            Restart to install
           </button>
-          <button style={dismissStyle} onClick={handleDismiss} title="Dismiss">
-            &times;
-          </button>
-        </div>
+          {dismiss}
+        </aside>
       );
 
     case 'not-available':
       return (
-        <div style={bannerStyle}>
-          <span style={{ color: 'var(--text-muted)' }}>You have the latest version</span>
-        </div>
+        <aside className="update-banner is-success" role="status" aria-live="polite">
+          <CheckIcon size="md" className="update-banner-icon" />
+          <span className="update-banner-message">JaneT is up to date</span>
+        </aside>
       );
 
     case 'error':
       return (
-        <div style={bannerStyle}>
-          <span style={{ color: 'var(--red, #f7768e)' }} title={state.message}>
-            Update check failed
-          </span>
-          <button style={secondaryButton} onClick={handleForceCheck}>
-            Retry
+        <aside className="update-banner is-error" role="alert">
+          <AlertIcon size="md" className="update-banner-icon" />
+          <span className="update-banner-message">Update failed: {state.message}</span>
+          <button type="button" className="update-banner-action" onClick={handleForceCheck}>
+            <RefreshIcon size="xs" /> Retry
           </button>
-          <button style={dismissStyle} onClick={handleDismiss} title="Dismiss">
-            &times;
-          </button>
-        </div>
+          {dismiss}
+        </aside>
       );
 
     default:

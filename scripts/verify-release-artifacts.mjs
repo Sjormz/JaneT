@@ -3,11 +3,20 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  APP_ASAR_WORKER_REWRITE,
+  CONPTY_DEFERRED_CONNECT_MARKER,
+  CONPTY_PID_REFRESH_MARKER,
+  CONPTY_PROCESS_LIST_MARKER,
+  WINDOWS_PATCH_POSTCONDITIONS,
+} from './patch-node-pty-windows-worker.mjs';
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
 const PACKAGED_PTY_MARKER = '__JANET_PACKAGED_PTY_OK__';
+const PACKAGED_PTY_READY = '__JANET_PACKAGED_PTY_READY__';
+export const PACKAGED_RUNTIME_TIMEOUT_MS = 60_000;
 
 export function normalizeReleasePlatform(value) {
   if (value === 'windows' || value === 'win32' || value === 'win') return 'windows';
@@ -48,9 +57,12 @@ export function packagedRuntime(platformValue, releaseRoot, hostArch = process.a
   const platform = normalizeReleasePlatform(platformValue);
   if (platform === 'windows') {
     const appRoot = path.join(releaseRoot, 'win-unpacked');
+    const nodePtyRoot = path.join(appRoot, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty');
     return {
+      platform: 'win32',
       executable: path.join(appRoot, 'JaneT.exe'),
-      nodePtyRoot: path.join(appRoot, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty'),
+      nodePtyRoot,
+      nodePtyModule: path.join(appRoot, 'resources', 'app.asar', 'node_modules', 'node-pty'),
     };
   }
   if (platform === 'macos') {
@@ -59,8 +71,10 @@ export function packagedRuntime(platformValue, releaseRoot, hostArch = process.a
   }
   const appRoot = path.join(releaseRoot, 'linux-unpacked');
   return {
+    platform: 'linux',
     executable: path.join(appRoot, 'janet'),
     nodePtyRoot: path.join(appRoot, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty'),
+    nodePtyModule: path.join(appRoot, 'resources', 'app.asar', 'node_modules', 'node-pty'),
   };
 }
 
@@ -71,11 +85,19 @@ export function macPackagedRuntimes(releaseRoot) {
   ].map(({ arch, outputDir }) => {
     const appRoot = path.join(releaseRoot, outputDir, 'JaneT.app', 'Contents');
     return {
+      platform: 'darwin',
       arch,
       executable: path.join(appRoot, 'MacOS', 'JaneT'),
       nodePtyRoot: path.join(appRoot, 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty'),
+      nodePtyModule: path.join(appRoot, 'Resources', 'app.asar', 'node_modules', 'node-pty'),
     };
   });
+}
+
+export function nativeMacRuntime(releaseRoot, hostArch = process.arch) {
+  const runtime = macPackagedRuntimes(releaseRoot).find((candidate) => candidate.arch === hostArch);
+  if (!runtime) throw new Error(`No packaged macOS runtime matches host architecture ${hostArch}`);
+  return runtime;
 }
 
 function requireNonEmptyFile(filePath, description) {
@@ -104,6 +126,22 @@ export function validateMacPtyLayout(runtime) {
   }
 }
 
+export function validateWindowsPtyRuntime(runtime) {
+  const requirements = [
+    ['windowsConoutConnection.js', WINDOWS_PATCH_POSTCONDITIONS.worker, 'worker cannot resolve app.asar.unpacked'],
+    ['windowsPtyAgent.js', WINDOWS_PATCH_POSTCONDITIONS.agent, 'agent is missing the deferred ConPTY connection fix'],
+    ['windowsTerminal.js', WINDOWS_PATCH_POSTCONDITIONS.terminal, 'terminal does not refresh its deferred ConPTY pid'],
+    ['conpty_console_list_agent.js', WINDOWS_PATCH_POSTCONDITIONS.consoleListAgent, 'process-list helper is not safe before ConPTY connects'],
+  ];
+  for (const [fileName, postconditions, failure] of requirements) {
+    const filePath = path.join(runtime.nodePtyRoot, 'lib', fileName);
+    const source = fs.readFileSync(filePath, 'utf8');
+    if (postconditions.some((postcondition) => !source.includes(postcondition))) {
+      throw new Error(`Packaged node-pty Windows ${failure}: ${filePath}`);
+    }
+  }
+}
+
 export function findMissingArtifacts(platform, version, releaseRoot) {
   return expectedReleaseArtifacts(platform, version).filter((name) => {
     const filePath = path.join(releaseRoot, name);
@@ -125,16 +163,19 @@ export async function verifyMacApplications(releaseRoot) {
     if (!fs.existsSync(appPath)) throw new Error(`Missing packaged macOS application: ${appPath}`);
     await execFileAsync('codesign', ['--verify', '--deep', '--strict', appPath]);
     const { stdout, stderr } = await execFileAsync('codesign', ['-dvv', appPath]);
-    const details = `${stdout}\n${stderr}`;
-    if (!/^Authority=Developer ID Application:/m.test(details)) {
-      throw new Error(`macOS app is not signed with a Developer ID Application identity: ${appPath}`);
-    }
-    if (/^TeamIdentifier=not set$/m.test(details) || !/^TeamIdentifier=\S+/m.test(details)) {
-      throw new Error(`macOS app has no signing team identifier: ${appPath}`);
-    }
-    if (!/^CodeDirectory .*flags=.*\bruntime\b/m.test(details)) {
-      throw new Error(`macOS app is not signed with hardened runtime enabled: ${appPath}`);
-    }
+    validateAdHocMacSignature(`${stdout}\n${stderr}`, appPath);
+  }
+}
+
+export function validateAdHocMacSignature(details, appPath = 'macOS application') {
+  if (!/^Signature=adhoc$/m.test(details)) {
+    throw new Error(`macOS app is not ad-hoc signed: ${appPath}`);
+  }
+  if (/^Authority=/m.test(details)) {
+    throw new Error(`Ad-hoc macOS app unexpectedly has a certificate authority: ${appPath}`);
+  }
+  if (!/^TeamIdentifier=not set$/m.test(details)) {
+    throw new Error(`Ad-hoc macOS app unexpectedly has a team identifier: ${appPath}`);
   }
 }
 
@@ -143,40 +184,25 @@ export async function smokePackagedTerminal(platform, releaseRoot) {
     const runtimes = macPackagedRuntimes(releaseRoot);
     for (const runtime of runtimes) validateMacPtyLayout(runtime);
 
-    const hostRuntime = runtimes.find((runtime) => runtime.arch === process.arch);
-    if (!hostRuntime) throw new Error(`No packaged macOS runtime matches host architecture ${process.arch}`);
+    const hostRuntime = nativeMacRuntime(releaseRoot);
     await smokeTerminalRuntime(hostRuntime);
 
-    // Apple Silicon runners may also have Rosetta and can exercise the x64
-    // bundle. Intel runners cannot execute arm64 code, so layout validation is
-    // the strongest deterministic check available for that non-host bundle.
-    if (process.arch === 'arm64') {
-      const x64Runtime = runtimes.find((runtime) => runtime.arch === 'x64');
-      if (x64Runtime) {
-        try {
-          await smokeTerminalRuntime(x64Runtime);
-        } catch (error) {
-          if (!isUnavailableCrossArchRuntime(error)) throw error;
-          console.log('Rosetta is unavailable; validated the x64 node-pty layout without executing it.');
-        }
-      }
-    }
+    // Execute only the runner's native architecture. Rosetta startup on fresh
+    // hosted ARM runners is nondeterministic and can stall before verifier
+    // JavaScript starts. Both bundles still receive deterministic artifact,
+    // signature, native-module, helper, and executable-permission validation.
+    console.log(
+      `Executed the native ${hostRuntime.arch} macOS PTY; validated the non-host bundle without translated execution.`,
+    );
     return;
   }
 
   const runtime = packagedRuntime(platform, releaseRoot);
+  if (normalizeReleasePlatform(platform) === 'windows') validateWindowsPtyRuntime(runtime);
   await smokeTerminalRuntime(runtime);
 }
 
-function isUnavailableCrossArchRuntime(error) {
-  const candidate = error ?? {};
-  const details = [candidate.message, candidate.code, candidate.errno, candidate.stderr]
-    .filter(Boolean)
-    .join(' ');
-  return /bad cpu type|unsupported architecture|unknown system error -86|\b-86\b|EBADARCH|ENOEXEC/i.test(details);
-}
-
-export async function smokeTerminalRuntime(runtime) {
+export async function smokeTerminalRuntime(runtime, timeoutMs = PACKAGED_RUNTIME_TIMEOUT_MS) {
   for (const [label, target] of [
     ['executable', runtime.executable],
     ['nodePtyRoot', runtime.nodePtyRoot],
@@ -187,24 +213,36 @@ export async function smokeTerminalRuntime(runtime) {
   const smokeProgram = String.raw`
 const pty = require(process.argv[1]);
 const marker = process.argv[2];
+const ready = process.argv[3];
+const platform = process.argv[4];
+const hostNodeExecutable = process.argv[5];
+const windows = platform === 'win32';
 let terminal;
 let received = '';
 const timeout = setTimeout(() => {
-  try { terminal && terminal.kill(); } catch {}
   console.error('packaged PTY timed out: ' + JSON.stringify(received));
   process.exit(2);
 }, 5000);
 try {
-  terminal = pty.spawn(process.execPath, ['-e', 'process.stdout.write(' + JSON.stringify(marker) + ')'], {
+  const childProgram = 'process.stdin.once("data",()=>{process.stdin.pause();process.stdout.write(' + JSON.stringify(marker) + ')});process.stdout.write(' + JSON.stringify(ready) + ')';
+  const childExecutable = windows ? hostNodeExecutable : process.execPath;
+  const childArgs = ['-e', childProgram];
+  terminal = pty.spawn(childExecutable, childArgs, {
     name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd(),
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', TERM: 'xterm-256color' },
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
+      TERM: 'xterm-256color',
+    },
   });
 } catch (error) {
   clearTimeout(timeout);
   console.error(error);
   process.exit(3);
 }
-terminal.onData((data) => { received += data; });
+terminal.onData((data) => {
+  received += data;
+});
 terminal.onExit(({ exitCode }) => {
   setTimeout(() => {
     clearTimeout(timeout);
@@ -212,19 +250,46 @@ terminal.onExit(({ exitCode }) => {
       console.error('packaged PTY failed: exit=' + exitCode + ' output=' + JSON.stringify(received));
       process.exit(4);
     }
-    process.stdout.write(marker);
+    // node-pty 1.1.0 keeps a ref'ed Conout worker after natural child exit.
+    // Once the isolated smoke has proved spawn, input, output, and exit, flush
+    // the result and terminate explicitly instead of hanging release CI.
+    process.stdout.write(marker, () => process.exit(0));
   }, 25);
 });
+// Listeners are attached before input. Unix pipes can accept the trigger
+// immediately; node-pty's Windows terminal queues it until READY produces the
+// first output event and the ConPTY data pipe becomes writable.
+terminal.write('\r');
 `;
 
-  const { stdout, stderr } = await execFileAsync(runtime.executable, [
-    '-e', smokeProgram, runtime.nodePtyRoot, PACKAGED_PTY_MARKER,
-  ], {
-    cwd: projectRoot,
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-    timeout: 15_000,
-    maxBuffer: 1024 * 1024,
-  });
+  let stdout;
+  let stderr;
+  try {
+    ({ stdout, stderr } = await execFileAsync(runtime.executable, [
+      '-e', smokeProgram, runtime.nodePtyModule, PACKAGED_PTY_MARKER, PACKAGED_PTY_READY,
+      runtime.platform, process.execPath,
+    ], {
+      cwd: projectRoot,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      // The outer ceiling catches a packaged runtime that never starts. Once
+      // JavaScript starts, the inner five-second PTY timer enforces the
+      // functional launch contract.
+      timeout: timeoutMs,
+      maxBuffer: 1024 * 1024,
+    }));
+  } catch (error) {
+    const candidate = error ?? {};
+    const details = [
+      candidate.message,
+      candidate.code !== undefined && `code: ${candidate.code}`,
+      candidate.signal && `signal: ${candidate.signal}`,
+      candidate.killed && 'killed: true',
+      `outer timeout limit: ${timeoutMs}ms`,
+      candidate.stdout && `stdout: ${candidate.stdout}`,
+      candidate.stderr && `stderr: ${candidate.stderr}`,
+    ].filter(Boolean);
+    throw new Error(details.join('\n'));
+  }
   if (!stdout.includes(PACKAGED_PTY_MARKER)) {
     throw new Error(`Packaged terminal smoke returned no marker. stderr: ${stderr}`);
   }

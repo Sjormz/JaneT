@@ -1,6 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { app, safeStorage } from 'electron';
+import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
+import type { StartupShellDialect } from '../shared/startupCommands';
+import { isStartupShellDialect, sanitizeStartupCommands } from '../shared/startupCommands';
 
 // Mirrors `SavedSession` in src/renderer/sessionRestore.ts. Duplicated as a
 // type-only contract because the main process cannot import the renderer
@@ -12,6 +15,8 @@ export interface SavedPaneLeaf {
   terminalType?: 'local' | 'ssh';
   cwd?: string;
   sshProfileId?: string;
+  startupCommands?: string[];
+  startupShellDialect?: StartupShellDialect;
 }
 
 export interface SavedPaneSplit {
@@ -136,8 +141,8 @@ const EMPTY_SESSION: SavedSession = {
 const DEFAULT_SETTINGS: AppSettings = {
   theme: 'tokyo-night',
   fontSize: 14,
-  fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace",
-  sidebarSide: 'left',
+  fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
+  sidebarSide: 'right',
   keybindings: { ...DEFAULT_KEYBINDINGS },
   sshProfiles: [],
   workspaceTabs: [],
@@ -162,7 +167,9 @@ export class SettingsManager {
     return {
       ...this.cache,
       sshProfiles: this.cache.sshProfiles.map((profile) => ({ ...profile })),
-      workspaceTabs: this.cache.workspaceTabs.map((preset) => ({ ...preset })),
+      workspaceTabs: this.cache.workspaceTabs
+        .map(cloneWorkspaceTabPreset)
+        .filter((preset): preset is AppSettings['workspaceTabs'][number] => Boolean(preset)),
       sshHostKeys: { ...this.cache.sshHostKeys },
       session: { ...this.cache.session, tabs: [...this.cache.session.tabs] },
     };
@@ -276,6 +283,7 @@ export class SettingsManager {
     const profiles = Array.isArray(settings.sshProfiles) ? settings.sshProfiles : [];
     return {
       ...settings,
+      fontFamily: normalizeTerminalFontFamily(settings.fontFamily),
       sshHostKeys: isStringRecord(settings.sshHostKeys) ? { ...settings.sshHostKeys } : {},
       sshProfiles: profiles.map((profile) => ({
         id: profile.id,
@@ -286,6 +294,9 @@ export class SettingsManager {
         password: profile.password ?? unprotectSecret(profile.passwordSecret) ?? decryptLegacySecret(profile.passwordEncrypted),
         privateKey: profile.privateKey ?? unprotectSecret(profile.privateKeySecret) ?? decryptLegacySecret(profile.privateKeyEncrypted),
       })),
+      workspaceTabs: (Array.isArray(settings.workspaceTabs) ? settings.workspaceTabs : [])
+        .map(cloneWorkspaceTabPreset)
+        .filter((preset): preset is AppSettings['workspaceTabs'][number] => Boolean(preset)),
       session: {
         ...EMPTY_SESSION,
         ...(settings.session ?? {}),
@@ -306,6 +317,69 @@ export class SettingsManager {
       });
     }
   }
+}
+
+function cloneWorkspaceTabPreset(value: unknown): AppSettings['workspaceTabs'][number] | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const { root: rawRoot, ...preset } = value as Record<string, unknown>;
+  const root = cloneSavedPaneNode(rawRoot);
+  return {
+    ...preset,
+    ...(root ? { root } : {}),
+  } as AppSettings['workspaceTabs'][number];
+}
+
+function cloneSavedPaneNode(node: unknown): SavedPaneNode | undefined {
+  if (!node || typeof node !== 'object') return undefined;
+  const candidate = node as Record<string, unknown>;
+  if (candidate.type === 'split') {
+    const children = (Array.isArray(candidate.children) ? candidate.children : [])
+      .map(cloneSavedPaneNode)
+      .filter((child): child is SavedPaneNode => Boolean(child));
+    if (children.length === 0) return undefined;
+    const sizes = Array.isArray(candidate.sizes)
+      && candidate.sizes.length === children.length
+      && candidate.sizes.every((size) => typeof size === 'number' && Number.isFinite(size))
+      ? [...candidate.sizes] as number[]
+      : new Array<number>(children.length).fill(1);
+    return {
+      type: 'split',
+      direction: candidate.direction === 'horizontal' ? 'horizontal' : 'vertical',
+      sizes,
+      children,
+    };
+  }
+  if (candidate.type !== 'leaf') return undefined;
+  const terminalType = candidate.terminalType === 'ssh' || candidate.terminalType === 'local'
+    ? candidate.terminalType
+    : undefined;
+  const hasExplicitStartupDialect = candidate.startupShellDialect !== undefined
+    && candidate.startupShellDialect !== null
+    && candidate.startupShellDialect !== '';
+  const startupShellDialect = isStartupShellDialect(candidate.startupShellDialect)
+    ? candidate.startupShellDialect
+    : undefined;
+  const validStartupDialect = startupShellDialect !== undefined;
+  const startupCommands = terminalType === 'ssh'
+    && hasExplicitStartupDialect
+    && !validStartupDialect
+    ? []
+    : sanitizeStartupCommands(candidate.startupCommands);
+  return {
+    type: 'leaf',
+    ...(typeof candidate.title === 'string' && candidate.title ? { title: candidate.title } : {}),
+    ...(terminalType ? { terminalType } : {}),
+    ...(typeof candidate.cwd === 'string' && candidate.cwd ? { cwd: candidate.cwd } : {}),
+    ...(typeof candidate.sshProfileId === 'string' && candidate.sshProfileId
+      ? { sshProfileId: candidate.sshProfileId }
+      : {}),
+    ...(startupCommands.length > 0 ? { startupCommands } : {}),
+    ...(startupCommands.length > 0 && terminalType === 'ssh'
+      ? { startupShellDialect: validStartupDialect ? startupShellDialect : 'posix' }
+      : startupCommands.length > 0 && validStartupDialect
+        ? { startupShellDialect }
+      : {}),
+  };
 }
 
 function protectSecret(secret: string): StoredSecretV1 | undefined {

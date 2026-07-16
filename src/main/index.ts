@@ -6,6 +6,33 @@ import { isAllowedExternalUrl } from './externalUrls';
 import { FileSystemManager } from './filesystem';
 import { GitManager } from './git';
 import { SettingsManager } from './settings';
+import type { SSHListDirParams } from '../shared/files';
+import type {
+  ReadLocalTextFileRequest,
+  ReadSSHTextFileRequest,
+  TextFileResult,
+  TextFileSnapshot,
+  TextFileWriteValue,
+  WriteLocalTextFileRequest,
+  WriteSSHTextFileRequest,
+} from '../shared/textFiles';
+import {
+  createRendererProtocolHandler,
+  RENDERER_ORIGIN,
+  RENDERER_SCHEME,
+  RENDERER_SCHEME_REGISTRATION,
+} from './rendererProtocol';
+import {
+  WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL,
+  WorkspaceClosePreparationCoordinator,
+  WorkspaceLifecycleController,
+  type WorkspaceActivity,
+  type WorkspaceCloseDecision,
+  type WorkspaceCloseReason,
+  type WorkspaceClosePrompt,
+  type WorkspacePrepareForCloseDecision,
+  type WorkspaceWindow,
+} from './workspaceLifecycle';
 
 let mainWindow: electron.BrowserWindow | null = null;
 let initializeUpdaterForWindow: ((window: electron.BrowserWindow) => void) | null = null;
@@ -14,6 +41,13 @@ let sshManager: SSHManager;
 let fsManager: FileSystemManager;
 let gitManager: GitManager;
 let settingsManager: SettingsManager;
+let workspaceLifecycle: WorkspaceLifecycleController;
+let backgroundTray: electron.Tray | null = null;
+let allowWindowCloseOnce = false;
+let quittingAfterWorkspaceStop = false;
+const closePreparation = new WorkspaceClosePreparationCoordinator();
+
+electron.protocol.registerSchemesAsPrivileged([RENDERER_SCHEME_REGISTRATION]);
 
 const e2eEventsPath = process.env.JANET_E2E_EVENTS_PATH;
 const e2eRemoteDebuggingPort = process.env.JANET_E2E_REMOTE_DEBUGGING_PORT;
@@ -24,6 +58,19 @@ if (e2eRemoteDebuggingPort) {
 
 if (process.env.JANET_E2E_USER_DATA_DIR) {
   electron.app.setPath('userData', process.env.JANET_E2E_USER_DATA_DIR);
+}
+
+const hasSingleInstanceLock = electron.app.requestSingleInstanceLock();
+let restoreRequestedBySecondInstance = false;
+if (!hasSingleInstanceLock) {
+  electron.app.quit();
+} else {
+  electron.app.on('second-instance', () => {
+    restoreRequestedBySecondInstance = true;
+    if (!electron.app.isReady() || !workspaceLifecycle) return;
+    restoreRequestedBySecondInstance = false;
+    showOrCreateWindow();
+  });
 }
 
 function recordE2eEvent(event: Record<string, unknown>): void {
@@ -41,6 +88,239 @@ function openAllowedExternalUrl(url: string): boolean {
   return true;
 }
 
+// A validated 32,768-character path can expand up to 4x when POSIX single
+// quotes are escaped, plus the surrounding quotes and trailing separator.
+const MAX_CLIPBOARD_TEXT_LENGTH = 131_075;
+const UNSAFE_CLIPBOARD_TEXT = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
+
+export function copyTextToClipboard(
+  text: unknown,
+  writeText: (safeText: string) => void = (safeText) => electron.clipboard.writeText(safeText),
+): boolean {
+  if (
+    typeof text !== 'string'
+    || text.length === 0
+    || text.length > MAX_CLIPBOARD_TEXT_LENGTH
+    || UNSAFE_CLIPBOARD_TEXT.test(text)
+  ) {
+    return false;
+  }
+  writeText(text);
+  return true;
+}
+
+function workspaceWindow(window: electron.BrowserWindow): WorkspaceWindow {
+  return {
+    close: () => {
+      allowWindowCloseOnce = true;
+      window.close();
+    },
+    hide: () => window.hide(),
+    show: () => {
+      if (window.isMinimized()) window.restore();
+      window.show();
+    },
+    focus: () => window.focus(),
+    isDestroyed: () => window.isDestroyed(),
+  };
+}
+
+async function getWorkspaceActivity(): Promise<WorkspaceActivity> {
+  const [localWork, sshSessions] = await Promise.all([
+    terminalManager.listRunningWork(),
+    Promise.resolve(sshManager.listRunningSessions()),
+  ]);
+  return {
+    localTerminals: localWork.length,
+    sshSessions: sshSessions.length,
+    localDetails: localWork.map((work) => (
+      `${work.processName}${work.descendantPids.length > 1 ? ` + ${work.descendantPids.length - 1} related processes` : ''}`
+    )),
+    sshDetails: sshSessions.map((session) => `${session.username ? `${session.username}@` : ''}${session.host}:${session.port}`),
+  };
+}
+
+async function chooseWorkspaceCloseDecision(prompt: WorkspaceClosePrompt): Promise<WorkspaceCloseDecision> {
+  const testDecision = process.env.JANET_E2E_CLOSE_DECISION;
+  if (testDecision === 'background' || testDecision === 'stop' || testDecision === 'cancel') {
+    recordE2eEvent({ type: 'workspace:close-decision', decision: testDecision });
+    return testDecision;
+  }
+
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) return 'cancel';
+  const defaultId = Math.max(0, prompt.actions.findIndex((action) => action.decision === prompt.defaultDecision));
+  const cancelId = Math.max(0, prompt.actions.findIndex((action) => action.decision === prompt.cancelDecision));
+  const { response } = await electron.dialog.showMessageBox(window, {
+    type: 'warning',
+    title: prompt.title,
+    message: prompt.message,
+    detail: prompt.detail,
+    buttons: prompt.actions.map((action) => action.label),
+    defaultId,
+    cancelId,
+    noLink: true,
+    normalizeAccessKeys: true,
+  });
+  return prompt.actions[response]?.decision ?? 'cancel';
+}
+
+async function stopWorkspaceResources(): Promise<void> {
+  await terminalManager.stopAll();
+  fsManager.cleanup();
+  sshManager.cleanup();
+}
+
+async function requestRendererClosePreparation(
+  reason: WorkspaceCloseReason,
+): Promise<WorkspacePrepareForCloseDecision> {
+  try {
+    const window = mainWindow;
+    if (
+      !window
+      || window.isDestroyed()
+      || window.webContents.isDestroyed()
+      || window.webContents.isLoadingMainFrame()
+    ) {
+      return 'cancel';
+    }
+
+    // A tray or OS-level quit request can arrive while JaneT is hidden. Make
+    // the renderer visible before asking it to resolve dirty editors so its
+    // confirmation cannot be stranded in an invisible window.
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+
+    const resolution = await closePreparation.request(window.webContents, reason);
+    recordE2eEvent({ type: 'workspace:prepare-for-close', reason, resolution });
+    return resolution;
+  } catch (error) {
+    console.error('[workspace] renderer close preparation unavailable:', error);
+    recordE2eEvent({ type: 'workspace:prepare-for-close', reason, resolution: 'cancel' });
+    return 'cancel';
+  }
+}
+
+async function prepareForUpdateInstall(): Promise<boolean> {
+  const activity = await getWorkspaceActivity();
+  if (activity.localTerminals > 0 || activity.sshSessions > 0) {
+    const window = mainWindow;
+    if (!window || window.isDestroyed()) return false;
+    const { response } = await electron.dialog.showMessageBox(window, {
+      type: 'warning',
+      title: 'Stop terminals and install update?',
+      message: 'JaneT needs to stop active terminals and SSH connections before installing the update.',
+      detail: `${activity.localTerminals} local ${activity.localTerminals === 1 ? 'terminal has' : 'terminals have'} active work, and ${activity.sshSessions} SSH connection${activity.sshSessions === 1 ? '' : 's'} will be closed. Detached jobs on remote hosts may continue running.`,
+      buttons: ['Stop all and install', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+      normalizeAccessKeys: true,
+    });
+    if (response !== 0) return false;
+  }
+
+  if (!await workspaceLifecycle.prepareForClose('update-install')) return false;
+  await stopWorkspaceResources();
+  return true;
+}
+
+function destroyBackgroundTray(): void {
+  if (!backgroundTray) return;
+  try { backgroundTray.destroy(); } catch {}
+  backgroundTray = null;
+}
+
+function showOrCreateWindow(): void {
+  const window = mainWindow;
+  if (window && !window.isDestroyed()) {
+    workspaceLifecycle.show(workspaceWindow(window));
+    return;
+  }
+  createWindow();
+}
+
+export async function confirmStopAllFromTray(
+  stopAllAndQuit: () => Promise<void> = () => workspaceLifecycle.stopFromTray(),
+): Promise<boolean> {
+  const { response } = await electron.dialog.showMessageBox({
+    type: 'warning',
+    title: 'Stop all terminals and quit?',
+    message: 'Stop all JaneT-managed terminals and SSH connections?',
+    detail: 'Running commands and interactive sessions will be ended. Remote jobs detached with tools such as tmux, nohup, systemd, or disown may continue on the remote machine.',
+    buttons: ['Cancel', 'Stop all and quit'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+    normalizeAccessKeys: true,
+  });
+  if (response !== 1) return false;
+  await stopAllAndQuit();
+  return true;
+}
+
+export function backgroundTrayMenuTemplate(
+  openWindow: () => void = showOrCreateWindow,
+  confirmStop: () => Promise<boolean> = () => confirmStopAllFromTray(),
+) {
+  return [
+    { label: 'Open JaneT', click: openWindow },
+    { type: 'separator' as const },
+    {
+      label: 'Stop all and quit',
+      click: () => {
+        void confirmStop().catch((error) => {
+          console.error('[workspace] failed to stop background services:', error);
+          electron.dialog.showErrorBox('Could not stop services', error instanceof Error ? error.message : String(error));
+        });
+      },
+    },
+  ];
+}
+
+function ensureBackgroundTray(): boolean {
+  if (backgroundTray) return true;
+  let tray: electron.Tray | null = null;
+  try {
+    const trayAsset = process.platform === 'darwin' ? 'trayTemplate.png' : 'tray.png';
+    const iconPath = path.join(electron.app.getAppPath(), 'assets', 'runtime', trayAsset);
+    let image = electron.nativeImage.createFromPath(iconPath);
+    if (image.isEmpty()) throw new Error(`Background tray icon is missing or invalid: ${iconPath}`);
+    if (process.platform === 'darwin' && !image.isEmpty()) {
+      image.setTemplateImage(true);
+    }
+    tray = new electron.Tray(image);
+    tray.setToolTip('JaneT — terminals and SSH connections are running');
+    tray.setContextMenu(electron.Menu.buildFromTemplate(backgroundTrayMenuTemplate()));
+    tray.on('click', showOrCreateWindow);
+    tray.on('double-click', showOrCreateWindow);
+    backgroundTray = tray;
+    return true;
+  } catch (error) {
+    try { tray?.destroy(); } catch {}
+    backgroundTray = null;
+    console.error('[workspace] failed to create background tray:', error);
+    return false;
+  }
+}
+
+function handleBackgroundChange(active: boolean): boolean {
+  recordE2eEvent({ type: 'workspace:background', active });
+  if (!active) {
+    destroyBackgroundTray();
+    return true;
+  }
+
+  const trayReady = ensureBackgroundTray();
+  if (trayReady || process.platform === 'darwin') return true;
+  electron.dialog.showErrorBox(
+    'Could not run JaneT in the background',
+    'JaneT could not create its background tray control, so the window will stay open. Resolve the desktop tray issue or choose Stop all and quit.',
+  );
+  return false;
+}
+
 function createWindow() {
   // Remove the default application menu (File / Edit / View / Window).
   // JaneT uses a fully custom in-renderer titlebar.
@@ -53,6 +333,9 @@ function createWindow() {
     minHeight: 600,
     title: 'JaneT',
     backgroundColor: '#0f0f1a',
+    ...(process.platform === 'darwin' ? {} : {
+      icon: path.join(electron.app.getAppPath(), 'assets', 'runtime', 'app-icon-256.png'),
+    }),
     autoHideMenuBar: true,
     // Remove the OS-level window chrome — the custom in-renderer titlebar
     // provides its own drag region and min/max/close controls.
@@ -113,15 +396,39 @@ function createWindow() {
       console.error(`[renderer] did-fail-load ${code} ${desc} ${url}`);
     });
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+    mainWindow.loadURL(`${RENDERER_ORIGIN}/index.html`);
   }
 
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = null;
   });
+  window.on('close', (event) => {
+    if (quittingAfterWorkspaceStop) return;
+    if (allowWindowCloseOnce) {
+      allowWindowCloseOnce = false;
+      return;
+    }
+    event.preventDefault();
+    void workspaceLifecycle.handleClose(workspaceWindow(window)).catch((error) => {
+      console.error('[workspace] close decision failed:', error);
+      if (!window.isDestroyed()) {
+        window.show();
+        window.focus();
+      }
+      electron.dialog.showErrorBox('Could not close JaneT safely', error instanceof Error ? error.message : String(error));
+    });
+  });
 }
 
 electron.app.whenReady().then(() => {
+  if (!hasSingleInstanceLock) return;
+  if (process.env.NODE_ENV !== 'development') {
+    const rendererRoot = path.join(__dirname, '../renderer');
+    electron.protocol.handle(
+      RENDERER_SCHEME,
+      createRendererProtocolHandler(rendererRoot, (fileUrl) => electron.net.fetch(fileUrl)),
+    );
+  }
   terminalManager = new TerminalManager();
   fsManager = new FileSystemManager();
   gitManager = new GitManager();
@@ -138,45 +445,88 @@ electron.app.whenReady().then(() => {
 
     const { response } = await electron.dialog.showMessageBox(window, {
       type: 'warning',
-      title: 'Trust SSH Host?',
-      message: `Trust SSH host ${host}:${port}?`,
-      detail: `Host: ${host}:${port}\nSHA-256 fingerprint: ${fingerprint}`,
-      buttons: ['Trust', 'Cancel'],
+      title: 'New SSH host',
+      message: `Trust and connect to ${host}:${port}?`,
+      detail: `Verify this SHA-256 fingerprint before continuing:\n\n${fingerprint}`,
+      buttons: ['Trust and connect', 'Cancel'],
       defaultId: 1,
       cancelId: 1,
       noLink: true,
     });
     return response === 0;
+  }, (event) => {
+    const window = mainWindow;
+    if (!window || window.isDestroyed()) return;
+    window.webContents.send('ssh:onConnectionClosed', event);
+  });
+
+  workspaceLifecycle = new WorkspaceLifecycleController({
+    getActivity: getWorkspaceActivity,
+    chooseDecision: chooseWorkspaceCloseDecision,
+    requestClosePreparation: requestRendererClosePreparation,
+    stopAll: stopWorkspaceResources,
+    quit: () => {
+      quittingAfterWorkspaceStop = true;
+      electron.app.quit();
+    },
+    onBackgroundChange: handleBackgroundChange,
+  });
+
+  // Update-driven window closes happen before the normal app `before-quit`
+  // event. Only bypass the workspace close guard once Electron confirms the
+  // installer has committed to quitting; preparation alone can still fail.
+  electron.autoUpdater.on('before-quit-for-update', () => {
+    quittingAfterWorkspaceStop = true;
+    destroyBackgroundTray();
+  });
+
+  electron.app.on('before-quit', (event) => {
+    if (quittingAfterWorkspaceStop) return;
+    const window = mainWindow;
+    if (!window || window.isDestroyed()) return;
+    event.preventDefault();
+    void workspaceLifecycle.handleQuit(workspaceWindow(window)).catch((error) => {
+      console.error('[workspace] quit decision failed:', error);
+      if (!window.isDestroyed()) {
+        window.show();
+        window.focus();
+      }
+      electron.dialog.showErrorBox('Could not quit JaneT safely', error instanceof Error ? error.message : String(error));
+    });
   });
 
   registerIpcHandlers();
   createWindow();
+  if (restoreRequestedBySecondInstance) {
+    restoreRequestedBySecondInstance = false;
+    showOrCreateWindow();
+  }
 
   // Initialize auto-updater. Keep this lazy so physical e2e launches can run
   // the built Electron app without electron-updater touching app internals at
   // module import time.
   if (mainWindow && process.env.NODE_ENV !== 'test') {
     import('./updater').then(({ initUpdater, checkForUpdates }) => {
-      initializeUpdaterForWindow = initUpdater;
+      initializeUpdaterForWindow = (nextWindow) => initUpdater(nextWindow, prepareForUpdateInstall);
       const window = mainWindow;
       if (!window || window.isDestroyed()) return;
-      initUpdater(window);
+      initUpdater(window, prepareForUpdateInstall);
       // Check for updates after a short delay so the app is fully settled
       setTimeout(() => checkForUpdates(true), 5000);
     }).catch((err) => console.error('[updater] failed to initialize:', err));
   }
 
   electron.app.on('activate', () => {
-    if (electron.BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+    showOrCreateWindow();
   });
 });
 
 electron.app.on('window-all-closed', () => {
+  if (!hasSingleInstanceLock) return;
   terminalManager.cleanup();
   fsManager.cleanup();
   sshManager.cleanup();
+  destroyBackgroundTray();
   if (process.platform !== 'darwin') {
     electron.app.quit();
   }
@@ -201,12 +551,12 @@ function registerIpcHandlers() {
   };
 
   // === Terminal IPC ===
-  handle('terminal:create', (event, { id, cwd, shell }) => {
+  handle('terminal:create', (event, { id, cwd, shell, startupCommands }) => {
     const pty = terminalManager.create(id, cwd, shell, (data) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('terminal:onData', { id, data });
       }
-    });
+    }, startupCommands);
     return { pid: pty.pid };
   });
 
@@ -214,11 +564,11 @@ function registerIpcHandlers() {
     terminalManager.resize(id, cols, rows);
   });
 
-  handle('terminal:write', (event, { id, data }) => {
-    terminalManager.write(id, data);
+  handle('terminal:write', (event, { id, data, userInput }) => {
+    terminalManager.write(id, data, userInput !== false);
   });
-  handle('terminal:writeBinary', (event, { id, data }) => {
-    terminalManager.writeBinary(id, data);
+  handle('terminal:writeBinary', (event, { id, data, userInput }) => {
+    terminalManager.writeBinary(id, data, userInput !== false);
   });
 
   handle('terminal:destroy', (event, { id }) => {
@@ -233,9 +583,17 @@ function registerIpcHandlers() {
     return { connected: true };
   });
 
-  handle('ssh:createShell', (event, { id, termId, cols, rows }) => {
+  handle('ssh:createShell', (event, {
+    id, termId, cols, rows, startupCommands, startupShellDialect,
+  }) => {
     recordE2eEvent({ type: 'ssh:createShell:start', id, termId, cols, rows });
-    const shell = sshManager.createShell(id, termId, { cols, rows });
+    const shell = sshManager.createShell(
+      id,
+      termId,
+      { cols, rows },
+      startupCommands,
+      startupShellDialect,
+    );
     shell.onData((data) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('terminal:onData', { id: termId, data });
@@ -244,11 +602,11 @@ function registerIpcHandlers() {
     return shell.ready.then(() => ({ connected: true }));
   });
 
-  handle('ssh:writeShell', (event, { sessionId, termId, data }) => {
-    sshManager.writeShell(termId, data, sessionId);
+  handle('ssh:writeShell', (event, { sessionId, termId, data, userInput }) => {
+    sshManager.writeShell(termId, data, sessionId, userInput !== false);
   });
-  handle('ssh:writeShellBinary', (event, { sessionId, termId, data }) => {
-    sshManager.writeShellBinary(termId, data, sessionId);
+  handle('ssh:writeShellBinary', (event, { sessionId, termId, data, userInput }) => {
+    sshManager.writeShellBinary(termId, data, sessionId, userInput !== false);
   });
 
   handle('ssh:destroyShell', (event, { sessionId, termId }) => {
@@ -259,8 +617,22 @@ function registerIpcHandlers() {
     sshManager.resizeShell(termId, cols, rows);
   });
 
-  handle('ssh:listDir', async (event, { sessionId, remotePath }) => {
-    return await sshManager.listDir(sessionId, remotePath);
+  handle('ssh:listDir', async (event, params: SSHListDirParams) => {
+    return await sshManager.listDir(params?.sessionId, params?.remotePath, params?.showHidden);
+  });
+
+  handle('ssh:readTextFile', async (
+    event,
+    request: ReadSSHTextFileRequest,
+  ): Promise<TextFileResult<TextFileSnapshot>> => {
+    return await sshManager.readTextFile(request);
+  });
+
+  handle('ssh:writeTextFile', async (
+    event,
+    request: WriteSSHTextFileRequest,
+  ): Promise<TextFileResult<TextFileWriteValue>> => {
+    return await sshManager.writeTextFile(request);
   });
 
   handle('ssh:disconnect', async (event, { id }) => {
@@ -286,6 +658,20 @@ function registerIpcHandlers() {
 
   handle('fs:stat', async (event, { filePath }) => {
     return await fsManager.stat(filePath);
+  });
+
+  handle('fs:readTextFile', async (
+    event,
+    request: ReadLocalTextFileRequest,
+  ): Promise<TextFileResult<TextFileSnapshot>> => {
+    return await fsManager.readTextFile(request);
+  });
+
+  handle('fs:writeTextFile', async (
+    event,
+    request: WriteLocalTextFileRequest,
+  ): Promise<TextFileResult<TextFileWriteValue>> => {
+    return await fsManager.writeTextFile(request);
   });
 
   // === Git IPC ===
@@ -354,6 +740,14 @@ function registerIpcHandlers() {
     if (typeof url !== 'string' || !isAllowedExternalUrl(url)) return false;
     await electron.shell.openExternal(url);
     return true;
+  });
+
+  handle('app:copyText', (event, text: unknown) => {
+    return copyTextToClipboard(text);
+  });
+
+  handle(WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL, (event, resolution: unknown) => {
+    return closePreparation.resolve(event.sender, resolution);
   });
 
   // === Window controls (for custom titlebar) ===

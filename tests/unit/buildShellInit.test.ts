@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { buildShellInit } from '../../src/main/shell-init';
+import { execFileSync } from 'child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import pty from 'node-pty';
+import { buildShellInit, STARTUP_READY_MARKER } from '../../src/main/shell-init';
 
 describe('buildShellInit', () => {
   describe('PowerShell', () => {
@@ -60,6 +65,28 @@ describe('buildShellInit', () => {
       // The new prompt should call the original so the user sees their
       // usual prompt (e.g. PSReadLine indicators).
       expect(init).toMatch(/& \$global:__jt_orig_prompt/);
+      expect(init.indexOf('& $global:__jt_orig_prompt'))
+        .toBeLessThan(init.indexOf('Write-Host -NoNewline $ready'));
+    });
+
+    it('restores the prior command status before calling a status-aware prompt', () => {
+      const init = buildShellInit('powershell.exe');
+      expect(init).toContain('  $__jt_success = $?');
+      expect(init).toContain('  $__jt_last_exit_code = $global:LASTEXITCODE');
+      expect(init.indexOf('$global:LASTEXITCODE = $__jt_last_exit_code'))
+        .toBeLessThan(init.indexOf('$promptText = & $global:__jt_orig_prompt'));
+      expect(init.indexOf('if ($__jt_success)'))
+        .toBeLessThan(init.indexOf('$promptText = & $global:__jt_orig_prompt'));
+      expect(init).toContain("Write-Error '__janet_status__' -ErrorAction Ignore");
+    });
+
+    it('emits readiness from finally and falls back when the original prompt throws', () => {
+      const init = buildShellInit('powershell.exe');
+      expect(init).toContain('} catch {');
+      expect(init).toContain("$promptText = 'PS> '");
+      expect(init).toContain('} finally {');
+      expect(init.indexOf('} finally {'))
+        .toBeLessThan(init.indexOf('Write-Host -NoNewline $ready'));
     });
 
     it('does NOT contain raw backslash-escape sequences (we use [char]92 instead)', () => {
@@ -76,6 +103,10 @@ describe('buildShellInit', () => {
       const init = buildShellInit('bash');
       expect(init).toContain('PROMPT_COMMAND');
       expect(init).toContain('printf');
+      expect(init).toContain('__jt_ready');
+      expect(init.indexOf('$PROMPT_COMMAND')).toBeLessThan(init.lastIndexOf('__jt_ready'));
+      expect(init).toContain('__jt_orig_prompt_commands=("${PROMPT_COMMAND[@]}")');
+      expect(init).toContain('PROMPT_COMMAND=__jt_prompt_command');
     });
 
     it('uses the canonical printf + file:// pattern', () => {
@@ -83,6 +114,83 @@ describe('buildShellInit', () => {
       expect(init).toContain('file://');
       // The actual OSC 7 escape sequence.
       expect(init).toMatch(/\\033\]7/);
+    });
+
+    it.skipIf(process.platform === 'win32')('keeps every array prompt hook before readiness', () => {
+      const script = [
+        'events=()',
+        'first_hook() { events+=(first); }',
+        'second_hook() { events+=(second); }',
+        'PROMPT_COMMAND=(first_hook second_hook)',
+        buildShellInit('bash'),
+        '__jt_osc7() { events+=(cwd); }',
+        '__jt_ready() { events+=(ready); }',
+        'for hook in "${PROMPT_COMMAND[@]}"; do eval "$hook"; done',
+        'printf %s "${events[*]}"',
+      ].join('\n');
+
+      expect(execFileSync('/bin/bash', ['--noprofile', '--norc', '-c', script], { encoding: 'utf8' }))
+        .toBe('cwd first second ready');
+    });
+
+    it.skipIf(process.platform === 'win32')('runs every array hook in a real interactive prompt', async () => {
+      const initDir = mkdtempSync(join(tmpdir(), 'janet-bash-prompt-'));
+      const rcPath = join(initDir, 'bashrc');
+      writeFileSync(rcPath, [
+        `PROMPT_COMMAND=("printf '<ONE>'" "printf '<TWO>'")`,
+        buildShellInit('bash'),
+        `PS1='<PROMPT>'`,
+      ].join('\n'));
+
+      try {
+        const output = await new Promise<string>((resolve, reject) => {
+          let received = '';
+          let exiting = false;
+          const terminal = pty.spawn('/bin/bash', ['--noprofile', '--rcfile', rcPath, '-i'], {
+            name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd(),
+            env: { ...process.env, TERM: 'xterm-256color' },
+          });
+          const timeout = setTimeout(() => {
+            try { terminal.kill(); } catch {}
+            reject(new Error(`Interactive Bash prompt timed out: ${JSON.stringify(received)}`));
+          }, 5_000);
+          terminal.onData((data) => {
+            received += data;
+            if (!exiting && received.includes(STARTUP_READY_MARKER) && received.includes('<PROMPT>')) {
+              exiting = true;
+              terminal.write('exit\r');
+            }
+          });
+          terminal.onExit(({ exitCode }) => {
+            clearTimeout(timeout);
+            if (exitCode === 0) resolve(received);
+            else reject(new Error(`Interactive Bash exited ${exitCode}: ${JSON.stringify(received)}`));
+          });
+        });
+
+        expect(output.indexOf('<ONE>')).toBeGreaterThanOrEqual(0);
+        expect(output.indexOf('<TWO>')).toBeGreaterThan(output.indexOf('<ONE>'));
+        expect(output.indexOf(STARTUP_READY_MARKER)).toBeGreaterThan(output.indexOf('<TWO>'));
+        expect(output.indexOf('<PROMPT>')).toBeGreaterThan(output.indexOf(STARTUP_READY_MARKER));
+      } finally {
+        rmSync(initDir, { recursive: true, force: true });
+      }
+    }, 10_000);
+
+    it.skipIf(process.platform === 'win32')('accepts a scalar prompt hook with a trailing separator', () => {
+      const script = [
+        'events=()',
+        'first_hook() { events+=(first); }',
+        "PROMPT_COMMAND='first_hook;'",
+        buildShellInit('bash'),
+        '__jt_osc7() { events+=(cwd); }',
+        '__jt_ready() { events+=(ready); }',
+        'eval "$PROMPT_COMMAND"',
+        'printf %s "${events[*]}"',
+      ].join('\n');
+
+      expect(execFileSync('/bin/bash', ['--noprofile', '--norc', '-c', script], { encoding: 'utf8' }))
+        .toBe('cwd first ready');
     });
 
     it('scopes Hermes graphics to direct, non-multiplexed invocations', () => {
@@ -101,6 +209,7 @@ describe('buildShellInit', () => {
     it('uses a precmd hook for zsh', () => {
       const init = buildShellInit('zsh');
       expect(init).toContain('precmd_functions');
+      expect(init).toContain('precmd_functions+=(__jt_osc7 __jt_ready)');
     });
 
     it('does not replace an existing Hermes alias or function', () => {
@@ -118,6 +227,9 @@ describe('buildShellInit', () => {
     it('uses a fish_prompt event handler for fish', () => {
       const init = buildShellInit('fish');
       expect(init).toContain('--on-event fish_prompt');
+      expect(init).toContain('functions -c fish_right_prompt __jt_orig_fish_right_prompt');
+      expect(init).toContain('__jt_orig_fish_right_prompt $argv');
+      expect(init).toContain("printf '\\033]777;janet-ready\\033\\\\' >&2");
     });
 
     it('uses a function-local exported graphics flag', () => {

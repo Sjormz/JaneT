@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
+import type { ProcessInfo, ProcessInspector } from '../../src/main/processInspector';
 
 class MockPty {
   pid = 4242;
@@ -29,6 +30,11 @@ class MockPty {
   emit(data: string) {
     for (const cb of this.onDataCallbacks) cb(data);
   }
+
+  /** Test helper: simulate the pty process exiting. */
+  emitExit(event = { exitCode: 0, signal: 0 }) {
+    for (const cb of this.onExitCallbacks) cb(event);
+  }
 }
 
 const mocks = {
@@ -43,12 +49,178 @@ async function loadTerminalManager() {
   return import('../../src/main/terminal');
 }
 
+function processInfo(
+  pid: number,
+  ppid: number,
+  name: string,
+  overrides: Partial<ProcessInfo> = {},
+): ProcessInfo {
+  return { pid, ppid, name, ...overrides };
+}
+
+function processInspector(...snapshots: Array<ProcessInfo[] | Error>): ProcessInspector {
+  let index = 0;
+  return {
+    snapshot: vi.fn(async () => {
+      const next = snapshots[Math.min(index, snapshots.length - 1)];
+      index += 1;
+      if (next instanceof Error) throw next;
+      return next;
+    }),
+  };
+}
+
+const prompt = '\x1b]7;file://localhost/tmp\x1b\\';
+const startupReady = '\x1b]777;janet-ready\x1b\\';
+
 beforeEach(() => {
   mocks.spawnMock.mockReset();
   vi.resetModules();
 });
 
 describe('TerminalManager', () => {
+  it('dispatches startup commands once after the first integrated prompt', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    const commands = ['hermes doctor', 'hermes --tui'];
+
+    manager.create('term-startup', undefined, '/bin/zsh', () => {}, commands);
+    manager.create('term-startup', undefined, '/bin/zsh', () => {}, commands);
+
+    expect(pty.write).not.toHaveBeenCalled();
+    pty.emit(prompt);
+    pty.emit(prompt);
+    expect(pty.write).not.toHaveBeenCalled();
+    pty.emit(startupReady);
+    pty.emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    expect(pty.write).toHaveBeenCalledWith(
+      "eval 'hermes doctor' && eval 'hermes --tui'\r",
+    );
+  });
+
+  it('skips startup and forwards input when a prompt hook needs an early answer', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    manager.create('term-startup-input', undefined, '/bin/zsh', () => {}, ['git pull']);
+
+    manager.write('term-startup-input', 'echo after startup\r');
+    manager.writeBinary('term-startup-input', 'x');
+    expect(pty.write.mock.calls).toEqual([
+      ['echo after startup\r'],
+      [Buffer.from('x', 'binary')],
+    ]);
+
+    pty.emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(pty.write.mock.calls).toEqual([
+      ['echo after startup\r'],
+      [Buffer.from('x', 'binary')],
+    ]);
+  });
+
+  it('forwards terminal protocol replies without cancelling pending startup', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    manager.create('term-startup-cpr', undefined, '/bin/zsh', () => {}, ['git pull']);
+
+    manager.write('term-startup-cpr', '\x1b[1;1R', false);
+    expect(pty.write).toHaveBeenCalledWith('\x1b[1;1R');
+
+    pty.emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(pty.write.mock.calls).toEqual([
+      ['\x1b[1;1R'],
+      ["eval 'git pull'\r"],
+    ]);
+  });
+
+  it('does not append startup commands to a partially typed user line', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    manager.create('term-startup-partial', undefined, '/bin/zsh', () => {}, ['git pull']);
+
+    manager.write('term-startup-partial', 'ls');
+    pty.emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(pty.write.mock.calls).toEqual([['ls']]);
+  });
+
+  it('uses a bounded fallback when the first prompt marker never arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager();
+      manager.create('term-startup-fallback', undefined, '/bin/sh', () => {}, ['hermes --tui']);
+
+      expect(pty.write).not.toHaveBeenCalled();
+      await vi.runAllTimersAsync();
+      manager.write('term-startup-fallback', 'q');
+      expect(pty.write.mock.calls).toEqual([
+        ["eval 'hermes --tui'\r"],
+        ['q'],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the local startup ledger only when the pane is explicitly destroyed', async () => {
+    const ptys = [new MockPty(), new MockPty()];
+    mocks.spawnMock.mockImplementation(() => ptys.shift()!);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+
+    const first = manager.create('term-startup-recreate', undefined, '/bin/zsh', () => {}, ['first']);
+    (first as unknown as MockPty).emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    manager.destroy('term-startup-recreate');
+    const second = manager.create('term-startup-recreate', undefined, '/bin/zsh', () => {}, ['second']);
+    (second as unknown as MockPty).emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect((first as unknown as MockPty).write).toHaveBeenCalledWith("eval 'first'\r");
+    expect((second as unknown as MockPty).write).toHaveBeenCalledWith("eval 'second'\r");
+  });
+
+  it('does not replay startup commands when a PTY exits without explicit pane destruction', async () => {
+    const ptys = [new MockPty(), new MockPty()];
+    mocks.spawnMock.mockImplementation(() => ptys.shift()!);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+
+    const first = manager.create('term-startup-exit', undefined, '/bin/zsh', () => {}, ['first']);
+    (first as unknown as MockPty).emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    (first as unknown as MockPty).emitExit();
+    const second = manager.create('term-startup-exit', undefined, '/bin/zsh', () => {}, ['second']);
+    (second as unknown as MockPty).emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect((first as unknown as MockPty).write).toHaveBeenCalledWith("eval 'first'\r");
+    expect((second as unknown as MockPty).write).not.toHaveBeenCalled();
+  });
+
   it('spawns exactly one pty when create() is called twice for the same id (StrictMode double-mount)', async () => {
     const ptys: MockPty[] = [];
     mocks.spawnMock.mockImplementation(() => {
@@ -241,5 +413,416 @@ describe('TerminalManager', () => {
     manager.writeBinary('term-binary', '\xff\x00');
 
     expect(pty.write).toHaveBeenCalledWith(Buffer.from('\xff\x00', 'binary'));
+  });
+
+  describe('listRunningWork()', () => {
+    it('does not report an idle interactive shell as running work', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const inspector = processInspector([shell], [shell]);
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: inspector,
+        sampleDelayMs: 0,
+        sleep: vi.fn().mockResolvedValue(undefined),
+      });
+      manager.create('term-idle', undefined, '/bin/zsh', () => {});
+
+      await expect(manager.listRunningWork()).resolves.toEqual([]);
+    });
+
+    it('does not treat partially typed input as a running command when inspection fails', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const inspector = processInspector(new Error('process table unavailable'));
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: inspector,
+        sampleDelayMs: 0,
+        sleep: vi.fn().mockResolvedValue(undefined),
+      });
+      manager.create('term-partial', undefined, '/bin/zsh', () => {});
+      manager.write('term-partial', 'npm run dev');
+
+      await expect(manager.listRunningWork()).resolves.toEqual([]);
+    });
+
+    it('reports a stable foreground child after a command is submitted', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const server = processInfo(5001, pty.pid, 'node', { startTime: '2' });
+      const inspector = processInspector([shell, server], [shell, server]);
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: inspector,
+        sampleDelayMs: 0,
+        sleep: vi.fn().mockResolvedValue(undefined),
+      });
+      manager.create('term-foreground', '/workspace/api', '/bin/zsh', () => {});
+      manager.write('term-foreground', 'node server.js\r');
+
+      await expect(manager.listRunningWork()).resolves.toEqual([
+        expect.objectContaining({
+          terminalId: 'term-foreground',
+          rootPid: pty.pid,
+          processName: 'node',
+          kind: 'foreground',
+          descendantPids: [5001],
+        }),
+      ]);
+    });
+
+    it('reports a stable background child after the shell prompt returns', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const server = processInfo(5002, pty.pid, 'python', { startTime: '2' });
+      const inspector = processInspector([shell, server], [shell, server]);
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: inspector,
+        sampleDelayMs: 0,
+        sleep: vi.fn().mockResolvedValue(undefined),
+      });
+      manager.create('term-background', '/workspace/api', '/bin/zsh', () => {});
+      manager.write('term-background', 'python -m http.server &\r');
+      pty.emit(prompt);
+
+      await expect(manager.listRunningWork()).resolves.toEqual([
+        expect.objectContaining({
+          terminalId: 'term-background',
+          rootPid: pty.pid,
+          processName: 'python',
+          kind: 'background',
+          descendantPids: [5002],
+        }),
+      ]);
+    });
+
+    it('excludes a child that disappears between process-table snapshots', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const transient = processInfo(5003, pty.pid, 'git', { startTime: '2' });
+      const inspector = processInspector([shell, transient], [shell]);
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: inspector,
+        sampleDelayMs: 0,
+        sleep: vi.fn().mockResolvedValue(undefined),
+      });
+      manager.create('term-transient', undefined, '/bin/zsh', () => {});
+      manager.write('term-transient', 'git status\r');
+      pty.emit(prompt);
+
+      await expect(manager.listRunningWork()).resolves.toEqual([]);
+    });
+
+    it('ignores stable zombie descendants', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const zombie = processInfo(5004, pty.pid, 'node', { startTime: '2', state: 'Z' });
+      const inspector = processInspector([shell, zombie], [shell, zombie]);
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: inspector,
+        sampleDelayMs: 0,
+        sleep: vi.fn().mockResolvedValue(undefined),
+      });
+      manager.create('term-zombie', undefined, '/bin/zsh', () => {});
+
+      await expect(manager.listRunningWork()).resolves.toEqual([]);
+    });
+
+    it('ignores a nested interactive shell that has no non-shell descendants', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const nestedShell = processInfo(5005, pty.pid, 'bash', { startTime: '2' });
+      const inspector = processInspector([shell, nestedShell], [shell, nestedShell]);
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: inspector,
+        sampleDelayMs: 0,
+        sleep: vi.fn().mockResolvedValue(undefined),
+      });
+      manager.create('term-nested-shell', undefined, '/bin/zsh', () => {});
+      manager.write('term-nested-shell', 'bash\r');
+      pty.emit(prompt);
+
+      await expect(manager.listRunningWork()).resolves.toEqual([]);
+    });
+
+    it('detects a service that starts between close-time process samples', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const server = processInfo(5006, pty.pid, 'node', { startTime: '2' });
+      const inspector = processInspector([shell], [shell, server], [shell, server]);
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({ processInspector: inspector, sampleDelayMs: 0 });
+      manager.create('term-starting', undefined, '/bin/zsh', () => {});
+      manager.write('term-starting', 'node server.js &\r');
+      pty.emit(prompt);
+
+      await expect(manager.listRunningWork()).resolves.toEqual([
+        expect.objectContaining({ terminalId: 'term-starting', processName: 'node' }),
+      ]);
+      expect(inspector.snapshot).toHaveBeenCalledTimes(3);
+    });
+
+    it('reports a shell process that was replaced in-place with exec', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const replacement = processInfo(pty.pid, 1, 'node', { startTime: '1' });
+      const inspector = processInspector([replacement], [replacement]);
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: inspector,
+        sampleDelayMs: 0,
+        sleep: vi.fn().mockResolvedValue(undefined),
+      });
+      manager.create('term-exec', undefined, '/bin/zsh', () => {});
+      manager.write('term-exec', 'exec node server.js\r');
+
+      await expect(manager.listRunningWork()).resolves.toEqual([
+        expect.objectContaining({
+          terminalId: 'term-exec',
+          rootPid: pty.pid,
+          processName: 'node',
+          kind: 'foreground',
+        }),
+      ]);
+    });
+
+    it('reports unknown work when process inspection fails after a command starts', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const inspector = processInspector(new Error('process table unavailable'));
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: inspector,
+        sampleDelayMs: 0,
+        sleep: vi.fn().mockResolvedValue(undefined),
+      });
+      manager.create('term-unknown', '/workspace/api', '/bin/zsh', () => {});
+      manager.write('term-unknown', 'npm run dev\r');
+
+      await expect(manager.listRunningWork()).resolves.toEqual([
+        expect.objectContaining({
+          terminalId: 'term-unknown',
+          rootPid: pty.pid,
+          kind: 'unknown',
+          descendantPids: [],
+        }),
+      ]);
+    });
+
+    it('fails safely after a submitted command returns to a prompt when inspection is unavailable', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const inspector = processInspector(new Error('process table unavailable'));
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({ processInspector: inspector, sampleDelayMs: 0 });
+      manager.create('term-unknown-background', '/workspace/api', '/bin/zsh', () => {});
+      manager.write('term-unknown-background', 'node server.js &\r');
+      pty.emit(prompt);
+
+      await expect(manager.listRunningWork()).resolves.toEqual([
+        expect.objectContaining({
+          terminalId: 'term-unknown-background',
+          kind: 'unknown',
+        }),
+      ]);
+    });
+
+    it('removes an exited pty from running-work detection', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const inspector = processInspector(new Error('process table unavailable'));
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: inspector,
+        sampleDelayMs: 0,
+        sleep: vi.fn().mockResolvedValue(undefined),
+      });
+      manager.create('term-exited', undefined, '/bin/zsh', () => {});
+      manager.write('term-exited', 'npm run dev\r');
+      pty.emitExit();
+
+      await expect(manager.listRunningWork()).resolves.toEqual([]);
+      expect(inspector.snapshot).not.toHaveBeenCalled();
+    });
+
+    it('interrupts work, terminates stable descendants deepest-first, and kills the PTY root', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const runner = processInfo(5001, pty.pid, 'npm', { startTime: '2' });
+      const server = processInfo(5002, runner.pid, 'node', { startTime: '3' });
+      const snapshot = [shell, runner, server];
+      const inspector = processInspector(snapshot, snapshot, [], []);
+      const killProcess = vi.fn();
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: inspector,
+        stopGraceMs: 0,
+        terminateGraceMs: 0,
+        forceKillGraceMs: 0,
+        killProcess,
+      });
+      manager.create('term-stop', undefined, '/bin/zsh', () => {});
+
+      await manager.stopAll();
+
+      expect(pty.write).toHaveBeenCalledWith('\x03');
+      expect(killProcess.mock.calls).toEqual([
+        [5002, 'SIGTERM'],
+        [5001, 'SIGTERM'],
+      ]);
+      expect(pty.kill).toHaveBeenCalledOnce();
+      await expect(manager.listRunningWork()).resolves.toEqual([]);
+    });
+
+    it('continues stopping other terminals when one descendant termination fails', async () => {
+      const firstPty = new MockPty();
+      const secondPty = new MockPty();
+      secondPty.pid = 4243;
+      mocks.spawnMock.mockReturnValueOnce(firstPty).mockReturnValueOnce(secondPty);
+      const snapshot = [
+        processInfo(firstPty.pid, 1, 'zsh', { startTime: '1' }),
+        processInfo(5001, firstPty.pid, 'node', { startTime: '2' }),
+        processInfo(secondPty.pid, 1, 'zsh', { startTime: '3' }),
+        processInfo(5002, secondPty.pid, 'python', { startTime: '4' }),
+      ];
+      const killProcess = vi.fn((pid: number) => {
+        if (pid === 5001) throw new Error('already exited');
+      });
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: processInspector(snapshot, snapshot, [], []),
+        stopGraceMs: 0,
+        terminateGraceMs: 0,
+        forceKillGraceMs: 0,
+        killProcess,
+      });
+      manager.create('term-stop-a', undefined, '/bin/zsh', () => {});
+      manager.create('term-stop-b', undefined, '/bin/zsh', () => {});
+
+      await expect(manager.stopAll()).resolves.toBeUndefined();
+      expect(killProcess).toHaveBeenCalledWith(5001, 'SIGTERM');
+      expect(killProcess).toHaveBeenCalledWith(5002, 'SIGTERM');
+      expect(firstPty.kill).toHaveBeenCalledOnce();
+      expect(secondPty.kill).toHaveBeenCalledOnce();
+    });
+
+    it('keeps ownership of a child that reparents during the interrupt grace period', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const attached = processInfo(5008, pty.pid, 'node', { startTime: '2' });
+      const reparented = processInfo(5008, 1, 'node', { startTime: '2' });
+      const killProcess = vi.fn();
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: processInspector([shell, attached], [shell, reparented], [], []),
+        stopGraceMs: 0,
+        terminateGraceMs: 0,
+        forceKillGraceMs: 0,
+        killProcess,
+      });
+      manager.create('term-reparent', undefined, '/bin/zsh', () => {});
+
+      await manager.stopAll();
+
+      expect(killProcess).toHaveBeenCalledWith(5008, 'SIGTERM');
+      expect(pty.kill).toHaveBeenCalledOnce();
+    });
+
+    it('escalates stubborn descendants and rejects shutdown if they survive', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const server = processInfo(5007, pty.pid, 'node', { startTime: '2' });
+      const snapshot = [shell, server];
+      const killProcess = vi.fn();
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: processInspector(snapshot, snapshot, snapshot, snapshot),
+        stopGraceMs: 0,
+        terminateGraceMs: 0,
+        forceKillGraceMs: 0,
+        killProcess,
+      });
+      manager.create('term-stubborn', undefined, '/bin/zsh', () => {});
+
+      await expect(manager.stopAll()).rejects.toThrow(/did not stop.*node \(5007\)/i);
+      expect(killProcess.mock.calls).toContainEqual([5007, 'SIGTERM']);
+      expect(killProcess.mock.calls).toContainEqual([5007, 'SIGKILL']);
+      expect(killProcess.mock.calls).toContainEqual([pty.pid, 'SIGKILL']);
+      expect(pty.kill).toHaveBeenCalledOnce();
+
+      await expect(manager.listRunningWork()).resolves.toEqual([
+        expect.objectContaining({ processName: 'node', descendantPids: [5007] }),
+      ]);
+      await expect(manager.stopAll()).rejects.toThrow(/did not stop.*node \(5007\)/i);
+      expect(pty.kill).toHaveBeenCalledTimes(2);
+    });
+
+    it('retries a remembered survivor after its PTY root exits and the child reparents', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const attached = processInfo(5009, pty.pid, 'node', { startTime: '2' });
+      const reparented = processInfo(5009, 1, 'node', { startTime: '2' });
+      const inspector = processInspector(
+        [shell, attached],
+        [shell, reparented],
+        [shell, reparented],
+        [reparented],
+        [reparented],
+        [reparented],
+        [reparented],
+        [],
+        [],
+      );
+      const killProcess = vi.fn();
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: inspector,
+        stopGraceMs: 0,
+        terminateGraceMs: 0,
+        forceKillGraceMs: 0,
+        killProcess,
+      });
+      manager.create('term-ledger-retry', undefined, '/bin/zsh', () => {});
+
+      await expect(manager.stopAll()).rejects.toThrow(/node \(5009\)/i);
+      pty.emitExit();
+      await expect(manager.stopAll()).resolves.toBeUndefined();
+
+      await expect(manager.listRunningWork()).resolves.toEqual([]);
+      expect(killProcess.mock.calls.filter(([pid, signal]) => pid === 5009 && signal === 'SIGTERM')).toHaveLength(2);
+    });
   });
 });

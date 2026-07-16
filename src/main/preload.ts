@@ -1,4 +1,26 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type {
+  FileEntry,
+  SSHConnectionClosedEvent,
+  SSHDirectoryListing,
+  SSHListDirParams,
+} from '../shared/files';
+import type { StartupShellDialect } from '../shared/startupCommands';
+import {
+  WORKSPACE_PREPARE_FOR_CLOSE_CHANNEL,
+  WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL,
+  type WorkspacePrepareForCloseRequest,
+  type WorkspacePrepareForCloseResolution,
+} from './workspaceLifecycle';
+import type {
+  ReadLocalTextFileRequest,
+  ReadSSHTextFileRequest,
+  TextFileResult,
+  TextFileSnapshot,
+  TextFileWriteValue,
+  WriteLocalTextFileRequest,
+  WriteSSHTextFileRequest,
+} from '../shared/textFiles';
 
 export interface UpdateProgress {
   percent: number;
@@ -13,15 +35,56 @@ export interface UpdateAvailableInfo {
   releaseNotes?: string;
 }
 
+type PrepareForCloseCallback = (
+  request: WorkspacePrepareForCloseRequest,
+) => void | Promise<void>;
+
+let prepareForCloseCallback: PrepareForCloseCallback | null = null;
+
+function safelyCancelClosePreparation(request: WorkspacePrepareForCloseRequest): void {
+  void ipcRenderer.invoke(WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL, {
+    requestId: request.requestId,
+    resolution: 'cancel',
+  } satisfies WorkspacePrepareForCloseResolution).catch(() => {});
+}
+
+// Register this listener during preload evaluation, before renderer scripts
+// run. If the application never subscribes (or its callback fails), reply with
+// the safe outcome instead of leaving the main process waiting indefinitely.
+ipcRenderer.on(WORKSPACE_PREPARE_FOR_CLOSE_CHANNEL, (
+  _event: Electron.IpcRendererEvent,
+  request: WorkspacePrepareForCloseRequest,
+) => {
+  if (!request || typeof request.requestId !== 'string') return;
+  const callback = prepareForCloseCallback;
+  if (!callback) {
+    safelyCancelClosePreparation(request);
+    return;
+  }
+  try {
+    void Promise.resolve(callback(request)).catch(() => {
+      safelyCancelClosePreparation(request);
+    });
+  } catch {
+    safelyCancelClosePreparation(request);
+  }
+});
+
 const api = {
   // Terminal
-  terminalCreate: (params: { id: string; cwd?: string; shell?: string }) =>
+  terminalCreate: (params: {
+    id: string;
+    cwd?: string;
+    shell?: string;
+    startupCommands?: string[];
+    startupShellDialect?: StartupShellDialect;
+  }) =>
     ipcRenderer.invoke('terminal:create', params),
   terminalResize: (params: { id: string; cols: number; rows: number }) =>
     ipcRenderer.invoke('terminal:resize', params),
-  terminalWrite: (params: { id: string; data: string }) =>
+  terminalWrite: (params: { id: string; data: string; userInput?: boolean }) =>
     ipcRenderer.invoke('terminal:write', params),
-  terminalWriteBinary: (params: { id: string; data: string }) =>
+  terminalWriteBinary: (params: { id: string; data: string; userInput?: boolean }) =>
     ipcRenderer.invoke('terminal:writeBinary', params),
   terminalDestroy: (params: { id: string }) =>
     ipcRenderer.invoke('terminal:destroy', params),
@@ -34,30 +97,52 @@ const api = {
   // SSH
   sshConnect: (params: { id: string; host: string; port: number; username?: string; auth: string; password?: string; privateKey?: string }) =>
     ipcRenderer.invoke('ssh:connect', params),
-  sshCreateShell: (params: { id: string; termId: string; cols: number; rows: number }) =>
+  sshCreateShell: (params: {
+    id: string;
+    termId: string;
+    cols: number;
+    rows: number;
+    startupCommands?: string[];
+    startupShellDialect?: StartupShellDialect;
+  }) =>
     ipcRenderer.invoke('ssh:createShell', params),
-  sshWriteShell: (params: { sessionId?: string; termId: string; data: string }) =>
+  sshWriteShell: (params: { sessionId?: string; termId: string; data: string; userInput?: boolean }) =>
     ipcRenderer.invoke('ssh:writeShell', params),
-  sshWriteShellBinary: (params: { sessionId?: string; termId: string; data: string }) =>
+  sshWriteShellBinary: (params: { sessionId?: string; termId: string; data: string; userInput?: boolean }) =>
     ipcRenderer.invoke('ssh:writeShellBinary', params),
   sshDestroyShell: (params: { sessionId?: string; termId: string }) =>
     ipcRenderer.invoke('ssh:destroyShell', params),
   sshResizeShell: (params: { termId: string; cols: number; rows: number }) =>
     ipcRenderer.invoke('ssh:resizeShell', params),
-  sshListDir: (params: { sessionId: string; remotePath: string }) =>
+  sshListDir: (params: SSHListDirParams): Promise<SSHDirectoryListing> =>
     ipcRenderer.invoke('ssh:listDir', params),
+  sshReadTextFile: (params: ReadSSHTextFileRequest): Promise<TextFileResult<TextFileSnapshot>> =>
+    ipcRenderer.invoke('ssh:readTextFile', params),
+  sshWriteTextFile: (params: WriteSSHTextFileRequest): Promise<TextFileResult<TextFileWriteValue>> =>
+    ipcRenderer.invoke('ssh:writeTextFile', params),
   sshDisconnect: (params: { id: string }) =>
     ipcRenderer.invoke('ssh:disconnect', params),
   sshListConnections: () =>
     ipcRenderer.invoke('ssh:listConnections'),
+  onSSHConnectionClosed: (callback: (event: SSHConnectionClosedEvent) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: SSHConnectionClosedEvent) => callback(data);
+    ipcRenderer.on('ssh:onConnectionClosed', handler);
+    return () => {
+      ipcRenderer.removeListener('ssh:onConnectionClosed', handler);
+    };
+  },
 
   // File System
-  fsListDir: (params: { dirPath: string; showHidden?: boolean }) =>
+  fsListDir: (params: { dirPath: string; showHidden?: boolean }): Promise<FileEntry[]> =>
     ipcRenderer.invoke('fs:listDir', params),
   fsGetHome: () => ipcRenderer.invoke('fs:getHome'),
   fsGetDrives: () => ipcRenderer.invoke('fs:getDrives'),
   fsStat: (params: { filePath: string }) =>
     ipcRenderer.invoke('fs:stat', params),
+  fsReadTextFile: (params: ReadLocalTextFileRequest): Promise<TextFileResult<TextFileSnapshot>> =>
+    ipcRenderer.invoke('fs:readTextFile', params),
+  fsWriteTextFile: (params: WriteLocalTextFileRequest): Promise<TextFileResult<TextFileWriteValue>> =>
+    ipcRenderer.invoke('fs:writeTextFile', params),
 
   // Git
   gitStatus: (params: { repoPath: string }) =>
@@ -92,6 +177,15 @@ const api = {
   // App
   getPlatform: () => ipcRenderer.invoke('app:getPlatform'),
   openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
+  copyText: (text: string): Promise<boolean> => ipcRenderer.invoke('app:copyText', text),
+  onPrepareForClose: (callback: PrepareForCloseCallback) => {
+    prepareForCloseCallback = callback;
+    return () => {
+      if (prepareForCloseCallback === callback) prepareForCloseCallback = null;
+    };
+  },
+  resolvePrepareForClose: (resolution: WorkspacePrepareForCloseResolution): Promise<boolean> =>
+    ipcRenderer.invoke(WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL, resolution),
 
   // Window controls (custom titlebar)
   windowMinimize: () => ipcRenderer.invoke('window:minimize'),

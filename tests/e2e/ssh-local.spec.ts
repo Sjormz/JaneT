@@ -5,12 +5,105 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
-import { Server, utils } from 'ssh2';
+import { Server, utils, type SFTPWrapper } from 'ssh2';
 
 const root = path.resolve(__dirname, '../..');
 const devServerUrl = process.env.JANET_DEV_SERVER_URL || 'http://127.0.0.1:5173';
+const electronExecutable = require('electron') as string;
 const testUsername = 'janet';
 const testPassword = 'janet-test';
+const remoteHome = '/home/janet';
+
+interface VirtualRemoteEntry {
+  name: string;
+  type: 'directory' | 'file';
+  size?: number;
+}
+
+const virtualRemoteTree = new Map<string, VirtualRemoteEntry[]>([
+  [remoteHome, [
+    { name: 'projects', type: 'directory' },
+    { name: 'REMOTE_README.md', type: 'file', size: 42 },
+    { name: '.remote-hidden', type: 'file', size: 7 },
+  ]],
+  [`${remoteHome}/projects`, [
+    { name: 'nested-remote.txt', type: 'file', size: 21 },
+  ]],
+]);
+
+const virtualRemoteTimestamp = Math.floor(Date.UTC(2026, 0, 1) / 1000);
+
+function virtualAttributes(entry: Pick<VirtualRemoteEntry, 'type' | 'size'>) {
+  const directory = entry.type === 'directory';
+  return {
+    mode: (directory ? fs.constants.S_IFDIR | 0o755 : fs.constants.S_IFREG | 0o644),
+    uid: 1000,
+    gid: 1000,
+    size: entry.size ?? 0,
+    atime: virtualRemoteTimestamp,
+    mtime: virtualRemoteTimestamp,
+  };
+}
+
+function resolveVirtualRemotePath(requestedPath: string): string | null {
+  const resolvedPath = requestedPath === '.'
+    ? remoteHome
+    : path.posix.resolve(remoteHome, requestedPath);
+  return virtualRemoteTree.has(resolvedPath) ? resolvedPath : null;
+}
+
+function serveVirtualRemoteTree(sftp: SFTPWrapper) {
+  const { STATUS_CODE } = utils.sftp;
+  const openDirectories = new Map<string, { path: string; read: boolean }>();
+  let nextHandle = 0;
+
+  sftp.on('error', ignoreBenignSshFixtureError);
+  sftp.on('REALPATH', (requestId, requestedPath) => {
+    const resolvedPath = resolveVirtualRemotePath(requestedPath);
+    if (!resolvedPath) {
+      sftp.status(requestId, STATUS_CODE.NO_SUCH_FILE);
+      return;
+    }
+    sftp.name(requestId, [{
+      filename: resolvedPath,
+      longname: resolvedPath,
+      attrs: virtualAttributes({ type: 'directory' }),
+    }]);
+  });
+  sftp.on('OPENDIR', (requestId, requestedPath) => {
+    const resolvedPath = resolveVirtualRemotePath(requestedPath);
+    if (!resolvedPath) {
+      sftp.status(requestId, STATUS_CODE.NO_SUCH_FILE);
+      return;
+    }
+    const handle = Buffer.alloc(4);
+    handle.writeUInt32BE(++nextHandle);
+    openDirectories.set(handle.toString('hex'), { path: resolvedPath, read: false });
+    sftp.handle(requestId, handle);
+  });
+  sftp.on('READDIR', (requestId, handle) => {
+    const directory = openDirectories.get(handle.toString('hex'));
+    if (!directory) {
+      sftp.status(requestId, STATUS_CODE.FAILURE);
+      return;
+    }
+    if (directory.read) {
+      sftp.status(requestId, STATUS_CODE.EOF);
+      return;
+    }
+    directory.read = true;
+    const entries = virtualRemoteTree.get(directory.path) ?? [];
+    sftp.name(requestId, entries.map((entry) => ({
+      filename: entry.name,
+      longname: `${entry.type === 'directory' ? 'd' : '-'}rw-r--r-- 1 janet janet ${entry.size ?? 0} ${entry.name}`,
+      attrs: virtualAttributes(entry),
+    })));
+  });
+  sftp.on('CLOSE', (requestId, handle) => {
+    const removed = openDirectories.delete(handle.toString('hex'));
+    sftp.status(requestId, removed ? STATUS_CODE.OK : STATUS_CODE.FAILURE);
+  });
+}
 
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -128,7 +221,13 @@ function respondToShellCommand(stream: NodeJS.WritableStream & { exit?: (code: n
   stream.write('$ ');
 }
 
-async function startLocalSshServer(): Promise<{ port: number; fingerprint: string; close: () => Promise<void> }> {
+async function startLocalSshServer(): Promise<{
+  port: number;
+  fingerprint: string;
+  receivedCommands: string[];
+  disconnectClients: () => void;
+  close: () => Promise<void>;
+}> {
   const port = await getFreePort();
   const { privateKey } = generateKeyPairSync('rsa', {
     modulusLength: 2048,
@@ -142,7 +241,11 @@ async function startLocalSshServer(): Promise<{ port: number; fingerprint: strin
     .digest('base64')
     .replace(/=+$/, '')}`;
 
+  const clients = new Set<{ end: () => void }>();
+  const receivedCommands: string[] = [];
   const server = new Server({ hostKeys: [privateKey] }, (client) => {
+    clients.add(client);
+    client.on('close', () => clients.delete(client));
     client.on('error', ignoreBenignSshFixtureError);
     client.on('authentication', (ctx) => {
       if (ctx.method === 'password' && ctx.username === testUsername && ctx.password === testPassword) {
@@ -157,6 +260,9 @@ async function startLocalSshServer(): Promise<{ port: number; fingerprint: strin
         const session = accept();
         session.on('error', ignoreBenignSshFixtureError);
         session.on('pty', (acceptPty) => acceptPty?.());
+        session.on('sftp', (acceptSftp) => {
+          serveVirtualRemoteTree(acceptSftp());
+        });
         session.on('shell', (acceptShell) => {
           const stream = acceptShell();
           stream.on('error', ignoreBenignSshFixtureError);
@@ -167,6 +273,7 @@ async function startLocalSshServer(): Promise<{ port: number; fingerprint: strin
             if (!/[\r\n]$/.test(buffer)) return;
             const command = buffer.trim();
             buffer = '';
+            receivedCommands.push(command);
             if (command === 'exit') {
               stream.exit(0);
               stream.end();
@@ -187,16 +294,25 @@ async function startLocalSshServer(): Promise<{ port: number; fingerprint: strin
   return {
     port,
     fingerprint,
+    receivedCommands,
+    disconnectClients: () => {
+      for (const client of clients) client.end();
+    },
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };
 }
 
-async function launchAppWithLocalSsh(port: number, fingerprint: string, options: { seedSession?: boolean } = {}): Promise<{
+async function launchAppWithLocalSsh(
+  port: number,
+  fingerprint: string,
+  options: { seedSession?: boolean; seedStartupPreset?: boolean } = {},
+): Promise<{
   browser: Browser;
   electronProcess: ChildProcess;
   page: Page;
   eventsPath: string;
   settingsPath: string;
+  userData: string;
 }> {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-local-ssh-'));
   const eventsPath = path.join(userData, 'events.ndjson');
@@ -217,7 +333,21 @@ async function launchAppWithLocalSsh(port: number, fingerprint: string, options:
     fontSize: 14,
     sidebarSide: 'left',
     keybindings: {},
-    workspaceTabs: [],
+    workspaceTabs: options.seedStartupPreset ? [{
+      id: 'remote-startup-preset',
+      name: 'Remote startup',
+      type: 'local',
+      terminalCount: 1,
+      splitDirection: 'vertical',
+      root: {
+        type: 'leaf',
+        title: 'remote automation',
+        terminalType: 'ssh',
+        sshProfileId: profile.id,
+        startupCommands: ['printf __JANET_REMOTE_ONE__', 'printf __JANET_REMOTE_TWO__'],
+        startupShellDialect: 'posix',
+      },
+    }] : [],
     sshProfiles: [profile],
     sshHostKeys: { [`127.0.0.1:${port}`]: fingerprint },
     session: seedSession ? {
@@ -235,8 +365,7 @@ async function launchAppWithLocalSsh(port: number, fingerprint: string, options:
     } : undefined,
   }, null, 2), 'utf-8');
 
-  const electronArgs = ['electron', '.', ...(process.platform === 'linux' ? ['--no-sandbox'] : [])];
-  const electronProcess = spawn('npx', electronArgs, {
+  const electronProcess = spawn(electronExecutable, ['.', ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
     cwd: root,
     env: electronEnv({
       NODE_ENV: 'test',
@@ -246,24 +375,32 @@ async function launchAppWithLocalSsh(port: number, fingerprint: string, options:
       JANET_E2E_REMOTE_DEBUGGING_PORT: String(remoteDebuggingPort),
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
-    shell: true,
+    shell: false,
   });
   electronProcess.stdout?.on('data', (chunk) => console.log(`[electron] ${chunk}`));
   electronProcess.stderr?.on('data', (chunk) => console.error(`[electron] ${chunk}`));
 
-  const browser = await connectCdp(remoteDebuggingPort);
-  const context = browser.contexts()[0] ?? await browser.newContext();
-  let page = context.pages().find((candidate) => isAppUrl(candidate.url()));
-  if (!page) page = await context.waitForEvent('page', { timeout: 10_000 });
-  if (!isAppUrl(page.url())) {
-    await page.waitForURL((url) => isAppUrl(url.href), { timeout: 10_000 }).catch(() => {});
+  let browser: Browser | undefined;
+  try {
+    browser = await connectCdp(remoteDebuggingPort);
+    const context = browser.contexts()[0] ?? await browser.newContext();
+    let page = context.pages().find((candidate) => isAppUrl(candidate.url()));
+    if (!page) page = await context.waitForEvent('page', { timeout: 10_000 });
+    if (!isAppUrl(page.url())) {
+      await page.waitForURL((url) => isAppUrl(url.href), { timeout: 10_000 }).catch(() => {});
+    }
+    page.on('console', (message) => console.log(`[renderer:${message.type()}] ${message.text()}`));
+    await page.waitForLoadState('domcontentloaded');
+    return { browser, electronProcess, page, eventsPath, settingsPath, userData };
+  } catch (error) {
+    await browser?.close().catch(() => {});
+    await killProcessTree(electronProcess);
+    fs.rmSync(userData, { recursive: true, force: true });
+    throw error;
   }
-  page.on('console', (message) => console.log(`[renderer:${message.type()}] ${message.text()}`));
-  await page.waitForLoadState('domcontentloaded');
-  return { browser, electronProcess, page, eventsPath, settingsPath };
 }
 
-async function closeApp(browser: Browser, electronProcess: ChildProcess) {
+async function closeApp(browser: Browser, electronProcess: ChildProcess, userData?: string) {
   try {
     for (const context of browser.contexts()) {
       for (const page of context.pages()) {
@@ -273,6 +410,7 @@ async function closeApp(browser: Browser, electronProcess: ChildProcess) {
     await browser.close().catch(() => {});
   } finally {
     await killProcessTree(electronProcess);
+    if (userData) fs.rmSync(userData, { recursive: true, force: true });
   }
 }
 
@@ -289,21 +427,34 @@ async function runMarkedLs(page: Page, marker: string) {
   await expect.poll(async () => page.locator('.xterm-rows').innerText(), { timeout: 20_000 }).toContain(`__JANET_${marker}_DONE__`);
 }
 
-test('connects to the local SSH fixture and runs ls', async () => {
+test('restores the local SSH fixture, browses remote files, and runs ls', async () => {
   const ssh = await startLocalSshServer();
-  const { browser, electronProcess, page, eventsPath } = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
+  const { browser, electronProcess, page, eventsPath, userData } = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
   try {
     await waitForShellCreateCount(eventsPath, 1);
+
+    const explorer = page.locator('.file-explorer');
+    await expect(explorer.getByText('REMOTE_README.md', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(explorer.getByRole('button', { name: 'Open folder projects' })).toBeVisible();
+    await expect(page.getByText(/remote browsing is not available yet/i)).toHaveCount(0);
+
+    await explorer.getByRole('button', { name: 'Open folder projects' }).click();
+    await expect(explorer.getByText('nested-remote.txt', { exact: true })).toBeVisible();
+
     await runMarkedLs(page, 'LS');
+
+    ssh.disconnectClients();
+    await expect(explorer.getByText(/Reconnect .* to browse its files\./i)).toBeVisible({ timeout: 20_000 });
+    await expect(explorer.getByText('nested-remote.txt', { exact: true })).toHaveCount(0);
   } finally {
-    await closeApp(browser, electronProcess);
+    await closeApp(browser, electronProcess, userData);
     await ssh.close();
   }
 });
 
 test('restores local SSH terminal after refresh and runs ls again', async () => {
   const ssh = await startLocalSshServer();
-  const { browser, electronProcess, page, eventsPath } = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
+  const { browser, electronProcess, page, eventsPath, userData } = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
   try {
     await waitForShellCreateCount(eventsPath, 1);
     await runMarkedLs(page, 'BEFORE_REFRESH');
@@ -313,14 +464,64 @@ test('restores local SSH terminal after refresh and runs ls again', async () => 
     await waitForShellCreateCount(eventsPath, 2);
     await runMarkedLs(page, 'AFTER_REFRESH');
   } finally {
-    await closeApp(browser, electronProcess);
+    await closeApp(browser, electronProcess, userData);
+    await ssh.close();
+  }
+});
+
+test('runs startup commands only for fresh launches of a saved SSH preset', async () => {
+  const ssh = await startLocalSshServer();
+  const { browser, electronProcess, page, eventsPath, settingsPath, userData } = await launchAppWithLocalSsh(
+    ssh.port,
+    ssh.fingerprint,
+    { seedSession: false, seedStartupPreset: true },
+  );
+  try {
+    const presetsButton = page.getByRole('button', { name: 'Presets' });
+    if (await presetsButton.getAttribute('aria-expanded') !== 'true') await presetsButton.click();
+    await page.getByRole('button', { name: 'Open preset Remote startup' }).click();
+
+    const expectedExpression = "eval 'printf __JANET_REMOTE_ONE__' && eval 'printf __JANET_REMOTE_TWO__'";
+    await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 }).toEqual([expectedExpression]);
+
+    // A durable renderer reload reconnects the saved SSH pane with a fresh
+    // transport, but session serialization intentionally removed automation.
+    await expect.poll(() => {
+      const session = readSettings(settingsPath).session;
+      const savedTab = session?.tabs?.find((tab: Record<string, any>) => tab.title === 'Remote startup');
+      if (!savedTab) return null;
+      return {
+        terminalType: savedTab.root?.terminalType,
+        startupCommands: savedTab.root?.startupCommands,
+        startupShellDialect: savedTab.root?.startupShellDialect,
+      };
+    }, { timeout: 10_000 }).toEqual({
+      terminalType: 'ssh',
+      startupCommands: undefined,
+      startupShellDialect: undefined,
+    });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await waitForShellCreateCount(eventsPath, 2);
+    await page.waitForTimeout(750);
+    expect(ssh.receivedCommands).toEqual([expectedExpression]);
+
+    // An explicit second preset launch creates a new pane and runs it again.
+    const reloadedPresetsButton = page.getByRole('button', { name: 'Presets' });
+    if (await reloadedPresetsButton.getAttribute('aria-expanded') !== 'true') {
+      await reloadedPresetsButton.click();
+    }
+    await page.getByRole('button', { name: 'Open preset Remote startup' }).click();
+    await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 })
+      .toEqual([expectedExpression, expectedExpression]);
+  } finally {
+    await closeApp(browser, electronProcess, userData);
     await ssh.close();
   }
 });
 
 test('opens saved local SSH profile, persists profile id, refreshes, and runs ls again', async () => {
   const ssh = await startLocalSshServer();
-  const { browser, electronProcess, page, eventsPath, settingsPath } = await launchAppWithLocalSsh(
+  const { browser, electronProcess, page, eventsPath, settingsPath, userData } = await launchAppWithLocalSsh(
     ssh.port,
     ssh.fingerprint,
     { seedSession: false },
@@ -342,7 +543,7 @@ test('opens saved local SSH profile, persists profile id, refreshes, and runs ls
     await waitForShellCreateCount(eventsPath, 2);
     await runMarkedLs(page, 'OPENED_PROFILE_AFTER_REFRESH');
   } finally {
-    await closeApp(browser, electronProcess);
+    await closeApp(browser, electronProcess, userData);
     await ssh.close();
   }
 });

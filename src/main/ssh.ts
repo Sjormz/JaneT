@@ -1,12 +1,44 @@
 import { Client, ClientChannel } from 'ssh2';
+import type { SFTPWrapper, Stats } from 'ssh2';
 import * as os from 'os';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { StringDecoder } from 'string_decoder';
+import type {
+  FileEntry,
+  SSHConnectionClosedEvent,
+  SSHDirectoryListing,
+} from '../shared/files';
+import {
+  compileStartupCommands,
+  isStartupShellDialect,
+  type StartupShellDialect,
+} from '../shared/startupCommands';
+import {
+  MAX_TEXT_FILE_BYTES,
+  isTextFileRevision,
+  textFileFailure,
+  type ReadSSHTextFileRequest,
+  type TextFileError,
+  type TextFileErrorCode,
+  type TextFileResult,
+  type TextFileSnapshot,
+  type TextFileWriteValue,
+  type WriteSSHTextFileRequest,
+} from '../shared/textFiles';
+import {
+  decodeTextFile,
+  encodeTextFile,
+  revisionsMatch,
+  textFileRevision,
+} from './textFileCodec';
 
 // Host verification may pause on a native Trust/Cancel dialog while the user
 // checks the fingerprint out of band. Keep the handshake bounded, but do not
 // apply the old 10-second machine-to-machine timeout to an interactive step.
 const INTERACTIVE_READY_TIMEOUT_MS = 5 * 60 * 1000;
+const SFTP_OPERATION_TIMEOUT_MS = 30_000;
+const MAX_REMOTE_PATH_LENGTH = 8_192;
+const SFTP_IO_CHUNK_BYTES = 64 * 1024;
 
 export interface SSHHostKeyStore {
   lookup(host: string, port: number): string | undefined;
@@ -15,21 +47,689 @@ export interface SSHHostKeyStore {
   migrate?(host: string, port: number, expectedFingerprint: string, fingerprint: string): void;
 }
 
+class RemoteTextFileError extends Error {
+  constructor(
+    readonly code: TextFileErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'RemoteTextFileError';
+  }
+}
+
+interface RemoteFileBytes {
+  bytes: Buffer;
+  stats: Stats;
+}
+
+function validateSSHReadRequest(request: unknown): TextFileResult<ReadSSHTextFileRequest> {
+  if (!hasExactObjectShape(request, ['sessionId', 'connectionId', 'remotePath'])) {
+    return textFileFailure('INVALID_REQUEST', 'A valid SSH text-file request is required.');
+  }
+  try {
+    const sessionId = request.sessionId;
+    const connectionId = request.connectionId;
+    const remotePath = request.remotePath;
+    const identityError = validateSSHFileIdentity(sessionId, connectionId);
+    if (identityError) return identityError;
+    if (typeof remotePath !== 'string') {
+      return textFileFailure('INVALID_REQUEST', 'A valid remote path is required.');
+    }
+    validateRemotePath(remotePath);
+    return {
+      ok: true,
+      value: {
+        sessionId: sessionId as string,
+        connectionId: connectionId as string,
+        remotePath,
+      },
+    };
+  } catch (error) {
+    return textFileFailure('INVALID_REQUEST', errorMessage(error));
+  }
+}
+
+function validateSSHWriteRequest(request: unknown): TextFileResult<WriteSSHTextFileRequest> {
+  if (!hasExactObjectShape(
+    request,
+    [
+      'sessionId',
+      'connectionId',
+      'requestedPath',
+      'resolvedPath',
+      'expectedRevision',
+      'content',
+      'hasUtf8Bom',
+    ],
+    ['overwrite'],
+  )) {
+    return textFileFailure('INVALID_REQUEST', 'A valid SSH text-file save request is required.');
+  }
+  try {
+    const sessionId = request.sessionId;
+    const connectionId = request.connectionId;
+    const requestedPath = request.requestedPath;
+    const resolvedPath = request.resolvedPath;
+    const expectedRevision = request.expectedRevision;
+    const content = request.content;
+    const hasUtf8Bom = request.hasUtf8Bom;
+    const hasOverwrite = Object.prototype.hasOwnProperty.call(request, 'overwrite');
+    const overwrite = request.overwrite;
+
+    const identityError = validateSSHFileIdentity(sessionId, connectionId);
+    if (identityError) return identityError;
+    if (typeof requestedPath !== 'string' || typeof resolvedPath !== 'string') {
+      return textFileFailure('INVALID_REQUEST', 'Valid requested and resolved remote paths are required.');
+    }
+    validateRemotePath(requestedPath);
+    validateRemotePath(resolvedPath);
+    if (
+      !hasExactObjectShape(expectedRevision, ['token', 'size', 'mtime'], ['fileId'])
+      || !isTextFileRevision(expectedRevision)
+      || (Object.prototype.hasOwnProperty.call(expectedRevision, 'fileId')
+        && typeof expectedRevision.fileId !== 'string')
+    ) {
+      return textFileFailure('INVALID_REQUEST', 'A valid expected file revision is required.');
+    }
+    if (typeof content !== 'string' || typeof hasUtf8Bom !== 'boolean') {
+      return textFileFailure('INVALID_REQUEST', 'A UTF-8 text value and BOM preference are required.');
+    }
+    if (hasOverwrite && typeof overwrite !== 'boolean') {
+      return textFileFailure('INVALID_REQUEST', 'The overwrite choice must be a boolean.');
+    }
+
+    return {
+      ok: true,
+      value: {
+        sessionId: sessionId as string,
+        connectionId: connectionId as string,
+        requestedPath,
+        resolvedPath,
+        expectedRevision: {
+          token: expectedRevision.token,
+          size: expectedRevision.size,
+          mtime: expectedRevision.mtime,
+          ...(expectedRevision.fileId !== undefined ? { fileId: expectedRevision.fileId } : {}),
+        },
+        content,
+        hasUtf8Bom,
+        ...(hasOverwrite ? { overwrite: overwrite as boolean } : {}),
+      },
+    };
+  } catch (error) {
+    return textFileFailure('INVALID_REQUEST', errorMessage(error));
+  }
+}
+
+function hasExactObjectShape(
+  value: unknown,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[] = [],
+): value is Record<string, unknown> {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return false;
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => typeof key !== 'string')) return false;
+    const allowed = new Set([...requiredKeys, ...optionalKeys]);
+    return requiredKeys.every((key) => Object.prototype.hasOwnProperty.call(value, key))
+      && keys.every((key) => {
+        if (!allowed.has(key as string)) return false;
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        return Boolean(descriptor?.enumerable && Object.prototype.hasOwnProperty.call(descriptor, 'value'));
+      });
+  } catch {
+    return false;
+  }
+}
+
+function validateSSHFileIdentity(
+  sessionId: unknown,
+  connectionId: unknown,
+): { ok: false; error: TextFileError } | undefined {
+  if (typeof sessionId !== 'string' || sessionId.trim().length === 0 || sessionId.length > 512) {
+    return { ok: false, error: { code: 'INVALID_REQUEST', message: 'A valid SSH session id is required.' } };
+  }
+  if (
+    typeof connectionId !== 'string'
+    || connectionId.trim().length === 0
+    || connectionId.length > 512
+  ) {
+    return { ok: false, error: { code: 'INVALID_REQUEST', message: 'A valid SSH connection id is required.' } };
+  }
+  return undefined;
+}
+
+async function readRemoteTextFile(
+  sftp: SFTPWrapper,
+  remotePath: string,
+  isSettled: () => boolean,
+): Promise<TextFileResult<TextFileSnapshot>> {
+  try {
+    const requestedPath = validateRemotePath(remotePath);
+    assertSftpActive(isSettled);
+    const resolvedPath = validateRemotePath(await sftpRealpath(sftp, requestedPath));
+    const { bytes, stats } = await readRemoteBytes(sftp, resolvedPath, isSettled);
+    const decoded = decodeTextFile(bytes);
+    if (!decoded.ok) return decoded;
+
+    return {
+      ok: true,
+      value: {
+        requestedPath,
+        resolvedPath,
+        content: decoded.value.content,
+        encoding: 'utf8',
+        hasUtf8Bom: decoded.value.hasUtf8Bom,
+        revision: textFileRevision(bytes, {
+          size: bytes.byteLength,
+          mtime: isoTimestamp(stats.mtime),
+        }),
+      },
+    };
+  } catch (error) {
+    throw normalizeRemoteTextFileError(error);
+  }
+}
+
+async function writeRemoteTextFile(
+  sftp: SFTPWrapper,
+  request: WriteSSHTextFileRequest,
+  bytes: Buffer,
+  isSettled: () => boolean,
+): Promise<TextFileResult<TextFileWriteValue>> {
+  let tempPath: string | undefined;
+  let tempHandle: Buffer | undefined;
+  let ownsTemp = false;
+  let renamed = false;
+
+  try {
+    assertSftpActive(isSettled);
+    const resolvedPath = validateRemotePath(await sftpRealpath(sftp, request.requestedPath));
+    if (resolvedPath !== request.resolvedPath) {
+      throw new RemoteTextFileError(
+        'CONFLICT',
+        'The remote path now resolves to a different file. Reopen it before saving.',
+      );
+    }
+
+    const current = await readRemoteBytes(sftp, resolvedPath, isSettled);
+    const currentRevision = textFileRevision(current.bytes, {
+      size: current.bytes.byteLength,
+      mtime: isoTimestamp(current.stats.mtime),
+    });
+    if (!request.overwrite && !revisionsMatch(currentRevision, request.expectedRevision)) {
+      throw new RemoteTextFileError(
+        'CONFLICT',
+        'The remote file changed after it was opened. Review the latest version before saving.',
+      );
+    }
+
+    const ordinaryPermissions = safeOrdinaryRemotePermissions(current.stats.mode);
+
+    // The temp is exclusive and in the destination directory, which is a
+    // prerequisite for an atomic POSIX rename on the same filesystem.
+    tempPath = remoteTempPath(resolvedPath);
+    assertSftpActive(isSettled);
+    // Keep the temp private until all bytes and intended permissions have
+    // been applied and verified. A rename never exposes a partial file.
+    tempHandle = await sftpOpenExclusive(sftp, tempPath, 0o600);
+    ownsTemp = true;
+
+    let position = 0;
+    while (position < bytes.byteLength) {
+      assertSftpActive(isSettled);
+      const length = Math.min(SFTP_IO_CHUNK_BYTES, bytes.byteLength - position);
+      await sftpWrite(sftp, tempHandle, bytes, position, length, position);
+      position += length;
+    }
+
+    assertSftpActive(isSettled);
+    await sftpFsetstat(sftp, tempHandle, ordinaryPermissions);
+    const tempStats = await sftpFstat(sftp, tempHandle);
+    assertRegularRemoteFile(tempStats);
+    if (remoteFileSize(tempStats) !== bytes.byteLength) {
+      throw new RemoteTextFileError('IO', 'The remote server did not persist the complete save.');
+    }
+    assertSafeReplacementMetadata(current.stats, tempStats, ordinaryPermissions);
+    await sftpOptionalFsync(sftp, tempHandle);
+    await sftpClose(sftp, tempHandle);
+    tempHandle = undefined;
+
+    // Re-read immediately before replacement. Even an explicitly confirmed
+    // overwrite must not clobber a newer change that raced with this upload.
+    const rechecked = await readRemoteBytes(sftp, resolvedPath, isSettled);
+    const recheckedRevision = textFileRevision(rechecked.bytes, {
+      size: rechecked.bytes.byteLength,
+      mtime: isoTimestamp(rechecked.stats.mtime),
+    });
+    if (!revisionsMatch(recheckedRevision, currentRevision)) {
+      throw new RemoteTextFileError(
+        'CONFLICT',
+        'The remote file changed while it was being saved. The newer version was left intact.',
+      );
+    }
+
+    assertSftpActive(isSettled);
+    await sftpAtomicReplace(sftp, tempPath, resolvedPath);
+    renamed = true;
+
+    return {
+      ok: true,
+      value: {
+        requestedPath: request.requestedPath,
+        resolvedPath,
+        revision: textFileRevision(bytes, {
+          size: bytes.byteLength,
+          mtime: isoTimestamp(tempStats.mtime),
+        }),
+      },
+    };
+  } catch (error) {
+    throw normalizeRemoteTextFileError(error);
+  } finally {
+    if (tempHandle && !isSettled()) {
+      try { await sftpClose(sftp, tempHandle); } catch {}
+    }
+    if (tempPath && ownsTemp && !renamed && !isSettled()) {
+      try { await sftpUnlink(sftp, tempPath); } catch {}
+    }
+  }
+}
+
+async function readRemoteBytes(
+  sftp: SFTPWrapper,
+  resolvedPath: string,
+  isSettled: () => boolean,
+): Promise<RemoteFileBytes> {
+  assertSftpActive(isSettled);
+  const initialStats = await sftpStat(sftp, resolvedPath);
+  assertRegularRemoteFile(initialStats);
+  assertRemoteFileSize(initialStats);
+
+  assertSftpActive(isSettled);
+  const handle = await sftpOpenRead(sftp, resolvedPath);
+  let closed = false;
+  try {
+    assertSftpActive(isSettled);
+    const beforeStats = await sftpFstat(sftp, handle);
+    assertRegularRemoteFile(beforeStats);
+    assertRemoteFileSize(beforeStats);
+
+    const storage = Buffer.allocUnsafe(MAX_TEXT_FILE_BYTES + 1);
+    let position = 0;
+    while (position < storage.byteLength) {
+      assertSftpActive(isSettled);
+      const requested = Math.min(SFTP_IO_CHUNK_BYTES, storage.byteLength - position);
+      let bytesRead: number;
+      try {
+        bytesRead = await sftpRead(sftp, handle, storage, position, requested, position);
+      } catch (error) {
+        if (isSftpEof(error)) break;
+        throw error;
+      }
+      if (bytesRead === 0) break;
+      if (!Number.isSafeInteger(bytesRead) || bytesRead < 0 || bytesRead > requested) {
+        throw new RemoteTextFileError('IO', 'The remote server returned an invalid read length.');
+      }
+      position += bytesRead;
+    }
+    if (position > MAX_TEXT_FILE_BYTES) {
+      throw new RemoteTextFileError(
+        'TOO_LARGE',
+        'This file is larger than JaneT\'s 2 MiB editor limit.',
+      );
+    }
+
+    assertSftpActive(isSettled);
+    const afterStats = await sftpFstat(sftp, handle);
+    assertRegularRemoteFile(afterStats);
+    assertRemoteFileSize(afterStats);
+    if (
+      remoteFileSize(afterStats) !== position
+      || remoteFileSize(beforeStats) !== remoteFileSize(afterStats)
+      || finiteNumber(beforeStats.mtime) !== finiteNumber(afterStats.mtime)
+    ) {
+      throw new RemoteTextFileError(
+        'CONFLICT',
+        'The remote file changed while it was being read. Try opening it again.',
+      );
+    }
+
+    await sftpClose(sftp, handle);
+    closed = true;
+    return { bytes: Buffer.from(storage.subarray(0, position)), stats: afterStats };
+  } finally {
+    if (!closed && !isSettled()) {
+      try { await sftpClose(sftp, handle); } catch {}
+    }
+  }
+}
+
+function assertRegularRemoteFile(stats: Stats): void {
+  let isFile = false;
+  try { isFile = stats.isFile(); } catch {}
+  if (!isFile) {
+    throw new RemoteTextFileError('NOT_FILE', 'Only regular remote files can be opened in the editor.');
+  }
+}
+
+function assertRemoteFileSize(stats: Stats): void {
+  const size = remoteFileSize(stats);
+  if (size > MAX_TEXT_FILE_BYTES) {
+    throw new RemoteTextFileError(
+      'TOO_LARGE',
+      'This file is larger than JaneT\'s 2 MiB editor limit.',
+    );
+  }
+}
+
+function remoteFileSize(stats: Stats): number {
+  if (!Number.isSafeInteger(stats.size) || stats.size < 0) {
+    throw new RemoteTextFileError('IO', 'The remote server returned an invalid file size.');
+  }
+  return stats.size;
+}
+
+function safeOrdinaryRemotePermissions(mode: unknown): number {
+  if (!Number.isSafeInteger(mode) || Number(mode) < 0) {
+    throw new RemoteTextFileError(
+      'SAFE_REPLACE_UNAVAILABLE',
+      'The remote server did not provide permissions that JaneT can preserve safely.',
+    );
+  }
+  const permissionBits = Number(mode) & 0o7777;
+  if ((permissionBits & 0o7000) !== 0) {
+    throw new RemoteTextFileError(
+      'SAFE_REPLACE_UNAVAILABLE',
+      'JaneT will not replace a remote file with setuid, setgid, or sticky mode bits.',
+    );
+  }
+  return permissionBits & 0o777;
+}
+
+function assertSafeReplacementMetadata(
+  original: Stats,
+  replacement: Stats,
+  expectedPermissions: number,
+): void {
+  const replacementPermissions = safeOrdinaryRemotePermissions(replacement.mode);
+  if (replacementPermissions !== expectedPermissions) {
+    throw new RemoteTextFileError(
+      'SAFE_REPLACE_UNAVAILABLE',
+      'The remote server did not preserve the file permissions on the replacement.',
+    );
+  }
+
+  for (const field of ['uid', 'gid'] as const) {
+    const expected = remoteOwnershipId(original[field]);
+    if (expected === undefined) continue;
+    const actual = remoteOwnershipId(replacement[field]);
+    if (actual === undefined || actual !== expected) {
+      throw new RemoteTextFileError(
+        'SAFE_REPLACE_UNAVAILABLE',
+        `The remote server cannot preserve the file ${field === 'uid' ? 'owner' : 'group'} safely.`,
+      );
+    }
+  }
+}
+
+function remoteOwnershipId(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
+}
+
+function remoteTempPath(resolvedPath: string): string {
+  const slash = resolvedPath.lastIndexOf('/');
+  const directory = slash <= 0 ? '/' : resolvedPath.slice(0, slash);
+  const tempPath = joinRemotePath(directory, `.janet-save-${randomUUID()}.tmp`);
+  return validateRemotePath(tempPath);
+}
+
+function assertSftpActive(isSettled: () => boolean): void {
+  if (isSettled()) throw new Error('The SFTP operation is no longer active.');
+}
+
+function sftpRealpath(sftp: SFTPWrapper, remotePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    try {
+      sftp.realpath(remotePath, (error, resolvedPath) => {
+        if (error) reject(error);
+        else if (!resolvedPath) reject(new Error(`SFTP server returned an empty path for ${remotePath}`));
+        else resolve(resolvedPath);
+      });
+    } catch (error) { reject(error); }
+  });
+}
+
+function sftpStat(sftp: SFTPWrapper, remotePath: string): Promise<Stats> {
+  return new Promise((resolve, reject) => {
+    try {
+      sftp.stat(remotePath, (error, stats) => {
+        if (error) reject(error);
+        else if (!stats) reject(new Error(`SFTP server returned no metadata for ${remotePath}`));
+        else resolve(stats);
+      });
+    } catch (error) { reject(error); }
+  });
+}
+
+function sftpOpenRead(sftp: SFTPWrapper, remotePath: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    try {
+      sftp.open(remotePath, 'r', (error, handle) => {
+        if (error) reject(error);
+        else if (!handle) reject(new Error(`SFTP server returned no handle for ${remotePath}`));
+        else resolve(handle);
+      });
+    } catch (error) { reject(error); }
+  });
+}
+
+function sftpOpenExclusive(sftp: SFTPWrapper, remotePath: string, mode: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    try {
+      sftp.open(remotePath, 'wx', { mode }, (error, handle) => {
+        if (error) reject(error);
+        else if (!handle) reject(new Error(`SFTP server returned no handle for ${remotePath}`));
+        else resolve(handle);
+      });
+    } catch (error) { reject(error); }
+  });
+}
+
+function sftpClose(sftp: SFTPWrapper, handle: Buffer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    try {
+      sftp.close(handle, (error) => error ? reject(error) : resolve());
+    } catch (error) { reject(error); }
+  });
+}
+
+function sftpFstat(sftp: SFTPWrapper, handle: Buffer): Promise<Stats> {
+  return new Promise((resolve, reject) => {
+    try {
+      sftp.fstat(handle, (error, stats) => {
+        if (error) reject(error);
+        else if (!stats) reject(new Error('SFTP server returned no file metadata.'));
+        else resolve(stats);
+      });
+    } catch (error) { reject(error); }
+  });
+}
+
+function sftpFsetstat(sftp: SFTPWrapper, handle: Buffer, mode: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    try {
+      sftp.fsetstat(handle, { mode }, (error) => error ? reject(error) : resolve());
+    } catch (error) { reject(error); }
+  });
+}
+
+async function sftpOptionalFsync(sftp: SFTPWrapper, handle: Buffer): Promise<void> {
+  if (typeof sftp.ext_openssh_fsync !== 'function') return;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      try {
+        sftp.ext_openssh_fsync(handle, (error) => error ? reject(error) : resolve());
+      } catch (error) { reject(error); }
+    });
+  } catch (error) {
+    // ssh2 exposes the method even when the server did not advertise the
+    // extension. Lack of fsync is tolerated; an advertised fsync that fails
+    // for another reason aborts the save before atomic replacement.
+    if (!isUnsupportedSftpOperation(error)) throw error;
+  }
+}
+
+function sftpRead(
+  sftp: SFTPWrapper,
+  handle: Buffer,
+  storage: Buffer,
+  offset: number,
+  length: number,
+  position: number,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    try {
+      sftp.read(handle, storage, offset, length, position, (error, bytesRead) => {
+        if (error) reject(error);
+        else resolve(bytesRead);
+      });
+    } catch (error) { reject(error); }
+  });
+}
+
+function sftpWrite(
+  sftp: SFTPWrapper,
+  handle: Buffer,
+  bytes: Buffer,
+  offset: number,
+  length: number,
+  position: number,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    try {
+      sftp.write(handle, bytes, offset, length, position, (error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    } catch (error) { reject(error); }
+  });
+}
+
+function sftpAtomicReplace(sftp: SFTPWrapper, sourcePath: string, destinationPath: string): Promise<void> {
+  if (typeof sftp.ext_openssh_rename !== 'function') {
+    return Promise.reject(new RemoteTextFileError(
+      'SAFE_REPLACE_UNAVAILABLE',
+      'This SSH server does not advertise a safe atomic file-replace operation.',
+    ));
+  }
+  return new Promise((resolve, reject) => {
+    try {
+      sftp.ext_openssh_rename(sourcePath, destinationPath, (error) => {
+        if (!error) {
+          resolve();
+          return;
+        }
+        if (isUnsupportedSftpOperation(error)) {
+          reject(new RemoteTextFileError(
+            'SAFE_REPLACE_UNAVAILABLE',
+            'This SSH server does not support safe atomic file replacement.',
+          ));
+          return;
+        }
+        reject(error);
+      });
+    } catch (error) {
+      reject(isUnsupportedSftpOperation(error)
+        ? new RemoteTextFileError(
+          'SAFE_REPLACE_UNAVAILABLE',
+          'This SSH server does not support safe atomic file replacement.',
+        )
+        : error);
+    }
+  });
+}
+
+function sftpUnlink(sftp: SFTPWrapper, remotePath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    try {
+      sftp.unlink(remotePath, (error) => error ? reject(error) : resolve());
+    } catch (error) { reject(error); }
+  });
+}
+
+function isSftpEof(error: unknown): boolean {
+  const code = remoteErrorCode(error);
+  return code === 1 || /end of file|\beof\b/i.test(errorMessage(error));
+}
+
+function isUnsupportedSftpOperation(error: unknown): boolean {
+  return remoteErrorCode(error) === 8 || /not support|unsupported/i.test(errorMessage(error));
+}
+
+function remoteErrorCode(error: unknown): unknown {
+  return error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+}
+
+function normalizeRemoteTextFileError(error: unknown): Error {
+  if (error instanceof RemoteTextFileError) return error;
+  const code = remoteErrorCode(error);
+  if (code === 2 || /no such file|not found/i.test(errorMessage(error))) {
+    return new RemoteTextFileError('NOT_FOUND', 'The remote file no longer exists.');
+  }
+  if (code === 3 || /permission denied/i.test(errorMessage(error))) {
+    return new RemoteTextFileError('PERMISSION_DENIED', 'Permission was denied by the remote server.');
+  }
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function remoteTextFileFailure<T>(
+  error: unknown,
+  sessionId: string,
+  expectedConnectionId: string,
+  connections: Map<string, SSHConnection>,
+): TextFileResult<T> {
+  if (error instanceof RemoteTextFileError) return textFileFailure(error.code, error.message);
+  const connection = connections.get(sessionId);
+  if (!connection || connection.connectionId !== expectedConnectionId) {
+    return textFileFailure(
+      'STALE_SSH_SESSION',
+      `SSH session ${sessionId} changed; reopen the file before continuing.`,
+    );
+  }
+  const normalized = normalizeRemoteTextFileError(error);
+  if (normalized instanceof RemoteTextFileError) {
+    return textFileFailure(normalized.code, normalized.message);
+  }
+  return textFileFailure('IO', `Remote file operation failed: ${errorMessage(normalized)}`);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export type SSHHostKeyConfirmer = (
   host: string,
   port: number,
   fingerprint: string,
 ) => boolean | Promise<boolean>;
 
+export type SSHConnectionClosedHandler = (event: SSHConnectionClosedEvent) => void;
+
 interface SSHConnection {
   client: Client;
   id: string;
+  /** Unique for each ready transport, even when the logical session id is reused. */
+  connectionId: string;
   config: {
     host: string;
     port: number;
     username?: string;
   };
   shells: Map<string, ClientChannel>;
+  sftpOperations: Set<(error: Error) => void>;
   pendingWrites: Map<string, Array<string | Buffer>>;
   /** Handles already returned by createShell(), keyed by termId — lets a
    * repeat call (e.g. React 18 StrictMode's double mount-effect invoke)
@@ -60,10 +760,14 @@ export class SSHManager {
   private connections: Map<string, SSHConnection> = new Map();
   private pendingConnections: Map<string, PendingSSHConnection> = new Map();
   private readonly inMemoryHostKeys = new Map<string, string>();
+  private readonly startupCommandLedger = new Set<string>();
+  private readonly pendingStartupCommandHandles = new Map<string, SSHShellHandle>();
+  private readonly remoteSaveQueues = new Map<string, Promise<void>>();
 
   constructor(
     private readonly hostKeyStore?: SSHHostKeyStore,
     private readonly confirmHostKey: SSHHostKeyConfirmer = () => false,
+    private readonly onConnectionClosed?: SSHConnectionClosedHandler,
   ) {}
 
   connect(id: string, config: {
@@ -110,12 +814,14 @@ export class SSHManager {
       !settled && this.pendingConnections.get(id)?.client === client
     );
 
-    const removeConnection = (reason: Error) => {
+    const removeConnection = (reason: Error): boolean => {
       const pending = this.pendingConnections.get(id);
       if (pending?.client === client) this.pendingConnections.delete(id);
       const connection = this.connections.get(id);
       if (connection?.client === client) {
         connection.pendingWrites.clear();
+        for (const cancel of connection.sftpOperations) cancel(reason);
+        connection.sftpOperations.clear();
         for (const handle of connection.shellHandles.values()) handle.cancel(reason);
         connection.shellHandles.clear();
         for (const shell of connection.shells.values()) {
@@ -123,6 +829,15 @@ export class SSHManager {
         }
         connection.shells.clear();
         this.connections.delete(id);
+        return true;
+      }
+      return false;
+    };
+    const notifyUnexpectedClose = (reason: Error) => {
+      try {
+        this.onConnectionClosed?.({ id, reason: reason.message });
+      } catch {
+        // A lifecycle observer must not interrupt SSH resource cleanup.
       }
     };
 
@@ -137,8 +852,10 @@ export class SSHManager {
       this.connections.set(id, {
           client,
           id,
+          connectionId: randomUUID(),
           config: { host, port, username: config.username },
           shells: new Map(),
+          sftpOperations: new Set(),
           pendingWrites: new Map(),
           shellHandles: new Map(),
       });
@@ -147,13 +864,15 @@ export class SSHManager {
     });
 
     client.on('error', (error) => {
-      removeConnection(error);
+      if (removeConnection(error)) notifyUnexpectedClose(error);
       rejectPending(verificationError ?? error);
     });
     const handleConnectionClosed = () => {
       const wasPending = this.pendingConnections.get(id)?.client === client;
-      const error = verificationError ?? new Error(`SSH connection to ${host}:${port} closed before it was ready`);
-      removeConnection(error);
+      const error = verificationError ?? new Error(wasPending
+        ? `SSH connection to ${host}:${port} closed before it was ready`
+        : `SSH connection to ${host}:${port} closed unexpectedly`);
+      if (removeConnection(error)) notifyUnexpectedClose(error);
       if (wasPending) rejectPending(error);
     };
     client.on('end', handleConnectionClosed);
@@ -249,9 +968,18 @@ export class SSHManager {
     return promise;
   }
 
-  createShell(sessionId: string, termId: string, size: { cols: number; rows: number }): SSHShellHandle {
+  createShell(
+    sessionId: string,
+    termId: string,
+    size: { cols: number; rows: number },
+    startupCommands?: unknown,
+    startupShellDialect?: StartupShellDialect,
+  ): SSHShellHandle {
     const conn = this.connections.get(sessionId);
     if (!conn) throw new Error(`SSH session ${sessionId} not found`);
+    const startupExpression = isStartupShellDialect(startupShellDialect)
+      ? compileStartupCommands(startupCommands, startupShellDialect)
+      : '';
 
     // Idempotent by termId — see the `shellHandles` doc comment on
     // SSHConnection. Without this a repeat createShell() call (StrictMode
@@ -298,10 +1026,16 @@ export class SSHManager {
       cancel: (error: Error) => {
         if (readySettled) return;
         readySettled = true;
+        if (this.pendingStartupCommandHandles.get(termId) === handle) {
+          this.pendingStartupCommandHandles.delete(termId);
+        }
         rejectReady?.(error);
       },
     };
     conn.shellHandles.set(termId, handle);
+    if (startupExpression && !this.startupCommandLedger.has(termId)) {
+      this.pendingStartupCommandHandles.set(termId, handle);
+    }
 
     conn.client.shell({
       cols: size.cols,
@@ -348,6 +1082,24 @@ export class SSHManager {
 
       conn.shells.set(termId, stream);
 
+      if (
+        startupExpression &&
+        !this.startupCommandLedger.has(termId) &&
+        this.pendingStartupCommandHandles.get(termId) === handle
+      ) {
+        this.startupCommandLedger.add(termId);
+        try {
+          stream.write(`${startupExpression}\r`);
+        } catch {
+          // The channel may close between the successful shell callback and
+          // the write. Do not replay an automatic command sequence after an
+          // ambiguous partial write.
+        }
+      }
+      if (this.pendingStartupCommandHandles.get(termId) === handle) {
+        this.pendingStartupCommandHandles.delete(termId);
+      }
+
       const queuedWrites = conn.pendingWrites.get(termId);
       if (queuedWrites && queuedWrites.length > 0) {
         for (const chunk of queuedWrites) {
@@ -372,9 +1124,18 @@ export class SSHManager {
     );
   }
 
-  private writeShellChunk(termId: string, data: string | Buffer, sessionId?: string): void {
+  private writeShellChunk(
+    termId: string,
+    data: string | Buffer,
+    sessionId?: string,
+    userInput = true,
+  ): void {
     const conn = this.terminalConnection(termId, sessionId);
     if (!conn) return;
+    if (userInput && this.pendingStartupCommandHandles.has(termId)) {
+      this.startupCommandLedger.add(termId);
+      this.pendingStartupCommandHandles.delete(termId);
+    }
     const shell = conn.shells.get(termId);
     if (shell) {
       shell.write(data);
@@ -385,12 +1146,12 @@ export class SSHManager {
     conn.pendingWrites.set(termId, queued);
   }
 
-  writeShell(termId: string, data: string, sessionId?: string): void {
-    this.writeShellChunk(termId, data, sessionId);
+  writeShell(termId: string, data: string, sessionId?: string, userInput = true): void {
+    this.writeShellChunk(termId, data, sessionId, userInput);
   }
 
-  writeShellBinary(termId: string, data: string, sessionId?: string): void {
-    this.writeShellChunk(termId, Buffer.from(data, 'binary'), sessionId);
+  writeShellBinary(termId: string, data: string, sessionId?: string, userInput = true): void {
+    this.writeShellChunk(termId, Buffer.from(data, 'binary'), sessionId, userInput);
   }
 
   destroyShell(termId: string, sessionId?: string): boolean {
@@ -401,6 +1162,10 @@ export class SSHManager {
     const shell = conn.shells.get(termId);
     if (!handle && !shell && !conn.pendingWrites.has(termId)) return false;
 
+    this.startupCommandLedger.delete(termId);
+    if (this.pendingStartupCommandHandles.get(termId) === handle) {
+      this.pendingStartupCommandHandles.delete(termId);
+    }
     conn.pendingWrites.delete(termId);
     conn.shellHandles.delete(termId);
     conn.shells.delete(termId);
@@ -419,34 +1184,159 @@ export class SSHManager {
     });
   }
 
-  async listDir(sessionId: string, remotePath: string): Promise<any[]> {
-    const conn = this.connections.get(sessionId);
-    if (!conn) throw new Error(`SSH session ${sessionId} not found`);
+  async listDir(
+    sessionId: string,
+    remotePath?: string,
+    showHidden: boolean = false,
+  ): Promise<SSHDirectoryListing> {
+    const requestedPath = validateRemotePath(remotePath);
+    const includeHidden = showHidden === true;
 
-    return new Promise((resolve, reject) => {
-      conn.client.sftp((err, sftp) => {
-        if (err) return reject(err);
+    return this.withSftp(sessionId, undefined, (sftp, done, isSettled, connectionId) => {
+      sftp.realpath(requestedPath, (realpathError, resolvedPath) => {
+        if (isSettled()) return;
+        if (realpathError) {
+          done(realpathError);
+          return;
+        }
+        try {
+          if (!resolvedPath) {
+            done(new Error(`SFTP server returned an empty path for ${requestedPath}`));
+            return;
+          }
+          const canonicalPath = validateRemotePath(resolvedPath);
 
-        sftp.readdir(remotePath, (err, list) => {
-          sftp.end();
-          if (err) return reject(err);
+          sftp.readdir(canonicalPath, (readError, list) => {
+            if (isSettled()) return;
+            if (readError) {
+              done(readError);
+              return;
+            }
 
-          const entries = list.map((item) => {
-            const isDir = item.attrs.isDirectory();
-            return {
-              name: item.filename,
-              path: remotePath === '/' ? `/${item.filename}` : `${remotePath}/${item.filename}`,
-              isDirectory: isDir,
-              isSymlink: item.attrs.isSymbolicLink(),
-              size: item.attrs.size,
-              mode: item.attrs.mode,
-              mtime: new Date(item.attrs.mtime * 1000).toISOString(),
-            };
+            try {
+              const entries = list
+                .filter((item) => isSafeRemoteEntryName(item.filename))
+                .filter((item) => includeHidden || !item.filename.startsWith('.'))
+                .map((item): FileEntry => ({
+                  name: item.filename,
+                  path: joinRemotePath(canonicalPath, item.filename),
+                  isDirectory: item.attrs.isDirectory(),
+                  isSymlink: item.attrs.isSymbolicLink(),
+                  size: finiteNumber(item.attrs.size),
+                  mode: finiteNumber(item.attrs.mode),
+                  mtime: isoTimestamp(item.attrs.mtime),
+                }));
+
+              // readdir() returns lstat-style attributes, so a symlink to a
+              // directory normally looks like a non-directory. Resolve only
+              // symlink targets, one at a time, so those links remain
+              // navigable without flooding the server with stat requests.
+              const resolveNextSymlink = (index: number) => {
+                if (isSettled()) return;
+                while (index < entries.length && !entries[index].isSymlink) index += 1;
+                if (index >= entries.length) {
+                  sortFileEntries(entries);
+                  done(undefined, { connectionId, resolvedPath: canonicalPath, entries });
+                  return;
+                }
+
+                const entry = entries[index];
+                let statSettled = false;
+                const continueAfterStat = () => {
+                  if (statSettled) return;
+                  statSettled = true;
+                  // Protect against non-conforming synchronous callbacks and
+                  // very large symlink-heavy directories growing the stack.
+                  queueMicrotask(() => resolveNextSymlink(index + 1));
+                };
+                try {
+                  sftp.stat(entry.path, (statError, targetAttrs) => {
+                    if (isSettled()) return;
+                    if (!statError && targetAttrs) {
+                      try {
+                        entry.isDirectory = targetAttrs.isDirectory();
+                      } catch {
+                        // Malformed target attributes leave the lstat result intact.
+                      }
+                    }
+                    continueAfterStat();
+                  });
+                } catch {
+                  // A broken/unsupported link remains visible as a symlink,
+                  // using the original readdir metadata.
+                  continueAfterStat();
+                }
+              };
+              resolveNextSymlink(0);
+            } catch (mappingError) {
+              done(mappingError);
+            }
           });
-
-          resolve(entries);
-        });
+        } catch (readStartError) {
+          done(readStartError);
+        }
       });
+    });
+  }
+
+  async readTextFile(
+    request: unknown,
+  ): Promise<TextFileResult<TextFileSnapshot>> {
+    const validation = validateSSHReadRequest(request);
+    if (!validation.ok) return validation;
+    const validRequest = validation.value;
+
+    try {
+      return await this.withSftp(
+        validRequest.sessionId,
+        validRequest.connectionId,
+        (sftp, done, isSettled) => {
+          void readRemoteTextFile(sftp, validRequest.remotePath, isSettled).then(
+            (result) => done(undefined, result),
+            (error) => done(error),
+          );
+        },
+      );
+    } catch (error) {
+      return remoteTextFileFailure(
+        error,
+        validRequest.sessionId,
+        validRequest.connectionId,
+        this.connections,
+      );
+    }
+  }
+
+  async writeTextFile(
+    request: unknown,
+  ): Promise<TextFileResult<TextFileWriteValue>> {
+    const validation = validateSSHWriteRequest(request);
+    if (!validation.ok) return validation;
+    const validRequest = validation.value;
+    const encoded = encodeTextFile(validRequest.content, validRequest.hasUtf8Bom);
+    if (!encoded.ok) return encoded;
+
+    const queueKey = `${validRequest.connectionId}\0${validRequest.resolvedPath}`;
+    return this.serializeRemoteSave(queueKey, async () => {
+      try {
+        return await this.withSftp(
+          validRequest.sessionId,
+          validRequest.connectionId,
+          (sftp, done, isSettled) => {
+            void writeRemoteTextFile(sftp, validRequest, encoded.value, isSettled).then(
+              (result) => done(undefined, result),
+              (error) => done(error),
+            );
+          },
+        );
+      } catch (error) {
+        return remoteTextFileFailure(
+          error,
+          validRequest.sessionId,
+          validRequest.connectionId,
+          this.connections,
+        );
+      }
     });
   }
 
@@ -460,16 +1350,22 @@ export class SSHManager {
 
     const conn = this.connections.get(id);
     if (conn) {
+      // Stop lifecycle events emitted synchronously by close()/end() from
+      // being reported as an unexpected connection loss.
+      this.connections.delete(id);
       conn.shells.forEach((shell) => {
         try { shell.close(); } catch {}
       });
       conn.pendingWrites.clear();
+      for (const cancel of conn.sftpOperations) {
+        cancel(new Error(`SSH connection ${id} was closed`));
+      }
+      conn.sftpOperations.clear();
       for (const handle of conn.shellHandles.values()) {
         handle.cancel(new Error(`SSH connection ${id} was closed`));
       }
       conn.shellHandles.clear();
       conn.client.end();
-      this.connections.delete(id);
     }
   }
 
@@ -486,6 +1382,37 @@ export class SSHManager {
     return result;
   }
 
+  listRunningSessions(): Array<{
+    id: string;
+    host: string;
+    port: number;
+    username?: string;
+    shellCount: number;
+  }> {
+    const result: Array<{
+      id: string;
+      host: string;
+      port: number;
+      username?: string;
+      shellCount: number;
+    }> = [];
+    this.connections.forEach((connection) => {
+      const shellIds = new Set([
+        ...connection.shells.keys(),
+        ...connection.shellHandles.keys(),
+      ]);
+      if (shellIds.size === 0) return;
+      result.push({
+        id: connection.id,
+        host: connection.config.host,
+        port: connection.config.port,
+        username: connection.config.username,
+        shellCount: shellIds.size,
+      });
+    });
+    return result;
+  }
+
   cleanup(): void {
     for (const id of Array.from(this.pendingConnections.keys())) {
       void this.disconnect(id);
@@ -493,6 +1420,103 @@ export class SSHManager {
     this.connections.forEach((_, id) => {
       void this.disconnect(id);
     });
+    this.pendingStartupCommandHandles.clear();
+    this.startupCommandLedger.clear();
+  }
+
+  private withSftp<T>(
+    sessionId: string,
+    expectedConnectionId: string | undefined,
+    operation: (
+      sftp: SFTPWrapper,
+      done: (error?: unknown, result?: T) => void,
+      isSettled: () => boolean,
+      connectionId: string,
+    ) => void,
+  ): Promise<T> {
+    if (typeof sessionId !== 'string' || sessionId.trim().length === 0) {
+      return Promise.reject(new Error('A valid SSH session id is required'));
+    }
+    const connection = this.connections.get(sessionId);
+    if (!connection) return Promise.reject(new Error(`SSH session ${sessionId} not found`));
+    if (expectedConnectionId !== undefined && connection.connectionId !== expectedConnectionId) {
+      return Promise.reject(new RemoteTextFileError(
+        'STALE_SSH_SESSION',
+        `SSH session ${sessionId} has reconnected; reopen the file before continuing.`,
+      ));
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      let sftp: SFTPWrapper | null = null;
+      let settled = false;
+      let cancel: (error: Error) => void;
+      const timeout = setTimeout(() => {
+        finish(new Error(`SFTP operation timed out for SSH session ${sessionId}`));
+      }, SFTP_OPERATION_TIMEOUT_MS);
+      timeout.unref?.();
+
+      const finish = (error?: unknown, result?: T) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        connection.sftpOperations.delete(cancel);
+        try { sftp?.end(); } catch {}
+
+        if (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+          return;
+        }
+        if (this.connections.get(sessionId) !== connection) {
+          reject(expectedConnectionId === undefined
+            ? new Error(`SSH session ${sessionId} changed during the SFTP operation`)
+            : new RemoteTextFileError(
+              'STALE_SSH_SESSION',
+              `SSH session ${sessionId} changed during the file operation.`,
+            ));
+          return;
+        }
+        resolve(result as T);
+      };
+      cancel = (error) => finish(error);
+      connection.sftpOperations.add(cancel);
+
+      try {
+        connection.client.sftp((error, channel) => {
+          if (settled) {
+            try { channel?.end(); } catch {}
+            return;
+          }
+          if (error || !channel) {
+            finish(error ?? new Error(`Could not open SFTP for SSH session ${sessionId}`));
+            return;
+          }
+          sftp = channel;
+          channel.on?.('error', finish);
+          channel.on?.('close', () => {
+            finish(new Error(`SFTP channel closed for SSH session ${sessionId}`));
+          });
+          try {
+            operation(channel, finish, () => settled, connection.connectionId);
+          } catch (operationError) {
+            finish(operationError);
+          }
+        });
+      } catch (sftpStartError) {
+        finish(sftpStartError);
+      }
+    });
+  }
+
+  private async serializeRemoteSave<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.remoteSaveQueues.get(key) ?? Promise.resolve();
+    const result = previous.catch(() => {}).then(operation);
+    const tail = result.then(() => {}, () => {});
+    this.remoteSaveQueues.set(key, tail);
+    try {
+      return await result;
+    } finally {
+      if (this.remoteSaveQueues.get(key) === tail) this.remoteSaveQueues.delete(key);
+    }
   }
 
   private lookupHostKey(host: string, port: number): string | undefined {
@@ -550,6 +1574,45 @@ function normalizeUsername(username: string | undefined): string {
 
 function normalizePort(port: number): number {
   return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 22;
+}
+
+function validateRemotePath(remotePath: string | undefined): string {
+  if (remotePath === undefined) return '.';
+  if (typeof remotePath !== 'string' || remotePath.length === 0) {
+    throw new Error('A valid remote path is required');
+  }
+  if (remotePath.length > MAX_REMOTE_PATH_LENGTH) {
+    throw new Error(`Remote path exceeds ${MAX_REMOTE_PATH_LENGTH} characters`);
+  }
+  if (remotePath.includes('\0')) throw new Error('Remote path cannot contain NUL characters');
+  return remotePath;
+}
+
+function joinRemotePath(directory: string, name: string): string {
+  const base = directory.replace(/\/+$/, '') || '/';
+  return base === '/' ? `/${name}` : `${base}/${name}`;
+}
+
+function isSafeRemoteEntryName(name: unknown): name is string {
+  return typeof name === 'string' && name.length > 0 && name !== '.' && name !== '..' &&
+    !name.includes('/') && !name.includes('\0');
+}
+
+function finiteNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function isoTimestamp(seconds: unknown): string {
+  const milliseconds = finiteNumber(seconds) * 1000;
+  const date = new Date(milliseconds);
+  return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
+}
+
+function sortFileEntries(entries: FileEntry[]): void {
+  entries.sort((left, right) => {
+    if (left.isDirectory !== right.isDirectory) return left.isDirectory ? -1 : 1;
+    return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
+  });
 }
 
 function hostKeyId(host: string, port: number): string {
