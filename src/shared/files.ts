@@ -15,6 +15,8 @@ export interface SSHListDirParams {
 }
 
 export interface SSHDirectoryListing {
+  /** Opaque identity for the ready SSH transport that produced this listing. */
+  connectionId: string;
   resolvedPath: string;
   entries: FileEntry[];
 }

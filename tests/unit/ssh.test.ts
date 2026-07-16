@@ -30,6 +30,185 @@ const mocks = {
   lastClient: null as MiniEmitter | null,
 };
 
+interface MockRemoteFile {
+  bytes: Buffer;
+  mtime: number;
+  mode: number;
+  uid: number;
+  gid: number;
+}
+
+function remoteAttrs(file: MockRemoteFile) {
+  return {
+    size: file.bytes.byteLength,
+    mtime: file.mtime,
+    atime: file.mtime,
+    mode: file.mode,
+    uid: file.uid,
+    gid: file.gid,
+    isFile: () => true,
+    isDirectory: () => false,
+    isBlockDevice: () => false,
+    isCharacterDevice: () => false,
+    isSymbolicLink: () => false,
+    isFIFO: () => false,
+    isSocket: () => false,
+  };
+}
+
+function createTextFileSftp(initial: Record<string, string | Buffer>) {
+  let clock = 10;
+  let nextHandle = 1;
+  const files = new Map<string, MockRemoteFile>(
+    Object.entries(initial).map(([path, content]) => [
+      path,
+      { bytes: Buffer.from(content), mtime: clock++, mode: 0o100644, uid: 1000, gid: 1000 },
+    ]),
+  );
+  const handles = new Map<string, string>();
+  const missing = () => Object.assign(new Error('No such file'), { code: 2 });
+
+  const sftp = {
+    end: vi.fn(),
+    realpath: vi.fn((remotePath: string, callback: (error?: Error, path?: string) => void) => {
+      callback(files.has(remotePath) ? undefined : missing(), files.has(remotePath) ? remotePath : undefined);
+    }),
+    stat: vi.fn((remotePath: string, callback: (error?: Error, attrs?: ReturnType<typeof remoteAttrs>) => void) => {
+      const file = files.get(remotePath);
+      callback(file ? undefined : missing(), file ? remoteAttrs(file) : undefined);
+    }),
+    open: vi.fn((remotePath: string, flags: string, attrsOrCallback: unknown, maybeCallback?: Function) => {
+      const callback = (typeof attrsOrCallback === 'function' ? attrsOrCallback : maybeCallback) as Function;
+      if (flags === 'r') {
+        if (!files.has(remotePath)) {
+          callback(missing());
+          return;
+        }
+      } else if (flags === 'wx') {
+        if (files.has(remotePath)) {
+          callback(Object.assign(new Error('Failure'), { code: 4 }));
+          return;
+        }
+        const mode = typeof attrsOrCallback === 'object' && attrsOrCallback
+          ? Number((attrsOrCallback as { mode?: number }).mode) || 0o600
+          : 0o600;
+        files.set(remotePath, {
+          bytes: Buffer.alloc(0),
+          mtime: clock++,
+          mode: 0o100000 | mode,
+          uid: 1000,
+          gid: 1000,
+        });
+      } else {
+        callback(new Error(`Unexpected open flags: ${flags}`));
+        return;
+      }
+      const handle = Buffer.from(`handle-${nextHandle++}`);
+      handles.set(handle.toString('hex'), remotePath);
+      callback(undefined, handle);
+    }),
+    close: vi.fn((_handle: Buffer, callback: (error?: Error) => void) => callback()),
+    fstat: vi.fn((handle: Buffer, callback: (error?: Error, attrs?: ReturnType<typeof remoteAttrs>) => void) => {
+      const file = files.get(handles.get(handle.toString('hex')) || '');
+      callback(file ? undefined : missing(), file ? remoteAttrs(file) : undefined);
+    }),
+    fsetstat: vi.fn((
+      handle: Buffer,
+      attrs: { mode?: number },
+      callback: (error?: Error) => void,
+    ) => {
+      const file = files.get(handles.get(handle.toString('hex')) || '');
+      if (!file) {
+        callback(missing());
+        return;
+      }
+      if (Number.isSafeInteger(attrs.mode)) {
+        file.mode = (file.mode & ~0o7777) | (Number(attrs.mode) & 0o7777);
+      }
+      callback();
+    }),
+    read: vi.fn((
+      handle: Buffer,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number,
+      callback: (error: Error | undefined, bytesRead: number, buffer: Buffer, position: number) => void,
+    ) => {
+      const file = files.get(handles.get(handle.toString('hex')) || '');
+      if (!file) {
+        callback(missing(), 0, buffer, position);
+        return;
+      }
+      const bytesRead = Math.min(length, Math.max(0, file.bytes.byteLength - position));
+      file.bytes.copy(buffer, offset, position, position + bytesRead);
+      callback(undefined, bytesRead, buffer, position);
+    }),
+    write: vi.fn((
+      handle: Buffer,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number,
+      callback: (error?: Error) => void,
+    ) => {
+      const path = handles.get(handle.toString('hex')) || '';
+      const file = files.get(path);
+      if (!file) {
+        callback(missing());
+        return;
+      }
+      const next = Buffer.alloc(Math.max(file.bytes.byteLength, position + length));
+      file.bytes.copy(next);
+      buffer.copy(next, position, offset, offset + length);
+      file.bytes = next;
+      file.mtime = clock++;
+      callback();
+    }),
+    ext_openssh_rename: vi.fn((sourcePath: string, destinationPath: string, callback: (error?: Error) => void) => {
+      const source = files.get(sourcePath);
+      if (!source) {
+        callback(missing());
+        return;
+      }
+      files.set(destinationPath, source);
+      files.delete(sourcePath);
+      callback();
+    }),
+    ext_openssh_fsync: vi.fn((_handle: Buffer, callback: (error?: Error) => void) => callback()),
+    unlink: vi.fn((remotePath: string, callback: (error?: Error) => void) => {
+      files.delete(remotePath);
+      callback();
+    }),
+  };
+
+  return {
+    sftp,
+    files,
+    setFile(remotePath: string, content: string | Buffer) {
+      const previous = files.get(remotePath);
+      files.set(remotePath, {
+        bytes: Buffer.from(content),
+        mtime: clock++,
+        mode: previous?.mode ?? 0o100644,
+        uid: previous?.uid ?? 1000,
+        gid: previous?.gid ?? 1000,
+      });
+    },
+    setMode(remotePath: string, mode: number) {
+      const file = files.get(remotePath);
+      if (!file) throw new Error(`Missing mock remote file: ${remotePath}`);
+      file.mode = 0o100000 | mode;
+    },
+    setOwner(remotePath: string, uid: number, gid: number) {
+      const file = files.get(remotePath);
+      if (!file) throw new Error(`Missing mock remote file: ${remotePath}`);
+      file.uid = uid;
+      file.gid = gid;
+    },
+  };
+}
+
 async function loadSSHManager() {
   vi.resetModules();
   vi.doMock('ssh2', () => {
@@ -946,12 +1125,568 @@ describe('SSHManager', () => {
     });
 
     await expect(manager.listDir('home-session')).resolves.toEqual({
+      connectionId: expect.any(String),
       resolvedPath: '/home/alice',
       entries: [],
     });
     expect(sftp.realpath).toHaveBeenCalledWith('.', expect.any(Function));
     expect(sftp.readdir).toHaveBeenCalledWith('/home/alice', expect.any(Function));
     expect(sftp.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads a regular remote UTF-8 file through bounded SFTP handle reads', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-read-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'hello €\n' });
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-read-session').connectionId;
+
+    const result = await manager.readTextFile({
+      sessionId: 'text-read-session',
+      connectionId,
+      remotePath: '/repo/readme.md',
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: expect.objectContaining({
+        requestedPath: '/repo/readme.md',
+        resolvedPath: '/repo/readme.md',
+        content: 'hello €\n',
+        encoding: 'utf8',
+        hasUtf8Bom: false,
+        revision: expect.objectContaining({
+          token: expect.stringMatching(/^[a-f0-9]{64}$/),
+          size: Buffer.byteLength('hello €\n'),
+        }),
+      }),
+    });
+    expect(remote.sftp.read).toHaveBeenCalled();
+    expect((remote.sftp as any).readFile).toBeUndefined();
+    expect(remote.sftp.open).toHaveBeenCalledWith('/repo/readme.md', 'r', expect.any(Function));
+    expect(remote.sftp.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects malformed SSH text-read IPC requests before opening SFTP', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-read-boundary-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const client = mocks.lastClient as any;
+    const connectionId = (manager as any).connections.get('text-read-boundary-session').connectionId;
+    const valid = {
+      sessionId: 'text-read-boundary-session',
+      connectionId,
+      remotePath: '/repo/readme.md',
+    };
+    const throwingRequest: Record<string, unknown> = {
+      connectionId,
+      remotePath: '/repo/readme.md',
+    };
+    Object.defineProperty(throwingRequest, 'sessionId', {
+      enumerable: true,
+      get: () => { throw new Error('getter must be contained'); },
+    });
+
+    const malformed: unknown[] = [
+      undefined,
+      null,
+      [],
+      {},
+      { ...valid, extra: true },
+      { ...valid, sessionId: 42 },
+      { ...valid, connectionId: null },
+      { sessionId: valid.sessionId, connectionId },
+      { ...valid, remotePath: 42 },
+      { ...valid, remotePath: '' },
+      throwingRequest,
+    ];
+
+    for (const request of malformed) {
+      await expect(manager.readTextFile(request)).resolves.toEqual({
+        ok: false,
+        error: expect.objectContaining({ code: 'INVALID_REQUEST' }),
+      });
+    }
+    expect(client.sftp).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed SSH text-write IPC requests and nested revisions before SFTP', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-write-boundary-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const client = mocks.lastClient as any;
+    const connectionId = (manager as any).connections.get('text-write-boundary-session').connectionId;
+    const revision = {
+      token: 'a'.repeat(64),
+      size: 8,
+      mtime: new Date(0).toISOString(),
+    };
+    const valid = {
+      sessionId: 'text-write-boundary-session',
+      connectionId,
+      requestedPath: '/repo/readme.md',
+      resolvedPath: '/repo/readme.md',
+      expectedRevision: revision,
+      content: 'updated\n',
+      hasUtf8Bom: false,
+    };
+    const { content: _content, ...missingContent } = valid;
+
+    const malformed: unknown[] = [
+      undefined,
+      null,
+      [],
+      {},
+      missingContent,
+      { ...valid, extra: true },
+      { ...valid, sessionId: 42 },
+      { ...valid, connectionId: null },
+      { ...valid, requestedPath: 42 },
+      { ...valid, resolvedPath: '' },
+      { ...valid, content: Buffer.from('updated') },
+      { ...valid, hasUtf8Bom: 'false' },
+      { ...valid, overwrite: undefined },
+      { ...valid, overwrite: 'yes' },
+      { ...valid, expectedRevision: { ...revision, extra: true } },
+      { ...valid, expectedRevision: { ...revision, size: '8' } },
+      { ...valid, expectedRevision: { ...revision, fileId: undefined } },
+      { ...valid, expectedRevision: null },
+    ];
+
+    for (const request of malformed) {
+      await expect(manager.writeTextFile(request)).resolves.toEqual({
+        ok: false,
+        error: expect.objectContaining({ code: 'INVALID_REQUEST' }),
+      });
+    }
+    expect(client.sftp).not.toHaveBeenCalled();
+  });
+
+  it('rejects a text read bound to an older ready transport before opening SFTP', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-reuse-session', {
+      host: 'old.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const oldConnectionId = (manager as any).connections.get('text-reuse-session').connectionId;
+    await manager.disconnect('text-reuse-session');
+    await manager.connect('text-reuse-session', {
+      host: 'new.example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const replacementClient = mocks.lastClient as any;
+    const newConnectionId = (manager as any).connections.get('text-reuse-session').connectionId;
+
+    await expect(manager.readTextFile({
+      sessionId: 'text-reuse-session',
+      connectionId: oldConnectionId,
+      remotePath: '/repo/readme.md',
+    })).resolves.toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'STALE_SSH_SESSION' }),
+    });
+    expect(newConnectionId).not.toBe(oldConnectionId);
+    expect(replacementClient.sftp).not.toHaveBeenCalled();
+  });
+
+  it('returns a conflict without creating a temp when the remote bytes changed after open', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-conflict-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-conflict-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-conflict-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) throw new Error('expected remote file to open');
+    remote.setFile('/repo/readme.md', 'changed elsewhere\n');
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-conflict-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'my edit\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'CONFLICT' }),
+    });
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('changed elsewhere\n');
+    expect(remote.sftp.open.mock.calls.some(([, flags]) => flags === 'wx')).toBe(false);
+    expect(remote.sftp.ext_openssh_rename).not.toHaveBeenCalled();
+  });
+
+  it('saves through an exclusive temp and atomic OpenSSH rename without truncating the destination', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-save-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    remote.setMode('/repo/readme.md', 0o750);
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-save-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-save-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-save-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'saved safely\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({
+      ok: true,
+      value: expect.objectContaining({
+        requestedPath: '/repo/readme.md',
+        resolvedPath: '/repo/readme.md',
+        revision: expect.objectContaining({ token: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+      }),
+    });
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('saved safely\n');
+    const exclusiveOpen = remote.sftp.open.mock.calls.find(([, flags]) => flags === 'wx');
+    expect(exclusiveOpen?.[0]).toMatch(/^\/repo\/\.janet-save-[a-f0-9-]+\.tmp$/);
+    expect(remote.sftp.ext_openssh_rename).toHaveBeenCalledWith(
+      exclusiveOpen?.[0], '/repo/readme.md', expect.any(Function),
+    );
+    expect(remote.sftp.fsetstat).toHaveBeenCalledWith(
+      expect.any(Buffer), { mode: 0o750 }, expect.any(Function),
+    );
+    expect(remote.sftp.ext_openssh_fsync).toHaveBeenCalledWith(
+      expect.any(Buffer), expect.any(Function),
+    );
+    expect((remote.files.get('/repo/readme.md')?.mode ?? 0) & 0o7777).toBe(0o750);
+    expect(remote.files.get('/repo/readme.md')).toMatchObject({ uid: 1000, gid: 1000 });
+    expect((remote.sftp as any).rename).toBeUndefined();
+    expect(remote.sftp.unlink).not.toHaveBeenCalled();
+  });
+
+  it('refuses to replace a remote target carrying special permission bits', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-special-mode-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/tool': 'original\n' });
+    remote.setMode('/repo/tool', 0o4755);
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-special-mode-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-special-mode-session', connectionId, remotePath: '/repo/tool',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-special-mode-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'must not replace\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'SAFE_REPLACE_UNAVAILABLE' }),
+    });
+    expect(remote.files.get('/repo/tool')?.bytes.toString()).toBe('original\n');
+    expect(remote.sftp.open.mock.calls.some(([, flags]) => flags === 'wx')).toBe(false);
+    expect(remote.sftp.fsetstat).not.toHaveBeenCalled();
+    expect(remote.sftp.ext_openssh_rename).not.toHaveBeenCalled();
+  });
+
+  it('refuses atomic replacement when the owned temp cannot preserve target ownership', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-owner-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    remote.setOwner('/repo/readme.md', 2000, 1000);
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-owner-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-owner-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-owner-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'must not replace\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'SAFE_REPLACE_UNAVAILABLE' }),
+    });
+    expect(remote.files.get('/repo/readme.md')).toMatchObject({ uid: 2000, gid: 1000 });
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('original\n');
+    expect(remote.sftp.ext_openssh_rename).not.toHaveBeenCalled();
+    expect(remote.sftp.unlink).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses replacement when fsetstat does not actually preserve ordinary permissions', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-mode-verify-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    remote.setMode('/repo/readme.md', 0o750);
+    remote.sftp.fsetstat.mockImplementation((
+      _handle: Buffer,
+      _attrs: { mode?: number },
+      callback: (error?: Error) => void,
+    ) => callback());
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-mode-verify-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-mode-verify-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-mode-verify-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'must not replace\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'SAFE_REPLACE_UNAVAILABLE' }),
+    });
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('original\n');
+    expect(remote.sftp.ext_openssh_rename).not.toHaveBeenCalled();
+    expect(remote.sftp.unlink).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps atomic replacement available when the optional OpenSSH fsync is unsupported', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-no-fsync-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    remote.sftp.ext_openssh_fsync.mockImplementation(() => {
+      throw new Error('Server does not support this extended request');
+    });
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-no-fsync-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-no-fsync-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-no-fsync-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'saved without fsync extension\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({ ok: true, value: expect.any(Object) });
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('saved without fsync extension\n');
+    expect(remote.sftp.ext_openssh_rename).toHaveBeenCalledTimes(1);
+  });
+
+  it('rechecks the destination after upload and preserves a racing remote change', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-race-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-race-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-race-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    const normalWrite = remote.sftp.write.getMockImplementation();
+    let injectedRace = false;
+    remote.sftp.write.mockImplementation((...args: any[]) => {
+      (normalWrite as Function | undefined)?.apply(remote.sftp, args);
+      if (!injectedRace) {
+        injectedRace = true;
+        remote.setFile('/repo/readme.md', 'racing change\n');
+      }
+    });
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-race-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'my edit\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'CONFLICT' }),
+    });
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('racing change\n');
+    expect(remote.sftp.ext_openssh_rename).not.toHaveBeenCalled();
+    expect(remote.sftp.unlink).toHaveBeenCalledTimes(1);
+  });
+
+  it('serializes saves to one remote file so a queued stale save conflicts', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-serialized-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    const client = mocks.lastClient as any;
+    client.sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-serialized-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-serialized-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    let finishRename!: () => void;
+    remote.sftp.ext_openssh_rename.mockImplementation((
+      sourcePath: string,
+      destinationPath: string,
+      callback: (error?: Error) => void,
+    ) => {
+      finishRename = () => {
+        const source = remote.files.get(sourcePath);
+        if (!source) throw new Error('expected owned temp');
+        remote.files.set(destinationPath, source);
+        remote.files.delete(sourcePath);
+        callback();
+      };
+    });
+    client.sftp.mockClear();
+    const first = manager.writeTextFile({
+      sessionId: 'text-serialized-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'first save\n',
+      hasUtf8Bom: false,
+    });
+    while (!finishRename) await Promise.resolve();
+    const second = manager.writeTextFile({
+      sessionId: 'text-serialized-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'stale queued save\n',
+      hasUtf8Bom: false,
+    });
+
+    await Promise.resolve();
+    expect(client.sftp).toHaveBeenCalledTimes(1);
+    finishRename();
+    await expect(first).resolves.toEqual({ ok: true, value: expect.any(Object) });
+    await expect(second).resolves.toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'CONFLICT' }),
+    });
+    expect(client.sftp).toHaveBeenCalledTimes(2);
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('first save\n');
+  });
+
+  it('refuses an unsafe replacement and cleans up only its owned temp file', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('text-unsafe-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const remote = createTextFileSftp({ '/repo/readme.md': 'original\n' });
+    (remote.sftp as any).ext_openssh_rename = undefined;
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, remote.sftp));
+    const connectionId = (manager as any).connections.get('text-unsafe-session').connectionId;
+    const opened = await manager.readTextFile({
+      sessionId: 'text-unsafe-session', connectionId, remotePath: '/repo/readme.md',
+    });
+    if (!opened.ok) throw new Error('expected remote file to open');
+
+    const saved = await manager.writeTextFile({
+      sessionId: 'text-unsafe-session',
+      connectionId,
+      requestedPath: opened.value.requestedPath,
+      resolvedPath: opened.value.resolvedPath,
+      expectedRevision: opened.value.revision,
+      content: 'must not replace\n',
+      hasUtf8Bom: false,
+    });
+
+    expect(saved).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'SAFE_REPLACE_UNAVAILABLE' }),
+    });
+    expect(remote.files.get('/repo/readme.md')?.bytes.toString()).toBe('original\n');
+    expect(remote.sftp.unlink).toHaveBeenCalledTimes(1);
+    const cleanedPath = remote.sftp.unlink.mock.calls[0][0];
+    expect(cleanedPath).toMatch(/^\/repo\/\.janet-save-/);
+    expect(remote.files.has(cleanedPath)).toBe(false);
   });
 
   it('returns filtered, sorted, cloneable directory metadata from SFTP listings', async () => {

@@ -57,7 +57,7 @@ export default function ThemeSwitcher({
 
       <div className="theme-section">
         <label className="theme-label" htmlFor="terminal-text-size">
-          <TypeIcon size="xs" /> Terminal text size <span className="theme-value">{fontSize}px</span>
+          <TypeIcon size="xs" /> Terminal and editor text size <span className="theme-value">{fontSize}px</span>
         </label>
         <div className="font-size-controls">
           <input
@@ -68,7 +68,7 @@ export default function ThemeSwitcher({
             value={fontSize}
             onChange={(e) => onFontSizeChange(parseInt(e.target.value))}
             className="font-size-slider"
-            aria-label="Terminal text size"
+            aria-label="Terminal and editor text size"
           />
         </div>
       </div>

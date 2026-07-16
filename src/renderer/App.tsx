@@ -12,6 +12,7 @@ import UpdateBanner from './components/UpdateBanner';
 import BrandMark from './components/BrandMark';
 import Tooltip from './components/Tooltip';
 import ConfirmationDialog from './components/ConfirmationDialog';
+import WorkspaceContent from './components/WorkspaceContent';
 import {
   TabInfo, SessionInfo,
   SavedSSHProfile,
@@ -29,6 +30,8 @@ import { requestTerminalSearch } from './terminalSearch';
 import { formatTerminalPathForPaste } from './terminalPathDrag';
 import type { FileExplorerSource } from './fileExplorerSource';
 import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
+import { useEditorDocuments } from './useEditorDocuments';
+import { emptyTabDocumentWorkspace, isEditorDocumentDirty, type EditorResource } from './editorDocuments';
 
 function createTabRoot(type: 'local' | 'ssh'): PaneNode {
   return createPaneRoot(type, 1, 'vertical');
@@ -57,7 +60,11 @@ interface PendingDestructiveAction {
   title: string;
   description: string;
   confirmLabel: string;
-  run: () => void;
+  run: () => void | boolean | Promise<void | boolean>;
+  secondaryLabel?: string;
+  runSecondary?: () => void | boolean | Promise<void | boolean>;
+  onCancel?: () => void;
+  destructive?: boolean;
   fallbackFocus?: () => HTMLElement | null;
 }
 
@@ -311,6 +318,8 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [settingsOpen, setSettingsOpen] = useState(initialState.settingsOpen);
   const [sshConnectionsOpen, setSshConnectionsOpen] = useState(initialState.sshConnectionsOpen);
   const [pendingDestructiveAction, setPendingDestructiveAction] = useState<PendingDestructiveAction | null>(null);
+  const [pendingDestructiveBusy, setPendingDestructiveBusy] = useState(false);
+  const editorDocuments = useEditorDocuments();
 
   const setWorkspaceToolsExpanded = useCallback((expanded: boolean) => {
     if (!expanded && document.activeElement instanceof HTMLElement
@@ -693,6 +702,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         setActiveTabId(next[Math.min(idx, next.length - 1)].id);
       }
 
+      editorDocuments.closeDocumentsForTab(tabId);
       teardownTerminalOwners(collectTerminalOwners(tab), next);
       if (focusedTerminalId && getAllLeafIds(tab.root).includes(focusedTerminalId)) {
         setFocusedTerminalId(null);
@@ -707,8 +717,131 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       tabsRef.current = next;
       setTabs(next);
     },
-    [activeTabId, focusedTerminalId, teardownTerminalOwners],
+    [activeTabId, editorDocuments.closeDocumentsForTab, focusedTerminalId, teardownTerminalOwners],
   );
+
+  const saveEditorDocument = useCallback(async (
+    key: string,
+    afterSave?: () => void,
+  ): Promise<boolean> => {
+    const documentTitle = () => (
+      editorDocuments.documents.find((candidate) => candidate.key === key)?.title ?? 'file'
+    );
+    const attempt = async (overwrite = false): Promise<boolean> => {
+      const outcome = await editorDocuments.saveDocument(key, overwrite);
+      if (outcome === 'saved') {
+        afterSave?.();
+        return true;
+      }
+      if (outcome === 'CONFLICT') {
+        setPendingDestructiveAction({
+          title: `Overwrite newer changes to ${documentTitle()}?`,
+          description: 'This file changed outside JaneT after it was opened. Overwriting will replace those newer on-disk changes with the editor contents.',
+          confirmLabel: 'Overwrite file',
+          run: () => attempt(true),
+        });
+        return false;
+      }
+
+      setPendingDestructiveAction({
+        title: `Couldn’t save ${documentTitle()}`,
+        description: 'JaneT left the file open and preserved the editor contents. Review the editor error, then try again or keep editing.',
+        confirmLabel: 'Keep editing',
+        run: () => true,
+        secondaryLabel: 'Try again',
+        runSecondary: () => attempt(overwrite),
+        destructive: false,
+      });
+      return false;
+    };
+
+    return attempt();
+  }, [editorDocuments.documents, editorDocuments.saveDocument]);
+
+  const saveEditorDocumentSequence = useCallback((
+    keys: string[],
+    onComplete: () => void | boolean | Promise<void | boolean>,
+    onCancel?: () => void,
+  ): Promise<boolean> => {
+    const showSaveFailure = (
+      title: string,
+      retry: () => Promise<boolean>,
+    ): false => {
+      setPendingDestructiveAction({
+        title: `Couldn’t save ${title}`,
+        description: 'JaneT left the file and its terminal workspace open. Review the editor error, then try the save again or keep editing.',
+        confirmLabel: 'Keep editing',
+        run: () => {
+          onCancel?.();
+        },
+        secondaryLabel: 'Try again',
+        runSecondary: retry,
+        onCancel,
+        destructive: false,
+      });
+      return false;
+    };
+
+    const promptConflict = (key: string, index: number, title: string): false => {
+      setPendingDestructiveAction({
+        title: `Overwrite newer changes to ${title}?`,
+        description: 'This file changed outside JaneT. Overwrite it and continue saving the remaining files?',
+        confirmLabel: 'Overwrite and continue',
+        run: () => overwriteAndContinue(key, index, title),
+        onCancel,
+      });
+      return false;
+    };
+
+    async function overwriteAndContinue(key: string, index: number, title: string): Promise<boolean> {
+      const outcome = await editorDocuments.saveDocument(key, true);
+      if (outcome === 'saved') return saveFrom(index + 1);
+      if (outcome === 'CONFLICT') return promptConflict(key, index, title);
+      return showSaveFailure(title, () => overwriteAndContinue(key, index, title));
+    }
+
+    const saveFrom = async (startIndex: number): Promise<boolean> => {
+      for (let index = startIndex; index < keys.length; index += 1) {
+        const key = keys[index];
+        const outcome = await editorDocuments.saveDocument(key);
+        if (outcome === 'saved') continue;
+
+        const document = editorDocuments.documents.find((candidate) => candidate.key === key);
+        const title = document?.title ?? 'file';
+        if (outcome === 'CONFLICT') {
+          return promptConflict(key, index, title);
+        }
+        return showSaveFailure(title, () => saveFrom(index));
+      }
+
+      const result = await onComplete();
+      return result !== false;
+    };
+
+    return saveFrom(0);
+  }, [editorDocuments.documents, editorDocuments.saveDocument]);
+
+  const requestCloseEditorDocument = useCallback((
+    key: string,
+    fallbackFocus: () => HTMLElement | null = firstTerminalFocusTarget,
+  ) => {
+    const document = editorDocuments.documents.find((candidate) => candidate.key === key);
+    if (!document) return;
+    if (!isEditorDocumentDirty(document)) {
+      editorDocuments.closeDocument(key);
+      requestAnimationFrame(() => fallbackFocus()?.focus());
+      return;
+    }
+    setPendingDestructiveAction({
+      title: `Save changes to ${document.title}?`,
+      description: 'This file has unsaved changes. Save them before closing, or explicitly discard the editor contents.',
+      confirmLabel: "Don't Save",
+      run: () => editorDocuments.closeDocument(key),
+      secondaryLabel: 'Save',
+      runSecondary: () => saveEditorDocument(key, () => editorDocuments.closeDocument(key)),
+      fallbackFocus,
+    });
+  }, [editorDocuments.closeDocument, editorDocuments.documents, saveEditorDocument]);
 
   const renameTab = useCallback((tabId: string, title: string) => {
     if (!title) return;
@@ -769,6 +902,20 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
     if (!tab) return;
     const paneCount = getAllLeafIds(tab.root).length;
+    const dirtyDocuments = (editorDocuments.documentsByTab[tabId] ?? []).filter(isEditorDocumentDirty);
+    if (dirtyDocuments.length > 0) {
+      const dirtyKeys = dirtyDocuments.map((document) => document.key);
+      setPendingDestructiveAction({
+        title: `Save ${dirtyDocuments.length} changed ${dirtyDocuments.length === 1 ? 'file' : 'files'} before closing ${tab.title}?`,
+        description: `Closing this terminal tab will also close its editor documents and end ${paneCount} terminal ${paneCount === 1 ? 'session' : 'sessions'}. Save the changed files, or explicitly discard them and close.`,
+        confirmLabel: 'Discard and close',
+        run: () => closeTab(tabId),
+        secondaryLabel: 'Save all and close',
+        runSecondary: () => saveEditorDocumentSequence(dirtyKeys, () => closeTab(tabId)),
+        fallbackFocus: firstTerminalFocusTarget,
+      });
+      return;
+    }
     setPendingDestructiveAction({
       title: `Close ${tab.title}?`,
       description: `Close this terminal tab and its ${paneCount} pane${paneCount === 1 ? '' : 's'}? Its terminal sessions will end; detached jobs may continue outside JaneT.`,
@@ -776,7 +923,66 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       run: () => closeTab(tabId),
       fallbackFocus: firstTerminalFocusTarget,
     });
-  }, [closeTab]);
+  }, [closeTab, editorDocuments.documentsByTab, saveEditorDocumentSequence]);
+
+  useEffect(() => {
+    if (!window.janet.onPrepareForClose || !window.janet.resolvePrepareForClose) return undefined;
+    return window.janet.onPrepareForClose(async (request) => {
+      if (pendingDestructiveAction || pendingDestructiveBusy) {
+        await window.janet.resolvePrepareForClose({
+          requestId: request.requestId,
+          resolution: 'cancel',
+        });
+        return;
+      }
+
+      const dirtyDocuments = editorDocuments.dirtyDocuments;
+      if (dirtyDocuments.length === 0) {
+        await window.janet.resolvePrepareForClose({
+          requestId: request.requestId,
+          resolution: 'saved',
+        });
+        return;
+      }
+
+      const reason = request.reason === 'update-install'
+        ? 'installing the update'
+        : request.reason === 'tray-stop'
+          ? 'stopping JaneT'
+          : 'closing JaneT';
+      const cancelClose = () => {
+        void window.janet.resolvePrepareForClose({
+          requestId: request.requestId,
+          resolution: 'cancel',
+        });
+      };
+      setPendingDestructiveAction({
+        title: `Save ${dirtyDocuments.length} changed ${dirtyDocuments.length === 1 ? 'file' : 'files'} before ${reason}?`,
+        description: 'JaneT can save every changed file before continuing, or you can explicitly discard the editor changes. Cancel keeps the application, terminals, and files open.',
+        confirmLabel: 'Discard changes and close',
+        run: async () => window.janet.resolvePrepareForClose({
+          requestId: request.requestId,
+          resolution: 'discarded',
+        }),
+        secondaryLabel: 'Save all and close',
+        runSecondary: () => saveEditorDocumentSequence(
+          dirtyDocuments.map((document) => document.key),
+          () => window.janet.resolvePrepareForClose({
+            requestId: request.requestId,
+            resolution: 'saved',
+          }),
+          cancelClose,
+        ),
+        onCancel: cancelClose,
+        fallbackFocus: firstTerminalFocusTarget,
+      });
+    });
+  }, [
+    editorDocuments.dirtyDocuments,
+    pendingDestructiveAction,
+    pendingDestructiveBusy,
+    saveEditorDocumentSequence,
+  ]);
 
   const requestClosePane = useCallback((tabId: string, leafId: string) => {
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
@@ -1119,6 +1325,11 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       : null,
     [gitRepository.repoPath, gitRepository.status],
   );
+  const openEditorFile = useCallback((resource: EditorResource) => {
+    void editorDocuments.openDocument(activeTab.id, resource);
+  }, [activeTab.id, editorDocuments.openDocument]);
+  const activeDocuments = editorDocuments.documentsByTab[activeTab.id] ?? [];
+  const activeDocumentWorkspace = editorDocuments.workspaces[activeTab.id] ?? emptyTabDocumentWorkspace();
 
   // === Keyboard shortcuts via keybindings context ===
   // Register global action handlers
@@ -1283,8 +1494,24 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       gitRepository={gitRepository}
       onOpenLocalTabAt={openLocalTabAt}
       onCopyTerminalPath={copyTerminalPath}
+      onOpenFile={openEditorFile}
     />
   );
+
+  const runPendingDestructiveAction = async (secondary: boolean) => {
+    const action = pendingDestructiveAction;
+    const run = secondary ? action?.runSecondary : action?.run;
+    if (!action || !run || pendingDestructiveBusy) return;
+    setPendingDestructiveBusy(true);
+    try {
+      const result = await run();
+      if (result !== false) {
+        setPendingDestructiveAction((current) => current === action ? null : current);
+      }
+    } finally {
+      setPendingDestructiveBusy(false);
+    }
+  };
 
   return (
     <div className="app">
@@ -1318,6 +1545,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
             key="terminal-tabs"
             tabs={tabs}
             activeTabId={activeTabId}
+            dirtyTabIds={editorDocuments.dirtyTabIds}
             sshProfiles={sshProfiles}
             sshConnectionsOpen={sshConnectionsOpen}
             onSSHConnectionsOpenChange={setSshConnectionsOpen}
@@ -1347,34 +1575,49 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           </Tooltip>
         )}
         <div key="terminal" className="terminal-area">
-          <SplitPane
-            node={activeTab.root}
+          <WorkspaceContent
             tabId={activeTab.id}
-            tabType={activeTab.type}
-            sshSessionId={activeTab.sshSessionId}
-            sshShellReady={activeTab.type !== 'ssh' || activeTab.sshShellReady === true}
-            onTerminalReady={handleTerminalReady}
-            onTerminalRemoved={handleTerminalRemoved}
-            onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}
-            onClosePane={(leafId) => requestClosePane(activeTab.id, leafId)}
-            onResizePane={(splitId, dividerIndex, leftFraction) => handleResizePane(activeTab.id, splitId, dividerIndex, leftFraction)}
-            onMovePane={(draggedLeafId, targetLeafId, side) => handleMovePane(activeTab.id, draggedLeafId, targetLeafId, side)}
-            draggedLeafId={draggedPaneId}
-            dropTarget={paneDropTarget}
-            onPaneDragStart={setDraggedPaneId}
-            onPaneDragOver={setPaneDropTarget}
-            onPaneDragEnd={() => { setDraggedPaneId(null); setPaneDropTarget(null); }}
-            maximizedLeafId={maximizedLeafByTab[activeTab.id] ?? null}
-            onToggleMaximizePane={(leafId) => handleToggleMaximizePane(activeTab.id, leafId)}
+            documents={activeDocuments}
+            activeSurface={activeDocumentWorkspace.activeSurface}
             themeName={currentTheme}
             fontSize={fontSize}
             fontFamily={fontFamily}
-            onCwdChange={handleCwdChange}
-            onTerminalFocus={handleTerminalFocus}
-            initialCwd={activeTab.cwd || homeDir || undefined}
-            hasSessionForLeaf={(leafId) => liveTerminalIdsRef.current.has(leafId)}
-            isSshSessionDisconnected={isSshSessionDisconnected}
-            onSshRetry={handleSshRetry}
+            onSelectSurface={(surface) => editorDocuments.selectSurface(activeTab.id, surface)}
+            onDocumentChange={editorDocuments.updateDocumentContent}
+            onSaveDocument={(key) => { void saveEditorDocument(key); }}
+            onRetryDocument={(key) => { void editorDocuments.retryDocument(key); }}
+            onCloseDocument={requestCloseEditorDocument}
+            terminal={(
+              <SplitPane
+                node={activeTab.root}
+                tabId={activeTab.id}
+                tabType={activeTab.type}
+                sshSessionId={activeTab.sshSessionId}
+                sshShellReady={activeTab.type !== 'ssh' || activeTab.sshShellReady === true}
+                onTerminalReady={handleTerminalReady}
+                onTerminalRemoved={handleTerminalRemoved}
+                onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}
+                onClosePane={(leafId) => requestClosePane(activeTab.id, leafId)}
+                onResizePane={(splitId, dividerIndex, leftFraction) => handleResizePane(activeTab.id, splitId, dividerIndex, leftFraction)}
+                onMovePane={(draggedLeafId, targetLeafId, side) => handleMovePane(activeTab.id, draggedLeafId, targetLeafId, side)}
+                draggedLeafId={draggedPaneId}
+                dropTarget={paneDropTarget}
+                onPaneDragStart={setDraggedPaneId}
+                onPaneDragOver={setPaneDropTarget}
+                onPaneDragEnd={() => { setDraggedPaneId(null); setPaneDropTarget(null); }}
+                maximizedLeafId={maximizedLeafByTab[activeTab.id] ?? null}
+                onToggleMaximizePane={(leafId) => handleToggleMaximizePane(activeTab.id, leafId)}
+                themeName={currentTheme}
+                fontSize={fontSize}
+                fontFamily={fontFamily}
+                onCwdChange={handleCwdChange}
+                onTerminalFocus={handleTerminalFocus}
+                initialCwd={activeTab.cwd || homeDir || undefined}
+                hasSessionForLeaf={(leafId) => liveTerminalIdsRef.current.has(leafId)}
+                isSshSessionDisconnected={isSshSessionDisconnected}
+                onSshRetry={handleSshRetry}
+              />
+            )}
           />
         </div>
         {sidebarSide === 'right' && workspaceTools}
@@ -1397,13 +1640,19 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         title={pendingDestructiveAction?.title ?? ''}
         description={pendingDestructiveAction?.description ?? ''}
         confirmLabel={pendingDestructiveAction?.confirmLabel ?? 'Continue'}
+        secondaryLabel={pendingDestructiveAction?.secondaryLabel}
+        onSecondary={pendingDestructiveAction?.runSecondary
+          ? () => { void runPendingDestructiveAction(true); }
+          : undefined}
+        busy={pendingDestructiveBusy}
+        destructive={pendingDestructiveAction?.destructive ?? true}
         fallbackFocus={pendingDestructiveAction?.fallbackFocus}
-        onCancel={() => setPendingDestructiveAction(null)}
-        onConfirm={() => {
-          const action = pendingDestructiveAction;
+        onCancel={() => {
+          if (pendingDestructiveBusy) return;
+          pendingDestructiveAction?.onCancel?.();
           setPendingDestructiveAction(null);
-          action?.run();
         }}
+        onConfirm={() => { void runPendingDestructiveAction(false); }}
       />
     </div>
   );

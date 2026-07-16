@@ -1,6 +1,6 @@
 {
   "name": "janet",
-  "version": "0.2.13",
+  "version": "0.3.0",
   "description": "A focused cross-platform terminal workspace with SSH, file browsing, Git tools, and durable sessions",
   "desktopName": "janet",
   "main": "dist/main/index.js",
@@ -176,6 +176,7 @@
     "@xterm/xterm": "^6.0.0",
     "electron-updater": "^6.8.9",
     "lucide-react": "^1.24.0",
+    "monaco-editor": "0.55.1",
     "node-pty": "^1.1.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

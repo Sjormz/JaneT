@@ -16,6 +16,9 @@ async function importMainClipboardBridge() {
       whenReady: vi.fn(() => Promise.resolve()),
       setPath: vi.fn(),
     },
+    protocol: {
+      registerSchemesAsPrivileged: vi.fn(),
+    },
     clipboard: { writeText },
     dialog: {
       showMessageBox: vi.fn(),

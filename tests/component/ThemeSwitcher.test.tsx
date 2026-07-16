@@ -45,13 +45,13 @@ describe('ThemeSwitcher', () => {
     renderThemeSwitcher({ fontSize: 16 });
 
     expect(screen.getByText('16px')).toBeInTheDocument();
-    expect(screen.getByText(/Terminal text size/)).toBeInTheDocument();
+    expect(screen.getByText(/Terminal and editor text size/)).toBeInTheDocument();
   });
 
   it('renders a font size slider with current value', () => {
     renderThemeSwitcher({ fontSize: 15 });
 
-    const slider = screen.getByLabelText('Terminal text size') as HTMLInputElement;
+    const slider = screen.getByLabelText('Terminal and editor text size') as HTMLInputElement;
     expect(slider).toBeInTheDocument();
     expect(slider.type).toBe('range');
     expect(slider.value).toBe('15');
@@ -63,7 +63,7 @@ describe('ThemeSwitcher', () => {
     const onFontSizeChange = vi.fn();
     renderThemeSwitcher({ onFontSizeChange });
 
-    const slider = screen.getByLabelText('Terminal text size') as HTMLInputElement;
+    const slider = screen.getByLabelText('Terminal and editor text size') as HTMLInputElement;
     fireEvent.change(slider, { target: { value: '18' } });
     expect(onFontSizeChange).toHaveBeenCalledWith(18);
   });

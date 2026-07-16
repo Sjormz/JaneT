@@ -171,17 +171,69 @@ describe('GitTree live refresh', () => {
 
   it('shows files that are both staged and modified as mixed instead of hiding the working-tree change', async () => {
     gitDetails.mockResolvedValue(details('main'));
+    const onOpenFile = vi.fn();
     const mixedStatus: GitStatusResult = {
       ...cleanStatus,
       files: [{ path: 'src/mixed.ts', working_dir: 'M', index: 'M', staged: true, unstaged: true }],
     };
 
     const view = render(
-      <GitTree cwdReady isRemote={false} repoPath="/repo" status={mixedStatus} searching={false} />,
+      <GitTree
+        cwdReady
+        isRemote={false}
+        repoPath="/repo"
+        status={mixedStatus}
+        searching={false}
+        onOpenFile={onOpenFile}
+      />,
     );
     const file = await screen.findByText('mixed.ts');
-    expect(file.closest('.git-file-item')).toHaveClass('mixed');
-    expect(file.closest('.git-file-item')).toHaveAttribute('aria-label', 'src/mixed.ts: Staged and modified in working tree');
+    const fileButton = file.closest('.git-file-item')!;
+    expect(fileButton).toHaveClass('mixed');
+    expect(fileButton).toHaveAttribute(
+      'aria-label',
+      'Open file src/mixed.ts: Staged and modified in working tree',
+    );
+
+    fireEvent.click(fileButton);
+    expect(onOpenFile).toHaveBeenCalledOnce();
+    expect(onOpenFile).toHaveBeenCalledWith({ kind: 'local', path: '/repo/src/mixed.ts' });
+    view.unmount();
+  });
+
+  it('explains deleted entries to keyboard users and never opens their missing path', async () => {
+    gitDetails.mockResolvedValue(details('main'));
+    const onOpenFile = vi.fn();
+    const deletedStatus: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'src/removed.ts', working_dir: ' ', index: 'D', staged: true, unstaged: false }],
+      deleted: ['src/removed.ts'],
+    };
+
+    const view = render(
+      <GitTree
+        cwdReady
+        isRemote={false}
+        repoPath="/repo"
+        status={deletedStatus}
+        searching={false}
+        onOpenFile={onOpenFile}
+      />,
+    );
+    const deleted = await screen.findByRole('button', {
+      name: 'src/removed.ts: Deleted from the working tree',
+    });
+
+    deleted.focus();
+    expect(deleted).toHaveFocus();
+    expect(deleted).toHaveAttribute('aria-disabled', 'true');
+    expect(deleted).toHaveAttribute(
+      'data-tooltip-label',
+      'src/removed.ts: Deleted from the working tree; there is no file to open',
+    );
+    fireEvent.keyDown(deleted, { key: 'Enter' });
+    fireEvent.click(deleted);
+    expect(onOpenFile).not.toHaveBeenCalled();
     view.unmount();
   });
 
@@ -217,7 +269,7 @@ describe('GitTree live refresh', () => {
       origin: 'source-control',
       filesystem: { kind: 'local' },
     });
-    expect(row).toHaveAttribute('aria-label', 'src/mixed.ts: Staged and modified in working tree');
+    expect(row).toHaveAttribute('aria-label', 'Open file src/mixed.ts: Staged and modified in working tree');
     const copyButton = screen.getByRole('button', { name: 'Copy path for src/mixed.ts' });
     expect(copyButton).not.toHaveAttribute('draggable', 'true');
     fireEvent.click(copyButton);
@@ -234,6 +286,7 @@ describe('GitTree live refresh', () => {
       files: [{ path: 'src/nested/app.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
     };
     const onCopyTerminalPath = vi.fn().mockResolvedValue(undefined);
+    const onOpenFile = vi.fn();
     const view = render(
       <GitTree
         cwdReady
@@ -242,6 +295,7 @@ describe('GitTree live refresh', () => {
         status={changedStatus}
         searching={false}
         onCopyTerminalPath={onCopyTerminalPath}
+        onOpenFile={onOpenFile}
       />,
     );
 
@@ -269,6 +323,9 @@ describe('GitTree live refresh', () => {
     expect(onCopyTerminalPath).toHaveBeenCalledWith('C:/repo/src/nested/app.ts');
 
     fireEvent.dragEnd(row, { dataTransfer });
+    fireEvent.click(row);
+    expect(onOpenFile).toHaveBeenCalledOnce();
+    expect(onOpenFile).toHaveBeenCalledWith({ kind: 'local', path: 'C:/repo/src/nested/app.ts' });
     view.unmount();
   });
 });

@@ -30,6 +30,7 @@ interface VerticalTabBarProps {
   onSaveWorkspaceTab: (tab: TabInfo) => void;
   onRenameTab: (id: string, title: string) => void;
   onCollapse: () => void;
+  dirtyTabIds?: ReadonlySet<string>;
 }
 
 function formatRelativeTime(date: Date): string {
@@ -75,6 +76,7 @@ export default function VerticalTabBar({
   onSaveWorkspaceTab,
   onRenameTab,
   onCollapse,
+  dirtyTabIds = new Set<string>(),
 }: VerticalTabBarProps) {
   const [, setNow] = useState(Date.now());
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
@@ -233,6 +235,7 @@ export default function VerticalTabBar({
           const TabIcon = isSSH ? LockIcon : TerminalTabIcon;
           const relTime = tabTimestamps[tab.id] ? formatRelativeTime(tabTimestamps[tab.id]) : 'now';
           const editing = editingTabId === tab.id;
+          const dirty = dirtyTabIds.has(tab.id);
           const sshProfile = tab.sshProfileId
             ? sshProfiles.find((profile) => profile.id === tab.sshProfileId)
             : undefined;
@@ -248,6 +251,7 @@ export default function VerticalTabBar({
               key={tab.id}
               role="button"
               aria-pressed={isActive}
+              aria-label={`${tab.title} ${subLabel}${dirty ? ', unsaved editor changes' : ''}`}
               tabIndex={0}
               className={`vtab-item ${isActive ? 'active' : ''} ${isSSH ? 'ssh' : ''}`}
               onClick={() => !editing && onSelectTab(tab.id)}
@@ -275,7 +279,10 @@ export default function VerticalTabBar({
                     aria-label="Tab name"
                   />
                 ) : (
-                  <div className="vtab-name" title={tab.title}>{tab.title}</div>
+                  <div className="vtab-name" title={tab.title}>
+                    {tab.title}
+                    {dirty && <span className="vtab-dirty-marker" aria-hidden="true">●</span>}
+                  </div>
                 )}
                 <div className="vtab-sub" title={subTitle}>
                   {subLabel}

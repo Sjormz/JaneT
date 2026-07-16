@@ -174,9 +174,15 @@ describe('Sidebar workspace tools', () => {
   });
 
   it('forwards the active terminal filesystem to Explorer', () => {
-    render(<Sidebar {...makeProps()} />);
+    const onCopyTerminalPath = vi.fn().mockResolvedValue(undefined);
+    const onOpenFile = vi.fn();
+    render(<Sidebar {...makeProps({ onCopyTerminalPath, onOpenFile })} />);
 
-    expect(childSpies.fileExplorer).toHaveBeenLastCalledWith({ source: explorerSource });
+    expect(childSpies.fileExplorer).toHaveBeenLastCalledWith({
+      source: explorerSource,
+      onCopyTerminalPath,
+      onOpenFile,
+    });
   });
 
   it('forwards repository state and local-tab navigation to Source Control', () => {
@@ -191,6 +197,8 @@ describe('Sidebar workspace tools', () => {
       conflicted: [],
     };
     const onOpenLocalTabAt = vi.fn();
+    const onCopyTerminalPath = vi.fn().mockResolvedValue(undefined);
+    const onOpenFile = vi.fn();
     render(
       <Sidebar
         {...makeProps({
@@ -203,6 +211,8 @@ describe('Sidebar workspace tools', () => {
             searching: true,
           },
           onOpenLocalTabAt,
+          onCopyTerminalPath,
+          onOpenFile,
         })}
       />,
     );
@@ -214,6 +224,8 @@ describe('Sidebar workspace tools', () => {
       status,
       searching: true,
       onOpenLocalTabAt,
+      onCopyTerminalPath,
+      onOpenFile,
     });
   });
 });

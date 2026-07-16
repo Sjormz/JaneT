@@ -14,6 +14,7 @@ import { useModalFocus } from '../useModalFocus';
 import { beginTerminalPathDrag, endTerminalPathDrag, resolveRepositoryPath } from '../terminalPathDrag';
 import TerminalPathCopyButton from './TerminalPathCopyButton';
 import Tooltip from './Tooltip';
+import type { EditorResource } from '../editorDocuments';
 
 interface GitBranchInfo {
   name: string;
@@ -32,6 +33,7 @@ interface GitTreeProps {
   searching: boolean;
   onOpenLocalTabAt?: (cwd: string, title?: string) => void;
   onCopyTerminalPath?: (path: string) => Promise<void>;
+  onOpenFile?: (resource: EditorResource) => void;
 }
 
 type Section = 'branches' | 'changes' | 'worktrees';
@@ -60,6 +62,7 @@ export default function GitTree({
   searching,
   onOpenLocalTabAt,
   onCopyTerminalPath,
+  onOpenFile,
 }: GitTreeProps) {
   const [branches, setBranches] = useState<GitBranchInfo[]>([]);
   const [worktrees, setWorktrees] = useState<GitWorktreeInfo[]>([]);
@@ -322,6 +325,7 @@ export default function GitTree({
               files={status.files}
               conflicted={status.conflicted}
               onCopyTerminalPath={onCopyTerminalPath}
+              onOpenFile={onOpenFile}
             />
           ) : (
             status.files.map((file) => (
@@ -330,6 +334,7 @@ export default function GitTree({
                 repoPath={repoPath}
                 path={file.path}
                 onCopyTerminalPath={onCopyTerminalPath}
+                onOpenFile={onOpenFile}
                 kind={status.conflicted.includes(file.path)
                   ? 'conflicted'
                   : file.staged && file.unstaged
@@ -338,6 +343,7 @@ export default function GitTree({
                       ? 'staged'
                       : 'unstaged'}
                 wd={file.working_dir}
+                index={file.index}
               />
             ))
           )}
@@ -543,6 +549,7 @@ function renderTreeNode(
   busy: boolean,
   repoPath: string,
   onCopyTerminalPath?: (path: string) => Promise<void>,
+  onOpenFile?: (resource: EditorResource) => void,
 ): React.ReactNode {
   const entries = Array.from(node.children.values()).sort((a: any, b: any) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
@@ -552,7 +559,7 @@ function renderTreeNode(
     if (child.isDir) {
       return (
         <GitTreeDir key={child.path} name={child.name} depth={depth}>
-          {renderTreeNode(child, depth + 1, busy, repoPath, onCopyTerminalPath)}
+          {renderTreeNode(child, depth + 1, busy, repoPath, onCopyTerminalPath, onOpenFile)}
         </GitTreeDir>
       );
     }
@@ -565,21 +572,24 @@ function renderTreeNode(
         path={child.file.path}
         kind={kind}
         wd={child.file.working_dir}
+        index={child.file.index}
         depth={depth}
         onCopyTerminalPath={onCopyTerminalPath}
+        onOpenFile={onOpenFile}
       />
     );
   });
 }
 
-function GitFileTree({ repoPath, files, conflicted, onCopyTerminalPath }: {
+function GitFileTree({ repoPath, files, conflicted, onCopyTerminalPath, onOpenFile }: {
   repoPath: string;
   files: Array<{ path: string; working_dir: string; index: string; staged: boolean; unstaged: boolean }>;
   conflicted: string[];
   onCopyTerminalPath?: (path: string) => Promise<void>;
+  onOpenFile?: (resource: EditorResource) => void;
 }) {
   const tree = buildFileTree(files, conflicted);
-  return <>{renderTreeNode(tree, 0, false, repoPath, onCopyTerminalPath)}</>;
+  return <>{renderTreeNode(tree, 0, false, repoPath, onCopyTerminalPath, onOpenFile)}</>;
 }
 
 function GitTreeDir({ name, depth, children }: { name: string; depth: number; children: React.ReactNode }) {
@@ -603,18 +613,22 @@ function GitTreeDir({ name, depth, children }: { name: string; depth: number; ch
   );
 }
 
-function GitFile({ repoPath, path, kind, wd, depth, onCopyTerminalPath }: {
+function GitFile({ repoPath, path, kind, wd, index, depth, onCopyTerminalPath, onOpenFile }: {
   repoPath: string;
   path: string;
   kind: 'staged' | 'unstaged' | 'mixed' | 'conflicted';
   wd?: string;
+  index?: string;
   depth?: number;
   onCopyTerminalPath?: (path: string) => Promise<void>;
+  onOpenFile?: (resource: EditorResource) => void;
 }) {
-  const Icon = kind === 'conflicted' ? AlertIcon : kind === 'mixed' ? GitMergeIcon : wd === 'D' ? TrashIcon : wd === 'R' ? GitMergeIcon : GitCommitIcon;
-  const FileIcon = kind === 'unstaged' && wd !== 'D' && wd !== 'R' ? fileIconFor(path, false) : Icon;
+  const isDeleted = wd === 'D' || index === 'D';
+  const Icon = kind === 'conflicted' ? AlertIcon : kind === 'mixed' ? GitMergeIcon : isDeleted ? TrashIcon : wd === 'R' ? GitMergeIcon : GitCommitIcon;
+  const FileIcon = kind === 'unstaged' && !isDeleted && wd !== 'R' ? fileIconFor(path, false) : Icon;
   const indent = depth !== undefined ? { paddingLeft: 14 + depth * 14 } : undefined;
   const absolutePath = resolveRepositoryPath(repoPath, path);
+  const canOpen = !isDeleted;
   const title = kind === 'mixed'
     ? 'Staged and modified in working tree'
     : kind === 'conflicted'
@@ -624,11 +638,18 @@ function GitFile({ repoPath, path, kind, wd, depth, onCopyTerminalPath }: {
         : 'Working-tree change';
   return (
     <div className="git-file-row">
-      <Tooltip label={`${path}: ${title} · Drag into a terminal to paste its path`} placement="right">
-        <div
+      <Tooltip label={canOpen
+        ? `${path}: ${title} · Open in editor or drag into a terminal`
+        : `${path}: Deleted from the working tree; there is no file to open`} placement="right">
+        <button
+          type="button"
           className={`git-file-item ${kind}`}
           style={indent}
-          aria-label={`${path}: ${title}`}
+          aria-label={canOpen ? `Open file ${path}: ${title}` : `${path}: Deleted from the working tree`}
+          aria-disabled={!canOpen}
+          onClick={() => {
+            if (canOpen) onOpenFile?.({ kind: 'local', path: absolutePath });
+          }}
           draggable
           onDragStart={(event) => {
             const started = beginTerminalPathDrag(event.dataTransfer, {
@@ -647,7 +668,7 @@ function GitFile({ repoPath, path, kind, wd, depth, onCopyTerminalPath }: {
         >
           <FileIcon size="sm" className={`file-status-icon ${kind}`} />
           <span className="file-name">{path.split('/').pop()}</span>
-        </div>
+        </button>
       </Tooltip>
       <TerminalPathCopyButton
         path={absolutePath}

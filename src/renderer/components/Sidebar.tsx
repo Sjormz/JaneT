@@ -9,6 +9,7 @@ import {
 } from '../icons';
 import { GitRepositoryState } from '../useGitRepository';
 import type { FileExplorerSource } from '../fileExplorerSource';
+import type { EditorResource } from '../editorDocuments';
 
 export type WorkspaceToolSection = 'files' | 'git';
 
@@ -27,6 +28,7 @@ export interface SidebarProps {
   gitRepository: GitRepositoryState;
   onOpenLocalTabAt?: (cwd: string, title?: string) => void;
   onCopyTerminalPath?: (path: string) => Promise<void>;
+  onOpenFile?: (resource: EditorResource) => void;
 }
 
 interface WorkspaceToolDefinition {
@@ -52,6 +54,7 @@ export default function Sidebar({
   gitRepository,
   onOpenLocalTabAt,
   onCopyTerminalPath,
+  onOpenFile,
 }: SidebarProps) {
   const activeTool = WORKSPACE_TOOLS.find((tool) => tool.id === section) ?? WORKSPACE_TOOLS[0];
   const panelId = 'workspace-tools-panel';
@@ -119,7 +122,11 @@ export default function Sidebar({
     >
       {expanded && (
         activeTool.id === 'files' ? (
-          <FileExplorer source={explorerSource} onCopyTerminalPath={onCopyTerminalPath} />
+          <FileExplorer
+            source={explorerSource}
+            onCopyTerminalPath={onCopyTerminalPath}
+            onOpenFile={onOpenFile}
+          />
         ) : (
           <GitTree
             cwdReady={cwdReady}
@@ -129,6 +136,7 @@ export default function Sidebar({
             searching={gitRepository.searching}
             onOpenLocalTabAt={onOpenLocalTabAt}
             onCopyTerminalPath={onCopyTerminalPath}
+            onOpenFile={onOpenFile}
           />
         )
       )}

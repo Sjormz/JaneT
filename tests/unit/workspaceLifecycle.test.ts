@@ -30,6 +30,8 @@ function makeHarness(activity: WorkspaceActivity = { localTerminals: 1, sshSessi
   const chooseDecision = vi.fn<WorkspaceLifecycleDependencies['chooseDecision']>()
     .mockResolvedValue('cancel');
   const getActivity = vi.fn<WorkspaceLifecycleDependencies['getActivity']>(() => activity);
+  const requestClosePreparation = vi.fn<WorkspaceLifecycleDependencies['requestClosePreparation']>()
+    .mockResolvedValue('saved');
   const stopAll = vi.fn<WorkspaceLifecycleDependencies['stopAll']>().mockResolvedValue(undefined);
   const quit = vi.fn<WorkspaceLifecycleDependencies['quit']>();
   const onBackgroundChange = vi.fn<WorkspaceLifecycleDependencies['onBackgroundChange']>(() => true);
@@ -37,6 +39,7 @@ function makeHarness(activity: WorkspaceActivity = { localTerminals: 1, sshSessi
   const controller = new WorkspaceLifecycleController({
     getActivity,
     chooseDecision,
+    requestClosePreparation,
     stopAll,
     quit,
     onBackgroundChange,
@@ -47,6 +50,7 @@ function makeHarness(activity: WorkspaceActivity = { localTerminals: 1, sshSessi
     window: makeWindow(),
     getActivity,
     chooseDecision,
+    requestClosePreparation,
     stopAll,
     quit,
     onBackgroundChange,
@@ -66,6 +70,7 @@ describe('WorkspaceLifecycleController', () => {
     expect(harness.chooseDecision).not.toHaveBeenCalled();
     expect(harness.stopAll).not.toHaveBeenCalled();
     expect(harness.quit).not.toHaveBeenCalled();
+    expect(harness.requestClosePreparation).toHaveBeenCalledWith('window-close');
     expect(harness.window.close).toHaveBeenCalledOnce();
   });
 
@@ -75,6 +80,7 @@ describe('WorkspaceLifecycleController', () => {
     await harness.controller.handleQuit(harness.window);
 
     expect(harness.window.close).not.toHaveBeenCalled();
+    expect(harness.requestClosePreparation).toHaveBeenCalledWith('application-quit');
     expect(harness.quit).toHaveBeenCalledOnce();
   });
 
@@ -94,6 +100,7 @@ describe('WorkspaceLifecycleController', () => {
     expect(harness.stopAll).not.toHaveBeenCalled();
     expect(harness.quit).not.toHaveBeenCalled();
     expect(harness.window.close).not.toHaveBeenCalled();
+    expect(harness.requestClosePreparation).not.toHaveBeenCalled();
   });
 
   it('keeps the window visible when no reliable background reopen path is available', async () => {
@@ -106,6 +113,19 @@ describe('WorkspaceLifecycleController', () => {
     expect(harness.window.hide).not.toHaveBeenCalled();
     expect(harness.window.show).toHaveBeenCalledOnce();
     expect(harness.window.focus).toHaveBeenCalledOnce();
+    expect(harness.quit).not.toHaveBeenCalled();
+    expect(harness.requestClosePreparation).not.toHaveBeenCalled();
+  });
+
+  it('does not request editor resolution when an application quit is converted to backgrounding', async () => {
+    const harness = makeHarness();
+    harness.chooseDecision.mockResolvedValue('background');
+
+    await harness.controller.handleQuit(harness.window);
+
+    expect(harness.window.hide).toHaveBeenCalledOnce();
+    expect(harness.requestClosePreparation).not.toHaveBeenCalled();
+    expect(harness.stopAll).not.toHaveBeenCalled();
     expect(harness.quit).not.toHaveBeenCalled();
   });
 
@@ -131,6 +151,7 @@ describe('WorkspaceLifecycleController', () => {
     await closing;
 
     expect(events).toEqual(['stop:start', 'stop:done', 'quit']);
+    expect(harness.requestClosePreparation).toHaveBeenCalledWith('window-close');
     expect(harness.quit).toHaveBeenCalledOnce();
   });
 
@@ -145,6 +166,7 @@ describe('WorkspaceLifecycleController', () => {
     expect(harness.stopAll).not.toHaveBeenCalled();
     expect(harness.quit).not.toHaveBeenCalled();
     expect(harness.onBackgroundChange).not.toHaveBeenCalled();
+    expect(harness.requestClosePreparation).not.toHaveBeenCalled();
   });
 
   it('coalesces duplicate close requests while one decision is pending', async () => {
@@ -161,6 +183,7 @@ describe('WorkspaceLifecycleController', () => {
 
     expect(harness.window.hide).toHaveBeenCalledOnce();
     expect(harness.onBackgroundChange).toHaveBeenCalledTimes(1);
+    expect(harness.requestClosePreparation).not.toHaveBeenCalled();
   });
 
   it('upgrades a pending window close when an application quit arrives', async () => {
@@ -174,6 +197,7 @@ describe('WorkspaceLifecycleController', () => {
     await Promise.all([close, quit]);
 
     expect(harness.window.close).not.toHaveBeenCalled();
+    expect(harness.requestClosePreparation).toHaveBeenCalledWith('application-quit');
     expect(harness.quit).toHaveBeenCalledOnce();
   });
 
@@ -236,6 +260,85 @@ describe('WorkspaceLifecycleController', () => {
     expect(events).toEqual(['stop', 'quit']);
     expect(harness.onBackgroundChange).toHaveBeenCalledWith(false);
     expect(harness.chooseDecision).not.toHaveBeenCalled();
+    expect(harness.requestClosePreparation).toHaveBeenCalledWith('tray-stop');
+  });
+
+  it.each(['saved', 'discarded'] as const)('proceeds after the renderer resolves %s', async (resolution) => {
+    const harness = makeHarness({ localTerminals: 0, sshSessions: 0 });
+    harness.requestClosePreparation.mockResolvedValue(resolution);
+
+    await harness.controller.handleClose(harness.window);
+
+    expect(harness.window.close).toHaveBeenCalledOnce();
+  });
+
+  it('does not close, stop, or quit when dirty editor resolution is cancelled', async () => {
+    const harness = makeHarness({ localTerminals: 0, sshSessions: 0 });
+    harness.requestClosePreparation.mockResolvedValue('cancel');
+
+    await harness.controller.handleClose(harness.window);
+
+    expect(harness.window.close).not.toHaveBeenCalled();
+    expect(harness.stopAll).not.toHaveBeenCalled();
+    expect(harness.quit).not.toHaveBeenCalled();
+  });
+
+  it('does not stop active work when renderer close preparation is cancelled', async () => {
+    const harness = makeHarness();
+    harness.chooseDecision.mockResolvedValue('stop');
+    harness.requestClosePreparation.mockResolvedValue('cancel');
+
+    await harness.controller.handleClose(harness.window);
+
+    expect(harness.stopAll).not.toHaveBeenCalled();
+    expect(harness.quit).not.toHaveBeenCalled();
+  });
+
+  it('waits for renderer close preparation before stopping active work', async () => {
+    const harness = makeHarness();
+    const preparation = deferred<'saved'>();
+    harness.chooseDecision.mockResolvedValue('stop');
+    harness.requestClosePreparation.mockReturnValue(preparation.promise);
+
+    const closing = harness.controller.handleClose(harness.window);
+    await vi.waitFor(() => expect(harness.requestClosePreparation).toHaveBeenCalledOnce());
+    expect(harness.stopAll).not.toHaveBeenCalled();
+
+    preparation.resolve('saved');
+    await closing;
+    expect(harness.stopAll).toHaveBeenCalledOnce();
+    expect(harness.quit).toHaveBeenCalledOnce();
+  });
+
+  it('does not stop or quit from the tray when editor resolution is cancelled', async () => {
+    const harness = makeHarness();
+    harness.requestClosePreparation.mockResolvedValue('cancel');
+
+    await harness.controller.stopFromTray();
+
+    expect(harness.stopAll).not.toHaveBeenCalled();
+    expect(harness.quit).not.toHaveBeenCalled();
+  });
+
+  it('exposes the update-install preparation gate without stopping resources itself', async () => {
+    const harness = makeHarness();
+    harness.requestClosePreparation.mockResolvedValue('discarded');
+
+    await expect(harness.controller.prepareForClose('update-install')).resolves.toBe(true);
+
+    expect(harness.requestClosePreparation).toHaveBeenCalledWith('update-install');
+    expect(harness.stopAll).not.toHaveBeenCalled();
+    expect(harness.quit).not.toHaveBeenCalled();
+  });
+
+  it('reports a cancelled update-install preparation gate', async () => {
+    const harness = makeHarness();
+    harness.requestClosePreparation.mockResolvedValue('cancel');
+
+    await expect(harness.controller.prepareForClose('update-install')).resolves.toBe(false);
+
+    expect(harness.stopAll).not.toHaveBeenCalled();
+    expect(harness.quit).not.toHaveBeenCalled();
   });
 });
 
@@ -252,6 +355,9 @@ describe('tray stop confirmation', () => {
         on: vi.fn(),
         whenReady: vi.fn(() => Promise.resolve()),
         setPath: vi.fn(),
+      },
+      protocol: {
+        registerSchemesAsPrivileged: vi.fn(),
       },
       dialog: {
         showMessageBox,

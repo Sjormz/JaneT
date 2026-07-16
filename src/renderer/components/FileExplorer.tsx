@@ -9,6 +9,7 @@ import { refreshCoordinator, RefreshReason, useRefreshTask } from '../refreshCoo
 import { beginTerminalPathDrag, endTerminalPathDrag } from '../terminalPathDrag';
 import TerminalPathCopyButton from './TerminalPathCopyButton';
 import Tooltip from './Tooltip';
+import type { EditorResource } from '../editorDocuments';
 
 interface NavigationState {
   currentPath: string;
@@ -18,6 +19,7 @@ interface NavigationState {
 interface FileExplorerProps {
   source: FileExplorerSource;
   onCopyTerminalPath?: (path: string) => Promise<void>;
+  onOpenFile?: (resource: EditorResource) => void;
 }
 
 interface LoadedDirectory {
@@ -28,6 +30,7 @@ interface LoadedDirectory {
 
 interface DirectorySnapshot extends LoadedDirectory {
   entries: FileEntry[];
+  connectionId?: string;
 }
 
 interface DirectoryError {
@@ -41,7 +44,7 @@ interface DirectoryRequest {
   path: string;
 }
 
-export default function FileExplorer({ source, onCopyTerminalPath }: FileExplorerProps) {
+export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }: FileExplorerProps) {
   const [navigationBySource, setNavigationBySource] = useState<Record<string, NavigationState>>(() => ({
     [source.key]: defaultNavigation(source),
   }));
@@ -107,6 +110,7 @@ export default function FileExplorer({ source, onCopyTerminalPath }: FileExplore
     try {
       let result: FileEntry[];
       let resolvedPath = requestedPath;
+      let connectionId: string | undefined;
       if (source.kind === 'ssh') {
         const listing = await window.janet.sshListDir({
           sessionId: source.sessionId,
@@ -115,6 +119,7 @@ export default function FileExplorer({ source, onCopyTerminalPath }: FileExplore
         });
         result = listing.entries;
         resolvedPath = listing.resolvedPath;
+        connectionId = listing.connectionId;
       } else {
         result = await window.janet.fsListDir({ dirPath: requestedPath, showHidden });
       }
@@ -141,11 +146,12 @@ export default function FileExplorer({ source, onCopyTerminalPath }: FileExplore
       setSnapshot((current) => {
         if (
           current?.sourceKey === sourceKey && current.path === resolvedPath &&
-          current.showHidden === showHidden && fileEntriesEqual(current.entries, result)
+          current.showHidden === showHidden && current.connectionId === connectionId &&
+          fileEntriesEqual(current.entries, result)
         ) {
           return current;
         }
-        return { sourceKey, path: resolvedPath, showHidden, entries: result };
+        return { sourceKey, path: resolvedPath, showHidden, entries: result, connectionId };
       });
     } catch (loadError) {
       if (
@@ -373,8 +379,30 @@ export default function FileExplorer({ source, onCopyTerminalPath }: FileExplore
 
           return (
             <div key={entry.path} className="explorer-item-row">
-              <Tooltip label={`${entry.name} · Drag into a terminal to paste its path`} placement="right">
-                <div className="explorer-item file" {...dragProps}>{content}</div>
+              <Tooltip label={`${entry.name} · Open in editor or drag into a terminal`} placement="right">
+                <button
+                  type="button"
+                  className="explorer-item file"
+                  aria-label={`Open file ${entry.name}`}
+                  onClick={() => {
+                    if (!onOpenFile) return;
+                    if (source.kind === 'ssh') {
+                      if (!snapshot?.connectionId) return;
+                      onOpenFile({
+                        kind: 'ssh',
+                        sessionId: source.sessionId,
+                        connectionId: snapshot.connectionId,
+                        path: entry.path,
+                        label: source.label,
+                      });
+                    } else {
+                      onOpenFile({ kind: 'local', path: entry.path });
+                    }
+                  }}
+                  {...dragProps}
+                >
+                  {content}
+                </button>
               </Tooltip>
               <TerminalPathCopyButton
                 path={entry.path}

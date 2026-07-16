@@ -10,6 +10,10 @@ const rendererMocks = vi.hoisted(() => ({
   titlebarProps: null as any,
   sidebarProps: null as any,
   verticalTabBarProps: null as any,
+  prepareForCloseHandler: null as null | ((request: {
+    requestId: string;
+    reason: 'window-close' | 'app-quit' | 'tray-stop' | 'update-install';
+  }) => void | Promise<void>),
   sshConnectionClosedHandler: null as null | ((event: { id: string; reason: string }) => void),
   sshRetryHandlers: new Map<string, (
     termId: string,
@@ -26,7 +30,20 @@ vi.mock('../../src/renderer/components/Titlebar', () => ({
 vi.mock('../../src/renderer/components/VerticalTabBar', () => ({
   default: (props: unknown) => {
     rendererMocks.verticalTabBarProps = props;
-    return <div data-testid="vertical-tab-bar" />;
+    const typedProps = props as any;
+    return (
+      <div data-testid="vertical-tab-bar">
+        {typedProps.tabs.map((tab: { id: string; title: string }) => (
+          <span
+            key={tab.id}
+            data-testid={`outer-tab-${tab.id}`}
+            data-dirty={typedProps.dirtyTabIds?.has(tab.id) ? 'true' : 'false'}
+          >
+            {tab.title}
+          </span>
+        ))}
+      </div>
+    );
   },
 }));
 vi.mock('../../src/renderer/components/Sidebar', () => ({
@@ -40,6 +57,12 @@ vi.mock('../../src/renderer/components/Sidebar', () => ({
         {props.expanded && (
           <div className="workspace-tools-panel">
             <button type="button">Mock tool content</button>
+            <button
+              type="button"
+              onClick={() => props.onOpenFile({ kind: 'local', path: '/home/test/sample.ts' })}
+            >
+              Open sample file
+            </button>
           </div>
         )}
       </aside>
@@ -67,6 +90,20 @@ vi.mock('../../src/renderer/components/ShortcutEditor', () => ({
 }));
 vi.mock('../../src/renderer/components/UpdateBanner', () => ({
   default: () => null,
+}));
+vi.mock('../../src/renderer/components/MonacoEditor', () => ({
+  default: ({ document, onChange, onSave }: any) => (
+    <div data-testid={`mock-editor-${document.key}`}>
+      <textarea
+        aria-label={`Editing ${document.title}`}
+        value={document.content}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+      <button type="button" onClick={onSave}>Save from editor</button>
+    </div>
+  ),
+  disposeEditorDocumentModel: vi.fn(),
+  disposeAllEditorDocumentModels: vi.fn(),
 }));
 vi.mock('../../src/renderer/components/TerminalPane', async () => {
   const React = await import('react');
@@ -166,6 +203,7 @@ beforeEach(() => {
   rendererMocks.titlebarProps = null;
   rendererMocks.sidebarProps = null;
   rendererMocks.verticalTabBarProps = null;
+  rendererMocks.prepareForCloseHandler = null;
   rendererMocks.sshConnectionClosedHandler = null;
   rendererMocks.sshRetryHandlers.clear();
   Object.defineProperty(document, 'startViewTransition', {
@@ -177,6 +215,35 @@ beforeEach(() => {
   });
   (window as any).janet = {
     fsGetHome: vi.fn().mockResolvedValue('/home/test'),
+    fsReadTextFile: vi.fn().mockResolvedValue({
+      ok: true,
+      value: {
+        requestedPath: '/home/test/sample.ts',
+        resolvedPath: '/home/test/sample.ts',
+        content: 'export const answer = 42;\n',
+        encoding: 'utf8',
+        hasUtf8Bom: false,
+        revision: {
+          token: 'a'.repeat(64),
+          size: 26,
+          mtime: '2026-07-16T00:00:00.000Z',
+          fileId: '1:2',
+        },
+      },
+    }),
+    fsWriteTextFile: vi.fn().mockResolvedValue({
+      ok: true,
+      value: {
+        requestedPath: '/home/test/sample.ts',
+        resolvedPath: '/home/test/sample.ts',
+        revision: {
+          token: 'b'.repeat(64),
+          size: 26,
+          mtime: '2026-07-16T00:01:00.000Z',
+          fileId: '1:2',
+        },
+      },
+    }),
     getSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] }),
     setSettings: vi.fn().mockResolvedValue(undefined),
     terminalCreate: vi.fn().mockResolvedValue(undefined),
@@ -198,6 +265,15 @@ beforeEach(() => {
         }
       };
     }),
+    onPrepareForClose: vi.fn((callback: typeof rendererMocks.prepareForCloseHandler) => {
+      rendererMocks.prepareForCloseHandler = callback;
+      return () => {
+        if (rendererMocks.prepareForCloseHandler === callback) {
+          rendererMocks.prepareForCloseHandler = null;
+        }
+      };
+    }),
+    resolvePrepareForClose: vi.fn().mockResolvedValue(true),
     checkForUpdates: vi.fn().mockResolvedValue(undefined),
   };
 });
@@ -205,6 +281,26 @@ beforeEach(() => {
 async function confirmPendingAction(name: RegExp) {
   const dialog = await screen.findByRole('alertdialog');
   fireEvent.click(within(dialog).getByRole('button', { name }));
+}
+
+async function openSampleEditor(): Promise<HTMLTextAreaElement> {
+  const openButton = await screen.findByRole('button', { name: 'Open sample file' });
+  fireEvent.click(openButton);
+  const editor = await screen.findByRole('textbox', { name: 'Editing sample.ts' });
+  await waitFor(() => {
+    expect(window.janet.fsReadTextFile).toHaveBeenCalledWith({ filePath: '/home/test/sample.ts' });
+  });
+  return editor as HTMLTextAreaElement;
+}
+
+async function requestWorkspaceClose(
+  requestId: string,
+  reason: 'window-close' | 'app-quit' | 'tray-stop' | 'update-install' = 'window-close',
+) {
+  await waitFor(() => expect(rendererMocks.prepareForCloseHandler).toBeTypeOf('function'));
+  await act(async () => {
+    await rendererMocks.prepareForCloseHandler!({ requestId, reason });
+  });
 }
 
 describe('split panes in the app', () => {
@@ -1426,4 +1522,161 @@ describe('split panes in the app', () => {
     // The active tab was split — root should now be a split, not a leaf.
     expect(lastSession.tabs[0].root.type).toBe('split');
   }, 5000);
+});
+
+describe('editor documents in the app', () => {
+  it('opens a local file from the sidebar and marks its terminal tab dirty after editing', async () => {
+    render(<App />);
+
+    const editor = await openSampleEditor();
+    expect(editor).toHaveValue('export const answer = 42;\n');
+    expect(screen.getByRole('tab', { name: 'sample.ts' })).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.change(editor, { target: { value: 'export const answer = 43;\n' } });
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /sample\.ts, unsaved changes/i })).toBeInTheDocument();
+      const tabId = rendererMocks.verticalTabBarProps.tabs[0].id;
+      expect(screen.getByTestId(`outer-tab-${tabId}`)).toHaveAttribute('data-dirty', 'true');
+      expect(rendererMocks.verticalTabBarProps.dirtyTabIds.has(tabId)).toBe(true);
+    });
+  });
+
+  it("keeps a dirty file open on Cancel and closes it on Don't Save", async () => {
+    render(<App />);
+
+    const editor = await openSampleEditor();
+    fireEvent.change(editor, { target: { value: 'discard me\n' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close sample.ts' }));
+
+    let dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('Save changes to sample.ts?')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('textbox', { name: 'Editing sample.ts' })).toHaveValue('discard me\n');
+    expect(window.janet.fsWriteTextFile).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close sample.ts' }));
+    dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: "Don't Save" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('tab', { name: /sample\.ts/i })).not.toBeInTheDocument();
+      expect(screen.getByTestId(/terminal-/)).toBeInTheDocument();
+    });
+    expect(window.janet.fsWriteTextFile).not.toHaveBeenCalled();
+  });
+
+  it('saves a dirty file before closing it when Save is chosen', async () => {
+    render(<App />);
+
+    const editor = await openSampleEditor();
+    fireEvent.change(editor, { target: { value: 'export const saved = true;\n' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close sample.ts' }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(window.janet.fsWriteTextFile).toHaveBeenCalledWith(expect.objectContaining({
+        requestedPath: '/home/test/sample.ts',
+        resolvedPath: '/home/test/sample.ts',
+        content: 'export const saved = true;\n',
+      }));
+      expect(screen.queryByRole('tab', { name: /sample\.ts/i })).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps a dirty terminal workspace on Cancel and tears it down on explicit discard', async () => {
+    render(<App />);
+
+    const terminal = await screen.findByTestId(/terminal-/);
+    const terminalId = terminal.textContent!;
+    const editor = await openSampleEditor();
+    fireEvent.change(editor, { target: { value: 'unsaved workspace change\n' } });
+    const tabId = rendererMocks.verticalTabBarProps.tabs[0].id;
+
+    act(() => rendererMocks.verticalTabBarProps.onCloseTab(tabId));
+    let dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByRole('button', { name: 'Discard and close' })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.getByRole('textbox', { name: 'Editing sample.ts' })).toHaveValue('unsaved workspace change\n');
+    expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
+    expect(rendererMocks.verticalTabBarProps.tabs.some((tab: { id: string }) => tab.id === tabId)).toBe(true);
+
+    act(() => rendererMocks.verticalTabBarProps.onCloseTab(tabId));
+    dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard and close' }));
+
+    await waitFor(() => {
+      expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
+      expect(screen.queryByRole('tab', { name: /sample\.ts/i })).not.toBeInTheDocument();
+      expect(rendererMocks.verticalTabBarProps.tabs.some((tab: { id: string }) => tab.id === tabId)).toBe(false);
+    });
+    expect(window.janet.fsWriteTextFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('unsaved editor shutdown handshake', () => {
+  it('resolves close preparation as saved immediately when no file is dirty', async () => {
+    render(<App />);
+
+    await requestWorkspaceClose('clean-close', 'app-quit');
+
+    await waitFor(() => {
+      expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
+        requestId: 'clean-close',
+        resolution: 'saved',
+      });
+    });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('offers Cancel, Discard, and Save all for dirty files and reports each resolution', async () => {
+    render(<App />);
+
+    const editor = await openSampleEditor();
+    fireEvent.change(editor, { target: { value: 'dirty during shutdown\n' } });
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /sample\.ts, unsaved changes/i })).toBeInTheDocument();
+    });
+
+    await requestWorkspaceClose('cancel-close', 'window-close');
+    let dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByRole('button', { name: 'Save all and close' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Discard changes and close' })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => {
+      expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
+        requestId: 'cancel-close',
+        resolution: 'cancel',
+      });
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+
+    await requestWorkspaceClose('discard-close', 'tray-stop');
+    dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard changes and close' }));
+    await waitFor(() => {
+      expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
+        requestId: 'discard-close',
+        resolution: 'discarded',
+      });
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+    expect(window.janet.fsWriteTextFile).not.toHaveBeenCalled();
+
+    await requestWorkspaceClose('save-close', 'update-install');
+    dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save all and close' }));
+    await waitFor(() => {
+      expect(window.janet.fsWriteTextFile).toHaveBeenCalledWith(expect.objectContaining({
+        content: 'dirty during shutdown\n',
+      }));
+      expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
+        requestId: 'save-close',
+        resolution: 'saved',
+      });
+    });
+  });
 });

@@ -10,6 +10,8 @@ interface ConfirmationDialogProps {
   onConfirm: () => void;
   onCancel: () => void;
   cancelLabel?: string;
+  secondaryLabel?: string;
+  onSecondary?: () => void;
   destructive?: boolean;
   busy?: boolean;
   fallbackFocus?: () => HTMLElement | null;
@@ -23,6 +25,8 @@ export default function ConfirmationDialog({
   onConfirm,
   onCancel,
   cancelLabel = 'Cancel',
+  secondaryLabel,
+  onSecondary,
   destructive = true,
   busy = false,
   fallbackFocus,
@@ -81,6 +85,16 @@ export default function ConfirmationDialog({
           >
             {cancelLabel}
           </button>
+          {secondaryLabel && onSecondary && (
+            <button
+              type="button"
+              className="confirmation-dialog-button secondary"
+              disabled={busy}
+              onClick={onSecondary}
+            >
+              {secondaryLabel}
+            </button>
+          )}
           <button
             type="button"
             className={`confirmation-dialog-button confirm${destructive ? ' danger' : ''}`}

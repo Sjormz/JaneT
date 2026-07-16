@@ -180,6 +180,9 @@ test('maximizes and restores a terminal pane in Electron', async () => {
     // Maximizing a pane also makes it the action target. After restoring the
     // layout, pane shortcuts must still act on the pane the user just chose.
     await page.keyboard.press('Control+Shift+W');
+    const closePaneDialog = page.getByRole('alertdialog', { name: 'Close right?' });
+    await expect(closePaneDialog).toBeVisible();
+    await closePaneDialog.getByRole('button', { name: 'Close pane' }).click();
     await expect(page.locator('.terminal-leaf')).toHaveCount(1);
     await expect(page.getByLabel('left — Local terminal pane')).toBeVisible();
   } finally {
@@ -333,7 +336,7 @@ test('refreshes external branch and file changes without a manual reload', async
     await expect(app.page.locator('.status-git')).toContainText('feature/heartbeat', { timeout: 8_000 });
     await expect(app.page.locator('.explorer-tree')).toContainText('external.txt', { timeout: 8_000 });
 
-    await app.page.getByRole('button', { name: 'Source Control' }).click();
+    await app.page.getByRole('tab', { name: 'Source Control' }).click();
     await expect(app.page.locator('.git-repo-path')).toContainText('feature/heartbeat', { timeout: 8_000 });
     await expect(app.page.getByRole('button', { name: 'Current branch feature/heartbeat' })).toBeVisible({ timeout: 8_000 });
   } finally {

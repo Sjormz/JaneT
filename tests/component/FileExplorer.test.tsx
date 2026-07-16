@@ -27,7 +27,12 @@ const sshSource = (sessionId: string, ready = true, host = 'box.local') => ({
   connectionState: ready ? 'ready' as const : 'connecting' as const,
 });
 
-const remoteListing = (resolvedPath: string, entries: Array<ReturnType<typeof file>>) => ({
+const remoteListing = (
+  resolvedPath: string,
+  entries: Array<ReturnType<typeof file>>,
+  connectionId = 'connection-current',
+) => ({
+  connectionId,
   resolvedPath,
   entries,
 });
@@ -154,15 +159,61 @@ describe('FileExplorer live refresh', () => {
       .mockResolvedValueOnce([directory('src'), file('README.md')])
       .mockResolvedValueOnce([]);
 
-    const view = render(<FileExplorer source={localSource('/repo')} />);
+    const onOpenFile = vi.fn();
+    const view = render(
+      <FileExplorer source={localSource('/repo')} onOpenFile={onOpenFile} />,
+    );
     const folder = await screen.findByRole('button', { name: 'Open folder src' });
 
-    expect(screen.queryByRole('button', { name: 'README.md' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open file README.md' })).toBeInTheDocument();
     fireEvent.click(folder);
 
     await waitFor(() => {
       expect(fsListDir).toHaveBeenLastCalledWith({ dirPath: '/repo/src', showHidden: false });
     });
+    expect(onOpenFile).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it('opens a local file with its absolute Explorer path', async () => {
+    fsListDir.mockResolvedValueOnce([file('README.md')]);
+    const onOpenFile = vi.fn();
+
+    const view = render(
+      <FileExplorer source={localSource('/repo')} onOpenFile={onOpenFile} />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Open file README.md' }));
+
+    expect(onOpenFile).toHaveBeenCalledOnce();
+    expect(onOpenFile).toHaveBeenCalledWith({ kind: 'local', path: '/repo/README.md' });
+    expect(fsListDir).toHaveBeenCalledTimes(1);
+    view.unmount();
+  });
+
+  it('opens an SSH file with the exact session and connection identity from its listing', async () => {
+    sshListDir.mockResolvedValueOnce(remoteListing('/srv/project', [{
+      ...file('remote.ts'),
+      path: '/srv/project/remote.ts',
+    }], 'transport-connection-42'));
+    const onOpenFile = vi.fn();
+
+    const view = render(
+      <FileExplorer
+        source={sshSource('ssh-editor', true, 'editor.example')}
+        onOpenFile={onOpenFile}
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Open file remote.ts' }));
+
+    expect(onOpenFile).toHaveBeenCalledOnce();
+    expect(onOpenFile).toHaveBeenCalledWith({
+      kind: 'ssh',
+      sessionId: 'ssh-editor',
+      connectionId: 'transport-connection-42',
+      path: '/srv/project/remote.ts',
+      label: 'editor.example',
+    });
+    expect(fsListDir).not.toHaveBeenCalled();
     view.unmount();
   });
 

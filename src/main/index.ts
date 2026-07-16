@@ -7,11 +7,30 @@ import { FileSystemManager } from './filesystem';
 import { GitManager } from './git';
 import { SettingsManager } from './settings';
 import type { SSHListDirParams } from '../shared/files';
+import type {
+  ReadLocalTextFileRequest,
+  ReadSSHTextFileRequest,
+  TextFileResult,
+  TextFileSnapshot,
+  TextFileWriteValue,
+  WriteLocalTextFileRequest,
+  WriteSSHTextFileRequest,
+} from '../shared/textFiles';
 import {
+  createRendererProtocolHandler,
+  RENDERER_ORIGIN,
+  RENDERER_SCHEME,
+  RENDERER_SCHEME_REGISTRATION,
+} from './rendererProtocol';
+import {
+  WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL,
+  WorkspaceClosePreparationCoordinator,
   WorkspaceLifecycleController,
   type WorkspaceActivity,
   type WorkspaceCloseDecision,
+  type WorkspaceCloseReason,
   type WorkspaceClosePrompt,
+  type WorkspacePrepareForCloseDecision,
   type WorkspaceWindow,
 } from './workspaceLifecycle';
 
@@ -26,6 +45,9 @@ let workspaceLifecycle: WorkspaceLifecycleController;
 let backgroundTray: electron.Tray | null = null;
 let allowWindowCloseOnce = false;
 let quittingAfterWorkspaceStop = false;
+const closePreparation = new WorkspaceClosePreparationCoordinator();
+
+electron.protocol.registerSchemesAsPrivileged([RENDERER_SCHEME_REGISTRATION]);
 
 const e2eEventsPath = process.env.JANET_E2E_EVENTS_PATH;
 const e2eRemoteDebuggingPort = process.env.JANET_E2E_REMOTE_DEBUGGING_PORT;
@@ -149,6 +171,37 @@ async function stopWorkspaceResources(): Promise<void> {
   sshManager.cleanup();
 }
 
+async function requestRendererClosePreparation(
+  reason: WorkspaceCloseReason,
+): Promise<WorkspacePrepareForCloseDecision> {
+  try {
+    const window = mainWindow;
+    if (
+      !window
+      || window.isDestroyed()
+      || window.webContents.isDestroyed()
+      || window.webContents.isLoadingMainFrame()
+    ) {
+      return 'cancel';
+    }
+
+    // A tray or OS-level quit request can arrive while JaneT is hidden. Make
+    // the renderer visible before asking it to resolve dirty editors so its
+    // confirmation cannot be stranded in an invisible window.
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+
+    const resolution = await closePreparation.request(window.webContents, reason);
+    recordE2eEvent({ type: 'workspace:prepare-for-close', reason, resolution });
+    return resolution;
+  } catch (error) {
+    console.error('[workspace] renderer close preparation unavailable:', error);
+    recordE2eEvent({ type: 'workspace:prepare-for-close', reason, resolution: 'cancel' });
+    return 'cancel';
+  }
+}
+
 async function prepareForUpdateInstall(): Promise<boolean> {
   const activity = await getWorkspaceActivity();
   if (activity.localTerminals > 0 || activity.sshSessions > 0) {
@@ -168,6 +221,7 @@ async function prepareForUpdateInstall(): Promise<boolean> {
     if (response !== 0) return false;
   }
 
+  if (!await workspaceLifecycle.prepareForClose('update-install')) return false;
   await stopWorkspaceResources();
   return true;
 }
@@ -342,7 +396,7 @@ function createWindow() {
       console.error(`[renderer] did-fail-load ${code} ${desc} ${url}`);
     });
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+    mainWindow.loadURL(`${RENDERER_ORIGIN}/index.html`);
   }
 
   window.on('closed', () => {
@@ -368,6 +422,13 @@ function createWindow() {
 
 electron.app.whenReady().then(() => {
   if (!hasSingleInstanceLock) return;
+  if (process.env.NODE_ENV !== 'development') {
+    const rendererRoot = path.join(__dirname, '../renderer');
+    electron.protocol.handle(
+      RENDERER_SCHEME,
+      createRendererProtocolHandler(rendererRoot, (fileUrl) => electron.net.fetch(fileUrl)),
+    );
+  }
   terminalManager = new TerminalManager();
   fsManager = new FileSystemManager();
   gitManager = new GitManager();
@@ -402,6 +463,7 @@ electron.app.whenReady().then(() => {
   workspaceLifecycle = new WorkspaceLifecycleController({
     getActivity: getWorkspaceActivity,
     chooseDecision: chooseWorkspaceCloseDecision,
+    requestClosePreparation: requestRendererClosePreparation,
     stopAll: stopWorkspaceResources,
     quit: () => {
       quittingAfterWorkspaceStop = true;
@@ -559,6 +621,20 @@ function registerIpcHandlers() {
     return await sshManager.listDir(params?.sessionId, params?.remotePath, params?.showHidden);
   });
 
+  handle('ssh:readTextFile', async (
+    event,
+    request: ReadSSHTextFileRequest,
+  ): Promise<TextFileResult<TextFileSnapshot>> => {
+    return await sshManager.readTextFile(request);
+  });
+
+  handle('ssh:writeTextFile', async (
+    event,
+    request: WriteSSHTextFileRequest,
+  ): Promise<TextFileResult<TextFileWriteValue>> => {
+    return await sshManager.writeTextFile(request);
+  });
+
   handle('ssh:disconnect', async (event, { id }) => {
     await sshManager.disconnect(id);
   });
@@ -582,6 +658,20 @@ function registerIpcHandlers() {
 
   handle('fs:stat', async (event, { filePath }) => {
     return await fsManager.stat(filePath);
+  });
+
+  handle('fs:readTextFile', async (
+    event,
+    request: ReadLocalTextFileRequest,
+  ): Promise<TextFileResult<TextFileSnapshot>> => {
+    return await fsManager.readTextFile(request);
+  });
+
+  handle('fs:writeTextFile', async (
+    event,
+    request: WriteLocalTextFileRequest,
+  ): Promise<TextFileResult<TextFileWriteValue>> => {
+    return await fsManager.writeTextFile(request);
   });
 
   // === Git IPC ===
@@ -654,6 +744,10 @@ function registerIpcHandlers() {
 
   handle('app:copyText', (event, text: unknown) => {
     return copyTextToClipboard(text);
+  });
+
+  handle(WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL, (event, resolution: unknown) => {
+    return closePreparation.resolve(event.sender, resolution);
   });
 
   // === Window controls (for custom titlebar) ===

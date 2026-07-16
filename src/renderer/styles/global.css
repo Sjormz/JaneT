@@ -958,6 +958,12 @@ html, body, #root {
 .vtab-item:hover .vtab-close,
 .vtab-item:focus-within .vtab-close,
 .vtab-close:focus-visible { opacity: 1; }
+.vtab-dirty-marker {
+  margin-left: 6px;
+  color: var(--yellow);
+  font-size: 8px;
+  vertical-align: middle;
+}
 .vtab-close:hover {
   background: color-mix(in srgb, var(--red) 20%, transparent);
   color: var(--red);
@@ -996,6 +1002,157 @@ html, body, #root {
   overflow: hidden;
   position: relative;
   background: var(--bg-primary);
+}
+
+/* === Terminal-owned document workspace === */
+.workspace-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-canvas);
+}
+.document-tabbar {
+  flex: 0 0 34px;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-panel);
+}
+.document-tabs {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.document-tab-shell {
+  min-width: 0;
+  max-width: 220px;
+  display: flex;
+  align-items: stretch;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--surface-panel);
+}
+.document-tab-shell.active {
+  background: var(--surface-canvas);
+}
+.document-tab {
+  min-width: 0;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 0;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--surface-panel);
+  color: var(--text-tertiary);
+  font: 500 11px/1 var(--font-ui);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.document-tab.file {
+  flex: 1;
+  border-right: 0;
+  padding-right: 4px;
+}
+.document-tab:hover,
+.document-tab-shell:focus-within .document-tab {
+  color: var(--text-primary);
+  background: var(--control-hover);
+}
+.document-tab.active {
+  color: var(--text-primary);
+  background: var(--surface-canvas);
+  box-shadow: inset 0 2px 0 var(--text-accent);
+}
+.document-tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.document-dirty-marker {
+  color: var(--yellow);
+  font-size: 8px;
+  line-height: 1;
+}
+.document-tab-close,
+.document-save-button {
+  flex: 0 0 28px;
+  width: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.document-tab-close:hover {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+}
+.document-save-button {
+  flex-basis: 34px;
+  width: 34px;
+  border-left: 1px solid var(--border-subtle);
+}
+.document-save-button:hover:not(:disabled) {
+  color: var(--text-accent);
+  background: var(--control-hover);
+}
+.document-save-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.workspace-content-surface {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  background: var(--surface-canvas);
+}
+.monaco-editor-host {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.editor-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px;
+  color: var(--text-secondary);
+  text-align: center;
+  font-size: 12px;
+}
+.editor-state.error strong { color: var(--text-primary); }
+.editor-state.error .icon { color: var(--red); }
+.editor-state button {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-accent);
+  cursor: pointer;
+  font: 600 12px/1 var(--font-ui);
+}
+.editor-save-error {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--red) 55%, var(--border-subtle));
+  background: color-mix(in srgb, var(--red) 10%, var(--surface-panel));
+  color: var(--red);
+  font-size: 11px;
 }
 .terminal-container {
   width: 100%;
@@ -1882,7 +2039,14 @@ html, body, #root {
   padding: 3px 42px 3px 28px;
   gap: 8px;
   font-size: 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
 }
+.git-file-item[aria-disabled="true"] { cursor: not-allowed; }
 .terminal-path-copy-button {
   position: absolute;
   top: 50%;
