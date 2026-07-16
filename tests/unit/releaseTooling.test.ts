@@ -117,8 +117,40 @@ describe('release tooling', () => {
     expect(windowsRuntime.platform).toBe('win32');
     expect(windowsRuntime.nodePtyRoot).toContain(path.join('app.asar.unpacked', 'node_modules', 'node-pty'));
     expect(windowsRuntime.nodePtyModule).toContain(path.join('app.asar', 'node_modules', 'node-pty'));
+    expect(windowsRuntime.nodePtyModule).not.toContain('app.asar.unpacked');
     expect(PACKAGED_RUNTIME_TIMEOUT_MS).toBe(60_000);
     expect(macPackagedRuntimes('/release').map((runtime: { arch: string }) => runtime.arch)).toEqual(['x64', 'arm64']);
+  });
+
+  it('patches and verifies node-pty Windows worker resolution from app.asar', async () => {
+    const {
+      APP_ASAR_WORKER_REWRITE,
+      patchNodePtyWindowsWorkerSource,
+    } = await loadScript('patch-node-pty-windows-worker.mjs');
+    const { validateWindowsPtyWorker } = await loadScript('verify-release-artifacts.mjs');
+    const legacy = "var scriptPath = __dirname.replace('node_modules.asar', 'node_modules.asar.unpacked');";
+    const patched = patchNodePtyWindowsWorkerSource(legacy);
+
+    expect(patched).toContain(APP_ASAR_WORKER_REWRITE);
+    expect(patchNodePtyWindowsWorkerSource(patched)).toBe(patched);
+    expect(() => patchNodePtyWindowsWorkerSource('unknown worker implementation')).toThrow(/expected path resolver/);
+
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-windows-worker-'));
+    const nodePtyRoot = path.join(fixtureRoot, 'node-pty');
+    const workerPath = path.join(nodePtyRoot, 'lib', 'windowsConoutConnection.js');
+    try {
+      fs.mkdirSync(path.dirname(workerPath), { recursive: true });
+      fs.writeFileSync(workerPath, legacy);
+      expect(() => validateWindowsPtyWorker({ nodePtyRoot }))
+        .toThrow(/cannot resolve app\.asar\.unpacked/);
+      fs.writeFileSync(workerPath, patched);
+      expect(() => validateWindowsPtyWorker({ nodePtyRoot })).not.toThrow();
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+
+    const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+    expect(packageJson.scripts.postinstall).toContain('patch-node-pty-windows-worker.mjs');
   });
 
   it.skipIf(process.platform === 'win32')('validates both macOS native PTY layouts and helper execute bits', async () => {
@@ -179,7 +211,7 @@ describe('release tooling', () => {
     const ready = '__JANET_PACKAGED_PTY_READY__';
     fs.mkdirSync(fakePtyRoot, { recursive: true });
     fs.mkdirSync(fakePtyModule, { recursive: true });
-    fs.writeFileSync(path.join(fakePtyModule, 'index.js'), `
+    const fakePtySource = `
 module.exports = {
   spawn(executable, args, options) {
     const requestedWindows = process.argv[4] === 'win32';
@@ -239,7 +271,8 @@ module.exports = {
     return terminal;
   },
 };
-`);
+`;
+    fs.writeFileSync(path.join(fakePtyModule, 'index.js'), fakePtySource);
 
     try {
       for (const platform of ['linux', 'win32']) {

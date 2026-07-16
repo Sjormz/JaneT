@@ -10,6 +10,7 @@ const projectRoot = path.resolve(__dirname, '..');
 const PACKAGED_PTY_MARKER = '__JANET_PACKAGED_PTY_OK__';
 const PACKAGED_PTY_READY = '__JANET_PACKAGED_PTY_READY__';
 export const PACKAGED_RUNTIME_TIMEOUT_MS = 60_000;
+const WINDOWS_WORKER_ASAR_REWRITE = ".replace('app.asar', 'app.asar.unpacked')";
 
 export function normalizeReleasePlatform(value) {
   if (value === 'windows' || value === 'win32' || value === 'win') return 'windows';
@@ -50,10 +51,11 @@ export function packagedRuntime(platformValue, releaseRoot, hostArch = process.a
   const platform = normalizeReleasePlatform(platformValue);
   if (platform === 'windows') {
     const appRoot = path.join(releaseRoot, 'win-unpacked');
+    const nodePtyRoot = path.join(appRoot, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty');
     return {
       platform: 'win32',
       executable: path.join(appRoot, 'JaneT.exe'),
-      nodePtyRoot: path.join(appRoot, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty'),
+      nodePtyRoot,
       nodePtyModule: path.join(appRoot, 'resources', 'app.asar', 'node_modules', 'node-pty'),
     };
   }
@@ -109,6 +111,14 @@ export function validateMacPtyLayout(runtime) {
   const helper = requireNonEmptyFile(helperPath, `${runtime.arch} node-pty spawn helper`);
   if ((helper.mode & 0o111) === 0) {
     throw new Error(`Packaged node-pty helper is not executable: ${helperPath}`);
+  }
+}
+
+export function validateWindowsPtyWorker(runtime) {
+  const workerPath = path.join(runtime.nodePtyRoot, 'lib', 'windowsConoutConnection.js');
+  const workerSource = fs.readFileSync(workerPath, 'utf8');
+  if (!workerSource.includes(WINDOWS_WORKER_ASAR_REWRITE)) {
+    throw new Error(`Packaged node-pty Windows worker cannot resolve app.asar.unpacked: ${workerPath}`);
   }
 }
 
@@ -176,6 +186,7 @@ export async function smokePackagedTerminal(platform, releaseRoot) {
   }
 
   const runtime = packagedRuntime(platform, releaseRoot);
+  if (normalizeReleasePlatform(platform) === 'windows') validateWindowsPtyWorker(runtime);
   await smokeTerminalRuntime(runtime);
 }
 
@@ -205,7 +216,6 @@ let terminal;
 let received = '';
 let exitRequested = false;
 const timeout = setTimeout(() => {
-  try { terminal && terminal.kill(); } catch {}
   console.error('packaged PTY timed out: ' + JSON.stringify(received));
   process.exit(2);
 }, 5000);
