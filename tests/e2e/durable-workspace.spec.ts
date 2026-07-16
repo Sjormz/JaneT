@@ -16,7 +16,10 @@ function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
   );
 }
 
-async function launchApp(decision: 'background' | 'stop' | 'cancel'): Promise<{
+async function launchApp(
+  decision: 'background' | 'stop' | 'cancel',
+  extraEnv: NodeJS.ProcessEnv = {},
+): Promise<{
   app: ElectronApplication;
   page: Page;
   userData: string;
@@ -29,6 +32,7 @@ async function launchApp(decision: 'background' | 'stop' | 'cancel'): Promise<{
       NODE_ENV: 'test',
       JANET_E2E_USER_DATA_DIR: userData,
       JANET_E2E_CLOSE_DECISION: decision,
+      ...extraEnv,
     }),
   });
   const page = await app.firstWindow();
@@ -201,7 +205,13 @@ test('allows a real application quit when only idle shells remain', async () => 
   let app: ElectronApplication | undefined;
   let userData: string | undefined;
   try {
-    const launched = await launchApp('cancel');
+    const launched = await launchApp('cancel', process.platform === 'win32' ? {} : {
+      // This assertion needs a genuinely idle shell. Do not inherit user
+      // profiles that can launch prompt helpers such as `gh` in the PTY.
+      SHELL: '/bin/sh',
+      ENV: '',
+      BASH_ENV: '',
+    });
     app = launched.app;
     userData = launched.userData;
 
