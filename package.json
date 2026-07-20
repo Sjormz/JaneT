@@ -1,6 +1,6 @@
 {
   "name": "janet",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A focused cross-platform terminal workspace with SSH, file browsing, Git tools, and durable sessions",
   "desktopName": "janet",
   "main": "dist/main/index.js",
