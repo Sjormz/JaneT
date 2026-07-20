@@ -78,15 +78,31 @@ function removeFixture(directory: string | undefined, prefix: string): void {
   fs.rmSync(resolved, { recursive: true, force: true });
 }
 
+async function renderedEditorLines(editor: Locator): Promise<string[]> {
+  const lines = await editor.locator('.view-line').allTextContents();
+  return lines.map((line) => line.replace(/\u00a0/g, ' '));
+}
+
 async function replaceEditorContent(page: Page, editor: Locator, content: string): Promise<void> {
   const selectAll = process.platform === 'darwin' ? 'Meta+A' : 'Control+A';
+  await expect.poll(async () => (await renderedEditorLines(editor)).length).toBeGreaterThan(0);
   await editor.locator('.view-lines').click({ position: { x: 80, y: 10 } });
   await page.keyboard.press(selectAll);
   await page.keyboard.press('Backspace');
-  const lines = content.replace(/\n$/, '').split('\n');
-  for (const [index, line] of lines.entries()) {
-    await page.keyboard.type(line);
-    if (index < lines.length - 1 || content.endsWith('\n')) await page.keyboard.press('Enter');
+  await expect.poll(() => renderedEditorLines(editor)).toEqual(['']);
+
+  let typedContent = '';
+  for (const character of content) {
+    // Monaco's native edit context can settle its caret after key dispatch, so
+    // reassert the append position before sending each next real key event.
+    await page.keyboard.press('End');
+    if (character === '\n') {
+      await page.keyboard.press('Enter');
+    } else {
+      await page.keyboard.type(character);
+    }
+    typedContent += character;
+    await expect.poll(() => renderedEditorLines(editor)).toEqual(typedContent.split('\n'));
   }
 }
 
