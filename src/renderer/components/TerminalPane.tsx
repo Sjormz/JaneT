@@ -26,6 +26,7 @@ import { fileUrlToPath } from '../osc7';
 import { createKittyGraphicsLayer } from '../kittyGraphics';
 import { refreshCoordinator } from '../refreshCoordinator';
 import { TERMINAL_SEARCH_REQUEST_EVENT, TerminalSearchRequestDetail } from '../terminalSearch';
+import { TERMINAL_PASTE_REQUEST_EVENT, TerminalPasteRequestDetail } from '../terminalPaste';
 import {
   canDropTerminalPath,
   endTerminalPathDrag,
@@ -226,6 +227,24 @@ export default function TerminalPane({
     };
     window.addEventListener(TERMINAL_SEARCH_REQUEST_EVENT, openRequestedSearch);
     return () => window.removeEventListener(TERMINAL_SEARCH_REQUEST_EVENT, openRequestedSearch);
+  }, [termId]);
+
+  useEffect(() => {
+    const pasteRequestedSnippet = (event: Event) => {
+      const request = event as CustomEvent<TerminalPasteRequestDetail>;
+      if (request.detail?.termId !== termId || typeof request.detail.text !== 'string' || !request.detail.text) return;
+      const cached = terminalPaneCache.get(termId);
+      if (!cached) return;
+      cached.inputSource.userInput = true;
+      try {
+        cached.term.paste(request.detail.text);
+        cached.term.focus();
+      } catch {
+        cached.inputSource.userInput = false;
+      }
+    };
+    window.addEventListener(TERMINAL_PASTE_REQUEST_EVENT, pasteRequestedSnippet);
+    return () => window.removeEventListener(TERMINAL_PASTE_REQUEST_EVENT, pasteRequestedSnippet);
   }, [termId]);
 
   const syncTerminalSize = (term: Terminal, fitAddon: FitAddon) => {

@@ -357,4 +357,36 @@ describe('SettingsManager', () => {
     expect(loaded.session.tabsOpen).toBe(true);
     expect(loaded.session.sidebarSection).toBe('files');
   });
+
+  it('loads validated flat snippets and drops malformed or duplicate saved entries', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      snippets: [
+        { id: 'deploy', name: ' Deploy ', content: 'npm run deploy' },
+        { id: 'duplicate', name: 'deploy', content: 'duplicate' },
+        { id: 'broken', name: 'Broken' },
+      ],
+    }));
+
+    const { SettingsManager } = await import('../../src/main/settings');
+    expect(new SettingsManager().get().snippets).toEqual([
+      { id: 'deploy', name: 'Deploy', content: 'npm run deploy' },
+    ]);
+  });
+
+  it('normalizes snippets before persisting settings updates', async () => {
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+
+    const saved = manager.set({
+      snippets: [
+        { id: 'deploy', name: ' Deploy ', content: 'npm run deploy' },
+        { id: 'duplicate', name: 'deploy', content: 'duplicate' },
+      ] as any,
+    });
+
+    expect(saved.snippets).toEqual([
+      { id: 'deploy', name: 'Deploy', content: 'npm run deploy' },
+    ]);
+  });
 });

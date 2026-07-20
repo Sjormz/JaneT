@@ -16,6 +16,7 @@ export type KeybindingAction =
   | 'toggle-sidebar'
   | 'font-increase'
   | 'font-decrease'
+  | 'snippets-toggle'
   | 'split-right'
   | 'split-down'
   | 'close-pane';
@@ -28,6 +29,7 @@ export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   'toggle-sidebar': 'Show or hide workspace tools',
   'font-increase': 'Increase terminal text size',
   'font-decrease': 'Decrease terminal text size',
+  'snippets-toggle': 'Open snippets',
   'split-right': 'Split pane right',
   'split-down': 'Split pane below',
   'close-pane': 'Close current pane',
@@ -41,6 +43,7 @@ export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'toggle-sidebar': 'Ctrl+B',
   'font-increase': 'Ctrl+Plus',
   'font-decrease': 'Ctrl+-',
+  'snippets-toggle': 'Ctrl+Shift+P',
   'split-right': 'Ctrl+\\',
   'split-down': 'Ctrl+Shift+\\',
   'close-pane': 'Ctrl+Shift+W',
