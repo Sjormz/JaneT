@@ -4,6 +4,7 @@ import { app, safeStorage } from 'electron';
 import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
 import type { StartupShellDialect } from '../shared/startupCommands';
 import { isStartupShellDialect, sanitizeStartupCommands } from '../shared/startupCommands';
+import { normalizeSnippets, type Snippet } from '../shared/snippets';
 
 // Mirrors `SavedSession` in src/renderer/sessionRestore.ts. Duplicated as a
 // type-only contract because the main process cannot import the renderer
@@ -55,6 +56,7 @@ export type KeybindingAction =
   | 'toggle-sidebar'
   | 'font-increase'
   | 'font-decrease'
+  | 'snippets-toggle'
   | 'split-right'
   | 'split-down'
   | 'close-pane';
@@ -67,6 +69,7 @@ export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'toggle-sidebar': 'Ctrl+B',
   'font-increase': 'Ctrl+Plus',
   'font-decrease': 'Ctrl+-',
+  'snippets-toggle': 'Ctrl+Shift+P',
   'split-right': 'Ctrl+\\',
   'split-down': 'Ctrl+Shift+\\',
   'close-pane': 'Ctrl+Shift+W',
@@ -78,6 +81,7 @@ export interface AppSettings {
   fontFamily: string;
   sidebarSide: 'left' | 'right';
   keybindings: Record<string, string>;
+  snippets: Snippet[];
   sshProfiles: Array<{
     id: string;
     host: string;
@@ -144,6 +148,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
   sidebarSide: 'right',
   keybindings: { ...DEFAULT_KEYBINDINGS },
+  snippets: [],
   sshProfiles: [],
   workspaceTabs: [],
   sshHostKeys: {},
@@ -166,6 +171,7 @@ export class SettingsManager {
   get(): AppSettings {
     return {
       ...this.cache,
+      snippets: this.cache.snippets.map((snippet) => ({ ...snippet })),
       sshProfiles: this.cache.sshProfiles.map((profile) => ({ ...profile })),
       workspaceTabs: this.cache.workspaceTabs
         .map(cloneWorkspaceTabPreset)
@@ -176,7 +182,11 @@ export class SettingsManager {
   }
 
   set(updates: Partial<AppSettings>): AppSettings {
-    this.cache = { ...this.cache, ...updates };
+    this.cache = {
+      ...this.cache,
+      ...updates,
+      snippets: updates.snippets === undefined ? this.cache.snippets : normalizeSnippets(updates.snippets),
+    };
     this.save();
     return this.get();
   }
@@ -284,6 +294,7 @@ export class SettingsManager {
     return {
       ...settings,
       fontFamily: normalizeTerminalFontFamily(settings.fontFamily),
+      snippets: normalizeSnippets(settings.snippets),
       sshHostKeys: isStringRecord(settings.sshHostKeys) ? { ...settings.sshHostKeys } : {},
       sshProfiles: profiles.map((profile) => ({
         id: profile.id,

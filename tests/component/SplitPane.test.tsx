@@ -304,6 +304,35 @@ async function requestWorkspaceClose(
 }
 
 describe('split panes in the app', () => {
+  it('opens snippets with the configured shortcut and routes pasted content to the focused terminal', async () => {
+    const pasted = vi.fn();
+    window.addEventListener('janet:terminal-paste-request', pasted);
+    try {
+      render(<App />);
+      await screen.findByRole('button', { name: /split pane right/i });
+      (await screen.findByTestId(/terminal-/)).focus();
+
+      await waitFor(() => {
+        fireEvent.keyDown(document, { key: 'P', ctrlKey: true, shiftKey: true });
+        expect(screen.getByRole('dialog', { name: 'Snippets' })).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'New snippet' }));
+      fireEvent.change(screen.getByRole('textbox', { name: 'Snippet name' }), { target: { value: 'Follow logs' } });
+      fireEvent.change(screen.getByRole('textbox', { name: 'Snippet content' }), { target: { value: 'docker compose logs -f\n' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save snippet' }));
+
+      fireEvent.keyDown(screen.getByRole('combobox', { name: 'Search snippets' }), { key: 'Enter' });
+      await waitFor(() => expect(pasted).toHaveBeenCalledTimes(1));
+      expect(pasted.mock.calls[0][0].detail.text).toBe('docker compose logs -f');
+      expect(pasted.mock.calls[0][0].detail.text).not.toMatch(/\n$/);
+      expect((window.janet.setSettings as ReturnType<typeof vi.fn>).mock.calls).toContainEqual([
+        { snippets: [expect.objectContaining({ name: 'Follow logs', content: 'docker compose logs -f\n' })] },
+      ]);
+    } finally {
+      window.removeEventListener('janet:terminal-paste-request', pasted);
+    }
+  });
+
   it('keeps existing terminals alive when splitting deeper panes', async () => {
     render(<App />);
 

@@ -6,6 +6,7 @@ import { disposeCachedTerminal } from './components/TerminalPane';
 import Sidebar, { WorkspaceToolSection } from './components/Sidebar';
 import StatusBar from './components/StatusBar';
 import CommandPalette, { CommandAction } from './components/CommandPalette';
+import SnippetPicker from './components/SnippetPicker';
 import ShortcutEditor from './components/ShortcutEditor';
 import ThemeSwitcher from './components/ThemeSwitcher';
 import UpdateBanner from './components/UpdateBanner';
@@ -27,11 +28,13 @@ import { serializePaneTree, restorePaneTree, normalizeSession, SavedSession } fr
 import { GitStatusSummary, summarizeGitStatus } from './gitStatus';
 import { useGitRepository } from './useGitRepository';
 import { requestTerminalSearch } from './terminalSearch';
+import { requestTerminalPaste } from './terminalPaste';
 import { formatTerminalPathForPaste } from './terminalPathDrag';
 import type { FileExplorerSource } from './fileExplorerSource';
 import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
 import { useEditorDocuments } from './useEditorDocuments';
 import { emptyTabDocumentWorkspace, isEditorDocumentDirty, type EditorResource } from './editorDocuments';
+import { snippetTextForPaste, type Snippet } from '../shared/snippets';
 
 function createTabRoot(type: 'local' | 'ssh'): PaneNode {
   return createPaneRoot(type, 1, 'vertical');
@@ -166,6 +169,7 @@ interface InitialAppState {
   fontSize: number;
   fontFamily: string;
   sidebarSide: 'left' | 'right';
+  snippets: Snippet[];
 }
 
 function createInitialAppState(settings: any): InitialAppState {
@@ -231,6 +235,7 @@ function createInitialAppState(settings: any): InitialAppState {
     fontSize: typeof s.fontSize === 'number' ? s.fontSize : 14,
     fontFamily: normalizeTerminalFontFamily(s.fontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY),
     sidebarSide: s.sidebarSide === 'left' ? 'left' : 'right',
+    snippets: Array.isArray(s.snippets) ? s.snippets : [],
   };
 }
 
@@ -315,6 +320,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const restoredSshTabsStartedRef = useRef(false);
   const restoredSshLeavesStartedRef = useRef(false);
   const [paletteVisible, setPaletteVisible] = useState(false);
+  const [snippetsVisible, setSnippetsVisible] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(initialState.settingsOpen);
   const [sshConnectionsOpen, setSshConnectionsOpen] = useState(initialState.sshConnectionsOpen);
   const [pendingDestructiveAction, setPendingDestructiveAction] = useState<PendingDestructiveAction | null>(null);
@@ -355,6 +361,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [fontSize, setFontSize] = useState(initialState.fontSize);
   const [fontFamily] = useState(initialState.fontFamily);
   const [sidebarSide, setSidebarSide] = useState<'left' | 'right'>(initialState.sidebarSide);
+  const [snippets, setSnippets] = useState<Snippet[]>(initialState.snippets);
   const settingsLoadedRef = useRef(true);
 
   const { bindings, matches, on } = useKeybindings();
@@ -541,6 +548,11 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const persistSidebarSide = useCallback((side: 'left' | 'right') => {
     setSidebarSide(side);
     try { window.janet.setSettings({ sidebarSide: side }).catch(() => {}); } catch {}
+  }, []);
+
+  const persistSnippets = useCallback((next: Snippet[]) => {
+    setSnippets(next);
+    try { window.janet.setSettings({ snippets: next }).catch(() => {}); } catch {}
   }, []);
 
   // Persist keybindings when they change
@@ -1342,8 +1354,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     const unsub4 = on('toggle-sidebar', toggleWorkspaceTools);
     const unsub5 = on('font-increase', () => persistFontSize(Math.min(24, fontSize + 1)));
     const unsub6 = on('font-decrease', () => persistFontSize(Math.max(10, fontSize - 1)));
+    const unsub7 = on('snippets-toggle', () => setSnippetsVisible(true));
     return () => {
-      unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6();
+      unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7();
     };
   }, [on, addTab, requestCloseTab, activeTabId, toggleWorkspaceTools, persistFontSize, fontSize]);
 
@@ -1426,6 +1439,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       {
         id: 'palette-toggle', label: 'Open command palette', category: 'General',
         shortcut: bindings['palette-toggle'], handler: () => setPaletteVisible((v) => !v),
+      },
+      {
+        id: 'snippets-toggle', label: 'Open snippets', category: 'Terminal',
+        shortcut: bindings['snippets-toggle'], handler: () => setSnippetsVisible(true),
       },
       {
         id: 'check-updates', label: 'Check for updates', category: 'General',
@@ -1633,6 +1650,16 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         visible={paletteVisible}
         onClose={() => setPaletteVisible(false)}
         actions={paletteActions}
+      />
+      <SnippetPicker
+        visible={snippetsVisible}
+        onClose={() => setSnippetsVisible(false)}
+        snippets={snippets}
+        onSave={persistSnippets}
+        onPaste={(snippet) => {
+          const text = snippetTextForPaste(snippet.content);
+          if (sidebarTerminalId && text) requestTerminalPaste(sidebarTerminalId, text);
+        }}
       />
       <UpdateBanner />
       <ConfirmationDialog

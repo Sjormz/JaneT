@@ -397,6 +397,54 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(searchOverlayProps.visible).toBe(true);
   });
 
+  it('pastes a requested snippet into only its target terminal without adding Enter', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-snippet" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    const term = MockTerminal.instances.at(-1)!;
+    const text = 'docker compose logs -f';
+    act(() => window.dispatchEvent(new CustomEvent('janet:terminal-paste-request', {
+      detail: { termId: 'term-snippet', text },
+    })));
+
+    expect(term.paste).toHaveBeenCalledWith(text);
+    expect(terminalWrite).toHaveBeenCalledWith({ id: 'term-snippet', data: text, userInput: true });
+    expect(term.paste).not.toHaveBeenCalledWith(`${text}\n`);
+  });
+
+  it('pastes a requested snippet into the active SSH shell without adding Enter', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-snippet-ssh"
+          tabType="ssh"
+          sshSessionId="ssh-snippet"
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalled());
+    const term = MockTerminal.instances.at(-1)!;
+    const text = 'sudo systemctl restart app';
+    act(() => window.dispatchEvent(new CustomEvent('janet:terminal-paste-request', {
+      detail: { termId: 'term-snippet-ssh', text },
+    })));
+
+    expect(term.paste).toHaveBeenCalledWith(text);
+    expect(sshWriteShell).toHaveBeenCalledWith({
+      sessionId: 'ssh-snippet', termId: 'term-snippet-ssh', data: text, userInput: true,
+    });
+    expect(term.paste).not.toHaveBeenCalledWith(`${text}\n`);
+  });
+
   it('propagates measured window/container resizes to the local pty and repaints', async () => {
     vi.useFakeTimers();
     try {
