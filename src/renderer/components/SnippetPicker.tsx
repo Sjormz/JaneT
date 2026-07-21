@@ -100,7 +100,13 @@ export default function SnippetPicker({ visible, onClose, snippets, onSave, onPa
   };
 
   return (
-    <div className="snippet-picker-overlay" role="presentation" onMouseDown={onClose}>
+    <div
+      className="snippet-picker-overlay"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       <div
         ref={panelRef}
         className="snippet-picker"
