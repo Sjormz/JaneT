@@ -22,6 +22,8 @@ When a `v*` tag is pushed, `.github/workflows/release.yml`:
 7. Uploads installers and update metadata to the matching GitHub Release.
 
 The app uses `electron-updater` with GitHub Releases, so the generated `latest*.yml` assets must stay attached to the release.
+Temporary Actions artifacts used between the package and publish jobs expire
+after one day. Published GitHub Releases and tags are retained.
 The macOS ZIP blockmaps must also be published for differential updates. The
 release check executes the runner's native macOS PTY. It avoids translated
 cross-architecture execution because Rosetta startup on disposable hosted
@@ -66,6 +68,8 @@ The `main-approval-gate` GitHub ruleset protects `refs/heads/main`.
 It should require these status checks before merge:
 
 - `Verify`
+- `Durable workspace (macos-latest)`
+- `Durable workspace (windows-latest)`
 - `Analyze JavaScript/TypeScript`
 
 It should also keep these pull request rules enabled:

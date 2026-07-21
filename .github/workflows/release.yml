@@ -135,6 +135,7 @@ jobs:
             release/*.deb
             release/latest*.yml
           if-no-files-found: error
+          retention-days: 1
 
   publish:
     name: Update GitHub release
