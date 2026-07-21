@@ -22,7 +22,7 @@ async function forceClose(app: ElectronApplication | undefined): Promise<void> {
   await app.waitForEvent('close', { timeout: 5_000 }).catch(() => {});
 }
 
-test('deletes a newly created snippet with a mouse click', async () => {
+test('keeps the empty picker compact and deletes a snippet with a mouse click', async () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-snippets-e2e-'));
   let app: ElectronApplication | undefined;
 
@@ -38,10 +38,17 @@ test('deletes a newly created snippet with a mouse click', async () => {
     });
     const page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(800, 600));
 
     await page.getByRole('button', { name: /Open command palette/ }).click();
     await page.getByRole('option', { name: /Open snippets/ }).click();
-    await expect(page.getByRole('dialog', { name: 'Snippets' })).toBeVisible();
+    const picker = page.getByRole('dialog', { name: 'Snippets' });
+    await expect(picker).toBeVisible();
+    await expect(picker.getByRole('status')).toContainText('No snippets yet');
+    const emptyBounds = await picker.boundingBox();
+    expect(emptyBounds).not.toBeNull();
+    expect(emptyBounds!.width).toBeLessThanOrEqual(580);
+    expect(emptyBounds!.height).toBeLessThanOrEqual(380);
 
     await page.getByRole('button', { name: 'New snippet' }).click();
     await page.getByRole('textbox', { name: 'Snippet name' }).fill('Temporary snippet');
@@ -56,7 +63,7 @@ test('deletes a newly created snippet with a mouse click', async () => {
 
     await expect(page.getByRole('dialog', { name: 'Snippets' })).toBeVisible();
     await expect(page.getByText('Temporary snippet', { exact: true })).toHaveCount(0);
-    await expect(page.getByText('No matching snippets')).toBeVisible();
+    await expect(page.getByText('No snippets yet')).toBeVisible();
   } finally {
     await forceClose(app);
     fs.rmSync(userData, { recursive: true, force: true });
