@@ -115,6 +115,16 @@ export function KeybindingsProvider({
       // confirmation or replacing the destructive target being reviewed.
       if (document.querySelector('[aria-modal="true"], [data-keybindings-suspended]')) return;
 
+      // Xterm owns copy when it has a selection and Ctrl+C when it does not.
+      // A user-rebound application action must not preempt either behavior.
+      if (
+        e.key.toLowerCase() === 'c'
+        && (e.ctrlKey || e.metaKey)
+        && !e.altKey
+        && e.target instanceof Element
+        && e.target.closest('.terminal-container')
+      ) return;
+
       // Fire all registered handlers for matching actions
       const currentBindings = bindingsRef.current;
       for (const [action, handlerSet] of listenersRef.current.entries()) {

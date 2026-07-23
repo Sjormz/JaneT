@@ -85,6 +85,7 @@ function openAllowedExternalUrl(url: string): boolean {
 // A validated 32,768-character path can expand up to 4x when POSIX single
 // quotes are escaped, plus the surrounding quotes and trailing separator.
 const MAX_CLIPBOARD_TEXT_LENGTH = 131_075;
+const MAX_TERMINAL_CLIPBOARD_TEXT_LENGTH = 1_048_576;
 const UNSAFE_CLIPBOARD_TEXT = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
 
 export function copyTextToClipboard(
@@ -97,6 +98,17 @@ export function copyTextToClipboard(
     || text.length > MAX_CLIPBOARD_TEXT_LENGTH
     || UNSAFE_CLIPBOARD_TEXT.test(text)
   ) {
+    return false;
+  }
+  writeText(text);
+  return true;
+}
+
+export function copyTerminalTextToClipboard(
+  text: unknown,
+  writeText: (selection: string) => void = (selection) => electron.clipboard.writeText(selection),
+): boolean {
+  if (typeof text !== 'string' || text.length === 0 || text.length > MAX_TERMINAL_CLIPBOARD_TEXT_LENGTH) {
     return false;
   }
   writeText(text);
@@ -592,6 +604,10 @@ function registerIpcHandlers() {
 
   handle('app:copyText', (event, text: unknown) => {
     return copyTextToClipboard(text);
+  });
+
+  handle('app:copyTerminalText', (event, text: unknown) => {
+    return copyTerminalTextToClipboard(text);
   });
 
   handle(WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL, (event, resolution: unknown) => {

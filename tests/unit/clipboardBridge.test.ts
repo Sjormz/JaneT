@@ -27,7 +27,11 @@ async function importMainClipboardBridge() {
     shell: { openExternal: vi.fn() },
   }));
   const main = await import('../../src/main/index');
-  return { copyTextToClipboard: main.copyTextToClipboard, writeText };
+  return {
+    copyTerminalTextToClipboard: main.copyTerminalTextToClipboard,
+    copyTextToClipboard: main.copyTextToClipboard,
+    writeText,
+  };
 }
 
 describe('main-process clipboard bridge', () => {
@@ -63,6 +67,34 @@ describe('main-process clipboard bridge', () => {
     expect(copyTextToClipboard(token)).toBe(true);
     expect(writeText).toHaveBeenCalledWith(token);
   });
+
+  it('copies multiline terminal selections without weakening path-copy validation', async () => {
+    const { copyTerminalTextToClipboard, copyTextToClipboard, writeText } = await importMainClipboardBridge();
+    const selection = 'first line\nsecond\tcolumn';
+
+    expect(copyTerminalTextToClipboard(selection)).toBe(true);
+    expect(writeText).toHaveBeenCalledWith(selection);
+    expect(copyTextToClipboard(selection)).toBe(false);
+  });
+
+  it('accepts the maximum terminal selection length', async () => {
+    const { copyTerminalTextToClipboard, writeText } = await importMainClipboardBridge();
+    const selection = 'a'.repeat(1_048_576);
+
+    expect(copyTerminalTextToClipboard(selection)).toBe(true);
+    expect(writeText).toHaveBeenCalledWith(selection);
+  });
+
+  it.each([
+    ['non-string data', { text: 'output' }],
+    ['empty data', ''],
+    ['oversized data', 'a'.repeat(1_048_577)],
+  ])('rejects %s as terminal selection text', async (_label, value) => {
+    const { copyTerminalTextToClipboard, writeText } = await importMainClipboardBridge();
+
+    expect(copyTerminalTextToClipboard(value)).toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
+  });
 });
 
 describe('preload clipboard bridge', () => {
@@ -80,11 +112,13 @@ describe('preload clipboard bridge', () => {
 
     await import('../../src/main/preload');
     const api = exposeInMainWorld.mock.calls[0]?.[1] as {
+      copyTerminalText(text: string): Promise<boolean>;
       copyText(text: string): Promise<boolean>;
     };
 
     await expect(api.copyText("'/tmp/drag target' ")).resolves.toBe(true);
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(invoke).toHaveBeenCalledWith('app:copyText', "'/tmp/drag target' ");
+    await expect(api.copyTerminalText('first line\nsecond line')).resolves.toBe(true);
+    expect(invoke).toHaveBeenNthCalledWith(1, 'app:copyText', "'/tmp/drag target' ");
+    expect(invoke).toHaveBeenNthCalledWith(2, 'app:copyTerminalText', 'first line\nsecond line');
   });
 });

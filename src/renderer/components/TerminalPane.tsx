@@ -313,6 +313,14 @@ export default function TerminalPane({
     mountCleanup.push(() => container.removeEventListener('focusin', focusListener));
     term.attachCustomKeyEventHandler((e) => {
       const currentBindings = kbBindingsRef.current;
+      if (e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey) && !e.altKey) {
+        const selection = term.getSelection();
+        if (selection) {
+          e.preventDefault();
+          if (e.type === 'keydown') void window.janet.copyTerminalText(selection).catch(() => {});
+          return false;
+        }
+      }
       if (matchesShortcut(e, currentBindings['search-toggle'])) {
         e.preventDefault();
         setSearchVisible((visible) => !visible);
@@ -700,6 +708,12 @@ export default function TerminalPane({
       ref={containerRef}
       data-terminal-focus-target
       tabIndex={-1}
+      onContextMenu={(event) => {
+        const selection = termRef.current?.getSelection();
+        if (!selection) return;
+        event.preventDefault();
+        void window.janet.copyTerminalText(selection).catch(() => {});
+      }}
       onDragEnter={inspectTerminalPathDrag}
       onDragOver={inspectTerminalPathDrag}
       onDragLeave={(event) => {
