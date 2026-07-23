@@ -181,10 +181,6 @@ function createInitialAppState(settings: any): InitialAppState {
   for (const saved of session.tabs) {
     let tree = restorePaneTree(saved.root);
     if (!tree) continue;
-    // Durable sessions describe terminals that already existed; startup
-    // automation belongs only to an explicit fresh preset launch. Refuse
-    // stale or manually injected startup fields on app restoration.
-    tree = mapLeaves(tree, stripStartupAutomation);
     if (saved.type !== 'ssh') {
       tree = mapLeaves(tree, (leaf) => leaf.terminalType === 'ssh' && leaf.sshProfileId ? {
         ...leaf,
@@ -514,7 +510,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         type: tab.type,
         cwd: tab.cwd,
         sshProfileId: tab.sshProfileId,
-        root: serializePaneTree(tab.root, cwdByTerminal),
+        root: serializePaneTree(tab.root, cwdByTerminal, { includeStartupCommands: true }),
       }));
       const session: SavedSession = {
         tabs: savedTabs,

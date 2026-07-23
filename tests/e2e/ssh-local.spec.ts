@@ -469,7 +469,7 @@ test('restores local SSH terminal after refresh and runs ls again', async () => 
   }
 });
 
-test('runs startup commands only for fresh launches of a saved SSH preset', async () => {
+test('reruns startup commands when restoring a saved SSH preset terminal', async () => {
   const ssh = await startLocalSshServer();
   const { browser, electronProcess, page, eventsPath, settingsPath, userData } = await launchAppWithLocalSsh(
     ssh.port,
@@ -485,7 +485,7 @@ test('runs startup commands only for fresh launches of a saved SSH preset', asyn
     await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 }).toEqual([expectedExpression]);
 
     // A durable renderer reload reconnects the saved SSH pane with a fresh
-    // transport, but session serialization intentionally removed automation.
+    // transport, so its startup automation must be persisted and rerun.
     await expect.poll(() => {
       const session = readSettings(settingsPath).session;
       const savedTab = session?.tabs?.find((tab: Record<string, any>) => tab.title === 'Remote startup');
@@ -497,13 +497,13 @@ test('runs startup commands only for fresh launches of a saved SSH preset', asyn
       };
     }, { timeout: 10_000 }).toEqual({
       terminalType: 'ssh',
-      startupCommands: undefined,
-      startupShellDialect: undefined,
+      startupCommands: ['printf __JANET_REMOTE_ONE__', 'printf __JANET_REMOTE_TWO__'],
+      startupShellDialect: 'posix',
     });
     await page.reload({ waitUntil: 'domcontentloaded' });
     await waitForShellCreateCount(eventsPath, 2);
-    await page.waitForTimeout(750);
-    expect(ssh.receivedCommands).toEqual([expectedExpression]);
+    await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 })
+      .toEqual([expectedExpression, expectedExpression]);
 
     // An explicit second preset launch creates a new pane and runs it again.
     const reloadedPresetsButton = page.getByRole('button', { name: 'Presets' });
@@ -512,7 +512,7 @@ test('runs startup commands only for fresh launches of a saved SSH preset', asyn
     }
     await page.getByRole('button', { name: 'Open preset Remote startup' }).click();
     await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 })
-      .toEqual([expectedExpression, expectedExpression]);
+      .toEqual([expectedExpression, expectedExpression, expectedExpression]);
   } finally {
     await closeApp(browser, electronProcess, userData);
     await ssh.close();
