@@ -18,27 +18,13 @@ interface TerminalInstance {
   forwardData?: (data: string) => void;
   cols: number;
   rows: number;
-  shell: string;
-  cwd: string;
-  atPrompt: boolean;
-  hasSubmittedCommand: boolean;
   promptMarkerTail: string;
   startupExpression?: string;
   startupTimer?: ReturnType<typeof setTimeout>;
 }
 
-export interface RunningTerminalWork {
-  terminalId: string;
-  rootPid: number;
-  processName: string;
-  kind: 'foreground' | 'background' | 'unknown';
-  cwd?: string;
-  descendantPids: number[];
-}
-
 export interface TerminalManagerOptions {
   processInspector?: ProcessInspector;
-  sampleDelayMs?: number;
   sleep?: (milliseconds: number) => Promise<void>;
   stopGraceMs?: number;
   terminateGraceMs?: number;
@@ -48,13 +34,11 @@ export interface TerminalManagerOptions {
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
-const DEFAULT_PROCESS_SAMPLE_DELAY_MS = 150;
 const DEFAULT_STOP_GRACE_MS = 300;
 const DEFAULT_TERMINATE_GRACE_MS = 750;
 const DEFAULT_FORCE_KILL_GRACE_MS = 250;
 const STARTUP_COMMAND_FALLBACK_MS = 1_000;
-const PROMPT_MARKER = '\x1b]7;';
-const PROMPT_PROBE_TAIL_LENGTH = Math.max(PROMPT_MARKER.length, STARTUP_READY_MARKER.length) - 1;
+const PROMPT_PROBE_TAIL_LENGTH = STARTUP_READY_MARKER.length - 1;
 
 const SHELL_PROCESS_NAMES = new Set([
   'bash', 'cmd', 'dash', 'fish', 'ksh', 'nu', 'nushell', 'powershell', 'pwsh', 'sh', 'tcsh', 'zsh',
@@ -141,7 +125,6 @@ export class TerminalManager {
   private startupCommandLedger = new Set<string>();
   private shellInitDir: string | null = null;
   private readonly processInspector: ProcessInspector;
-  private readonly sampleDelayMs: number;
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly stopGraceMs: number;
   private readonly terminateGraceMs: number;
@@ -150,7 +133,6 @@ export class TerminalManager {
 
   constructor(options: TerminalManagerOptions = {}) {
     this.processInspector = options.processInspector ?? new SystemProcessInspector();
-    this.sampleDelayMs = Math.max(0, options.sampleDelayMs ?? DEFAULT_PROCESS_SAMPLE_DELAY_MS);
     this.sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
     this.stopGraceMs = Math.max(0, options.stopGraceMs ?? DEFAULT_STOP_GRACE_MS);
     this.terminateGraceMs = Math.max(0, options.terminateGraceMs ?? DEFAULT_TERMINATE_GRACE_MS);
@@ -239,10 +221,6 @@ export class TerminalManager {
       forwardData: onData,
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
-      shell: defaultShell,
-      cwd: defaultCwd,
-      atPrompt: true,
-      hasSubmittedCommand: false,
       promptMarkerTail: '',
       ...(startupExpression && !this.startupCommandLedger.has(id) ? { startupExpression } : {}),
     };
@@ -258,9 +236,7 @@ export class TerminalManager {
       const current = this.terminals.get(id);
       if (current?.pty !== pty) return;
       const promptProbe = current.promptMarkerTail + data;
-      const reachedPrompt = promptProbe.includes(PROMPT_MARKER);
       const reachedStartupReady = promptProbe.includes(STARTUP_READY_MARKER);
-      if (reachedPrompt) current.atPrompt = true;
       current.promptMarkerTail = promptProbe.slice(-PROMPT_PROBE_TAIL_LENGTH);
       current.forwardData?.(data);
       if (reachedStartupReady) {
@@ -304,11 +280,10 @@ export class TerminalManager {
   write(id: string, data: string, userInput = true): void {
     const term = this.terminals.get(id);
     if (term) {
-      const submitsCommand = data.includes('\r') || data.includes('\n');
       if (userInput && term.startupExpression && !this.startupCommandLedger.has(id)) {
         this.cancelStartupCommands(term);
       }
-      this.writeTerminalInput(term, data, submitsCommand);
+      term.pty.write(data);
     }
   }
 
@@ -316,108 +291,11 @@ export class TerminalManager {
     const term = this.terminals.get(id);
     if (term) {
       const binary = Buffer.from(data, 'binary');
-      const submitsCommand = data.includes('\r') || data.includes('\n');
       if (userInput && term.startupExpression && !this.startupCommandLedger.has(id)) {
         this.cancelStartupCommands(term);
       }
-      this.writeTerminalInput(term, binary, submitsCommand);
+      term.pty.write(binary);
     }
-  }
-
-  async listRunningWork(): Promise<RunningTerminalWork[]> {
-    const terminals = Array.from(this.terminals.values());
-    const pendingStopProcesses = Array.from(this.pendingStopProcesses.values());
-    if (terminals.length === 0 && pendingStopProcesses.length === 0) return [];
-
-    let stable: ProcessInfo[];
-    try {
-      const first = await this.processInspector.snapshot();
-      if (this.sampleDelayMs > 0) await this.sleep(this.sampleDelayMs);
-      const second = await this.processInspector.snapshot();
-      stable = stableProcesses(first, second).filter((process) => !process.state?.toUpperCase().startsWith('Z'));
-
-      // A service can start between the two close-time samples. If the newer
-      // sample contains a meaningful new child, give it one more bounded
-      // sample so a just-started long-running task is not mistaken for a
-      // transient command and silently closed.
-      const hasNewWorkCandidate = terminals.some((terminal) => (
-        descendantsOf(second, terminal.pty.pid).some((process) => (
-          !isShellProcess(process.name) && stableProcesses(first, [process]).length === 0
-        ))
-      ));
-      if (hasNewWorkCandidate) {
-        if (this.sampleDelayMs > 0) await this.sleep(this.sampleDelayMs);
-        const third = await this.processInspector.snapshot();
-        stable = stableProcesses(second, third).filter((process) => !process.state?.toUpperCase().startsWith('Z'));
-      }
-    } catch {
-      const terminalFallback = terminals
-        .filter((terminal) => this.terminals.get(terminal.id) === terminal && terminal.hasSubmittedCommand)
-        .map((terminal) => ({
-          terminalId: terminal.id,
-          rootPid: terminal.pty.pid,
-          processName: processName(terminal.shell),
-          kind: 'unknown' as const,
-          cwd: terminal.cwd,
-          descendantPids: [],
-        }));
-      const knownPids = new Set(terminalFallback.flatMap((work) => [work.rootPid, ...work.descendantPids]));
-      return [
-        ...terminalFallback,
-        ...pendingStopProcesses
-          .filter((process) => !knownPids.has(process.pid))
-          .map((process) => ({
-            terminalId: `pending-stop-${process.pid}`,
-            rootPid: process.pid,
-            processName: processName(process.name),
-            kind: 'unknown' as const,
-            descendantPids: [],
-          })),
-      ];
-    }
-
-    const byPid = new Map(stable.map((process) => [process.pid, process]));
-    const running: RunningTerminalWork[] = [];
-    for (const terminal of terminals) {
-      if (this.terminals.get(terminal.id) !== terminal) continue;
-      const rootPid = terminal.pty.pid;
-      const root = byPid.get(rootPid);
-      const descendants = descendantsOf(stable, rootPid);
-      const meaningfulDescendants = descendants.filter((process) => !isShellProcess(process.name));
-      const rootWasReplaced = Boolean(root && processName(root.name) !== processName(terminal.shell));
-
-      if (meaningfulDescendants.length > 0 || rootWasReplaced) {
-        running.push({
-          terminalId: terminal.id,
-          rootPid,
-          processName: processName(meaningfulDescendants[0]?.name ?? root?.name ?? terminal.shell),
-          kind: terminal.atPrompt ? 'background' : 'foreground',
-          cwd: terminal.cwd,
-          descendantPids: descendants.map((process) => process.pid),
-        });
-      } else if (terminal.hasSubmittedCommand && !terminal.atPrompt) {
-        running.push({
-          terminalId: terminal.id,
-          rootPid,
-          processName: processName(root?.name ?? terminal.shell),
-          kind: 'unknown',
-          cwd: terminal.cwd,
-          descendantPids: [],
-        });
-      }
-    }
-    const knownPids = new Set(running.flatMap((work) => [work.rootPid, ...work.descendantPids]));
-    for (const process of stableProcesses(pendingStopProcesses, stable)) {
-      if (knownPids.has(process.pid)) continue;
-      running.push({
-        terminalId: `pending-stop-${process.pid}`,
-        rootPid: process.pid,
-        processName: processName(process.name),
-        kind: 'unknown',
-        descendantPids: [],
-      });
-    }
-    return running;
   }
 
   async stopAll(): Promise<void> {
@@ -592,8 +470,6 @@ export class TerminalManager {
       clearTimeout(terminal.startupTimer);
       terminal.startupTimer = undefined;
     }
-    terminal.atPrompt = false;
-    terminal.hasSubmittedCommand = true;
     try {
       terminal.pty.write(`${startupExpression}\r`);
     } catch {
@@ -611,17 +487,6 @@ export class TerminalManager {
     }
   }
 
-  private writeTerminalInput(
-    terminal: TerminalInstance,
-    data: string | Buffer,
-    submitsCommand: boolean,
-  ): void {
-    if (submitsCommand) {
-      terminal.atPrompt = false;
-      terminal.hasSubmittedCommand = true;
-    }
-    terminal.pty.write(data);
-  }
 
   private ensureShellInitFile(name: string, contents: string): string {
     if (!this.shellInitDir || !fs.existsSync(this.shellInitDir)) {

@@ -376,3 +376,64 @@ test('refreshes external branch and file changes without a manual reload', async
     fs.rmSync(repoPath, { recursive: true, force: true });
   }
 });
+
+test('stages and commits changes from Source Control', async ({}, testInfo) => {
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-source-control-'));
+  let app: Awaited<ReturnType<typeof launchApp>> | undefined;
+  try {
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repoPath });
+    execFileSync('git', ['config', 'user.email', 'janet-e2e@example.com'], { cwd: repoPath });
+    execFileSync('git', ['config', 'user.name', 'JaneT E2E'], { cwd: repoPath });
+    fs.writeFileSync(path.join(repoPath, 'base.txt'), 'base\n', 'utf-8');
+    execFileSync('git', ['add', 'base.txt'], { cwd: repoPath });
+    execFileSync('git', ['commit', '-m', 'base'], { cwd: repoPath });
+    fs.writeFileSync(path.join(repoPath, 'change.txt'), 'from JaneT\n', 'utf-8');
+
+    app = await launchApp({
+      theme: 'tokyo-night',
+      fontSize: 14,
+      sidebarSide: 'left',
+      keybindings: {},
+      workspaceTabs: [],
+      session: {
+        tabs: [{
+          id: 'source-control-tab',
+          title: 'source control repo',
+          type: 'local',
+          cwd: repoPath,
+          root: { type: 'leaf', title: 'repo', terminalType: 'local', cwd: repoPath },
+        }],
+        activeTabId: 'source-control-tab',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'git',
+      },
+    }, 'janet-e2e-source-control-app-');
+
+    await app.page.bringToFront();
+    const sourceControl = app.page.locator('.git-tree');
+    await expect(sourceControl.getByRole('button', { name: 'Add worktree with new branch' })).toBeVisible({ timeout: 10_000 });
+    const worktrees = sourceControl.getByRole('button', { name: /Worktrees/ });
+    const changes = sourceControl.getByRole('button', { name: /Changes/ });
+    const worktreesBeforeChanges = await worktrees.evaluate(
+      (node, other) => Boolean(node.compareDocumentPosition(other as Node) & Node.DOCUMENT_POSITION_FOLLOWING),
+      await changes.elementHandle(),
+    );
+    expect(worktreesBeforeChanges).toBe(true);
+    await sourceControl.screenshot({ path: testInfo.outputPath('source-control.png') });
+
+    await sourceControl.getByRole('button', { name: 'Stage change.txt' }).click();
+    await expect(sourceControl.getByRole('button', { name: 'Unstage change.txt' })).toBeVisible({ timeout: 8_000 });
+    await sourceControl.getByLabel('Commit message').fill('commit from Source Control');
+    await sourceControl.getByRole('button', { name: 'Commit staged changes' }).click();
+
+    await expect.poll(
+      () => execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: repoPath, encoding: 'utf8' }).trim(),
+      { timeout: 8_000 },
+    ).toBe('commit from Source Control');
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd: repoPath, encoding: 'utf8' }).trim()).toBe('');
+  } finally {
+    if (app) await closeApp(app.browser, app.electronProcess, app.userData);
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});

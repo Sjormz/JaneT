@@ -156,7 +156,6 @@ test('pastes Explorer and Source Control paths into a real terminal', async ({},
       env: electronEnv({
         NODE_ENV: 'test',
         JANET_E2E_USER_DATA_DIR: userData,
-        JANET_E2E_CLOSE_DECISION: 'cancel',
       }),
     });
     const page = await app.firstWindow();

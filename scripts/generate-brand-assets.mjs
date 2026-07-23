@@ -10,10 +10,6 @@ const checkOnly = process.argv.includes('--check');
 
 const outputs = [
   { source: 'app-icon.svg', output: 'app-icon-256.png', size: 256 },
-  { source: 'tray-icon.svg', output: 'tray.png', size: 24 },
-  { source: 'tray-icon.svg', output: 'tray@2x.png', size: 48 },
-  { source: 'tray-template.svg', output: 'trayTemplate.png', size: 16 },
-  { source: 'tray-template.svg', output: 'trayTemplate@2x.png', size: 32 },
 ];
 
 async function renderAsset({ source, size }) {

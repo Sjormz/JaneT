@@ -1620,6 +1620,12 @@ html, body, #root {
   padding: 10px 14px;
   border-bottom: 1px solid var(--glass-border);
 }
+.git-toolbar,
+.git-section-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
 .git-repo-path {
   display: flex;
   align-items: center;
@@ -1702,6 +1708,66 @@ html, body, #root {
   font-variant-numeric: tabular-nums;
 }
 .git-section-content { padding: 2px 0; }
+
+.git-section-action {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.git-section-action:hover:not(:disabled) { background: var(--control-hover); color: var(--text-primary); }
+.git-section-action:disabled { opacity: 0.35; cursor: default; }
+.git-section-action:focus-visible,
+.git-commit-button:focus-visible,
+.git-file-action:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 1px;
+}
+
+.git-commit-form {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--glass-border);
+}
+.git-commit-input {
+  min-width: 0;
+  flex: 1;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font: 11px var(--font-ui);
+}
+.git-commit-input:focus { border-color: var(--border-active); }
+.git-commit-input::placeholder { color: var(--text-tertiary); }
+.git-commit-button {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--glass-border-active);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text-accent) 12%, transparent);
+  color: var(--text-accent);
+  cursor: pointer;
+}
+.git-commit-button:hover:not(:disabled) { background: color-mix(in srgb, var(--text-accent) 20%, transparent); }
+.git-commit-button:disabled { opacity: 0.35; cursor: default; }
 
 .git-inline-actions {
   display: flex;
@@ -1809,7 +1875,6 @@ html, body, #root {
 
 .git-kebab-menu {
   position: relative;
-  margin-left: auto;
 }
 .git-kebab-overlay {
   position: fixed;
@@ -2036,7 +2101,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   width: 100%;
-  padding: 3px 42px 3px 28px;
+  padding: 3px 70px 3px 28px;
   gap: 8px;
   font-size: 12px;
   border: 0;
@@ -2047,6 +2112,30 @@ html, body, #root {
   cursor: pointer;
 }
 .git-file-item[aria-disabled="true"] { cursor: not-allowed; }
+.git-file-action {
+  position: absolute;
+  top: 50%;
+  right: 34px;
+  z-index: 1;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-overlay);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-50%);
+}
+.git-file-row:hover .git-file-action,
+.git-file-row:focus-within .git-file-action,
+.git-file-action:focus-visible { opacity: 1; }
+.git-file-action:hover { background: var(--control-hover); color: var(--text-accent); }
+.git-file-action:disabled { cursor: default; opacity: 0.35; }
 .terminal-path-copy-button {
   position: absolute;
   top: 50%;

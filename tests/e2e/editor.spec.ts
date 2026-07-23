@@ -122,7 +122,6 @@ test('edits a local file with Monaco under the packaged JaneT origin', async ({}
       env: electronEnv({
         NODE_ENV: 'test',
         JANET_E2E_USER_DATA_DIR: userData,
-        JANET_E2E_CLOSE_DECISION: 'stop',
       }),
     });
     const page = await app.firstWindow();

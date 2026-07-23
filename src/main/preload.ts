@@ -161,6 +161,18 @@ const api = {
     ipcRenderer.invoke('git:createBranch', params),
   gitDeleteBranch: (params: { repoPath: string; branch: string; force?: boolean }) =>
     ipcRenderer.invoke('git:deleteBranch', params),
+  gitStage: (params: { repoPath: string; paths: string[] }) =>
+    ipcRenderer.invoke('git:stage', params),
+  gitUnstage: (params: { repoPath: string; paths: string[] }) =>
+    ipcRenderer.invoke('git:unstage', params),
+  gitCommit: (params: { repoPath: string; message: string }) =>
+    ipcRenderer.invoke('git:commit', params),
+  gitFetch: (params: { repoPath: string }) =>
+    ipcRenderer.invoke('git:fetch', params),
+  gitPull: (params: { repoPath: string }) =>
+    ipcRenderer.invoke('git:pull', params),
+  gitPush: (params: { repoPath: string }) =>
+    ipcRenderer.invoke('git:push', params),
   gitWorktrees: (params: { repoPath: string }) =>
     ipcRenderer.invoke('git:worktrees', params),
   gitAddWorktree: (params: { repoPath: string; worktreePath: string; branch: string; createBranch?: boolean; startPoint?: string }) =>

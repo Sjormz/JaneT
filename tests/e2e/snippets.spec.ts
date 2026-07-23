@@ -33,7 +33,6 @@ test('keeps the empty picker compact and deletes a snippet with a mouse click', 
       env: electronEnv({
         NODE_ENV: 'test',
         JANET_E2E_USER_DATA_DIR: userData,
-        JANET_E2E_CLOSE_DECISION: 'cancel',
       }),
     });
     const page = await app.firstWindow();

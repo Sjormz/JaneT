@@ -12,7 +12,7 @@ const rendererMocks = vi.hoisted(() => ({
   verticalTabBarProps: null as any,
   prepareForCloseHandler: null as null | ((request: {
     requestId: string;
-    reason: 'window-close' | 'app-quit' | 'tray-stop' | 'update-install';
+    reason: 'window-close' | 'application-quit' | 'update-install';
   }) => void | Promise<void>),
   sshConnectionClosedHandler: null as null | ((event: { id: string; reason: string }) => void),
   sshRetryHandlers: new Map<string, (
@@ -296,7 +296,7 @@ async function openSampleEditor(): Promise<HTMLTextAreaElement> {
 
 async function requestWorkspaceClose(
   requestId: string,
-  reason: 'window-close' | 'app-quit' | 'tray-stop' | 'update-install' = 'window-close',
+  reason: 'window-close' | 'application-quit' | 'update-install' = 'window-close',
 ) {
   await waitFor(() => expect(rendererMocks.prepareForCloseHandler).toBeTypeOf('function'));
   await act(async () => {
@@ -1713,7 +1713,7 @@ describe('unsaved editor shutdown handshake', () => {
   it('resolves close preparation as saved immediately when no file is dirty', async () => {
     render(<App />);
 
-    await requestWorkspaceClose('clean-close', 'app-quit');
+    await requestWorkspaceClose('clean-close', 'application-quit');
 
     await waitFor(() => {
       expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
@@ -1746,7 +1746,7 @@ describe('unsaved editor shutdown handshake', () => {
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     });
 
-    await requestWorkspaceClose('discard-close', 'tray-stop');
+    await requestWorkspaceClose('discard-close', 'application-quit');
     dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Discard changes and close' }));
     await waitFor(() => {

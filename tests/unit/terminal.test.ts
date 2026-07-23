@@ -415,260 +415,7 @@ describe('TerminalManager', () => {
     expect(pty.write).toHaveBeenCalledWith(Buffer.from('\xff\x00', 'binary'));
   });
 
-  describe('listRunningWork()', () => {
-    it('does not report an idle interactive shell as running work', async () => {
-      const pty = new MockPty();
-      mocks.spawnMock.mockReturnValue(pty);
-      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
-      const inspector = processInspector([shell], [shell]);
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
-        processInspector: inspector,
-        sampleDelayMs: 0,
-        sleep: vi.fn().mockResolvedValue(undefined),
-      });
-      manager.create('term-idle', undefined, '/bin/zsh', () => {});
-
-      await expect(manager.listRunningWork()).resolves.toEqual([]);
-    });
-
-    it('does not treat partially typed input as a running command when inspection fails', async () => {
-      const pty = new MockPty();
-      mocks.spawnMock.mockReturnValue(pty);
-      const inspector = processInspector(new Error('process table unavailable'));
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
-        processInspector: inspector,
-        sampleDelayMs: 0,
-        sleep: vi.fn().mockResolvedValue(undefined),
-      });
-      manager.create('term-partial', undefined, '/bin/zsh', () => {});
-      manager.write('term-partial', 'npm run dev');
-
-      await expect(manager.listRunningWork()).resolves.toEqual([]);
-    });
-
-    it('reports a stable foreground child after a command is submitted', async () => {
-      const pty = new MockPty();
-      mocks.spawnMock.mockReturnValue(pty);
-      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
-      const server = processInfo(5001, pty.pid, 'node', { startTime: '2' });
-      const inspector = processInspector([shell, server], [shell, server]);
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
-        processInspector: inspector,
-        sampleDelayMs: 0,
-        sleep: vi.fn().mockResolvedValue(undefined),
-      });
-      manager.create('term-foreground', '/workspace/api', '/bin/zsh', () => {});
-      manager.write('term-foreground', 'node server.js\r');
-
-      await expect(manager.listRunningWork()).resolves.toEqual([
-        expect.objectContaining({
-          terminalId: 'term-foreground',
-          rootPid: pty.pid,
-          processName: 'node',
-          kind: 'foreground',
-          descendantPids: [5001],
-        }),
-      ]);
-    });
-
-    it('reports a stable background child after the shell prompt returns', async () => {
-      const pty = new MockPty();
-      mocks.spawnMock.mockReturnValue(pty);
-      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
-      const server = processInfo(5002, pty.pid, 'python', { startTime: '2' });
-      const inspector = processInspector([shell, server], [shell, server]);
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
-        processInspector: inspector,
-        sampleDelayMs: 0,
-        sleep: vi.fn().mockResolvedValue(undefined),
-      });
-      manager.create('term-background', '/workspace/api', '/bin/zsh', () => {});
-      manager.write('term-background', 'python -m http.server &\r');
-      pty.emit(prompt);
-
-      await expect(manager.listRunningWork()).resolves.toEqual([
-        expect.objectContaining({
-          terminalId: 'term-background',
-          rootPid: pty.pid,
-          processName: 'python',
-          kind: 'background',
-          descendantPids: [5002],
-        }),
-      ]);
-    });
-
-    it('excludes a child that disappears between process-table snapshots', async () => {
-      const pty = new MockPty();
-      mocks.spawnMock.mockReturnValue(pty);
-      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
-      const transient = processInfo(5003, pty.pid, 'git', { startTime: '2' });
-      const inspector = processInspector([shell, transient], [shell]);
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
-        processInspector: inspector,
-        sampleDelayMs: 0,
-        sleep: vi.fn().mockResolvedValue(undefined),
-      });
-      manager.create('term-transient', undefined, '/bin/zsh', () => {});
-      manager.write('term-transient', 'git status\r');
-      pty.emit(prompt);
-
-      await expect(manager.listRunningWork()).resolves.toEqual([]);
-    });
-
-    it('ignores stable zombie descendants', async () => {
-      const pty = new MockPty();
-      mocks.spawnMock.mockReturnValue(pty);
-      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
-      const zombie = processInfo(5004, pty.pid, 'node', { startTime: '2', state: 'Z' });
-      const inspector = processInspector([shell, zombie], [shell, zombie]);
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
-        processInspector: inspector,
-        sampleDelayMs: 0,
-        sleep: vi.fn().mockResolvedValue(undefined),
-      });
-      manager.create('term-zombie', undefined, '/bin/zsh', () => {});
-
-      await expect(manager.listRunningWork()).resolves.toEqual([]);
-    });
-
-    it('ignores a nested interactive shell that has no non-shell descendants', async () => {
-      const pty = new MockPty();
-      mocks.spawnMock.mockReturnValue(pty);
-      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
-      const nestedShell = processInfo(5005, pty.pid, 'bash', { startTime: '2' });
-      const inspector = processInspector([shell, nestedShell], [shell, nestedShell]);
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
-        processInspector: inspector,
-        sampleDelayMs: 0,
-        sleep: vi.fn().mockResolvedValue(undefined),
-      });
-      manager.create('term-nested-shell', undefined, '/bin/zsh', () => {});
-      manager.write('term-nested-shell', 'bash\r');
-      pty.emit(prompt);
-
-      await expect(manager.listRunningWork()).resolves.toEqual([]);
-    });
-
-    it('detects a service that starts between close-time process samples', async () => {
-      const pty = new MockPty();
-      mocks.spawnMock.mockReturnValue(pty);
-      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
-      const server = processInfo(5006, pty.pid, 'node', { startTime: '2' });
-      const inspector = processInspector([shell], [shell, server], [shell, server]);
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({ processInspector: inspector, sampleDelayMs: 0 });
-      manager.create('term-starting', undefined, '/bin/zsh', () => {});
-      manager.write('term-starting', 'node server.js &\r');
-      pty.emit(prompt);
-
-      await expect(manager.listRunningWork()).resolves.toEqual([
-        expect.objectContaining({ terminalId: 'term-starting', processName: 'node' }),
-      ]);
-      expect(inspector.snapshot).toHaveBeenCalledTimes(3);
-    });
-
-    it('reports a shell process that was replaced in-place with exec', async () => {
-      const pty = new MockPty();
-      mocks.spawnMock.mockReturnValue(pty);
-      const replacement = processInfo(pty.pid, 1, 'node', { startTime: '1' });
-      const inspector = processInspector([replacement], [replacement]);
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
-        processInspector: inspector,
-        sampleDelayMs: 0,
-        sleep: vi.fn().mockResolvedValue(undefined),
-      });
-      manager.create('term-exec', undefined, '/bin/zsh', () => {});
-      manager.write('term-exec', 'exec node server.js\r');
-
-      await expect(manager.listRunningWork()).resolves.toEqual([
-        expect.objectContaining({
-          terminalId: 'term-exec',
-          rootPid: pty.pid,
-          processName: 'node',
-          kind: 'foreground',
-        }),
-      ]);
-    });
-
-    it('reports unknown work when process inspection fails after a command starts', async () => {
-      const pty = new MockPty();
-      mocks.spawnMock.mockReturnValue(pty);
-      const inspector = processInspector(new Error('process table unavailable'));
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
-        processInspector: inspector,
-        sampleDelayMs: 0,
-        sleep: vi.fn().mockResolvedValue(undefined),
-      });
-      manager.create('term-unknown', '/workspace/api', '/bin/zsh', () => {});
-      manager.write('term-unknown', 'npm run dev\r');
-
-      await expect(manager.listRunningWork()).resolves.toEqual([
-        expect.objectContaining({
-          terminalId: 'term-unknown',
-          rootPid: pty.pid,
-          kind: 'unknown',
-          descendantPids: [],
-        }),
-      ]);
-    });
-
-    it('fails safely after a submitted command returns to a prompt when inspection is unavailable', async () => {
-      const pty = new MockPty();
-      mocks.spawnMock.mockReturnValue(pty);
-      const inspector = processInspector(new Error('process table unavailable'));
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({ processInspector: inspector, sampleDelayMs: 0 });
-      manager.create('term-unknown-background', '/workspace/api', '/bin/zsh', () => {});
-      manager.write('term-unknown-background', 'node server.js &\r');
-      pty.emit(prompt);
-
-      await expect(manager.listRunningWork()).resolves.toEqual([
-        expect.objectContaining({
-          terminalId: 'term-unknown-background',
-          kind: 'unknown',
-        }),
-      ]);
-    });
-
-    it('removes an exited pty from running-work detection', async () => {
-      const pty = new MockPty();
-      mocks.spawnMock.mockReturnValue(pty);
-      const inspector = processInspector(new Error('process table unavailable'));
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
-        processInspector: inspector,
-        sampleDelayMs: 0,
-        sleep: vi.fn().mockResolvedValue(undefined),
-      });
-      manager.create('term-exited', undefined, '/bin/zsh', () => {});
-      manager.write('term-exited', 'npm run dev\r');
-      pty.emitExit();
-
-      await expect(manager.listRunningWork()).resolves.toEqual([]);
-      expect(inspector.snapshot).not.toHaveBeenCalled();
-    });
-
+  describe('stopAll()', () => {
     it('interrupts work, terminates stable descendants deepest-first, and kills the PTY root', async () => {
       const pty = new MockPty();
       mocks.spawnMock.mockReturnValue(pty);
@@ -697,7 +444,6 @@ describe('TerminalManager', () => {
         [5001, 'SIGTERM'],
       ]);
       expect(pty.kill).toHaveBeenCalledOnce();
-      await expect(manager.listRunningWork()).resolves.toEqual([]);
     });
 
     it('continues stopping other terminals when one descendant termination fails', async () => {
@@ -781,9 +527,6 @@ describe('TerminalManager', () => {
       expect(killProcess.mock.calls).toContainEqual([pty.pid, 'SIGKILL']);
       expect(pty.kill).toHaveBeenCalledOnce();
 
-      await expect(manager.listRunningWork()).resolves.toEqual([
-        expect.objectContaining({ processName: 'node', descendantPids: [5007] }),
-      ]);
       await expect(manager.stopAll()).rejects.toThrow(/did not stop.*node \(5007\)/i);
       expect(pty.kill).toHaveBeenCalledTimes(2);
     });
@@ -821,7 +564,6 @@ describe('TerminalManager', () => {
       pty.emitExit();
       await expect(manager.stopAll()).resolves.toBeUndefined();
 
-      await expect(manager.listRunningWork()).resolves.toEqual([]);
       expect(killProcess.mock.calls.filter(([pid, signal]) => pid === 5009 && signal === 'SIGTERM')).toHaveLength(2);
     });
   });
