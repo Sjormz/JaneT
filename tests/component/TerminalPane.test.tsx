@@ -93,6 +93,8 @@ class MockTerminal {
   paste = vi.fn((data: string) => this.dataHandler?.(data));
   refresh = vi.fn();
   clearSelection = vi.fn();
+  selection = '';
+  getSelection = vi.fn(() => this.selection);
   rows = 24;
 
   constructor(options: Record<string, unknown>) {
@@ -107,6 +109,7 @@ const terminalWrite = vi.fn(() => Promise.resolve());
 const terminalWriteBinary = vi.fn(() => Promise.resolve());
 const terminalDestroy = vi.fn(() => Promise.resolve());
 const openExternal = vi.fn(() => Promise.resolve(true));
+const copyTerminalText = vi.fn(() => Promise.resolve(true));
 let sshCreateShellImpl: () => Promise<unknown> = () => Promise.resolve({ connected: true });
 const sshCreateShell = vi.fn(() => sshCreateShellImpl());
 const sshResizeShell = vi.fn(() => Promise.resolve());
@@ -187,6 +190,7 @@ beforeEach(() => {
       sshWriteShell,
       sshWriteShellBinary,
       openExternal,
+      copyTerminalText,
     },
   });
 });
@@ -395,6 +399,64 @@ describe('TerminalPane SSH reinitialization', () => {
 
     act(() => requestTerminalSearch('term-command-search'));
     expect(searchOverlayProps.visible).toBe(true);
+  });
+
+  it('copies selected terminal text from copy shortcuts and right-click without sending shell input', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-copy" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    const term = MockTerminal.instances.at(-1)!;
+    term.selection = 'first line\nsecond line';
+    const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
+
+    for (const modifiers of [
+      { ctrlKey: true, metaKey: false, shiftKey: false },
+      { ctrlKey: true, metaKey: false, shiftKey: true },
+      { ctrlKey: false, metaKey: true, shiftKey: false },
+    ]) {
+      const preventDefault = vi.fn();
+      expect(keyHandler({
+        type: 'keydown', key: 'c', altKey: false, ...modifiers, preventDefault,
+      })).toBe(false);
+      expect(preventDefault).toHaveBeenCalledOnce();
+    }
+    expect(keyHandler({
+      type: 'keyup', key: 'c', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, preventDefault: vi.fn(),
+    })).toBe(false);
+    fireEvent.contextMenu(document.querySelector('.terminal-container')!);
+
+    await waitFor(() => expect(copyTerminalText).toHaveBeenCalledTimes(4));
+    expect(copyTerminalText).toHaveBeenNthCalledWith(1, 'first line\nsecond line');
+    expect(copyTerminalText).toHaveBeenNthCalledWith(2, 'first line\nsecond line');
+    expect(copyTerminalText).toHaveBeenNthCalledWith(3, 'first line\nsecond line');
+    expect(copyTerminalText).toHaveBeenNthCalledWith(4, 'first line\nsecond line');
+    expect(terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: '\u0003' }));
+  });
+
+  it('keeps unselected Ctrl+C available for terminal interrupt', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-interrupt" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    const term = MockTerminal.instances.at(-1)!;
+    const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
+    for (const modifiers of [
+      { ctrlKey: true, metaKey: false, shiftKey: false },
+      { ctrlKey: true, metaKey: false, shiftKey: true },
+      { ctrlKey: false, metaKey: true, shiftKey: false },
+    ]) {
+      expect(keyHandler({
+        type: 'keydown', key: 'c', altKey: false, ...modifiers, preventDefault: vi.fn(),
+      })).toBe(true);
+    }
+    expect(copyTerminalText).not.toHaveBeenCalled();
   });
 
   it('pastes a requested snippet into only its target terminal without adding Enter', async () => {
