@@ -8,6 +8,26 @@ const snippets = [
 ];
 
 describe('SnippetPicker', () => {
+  it('shows a creation empty state when no snippets are saved', () => {
+    render(<SnippetPicker visible onClose={vi.fn()} snippets={[]} onSave={vi.fn()} onPaste={vi.fn()} />);
+
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('No snippets yet');
+    expect(status).toHaveTextContent('Save reusable terminal text to paste it quickly.');
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search snippets' }), { target: { value: 'missing' } });
+    expect(status).toHaveTextContent('No snippets yet');
+    expect(status).not.toHaveTextContent('No snippets match');
+  });
+
+  it('identifies an empty search as no matching snippets', () => {
+    render(<SnippetPicker visible onClose={vi.fn()} snippets={snippets} onSave={vi.fn()} onPaste={vi.fn()} />);
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search snippets' }), { target: { value: 'missing' } });
+
+    expect(screen.getByRole('status')).toHaveTextContent('No snippets match “missing”');
+  });
+
   it('filters snippets by name and pastes the selected snippet without adding a newline', () => {
     const onPaste = vi.fn();
     render(<SnippetPicker visible onClose={vi.fn()} snippets={snippets} onSave={vi.fn()} onPaste={onPaste} />);
