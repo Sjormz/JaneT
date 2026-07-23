@@ -873,6 +873,19 @@ describe('split panes in the app', () => {
     expect(window.janet.terminalWrite).not.toHaveBeenCalled();
     expect(window.janet.sshWriteShell).not.toHaveBeenCalled();
 
+    await waitFor(() => {
+      const sessionUpdates = (window.janet.setSettings as any).mock.calls
+        .map((call: any[]) => call[0])
+        .filter((update: any) => Array.isArray(update?.session?.tabs));
+      const savedTab = sessionUpdates.at(-1)?.session.tabs
+        .find((candidate: { title: string }) => candidate.title === preset.name);
+      expect(savedTab?.root.children[0].startupCommands).toEqual(['npm install', 'npm run dev']);
+      expect(savedTab?.root.children[1]).toMatchObject({
+        startupCommands: ['hermes doctor', 'hermes -p forge --tui'],
+        startupShellDialect: 'posix',
+      });
+    }, { timeout: 1_500 });
+
     const launchedTab = rendererMocks.verticalTabBarProps.tabs.find(
       (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
     );
@@ -1026,7 +1039,7 @@ describe('split panes in the app', () => {
     }
   });
 
-  it('restores a saved session with multiple tabs, pane tree, and active tab', async () => {
+  it('restores startup commands with a saved session and reruns them in fresh terminals', async () => {
     window.janet.getSettings = vi.fn().mockResolvedValue({
       keybindings: {},
       workspaceTabs: [],
@@ -1076,10 +1089,11 @@ describe('split panes in the app', () => {
         (call: any[]) => call[0]?.cwd === 'C:/repo',
       );
       expect(projectCreates).toHaveLength(2);
-      for (const [params] of projectCreates) {
-        expect(params).not.toHaveProperty('startupCommands');
-        expect(params).not.toHaveProperty('startupShellDialect');
-      }
+      expect(projectCreates[0][0]).toMatchObject({
+        startupCommands: ['git pull', 'npm install'],
+        startupShellDialect: 'posix',
+      });
+      expect(projectCreates[1][0]).not.toHaveProperty('startupCommands');
       expect(window.janet.terminalCreate).toHaveBeenCalledTimes(2);
     });
   });
@@ -1213,8 +1227,10 @@ describe('split panes in the app', () => {
     const shellArgs = (window.janet.sshCreateShell as any).mock.calls[0][0] as any;
     expect(connectArgs.id).toBe(`ssh-${sessionUuid}`);
     expect(shellArgs.id).toBe(connectArgs.id);
-    expect(shellArgs).not.toHaveProperty('startupCommands');
-    expect(shellArgs).not.toHaveProperty('startupShellDialect');
+    expect(shellArgs).toMatchObject({
+      startupCommands: ['hermes doctor', 'hermes --tui'],
+      startupShellDialect: 'posix',
+    });
     expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
       kind: 'ssh',
       sessionId: connectArgs.id,

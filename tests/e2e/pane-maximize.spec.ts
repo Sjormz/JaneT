@@ -75,12 +75,12 @@ async function connectCdp(port: number): Promise<Browser> {
   return chromium.connectOverCDP(`http://127.0.0.1:${port}`);
 }
 
-async function launchApp(settings: unknown, prefix: string): Promise<{ browser: Browser; electronProcess: ChildProcess; page: Page; userData: string }> {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+async function launchApp(settings: unknown, prefix: string, existingUserData?: string): Promise<{ browser: Browser; electronProcess: ChildProcess; page: Page; userData: string }> {
+  const userData = existingUserData ?? fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const settingsPath = path.join(userData, 'settings.json');
   const remoteDebuggingPort = await getFreePort();
 
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+  if (settings !== undefined) fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
 
   // Spawn Electron directly so the tracked child is the app process itself.
   // A shell-wrapped `npx electron` can exit or be killed while leaving its
@@ -217,6 +217,7 @@ test('runs ordered preset startup commands once per fresh terminal', async () =>
   const failAfterRelativeMarker = `node -e "require('fs').appendFileSync('failure.txt','X');process.exit(23)"`;
   const mustNotRunAfterFailure = `node -e "require('fs').appendFileSync('failure.txt','Y')"`;
   let app: Awaited<ReturnType<typeof launchApp>> | undefined;
+  let userData: string | undefined;
 
   try {
     app = await launchApp({
@@ -267,6 +268,7 @@ test('runs ordered preset startup commands once per fresh terminal', async () =>
         sidebarSection: 'files',
       },
     }, 'janet-e2e-startup-app-');
+    userData = app.userData;
 
     const presetsButton = app.page.getByRole('button', { name: 'Presets' });
     if (await presetsButton.getAttribute('aria-expanded') !== 'true') await presetsButton.click();
@@ -286,13 +288,25 @@ test('runs ordered preset startup commands once per fresh terminal', async () =>
     await app.page.waitForTimeout(1_750);
     expect(fs.readFileSync(markerPath, 'utf-8')).toBe('AB');
 
-    // Opening the preset explicitly creates a new pane instance, so its startup
-    // sequence should run again from the beginning.
-    await app.page.getByRole('button', { name: 'Open preset Ordered startup' }).click();
+    // A full app restart creates fresh terminals, so startup automation should
+    // run again instead of leaving the restored pane idle.
+    await closeApp(app.browser, app.electronProcess);
+    app = undefined;
+    app = await launchApp(undefined, 'janet-e2e-startup-app-', userData);
     await expect.poll(
       () => fs.readFileSync(markerPath, 'utf-8'),
       { timeout: 10_000 },
     ).toBe('ABAB');
+
+    // Opening the preset explicitly creates a new pane instance, so its startup
+    // sequence should run again from the beginning.
+    const reloadedPresetsButton = app.page.getByRole('button', { name: 'Presets' });
+    if (await reloadedPresetsButton.getAttribute('aria-expanded') !== 'true') await reloadedPresetsButton.click();
+    await app.page.getByRole('button', { name: 'Open preset Ordered startup' }).click();
+    await expect.poll(
+      () => fs.readFileSync(markerPath, 'utf-8'),
+      { timeout: 10_000 },
+    ).toBe('ABABAB');
 
     // The first row writes a relative marker and exits non-zero. Finding the
     // marker in the saved cwd proves directory selection; never seeing `Y`
@@ -305,7 +319,8 @@ test('runs ordered preset startup commands once per fresh terminal', async () =>
     await app.page.waitForTimeout(750);
     expect(fs.readFileSync(failurePath, 'utf-8')).toBe('X');
   } finally {
-    if (app) await closeApp(app.browser, app.electronProcess, app.userData);
+    if (app) await closeApp(app.browser, app.electronProcess, userData);
+    else if (userData) fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     fs.rmSync(markerDir, { recursive: true, force: true });
   }
 });

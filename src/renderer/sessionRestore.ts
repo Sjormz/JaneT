@@ -49,7 +49,7 @@ function normalizeSizes(sizes: unknown, count: number): number[] {
 }
 
 export interface SerializePaneTreeOptions {
-  /** Startup automation belongs to reusable presets, not durable live sessions. */
+  /** Include startup automation when it must survive serialization. */
   includeStartupCommands?: boolean;
 }
 
