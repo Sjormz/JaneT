@@ -38,6 +38,7 @@ vi.mock('../../src/renderer/components/VerticalTabBar', () => ({
             key={tab.id}
             data-testid={`outer-tab-${tab.id}`}
             data-dirty={typedProps.dirtyTabIds?.has(tab.id) ? 'true' : 'false'}
+            onClick={() => typedProps.onSelectTab(tab.id)}
           >
             {tab.title}
           </span>
@@ -1080,6 +1081,52 @@ describe('split panes in the app', () => {
         expect(params).not.toHaveProperty('startupShellDialect');
       }
       expect(window.janet.terminalCreate).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('focuses the first terminal after clicking a terminal tab', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [],
+      session: {
+        tabs: [
+          {
+            id: 'tab-1',
+            title: 'project',
+            type: 'local',
+            root: {
+              type: 'split',
+              direction: 'vertical',
+              sizes: [1, 1],
+              children: [{ type: 'leaf' }, { type: 'leaf' }],
+            },
+          },
+          {
+            id: 'tab-2',
+            title: 'docs',
+            type: 'local',
+            root: { type: 'leaf' },
+          },
+        ],
+        activeTabId: 'tab-1',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    await openSampleEditor();
+
+    fireEvent.click(within(screen.getByTestId('vertical-tab-bar')).getByText('docs'));
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+    fireEvent.click(within(screen.getByTestId('vertical-tab-bar')).getByText('project'));
+
+    await waitFor(() => {
+      const terminals = screen.getAllByTestId(/terminal-/);
+      expect(terminals).toHaveLength(2);
+      expect(terminals[0]).toHaveFocus();
     });
   });
 

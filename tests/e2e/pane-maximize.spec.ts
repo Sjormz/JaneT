@@ -156,7 +156,7 @@ async function closeApp(browser: Browser, electronProcess: ChildProcess, userDat
     await browser.close().catch(() => {});
   } finally {
     await killProcessTree(electronProcess);
-    if (userData) fs.rmSync(userData, { recursive: true, force: true });
+    if (userData) fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
@@ -185,6 +185,23 @@ test('maximizes and restores a terminal pane in Electron', async () => {
     await closePaneDialog.getByRole('button', { name: 'Close pane' }).click();
     await expect(page.locator('.terminal-leaf')).toHaveCount(1);
     await expect(page.getByLabel('left — Local terminal pane')).toBeVisible();
+  } finally {
+    await closeApp(browser, electronProcess, userData);
+  }
+});
+
+test('focuses the first terminal after clicking a terminal tab', async () => {
+  const { browser, electronProcess, page, userData } = await launchTwoPaneApp();
+
+  try {
+    await expect(page.locator('.terminal-container')).toHaveCount(2);
+    await page.getByRole('button', { name: 'New local terminal tab' }).click();
+    await expect(page.locator('.terminal-container')).toHaveCount(1);
+    await page.locator('.vtab-item').filter({ hasText: 'two panes' }).click();
+    await expect(page.locator('.terminal-container')).toHaveCount(2);
+    await expect.poll(() => page.evaluate(() => (
+      document.activeElement === document.querySelector('.terminal-container .xterm-helper-textarea')
+    ))).toBe(true);
   } finally {
     await closeApp(browser, electronProcess, userData);
   }

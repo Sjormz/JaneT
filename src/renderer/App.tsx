@@ -596,6 +596,12 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     setFocusedTerminalId(termId);
   }, []);
 
+  const selectTerminalTab = useCallback((tabId: string) => {
+    setActiveTabId(tabId);
+    editorDocuments.selectSurface(tabId, 'terminal');
+    requestAnimationFrame(() => firstTerminalFocusTarget()?.focus());
+  }, [editorDocuments.selectSurface]);
+
   const teardownTerminalOwners = useCallback((owners: TerminalOwner[], remainingTabs: TabInfo[]) => {
     if (owners.length === 0) return;
 
@@ -1569,7 +1575,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
             onSSHConnected={handleSSHConnected}
             onSSHProfilesChange={handleSSHProfilesChange}
             workspaceTabs={workspaceTabs}
-            onSelectTab={setActiveTabId}
+            onSelectTab={selectTerminalTab}
             onCloseTab={requestCloseTab}
             onNewTab={() => addTab('local')}
             onWorkspaceTabsChange={handleWorkspaceTabsChange}

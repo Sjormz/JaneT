@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { PencilIcon, PlusIcon, SearchIcon, TrashIcon } from '../icons';
+import { FileTextIcon, PencilIcon, PlusIcon, SearchCloseIcon, SearchIcon, TrashIcon } from '../icons';
 import { useModalFocus } from '../useModalFocus';
 import { hasDuplicateSnippetName, type Snippet } from '../../shared/snippets';
 import ConfirmationDialog from './ConfirmationDialog';
@@ -52,6 +52,8 @@ export default function SnippetPicker({ visible, onClose, snippets, onSave, onPa
 
   if (!visible) return null;
 
+  const noMatches = snippets.length > 0 && query.trim().length > 0;
+
   const beginEditing = (snippet?: Snippet) => {
     setError('');
     setEditing(snippet ? { ...snippet } : freshSnippet());
@@ -100,7 +102,13 @@ export default function SnippetPicker({ visible, onClose, snippets, onSave, onPa
   };
 
   return (
-    <div className="snippet-picker-overlay" role="presentation" onMouseDown={onClose}>
+    <div
+      className="snippet-picker-overlay"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       <div
         ref={panelRef}
         className="snippet-picker"
@@ -119,7 +127,6 @@ export default function SnippetPicker({ visible, onClose, snippets, onSave, onPa
           >
             <div className="snippet-editor-heading">
               <h2>{snippets.some((snippet) => snippet.id === editing.id) ? 'Edit snippet' : 'New snippet'}</h2>
-              <button type="button" className="snippet-secondary-button" onClick={finishEditing}>Back</button>
             </div>
             <label className="form-field">
               <span>Name</span>
@@ -156,36 +163,48 @@ export default function SnippetPicker({ visible, onClose, snippets, onSave, onPa
             <div className="snippet-picker-heading">
               <div>
                 <h2>Snippets</h2>
-                <p>Enter pastes text only; it never runs the command.</p>
+                <p>Paste saved text without running it.</p>
               </div>
               <button type="button" className="snippet-primary-button" onClick={() => beginEditing()}>
                 <PlusIcon size="sm" /> New snippet
               </button>
             </div>
-            <div className="command-palette-input-wrapper">
-              <SearchIcon size="md" className="command-palette-icon" />
-              <input
-                data-testid="snippet-search-input"
-                className="command-palette-input"
-                type="text"
-                role="combobox"
-                aria-label="Search snippets"
-                aria-autocomplete="list"
-                aria-expanded="true"
-                aria-controls="snippet-results"
-                aria-activedescendant={filtered[selectedIndex] ? `snippet-option-${filtered[selectedIndex].id}` : undefined}
-                value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setSelectedIndex(0);
-                }}
-                onKeyDown={onSearchKeyDown}
-                placeholder="Search snippets…"
-              />
+            <div className="snippet-search-shell">
+              <div className="snippet-search-field">
+                <SearchIcon size="md" />
+                <input
+                  data-testid="snippet-search-input"
+                  className="snippet-search-input"
+                  type="text"
+                  role="combobox"
+                  aria-label="Search snippets"
+                  aria-autocomplete="list"
+                  aria-expanded="true"
+                  aria-controls="snippet-results"
+                  aria-activedescendant={filtered[selectedIndex] ? `snippet-option-${filtered[selectedIndex].id}` : undefined}
+                  value={query}
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    setSelectedIndex(0);
+                  }}
+                  onKeyDown={onSearchKeyDown}
+                  placeholder="Search snippets…"
+                />
+              </div>
             </div>
             <div id="snippet-results" className="snippet-results" role="listbox" aria-label="Snippets">
               {filtered.length === 0 ? (
-                <div className="command-palette-empty" role="status">No matching snippets</div>
+                <div className="snippet-empty" role="status">
+                  <span className="snippet-empty-icon">
+                    {noMatches ? <SearchCloseIcon size="lg" /> : <FileTextIcon size="lg" />}
+                  </span>
+                  <strong>{noMatches ? `No snippets match “${query.trim()}”` : 'No snippets yet'}</strong>
+                  <span>
+                    {noMatches
+                      ? 'Try another search or create a new snippet.'
+                      : 'Save reusable terminal text to paste it quickly.'}
+                  </span>
+                </div>
               ) : filtered.map((snippet, index) => (
                 <div
                   key={snippet.id}
