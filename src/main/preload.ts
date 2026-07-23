@@ -165,6 +165,8 @@ const api = {
     ipcRenderer.invoke('git:stage', params),
   gitUnstage: (params: { repoPath: string; paths: string[] }) =>
     ipcRenderer.invoke('git:unstage', params),
+  gitDiscard: (params: { repoPath: string; paths: string[] }) =>
+    ipcRenderer.invoke('git:discard', params),
   gitCommit: (params: { repoPath: string; message: string }) =>
     ipcRenderer.invoke('git:commit', params),
   gitFetch: (params: { repoPath: string }) =>

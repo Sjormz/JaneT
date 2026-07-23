@@ -387,6 +387,7 @@ test('stages and commits changes from Source Control', async ({}, testInfo) => {
     fs.writeFileSync(path.join(repoPath, 'base.txt'), 'base\n', 'utf-8');
     execFileSync('git', ['add', 'base.txt'], { cwd: repoPath });
     execFileSync('git', ['commit', '-m', 'base'], { cwd: repoPath });
+    fs.writeFileSync(path.join(repoPath, 'base.txt'), 'discard me\n', 'utf-8');
     fs.writeFileSync(path.join(repoPath, 'change.txt'), 'from JaneT\n', 'utf-8');
 
     app = await launchApp({
@@ -414,13 +415,28 @@ test('stages and commits changes from Source Control', async ({}, testInfo) => {
     const sourceControl = app.page.locator('.git-tree');
     await expect(sourceControl.getByRole('button', { name: 'Add worktree with new branch' })).toBeVisible({ timeout: 10_000 });
     const worktrees = sourceControl.getByRole('button', { name: /Worktrees/ });
+    const repo = sourceControl.locator('.git-repo-path');
     const changes = sourceControl.getByRole('button', { name: /Changes/ });
-    const worktreesBeforeChanges = await worktrees.evaluate(
-      (node, other) => Boolean(node.compareDocumentPosition(other as Node) & Node.DOCUMENT_POSITION_FOLLOWING),
-      await changes.elementHandle(),
-    );
-    expect(worktreesBeforeChanges).toBe(true);
+    for (const item of [repo, changes]) {
+      const followsWorktrees = await worktrees.evaluate(
+        (node, other) => Boolean(node.compareDocumentPosition(other as Node) & Node.DOCUMENT_POSITION_FOLLOWING),
+        await item.elementHandle(),
+      );
+      expect(followsWorktrees).toBe(true);
+    }
+    const createBranch = sourceControl.getByRole('button', { name: 'Create branch', exact: true });
+    await expect(createBranch).toHaveClass(/git-section-action/);
+    await expect(createBranch.locator('xpath=ancestor::div[contains(@class,"git-section-header")]')).toContainText('Branches');
+    await expect(sourceControl.getByText('Create branch…')).toHaveCount(0);
     await sourceControl.screenshot({ path: testInfo.outputPath('source-control.png') });
+
+    await expect(sourceControl.getByRole('button', { name: 'Discard changes in base.txt' })).toBeVisible();
+    await expect(sourceControl.getByRole('button', { name: 'Discard changes in change.txt' })).toHaveCount(0);
+    await sourceControl.getByRole('button', { name: 'Discard changes in base.txt' }).click();
+    await expect(app.page.getByRole('dialog', { name: 'Discard changes in base.txt?' })).toBeVisible();
+    await app.page.getByRole('button', { name: 'Discard', exact: true }).click();
+    await expect.poll(() => fs.readFileSync(path.join(repoPath, 'base.txt'), 'utf-8').trim()).toBe('base');
+    expect(fs.readFileSync(path.join(repoPath, 'change.txt'), 'utf-8').trim()).toBe('from JaneT');
 
     await sourceControl.getByRole('button', { name: 'Stage change.txt' }).click();
     await expect(sourceControl.getByRole('button', { name: 'Unstage change.txt' })).toBeVisible({ timeout: 8_000 });

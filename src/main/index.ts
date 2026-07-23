@@ -551,6 +551,10 @@ function registerIpcHandlers() {
     return await gitManager.unstage(repoPath, paths);
   });
 
+  handle('git:discard', async (event, { repoPath, paths }) => {
+    return await gitManager.discard(repoPath, paths);
+  });
+
   handle('git:commit', async (event, { repoPath, message }) => {
     return await gitManager.commit(repoPath, message);
   });
