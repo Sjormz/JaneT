@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useId, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   RefreshIcon, ChevronDownIcon, ChevronRightIcon, PlusIcon,
@@ -6,7 +6,7 @@ import {
   TrashIcon, AlertIcon, CircleDotIcon, CircleIcon, FolderIcon,
   fileIconFor,
   SettingsIconCmp, MoreIcon, ListIcon, ArrowUpIcon, ArrowDownIcon,
-  CheckIcon, MinusIcon, RotateIcon,
+  CheckIcon, MinusIcon, RotateIcon, UndoIcon,
 } from '../icons';
 import { defaultWorktreePath, GitWorktreeInfo, basename } from '../../shared/gitWorktrees';
 import { refreshCoordinator, useRefreshTask } from '../refreshCoordinator';
@@ -47,6 +47,7 @@ interface DialogField {
 }
 
 interface DialogState {
+  repoPath: string;
   title: string;
   description?: string;
   fields: DialogField[];
@@ -86,6 +87,11 @@ export default function GitTree({
     repoPath: null,
     branch: null,
   });
+  const activeRepoPath = useRef(repoPath);
+
+  useLayoutEffect(() => {
+    activeRepoPath.current = repoPath;
+  }, [repoPath]);
 
   useEffect(() => {
     window.janet.getSettings().then((settings: any) => {
@@ -111,6 +117,7 @@ export default function GitTree({
     setBranches([]);
     setWorktrees([]);
     setMessage(null);
+    setDialog(null);
   }, [repoPath]);
 
   useRefreshTask({
@@ -163,6 +170,7 @@ export default function GitTree({
   const handleCreateBranch = () => {
     if (!repoPath) return;
     setDialog({
+      repoPath,
       title: 'Create branch',
       confirmLabel: 'Create',
       fields: [
@@ -183,6 +191,7 @@ export default function GitTree({
     const isCurrent = status?.current ? branch.name === status.current : branch.current;
     if (!repoPath || isCurrent) return;
     setDialog({
+      repoPath,
       title: `Delete ${branch.name}`,
       confirmLabel: 'Delete',
       destructive: true,
@@ -211,7 +220,9 @@ export default function GitTree({
   };
 
   const handleWorktreeSettings = () => {
+    if (!repoPath) return;
     setDialog({
+      repoPath,
       title: 'Worktree defaults',
       confirmLabel: 'Save',
       fields: [
@@ -227,6 +238,7 @@ export default function GitTree({
   const handleAddWorktree = (createBranch: boolean) => {
     if (!repoPath) return;
     setDialog({
+      repoPath,
       title: createBranch ? 'Add worktree with new branch' : 'Add worktree from existing branch',
       confirmLabel: 'Add',
       fields: [
@@ -262,6 +274,7 @@ export default function GitTree({
   const handleRemoveWorktree = (tree: GitWorktreeInfo) => {
     if (!repoPath || tree.path === repoPath) return;
     setDialog({
+      repoPath,
       title: `Remove ${basename(tree.path)}`,
       description: `Remove the Git worktree at ${tree.path}. This deletes that worktree directory; uncommitted files are preserved only if Git refuses the safe removal.`,
       confirmLabel: 'Remove',
@@ -282,6 +295,7 @@ export default function GitTree({
   const handlePruneWorktrees = () => {
     if (!repoPath) return;
     setDialog({
+      repoPath,
       title: 'Prune stale worktrees',
       description: 'Remove Git records for worktrees whose directories no longer exist. Working directories are not deleted.',
       confirmLabel: 'Prune',
@@ -289,6 +303,27 @@ export default function GitTree({
       fields: [],
       onSubmit: () => {
         runGitAction(() => window.janet.gitPruneWorktrees({ repoPath }), 'Pruned stale worktrees');
+      },
+    });
+  };
+
+  const handleDiscard = (paths: string[], all = false) => {
+    if (!repoPath || paths.length === 0) return;
+    const file = paths[0];
+    setDialog({
+      repoPath,
+      title: all ? 'Discard all unstaged changes?' : `Discard changes in ${file}?`,
+      description: all
+        ? `Restore ${paths.length} tracked working-tree ${paths.length === 1 ? 'change' : 'changes'} from Git. Staged content and untracked files are preserved; anything not staged returns to the last commit. This cannot be undone.`
+        : 'Restore this tracked file from Git. Staged content is preserved; otherwise it returns to the last commit. This cannot be undone.',
+      confirmLabel: 'Discard',
+      destructive: true,
+      fields: [],
+      onSubmit: () => {
+        runGitAction(
+          () => window.janet.gitDiscard({ repoPath, paths }),
+          all ? 'Discarded all unstaged changes' : `Discarded changes in ${file}`,
+        );
       },
     });
   };
@@ -302,6 +337,10 @@ export default function GitTree({
   const conflictedPaths = new Set(status?.conflicted || []);
   const stagedFiles = status?.files.filter((file) => file.staged) || [];
   const changedFiles = status?.files.filter((file) => file.unstaged || conflictedPaths.has(file.path)) || [];
+  const discardablePaths = changedFiles
+    .filter((file) => !conflictedPaths.has(file.path) && file.index !== '?' && file.working_dir !== '?')
+    .map((file) => file.path);
+  const discardablePathSet = new Set(discardablePaths);
 
   return (
     <div className="git-tree">
@@ -322,33 +361,6 @@ export default function GitTree({
           </Tooltip>
         </div>
       </div>
-
-      <Tooltip label={repoPath} placement="right">
-        <div className="git-repo-path" aria-label={`${status?.current || 'HEAD'} at ${repoPath}`}>
-          <GitBranchIcon size="xs" /> {status?.current || 'HEAD'}
-          {status && status.files.length > 0 && <span className="git-pill dirty" aria-label={`${status.files.length} changed files`}><CircleIcon size="xs" /> {status.files.length}</span>}
-          {status && status.ahead > 0 && <span className="git-pill ahead" aria-label={`${status.ahead} commits ahead`}><ArrowUpIcon size="xs" />{status.ahead}</span>}
-          {status && status.behind > 0 && <span className="git-pill behind" aria-label={`${status.behind} commits behind`}><ArrowDownIcon size="xs" />{status.behind}</span>}
-        </div>
-      </Tooltip>
-      {message && <div className="git-message" role="status" aria-live="polite">{message}</div>}
-
-      <form className="git-commit-form" onSubmit={handleCommit}>
-        <input
-          className="git-commit-input"
-          aria-label="Commit message"
-          placeholder="Message (Ctrl+Enter to commit)"
-          value={commitMessage}
-          onChange={(event) => setCommitMessage(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.ctrlKey && event.key === 'Enter') event.currentTarget.form?.requestSubmit();
-          }}
-          disabled={busy}
-        />
-        <Tooltip label="Commit staged changes" placement="left">
-          <button className="git-commit-button" type="submit" aria-label="Commit staged changes" disabled={busy || stagedFiles.length === 0 || !commitMessage.trim()}><CheckIcon size="sm" /></button>
-        </Tooltip>
-      </form>
 
       <GitSection title="Worktrees" count={worktrees.length} expanded={expanded.worktrees} onToggle={() => toggle('worktrees')}
         extra={
@@ -398,6 +410,33 @@ export default function GitTree({
         ))}
       </GitSection>
 
+      <Tooltip label={repoPath} placement="right">
+        <div className="git-repo-path" aria-label={`${status?.current || 'HEAD'} at ${repoPath}`}>
+          <GitBranchIcon size="xs" /> {status?.current || 'HEAD'}
+          {status && status.files.length > 0 && <span className="git-pill dirty" aria-label={`${status.files.length} changed files`}><CircleIcon size="xs" /> {status.files.length}</span>}
+          {status && status.ahead > 0 && <span className="git-pill ahead" aria-label={`${status.ahead} commits ahead`}><ArrowUpIcon size="xs" />{status.ahead}</span>}
+          {status && status.behind > 0 && <span className="git-pill behind" aria-label={`${status.behind} commits behind`}><ArrowDownIcon size="xs" />{status.behind}</span>}
+        </div>
+      </Tooltip>
+      {message && <div className="git-message" role="status" aria-live="polite">{message}</div>}
+
+      <form className="git-commit-form" onSubmit={handleCommit}>
+        <input
+          className="git-commit-input"
+          aria-label="Commit message"
+          placeholder="Message (Ctrl+Enter to commit)"
+          value={commitMessage}
+          onChange={(event) => setCommitMessage(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.ctrlKey && event.key === 'Enter') event.currentTarget.form?.requestSubmit();
+          }}
+          disabled={busy}
+        />
+        <Tooltip label="Commit staged changes" placement="left">
+          <button className="git-commit-button" type="submit" aria-label="Commit staged changes" disabled={busy || stagedFiles.length === 0 || !commitMessage.trim()}><CheckIcon size="sm" /></button>
+        </Tooltip>
+      </form>
+
       {status && stagedFiles.length > 0 && (
         <GitSection title="Staged Changes" count={stagedFiles.length} expanded={expanded.staged} onToggle={() => toggle('staged')}
           extra={
@@ -431,6 +470,11 @@ export default function GitTree({
               <Tooltip label="Stage all changes" placement="left">
                 <button className="git-section-action" onClick={() => runGitAction(() => window.janet.gitStage({ repoPath, paths: [] }), 'Staged all changes')} disabled={busy} aria-label="Stage all changes"><PlusIcon size="xs" /></button>
               </Tooltip>
+              {discardablePaths.length > 0 && (
+                <Tooltip label="Discard all unstaged changes" placement="left">
+                  <button className="git-section-action danger" onClick={() => handleDiscard(discardablePaths, true)} disabled={busy} aria-label="Discard all unstaged changes"><UndoIcon size="xs" /></button>
+                </Tooltip>
+              )}
               <Tooltip label={changesView === 'flat' ? 'Show changes as a folder tree' : 'Show changes as a flat list'} placement="left">
                 <button
                   className="git-section-action"
@@ -453,6 +497,7 @@ export default function GitTree({
               onCopyTerminalPath={onCopyTerminalPath}
               onOpenFile={onOpenFile}
               onStage={(path) => runGitAction(() => window.janet.gitStage({ repoPath, paths: [path] }), `Staged ${path}`)}
+              onDiscard={(path) => handleDiscard([path])}
             />
           ) : (
             changedFiles.map((file) => (
@@ -465,6 +510,7 @@ export default function GitTree({
                 action="stage"
                 busy={busy}
                 onAction={() => runGitAction(() => window.janet.gitStage({ repoPath, paths: [file.path] }), `Staged ${file.path}`)}
+                onDiscard={discardablePathSet.has(file.path) ? () => handleDiscard([file.path]) : undefined}
                 kind={status.conflicted.includes(file.path)
                   ? 'conflicted'
                   : file.staged
@@ -478,10 +524,13 @@ export default function GitTree({
         </GitSection>
       )}
 
-      <GitSection title="Branches" count={branches.length} expanded={expanded.branches} onToggle={() => toggle('branches')}>
-        <div className="git-inline-actions">
-          <button className="git-action-btn" onClick={handleCreateBranch} disabled={busy}><PlusIcon size="xs" /> Create branch…</button>
-        </div>
+      <GitSection title="Branches" count={branches.length} expanded={expanded.branches} onToggle={() => toggle('branches')}
+        extra={
+          <Tooltip label="Create branch" placement="left">
+            <button className="git-section-action" onClick={handleCreateBranch} disabled={busy} aria-label="Create branch"><PlusIcon size="xs" /></button>
+          </Tooltip>
+        }
+      >
         {branches.filter((b) => !b.isRemote).map((branch) => {
           const current = status?.current ? branch.name === status.current : branch.current;
           const DotIcon = current ? CircleDotIcon : CircleIcon;
@@ -523,7 +572,7 @@ export default function GitTree({
         ))}
       </GitSection>
 
-      {dialog && createPortal(
+      {dialog?.repoPath === repoPath && createPortal(
               <GitDialog
                 title={dialog.title}
                 description={dialog.description}
@@ -535,6 +584,10 @@ export default function GitTree({
                 worktreeBaseDir={worktreeBaseDir}
                 worktreeTemplate={worktreeTemplate}
                 onSubmit={(values) => {
+                  if (dialog.repoPath !== activeRepoPath.current) {
+                    setDialog(null);
+                    return;
+                  }
                   dialog.onSubmit(values);
                   setDialog(null);
                 }}
@@ -635,6 +688,7 @@ function renderTreeNode(
   onCopyTerminalPath?: (path: string) => Promise<void>,
   onOpenFile?: (resource: EditorResource) => void,
   onStage?: (path: string) => void,
+  onDiscard?: (path: string) => void,
 ): React.ReactNode {
   const entries = Array.from(node.children.values()).sort((a: any, b: any) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
@@ -644,7 +698,7 @@ function renderTreeNode(
     if (child.isDir) {
       return (
         <GitTreeDir key={child.path} name={child.name} depth={depth}>
-          {renderTreeNode(child, depth + 1, busy, repoPath, onCopyTerminalPath, onOpenFile, onStage)}
+          {renderTreeNode(child, depth + 1, busy, repoPath, onCopyTerminalPath, onOpenFile, onStage, onDiscard)}
         </GitTreeDir>
       );
     }
@@ -664,12 +718,15 @@ function renderTreeNode(
         action={onStage ? 'stage' : undefined}
         busy={busy}
         onAction={onStage ? () => onStage(child.file.path) : undefined}
+        onDiscard={onDiscard && !f.conflicted && f.index !== '?' && f.working_dir !== '?'
+          ? () => onDiscard(child.file.path)
+          : undefined}
       />
     );
   });
 }
 
-function GitFileTree({ repoPath, files, conflicted, busy, onCopyTerminalPath, onOpenFile, onStage }: {
+function GitFileTree({ repoPath, files, conflicted, busy, onCopyTerminalPath, onOpenFile, onStage, onDiscard }: {
   repoPath: string;
   files: Array<{ path: string; working_dir: string; index: string; staged: boolean; unstaged: boolean }>;
   conflicted: string[];
@@ -677,9 +734,10 @@ function GitFileTree({ repoPath, files, conflicted, busy, onCopyTerminalPath, on
   onCopyTerminalPath?: (path: string) => Promise<void>;
   onOpenFile?: (resource: EditorResource) => void;
   onStage?: (path: string) => void;
+  onDiscard?: (path: string) => void;
 }) {
   const tree = buildFileTree(files, conflicted);
-  return <>{renderTreeNode(tree, 0, Boolean(busy), repoPath, onCopyTerminalPath, onOpenFile, onStage)}</>;
+  return <>{renderTreeNode(tree, 0, Boolean(busy), repoPath, onCopyTerminalPath, onOpenFile, onStage, onDiscard)}</>;
 }
 
 function GitTreeDir({ name, depth, children }: { name: string; depth: number; children: React.ReactNode }) {
@@ -703,7 +761,7 @@ function GitTreeDir({ name, depth, children }: { name: string; depth: number; ch
   );
 }
 
-function GitFile({ repoPath, path, kind, wd, index, depth, onCopyTerminalPath, onOpenFile, action, onAction, busy }: {
+function GitFile({ repoPath, path, kind, wd, index, depth, onCopyTerminalPath, onOpenFile, action, onAction, onDiscard, busy }: {
   repoPath: string;
   path: string;
   kind: 'staged' | 'unstaged' | 'mixed' | 'conflicted';
@@ -714,6 +772,7 @@ function GitFile({ repoPath, path, kind, wd, index, depth, onCopyTerminalPath, o
   onOpenFile?: (resource: EditorResource) => void;
   action?: 'stage' | 'unstage';
   onAction?: () => void;
+  onDiscard?: () => void;
   busy?: boolean;
 }) {
   const isDeleted = wd === 'D' || index === 'D';
@@ -730,7 +789,7 @@ function GitFile({ repoPath, path, kind, wd, index, depth, onCopyTerminalPath, o
         ? 'Staged change'
         : 'Working-tree change';
   return (
-    <div className="git-file-row">
+    <div className={`git-file-row ${onDiscard ? 'has-discard' : ''}`}>
       <Tooltip label={canOpen
         ? `${path}: ${title} · Open in editor or drag into a terminal`
         : `${path}: Deleted from the working tree; there is no file to open`} placement="right">
@@ -773,6 +832,19 @@ function GitFile({ repoPath, path, kind, wd, index, depth, onCopyTerminalPath, o
             disabled={busy}
           >
             {action === 'stage' ? <PlusIcon size="xs" /> : <MinusIcon size="xs" />}
+          </button>
+        </Tooltip>
+      )}
+      {onDiscard && (
+        <Tooltip label={`Discard changes in ${path}`} placement="left">
+          <button
+            type="button"
+            className="git-file-discard"
+            aria-label={`Discard changes in ${path}`}
+            onClick={onDiscard}
+            disabled={busy}
+          >
+            <UndoIcon size="xs" />
           </button>
         </Tooltip>
       )}

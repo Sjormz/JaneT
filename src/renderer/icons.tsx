@@ -17,7 +17,7 @@ import {
   // Status
   Circle, CircleDot,
   // UI
-  Search, SearchX, ArrowUp, ArrowDown, ArrowRight,
+  Search, SearchX, ArrowUp, ArrowDown, ArrowRight, Undo2,
   Pencil, Trash2, Sliders, Type,
   ChevronsRight, ChevronsDown, ChevronsUp, ChevronsLeft,
   // SSH
@@ -135,6 +135,7 @@ export const SearchCloseIcon = make(SearchX);
 export const ArrowUpIcon = make(ArrowUp);
 export const ArrowDownIcon = make(ArrowDown);
 export const ArrowRightIcon = make(ArrowRight);
+export const UndoIcon = make(Undo2);
 export const PencilIcon = make(Pencil);
 export const TrashIcon = make(Trash2);
 export const SlidersIcon = make(Sliders);

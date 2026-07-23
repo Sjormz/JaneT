@@ -110,6 +110,36 @@ describe('GitManager working tree actions', () => {
     expect(git(repository, 'status', '--porcelain')).toBe('');
   });
 
+  it('discards tracked working-tree changes while preserving staged and untracked content', async () => {
+    const repository = initializeRepository();
+    const manager = new GitManager();
+    const tracked = path.join(repository, 'base.txt');
+    const second = path.join(repository, 'second.txt');
+    const untracked = path.join(repository, 'untracked.txt');
+
+    fs.writeFileSync(second, 'second\n');
+    expect(await manager.stage(repository, ['second.txt'])).toBe(true);
+    expect(await manager.commit(repository, 'add second file')).toBe(true);
+    fs.writeFileSync(tracked, 'staged\n');
+    expect(await manager.stage(repository, ['base.txt'])).toBe(true);
+    fs.writeFileSync(tracked, 'unstaged\n');
+    fs.writeFileSync(second, 'second unstaged\n');
+    fs.writeFileSync(untracked, 'keep me\n');
+
+    expect(await manager.discard(repository, ['base.txt'])).toBe(true);
+    expect(fs.readFileSync(tracked, 'utf8').trim()).toBe('staged');
+    expect(git(repository, 'diff', '--name-only')).toBe('second.txt');
+    expect(git(repository, 'diff', '--cached', '--name-only')).toBe('base.txt');
+
+    fs.writeFileSync(tracked, 'unstaged again\n');
+    expect(await manager.discard(repository, ['base.txt', 'second.txt'])).toBe(true);
+    expect(fs.readFileSync(tracked, 'utf8').trim()).toBe('staged');
+    expect(fs.readFileSync(second, 'utf8').trim()).toBe('second');
+    expect(fs.readFileSync(untracked, 'utf8').trim()).toBe('keep me');
+    expect(await manager.discard(repository, [])).toBe(false);
+    expect(await manager.discard(repository, null as unknown as string[])).toBe(false);
+  });
+
   it('treats unusual filenames as literal Git paths', async () => {
     const repository = initializeRepository();
     const manager = new GitManager();

@@ -258,6 +258,16 @@ export class GitManager {
     }
   }
 
+  async discard(repoPath: string, paths: string[]): Promise<boolean> {
+    if (!simpleGit || !validGitPaths(paths) || paths.length === 0) return false;
+    try {
+      await simpleGit(repoPath).raw(['--literal-pathspecs', 'restore', '--worktree', '--', ...paths]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async commit(repoPath: string, message: string): Promise<boolean> {
     if (typeof message !== 'string') return false;
     const cleanMessage = message.trim();

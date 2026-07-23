@@ -8,6 +8,7 @@ import type { GitStatusResult } from '../../src/renderer/useGitRepository';
 const gitDetails = vi.fn();
 const gitStage = vi.fn();
 const gitUnstage = vi.fn();
+const gitDiscard = vi.fn();
 const gitCommit = vi.fn();
 const gitFetch = vi.fn();
 const gitPull = vi.fn();
@@ -60,6 +61,7 @@ beforeEach(() => {
   gitDetails.mockReset();
   gitStage.mockReset().mockResolvedValue(true);
   gitUnstage.mockReset().mockResolvedValue(true);
+  gitDiscard.mockReset().mockResolvedValue(true);
   gitCommit.mockReset().mockResolvedValue(true);
   gitFetch.mockReset().mockResolvedValue(true);
   gitPull.mockReset().mockResolvedValue(true);
@@ -74,6 +76,7 @@ beforeEach(() => {
       gitDetails,
       gitStage,
       gitUnstage,
+      gitDiscard,
       gitCommit,
       gitFetch,
       gitPull,
@@ -91,13 +94,18 @@ afterEach(() => {
 });
 
 describe('GitTree live refresh', () => {
-  it('puts worktrees above changes and keeps both add actions compact in the section header', async () => {
+  it('puts worktrees first and keeps create actions compact in their section headers', async () => {
     gitDetails.mockResolvedValue(details('main'));
     render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={cleanStatus} searching={false} />);
 
     const worktrees = await screen.findByRole('button', { name: /Worktrees/ });
+    const worktreeSection = worktrees.closest('.git-section')!;
+    const repo = screen.getByLabelText('main at /repo');
+    const commitMessage = screen.getByLabelText('Commit message');
     const changes = screen.getByRole('button', { name: /Changes/ });
-    expect(worktrees.compareDocumentPosition(changes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(worktreeSection.compareDocumentPosition(repo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(worktreeSection.compareDocumentPosition(commitMessage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(worktreeSection.compareDocumentPosition(changes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     const addNew = screen.getByRole('button', { name: 'Add worktree with new branch' });
     const addExisting = screen.getByRole('button', { name: 'Add worktree from existing branch' });
@@ -107,6 +115,14 @@ describe('GitTree live refresh', () => {
     expect(addExisting.closest('.git-section-header')).toBe(worktrees.closest('.git-section-header'));
     expect(screen.queryByText('Add with new branch…')).not.toBeInTheDocument();
     expect(screen.queryByText('Add existing branch…')).not.toBeInTheDocument();
+
+    const branches = screen.getByRole('button', { name: /Branches/ });
+    const createBranch = screen.getByRole('button', { name: /^Create branch$/ });
+    expect(createBranch).toHaveClass('git-section-action');
+    expect(createBranch.closest('.git-section-header')).toBe(branches.closest('.git-section-header'));
+    expect(screen.queryByText('Create branch…')).not.toBeInTheDocument();
+    fireEvent.click(createBranch);
+    expect(screen.getByRole('dialog', { name: 'Create branch' })).toBeInTheDocument();
   });
 
   it('supports the normal stage, unstage, commit, fetch, pull, and push workflow', async () => {
@@ -143,6 +159,80 @@ describe('GitTree live refresh', () => {
     await waitFor(() => expect(gitPull).toHaveBeenCalledWith({ repoPath: '/repo' }));
     fireEvent.click(screen.getByRole('button', { name: 'Push' }));
     await waitFor(() => expect(gitPush).toHaveBeenCalledWith({ repoPath: '/repo' }));
+  });
+
+  it('confirms before discarding one tracked unstaged change', async () => {
+    gitDetails.mockResolvedValue(details('main'));
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
+      modified: ['working.ts'],
+    };
+    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+
+    const openDialog = () => fireEvent.click(screen.getByRole('button', { name: 'Discard changes in working.ts' }));
+    openDialog();
+    expect(screen.getByRole('dialog', { name: 'Discard changes in working.ts?' })).toHaveAccessibleDescription(
+      /last commit.*cannot be undone/i,
+    );
+    expect(gitDiscard).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(gitDiscard).not.toHaveBeenCalled();
+
+    openDialog();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(gitDiscard).toHaveBeenCalledWith({ repoPath: '/repo', paths: ['working.ts'] }));
+  });
+
+  it('closes a discard confirmation when the selected repository changes', async () => {
+    gitDetails.mockResolvedValue(details('main'));
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
+      modified: ['working.ts'],
+    };
+    const view = render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes in working.ts' }));
+    expect(screen.getByRole('dialog', { name: 'Discard changes in working.ts?' })).toBeInTheDocument();
+
+    view.rerender(<GitTree cwdReady isRemote={false} repoPath="/other-repo" status={status} searching={false} />);
+
+    expect(screen.queryByRole('dialog', { name: 'Discard changes in working.ts?' })).not.toBeInTheDocument();
+    expect(gitDiscard).not.toHaveBeenCalled();
+  });
+
+  it('discards all eligible unstaged changes without including untracked files or conflicts', async () => {
+    gitDetails.mockResolvedValue(details('main'));
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [
+        { path: 'tracked.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true },
+        { path: 'mixed.ts', working_dir: 'M', index: 'M', staged: true, unstaged: true },
+        { path: 'new.ts', working_dir: '?', index: '?', staged: false, unstaged: true },
+        { path: 'conflict.ts', working_dir: 'U', index: 'U', staged: false, unstaged: false },
+      ],
+      modified: ['tracked.ts', 'mixed.ts'],
+      created: ['new.ts'],
+      conflicted: ['conflict.ts'],
+    };
+    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+
+    expect(screen.getByRole('button', { name: 'Discard changes in tracked.ts' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Discard changes in mixed.ts' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Discard changes in new.ts' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Discard changes in conflict.ts' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard all unstaged changes' }));
+    expect(screen.getByRole('dialog', { name: 'Discard all unstaged changes?' })).toHaveAccessibleDescription(
+      /2 tracked working-tree changes.*staged content and untracked files are preserved.*cannot be undone/i,
+    );
+    expect(gitDiscard).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(gitDiscard).toHaveBeenCalledWith({
+      repoPath: '/repo',
+      paths: ['tracked.ts', 'mixed.ts'],
+    }));
   });
 
   it('keeps a failed commit message and blocks overlapping Git mutations', async () => {
