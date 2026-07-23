@@ -3183,20 +3183,26 @@ button:disabled,
   inset: 0;
   z-index: 101;
   display: flex;
+  align-items: flex-start;
   justify-content: center;
-  padding-top: 80px;
+  padding: clamp(48px, 9vh, 80px) 16px 24px;
   background: var(--overlay-scrim);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 .snippet-picker {
   display: flex;
-  width: min(640px, calc(100vw - 32px));
-  max-height: min(620px, calc(100vh - 112px));
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(520px, calc(100vh - 96px));
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
-  background: var(--surface-overlay);
-  box-shadow: var(--glass-shadow);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 10%, var(--border-subtle));
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--surface-overlay) 94%, transparent);
+  backdrop-filter: blur(20px) saturate(145%);
+  -webkit-backdrop-filter: blur(20px) saturate(145%);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.48), 0 1px 0 color-mix(in srgb, var(--text-primary) 7%, transparent) inset;
+  animation: palette-slide-in 0.15s ease-out;
 }
 .snippet-picker-heading,
 .snippet-editor-heading {
@@ -3204,23 +3210,81 @@ button:disabled,
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 18px;
+  padding: 13px 16px;
   border-bottom: 1px solid var(--border-subtle);
 }
 .snippet-picker-heading h2,
-.snippet-editor-heading h2 { font-size: 14px; font-weight: 650; }
-.snippet-picker-heading p { margin-top: 2px; color: var(--text-tertiary); font-size: 11px; }
-.snippet-results { flex: 1; overflow-y: auto; padding: 6px; }
+.snippet-editor-heading h2 { color: var(--text-primary); font-size: 15px; font-weight: 650; letter-spacing: -0.12px; }
+.snippet-picker-heading p { margin-top: 1px; color: var(--text-tertiary); font-size: 11px; }
+.snippet-search-shell { padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); }
+.snippet-search-field {
+  display: flex;
+  min-height: 42px;
+  padding: 0 12px;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, var(--border-subtle));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+  color: var(--text-tertiary);
+  transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+}
+.snippet-search-field:focus-within {
+  border-color: var(--text-accent);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  color: var(--text-accent);
+}
+.snippet-search-input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: 400 14px/1.4 var(--font-ui);
+}
+.snippet-search-input:focus-visible { outline: none; }
+.snippet-search-input::placeholder { color: var(--text-tertiary); }
+.snippet-results { max-height: 342px; overflow-y: auto; padding: 6px; }
+.snippet-empty {
+  display: flex;
+  min-height: 156px;
+  padding: 24px 20px 28px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+.snippet-empty-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  margin-bottom: 5px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--text-accent) 24%, var(--border-subtle));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text-accent) 9%, transparent);
+  color: var(--text-accent);
+}
+.snippet-empty strong { color: var(--text-primary); font-size: 13px; font-weight: 600; }
+.snippet-empty > span:last-child { max-width: 300px; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
 .snippet-item {
   display: flex;
   min-width: 0;
+  min-height: 52px;
   align-items: center;
   gap: 4px;
   padding: 2px;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
 }
 .snippet-item:hover,
-.snippet-item.selected { background: var(--selection-bg); }
+.snippet-item.selected {
+  border-color: color-mix(in srgb, var(--text-accent) 16%, transparent);
+  background: var(--selection-bg);
+}
 .snippet-paste-button {
   display: grid;
   min-width: 0;
@@ -3233,8 +3297,8 @@ button:disabled,
   cursor: pointer;
   text-align: left;
 }
-.snippet-item-name { overflow: hidden; font-size: 13px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
-.snippet-item-preview { overflow: hidden; color: var(--text-tertiary); font: 11px/1.35 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.snippet-item-name { overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.snippet-item-preview { overflow: hidden; color: var(--text-secondary); font: 11px/1.35 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .snippet-icon-button,
 .snippet-secondary-button,
 .snippet-primary-button {
@@ -3252,16 +3316,18 @@ button:disabled,
 }
 .snippet-icon-button { width: 30px; padding: 0; }
 .snippet-secondary-button { padding: 0 10px; }
-.snippet-primary-button { padding: 0 11px; border-color: var(--text-accent); background: var(--text-accent); color: var(--on-accent); }
+.snippet-primary-button { padding: 0 11px; border-color: color-mix(in srgb, var(--text-accent) 42%, var(--border-subtle)); background: color-mix(in srgb, var(--text-accent) 14%, transparent); color: var(--text-primary); }
 .snippet-icon-button:hover,
 .snippet-secondary-button:hover { background: var(--control-hover); color: var(--text-primary); }
 .snippet-icon-button.danger:hover { border-color: var(--red); color: var(--red); }
-.snippet-primary-button:hover { filter: brightness(1.08); }
+.snippet-primary-button:hover { border-color: color-mix(in srgb, var(--text-accent) 62%, var(--border-subtle)); background: color-mix(in srgb, var(--text-accent) 22%, transparent); }
 .snippet-editor { display: flex; flex-direction: column; gap: 12px; padding: 0 18px 18px; overflow-y: auto; }
 .snippet-editor-heading { margin: 0 -18px; }
-.snippet-content-input { min-height: 180px; }
+.snippet-content-input { min-height: 180px; resize: none; }
 .snippet-error { color: var(--red); font-size: 12px; }
 .snippet-editor-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.snippet-editor .snippet-primary-button { border-color: var(--text-accent); background: var(--text-accent); color: var(--on-accent); }
+.snippet-editor .snippet-primary-button:hover { filter: brightness(1.08); }
 
 .status-bar {
   justify-content: flex-start;
