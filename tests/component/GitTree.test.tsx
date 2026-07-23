@@ -184,6 +184,24 @@ describe('GitTree live refresh', () => {
     await waitFor(() => expect(gitDiscard).toHaveBeenCalledWith({ repoPath: '/repo', paths: ['working.ts'] }));
   });
 
+  it('closes a discard confirmation when the selected repository changes', async () => {
+    gitDetails.mockResolvedValue(details('main'));
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
+      modified: ['working.ts'],
+    };
+    const view = render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes in working.ts' }));
+    expect(screen.getByRole('dialog', { name: 'Discard changes in working.ts?' })).toBeInTheDocument();
+
+    view.rerender(<GitTree cwdReady isRemote={false} repoPath="/other-repo" status={status} searching={false} />);
+
+    expect(screen.queryByRole('dialog', { name: 'Discard changes in working.ts?' })).not.toBeInTheDocument();
+    expect(gitDiscard).not.toHaveBeenCalled();
+  });
+
   it('discards all eligible unstaged changes without including untracked files or conflicts', async () => {
     gitDetails.mockResolvedValue(details('main'));
     const status: GitStatusResult = {

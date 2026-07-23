@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useId, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   RefreshIcon, ChevronDownIcon, ChevronRightIcon, PlusIcon,
@@ -47,6 +47,7 @@ interface DialogField {
 }
 
 interface DialogState {
+  repoPath: string;
   title: string;
   description?: string;
   fields: DialogField[];
@@ -86,6 +87,11 @@ export default function GitTree({
     repoPath: null,
     branch: null,
   });
+  const activeRepoPath = useRef(repoPath);
+
+  useLayoutEffect(() => {
+    activeRepoPath.current = repoPath;
+  }, [repoPath]);
 
   useEffect(() => {
     window.janet.getSettings().then((settings: any) => {
@@ -111,6 +117,7 @@ export default function GitTree({
     setBranches([]);
     setWorktrees([]);
     setMessage(null);
+    setDialog(null);
   }, [repoPath]);
 
   useRefreshTask({
@@ -163,6 +170,7 @@ export default function GitTree({
   const handleCreateBranch = () => {
     if (!repoPath) return;
     setDialog({
+      repoPath,
       title: 'Create branch',
       confirmLabel: 'Create',
       fields: [
@@ -183,6 +191,7 @@ export default function GitTree({
     const isCurrent = status?.current ? branch.name === status.current : branch.current;
     if (!repoPath || isCurrent) return;
     setDialog({
+      repoPath,
       title: `Delete ${branch.name}`,
       confirmLabel: 'Delete',
       destructive: true,
@@ -211,7 +220,9 @@ export default function GitTree({
   };
 
   const handleWorktreeSettings = () => {
+    if (!repoPath) return;
     setDialog({
+      repoPath,
       title: 'Worktree defaults',
       confirmLabel: 'Save',
       fields: [
@@ -227,6 +238,7 @@ export default function GitTree({
   const handleAddWorktree = (createBranch: boolean) => {
     if (!repoPath) return;
     setDialog({
+      repoPath,
       title: createBranch ? 'Add worktree with new branch' : 'Add worktree from existing branch',
       confirmLabel: 'Add',
       fields: [
@@ -262,6 +274,7 @@ export default function GitTree({
   const handleRemoveWorktree = (tree: GitWorktreeInfo) => {
     if (!repoPath || tree.path === repoPath) return;
     setDialog({
+      repoPath,
       title: `Remove ${basename(tree.path)}`,
       description: `Remove the Git worktree at ${tree.path}. This deletes that worktree directory; uncommitted files are preserved only if Git refuses the safe removal.`,
       confirmLabel: 'Remove',
@@ -282,6 +295,7 @@ export default function GitTree({
   const handlePruneWorktrees = () => {
     if (!repoPath) return;
     setDialog({
+      repoPath,
       title: 'Prune stale worktrees',
       description: 'Remove Git records for worktrees whose directories no longer exist. Working directories are not deleted.',
       confirmLabel: 'Prune',
@@ -297,6 +311,7 @@ export default function GitTree({
     if (!repoPath || paths.length === 0) return;
     const file = paths[0];
     setDialog({
+      repoPath,
       title: all ? 'Discard all unstaged changes?' : `Discard changes in ${file}?`,
       description: all
         ? `Restore ${paths.length} tracked working-tree ${paths.length === 1 ? 'change' : 'changes'} from Git. Staged content and untracked files are preserved; anything not staged returns to the last commit. This cannot be undone.`
@@ -557,7 +572,7 @@ export default function GitTree({
         ))}
       </GitSection>
 
-      {dialog && createPortal(
+      {dialog?.repoPath === repoPath && createPortal(
               <GitDialog
                 title={dialog.title}
                 description={dialog.description}
@@ -569,6 +584,10 @@ export default function GitTree({
                 worktreeBaseDir={worktreeBaseDir}
                 worktreeTemplate={worktreeTemplate}
                 onSubmit={(values) => {
+                  if (dialog.repoPath !== activeRepoPath.current) {
+                    setDialog(null);
+                    return;
+                  }
                   dialog.onSubmit(values);
                   setDialog(null);
                 }}
