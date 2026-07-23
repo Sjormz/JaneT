@@ -958,107 +958,6 @@ describe('SSHManager', () => {
     ]);
   });
 
-  it('lists only SSH connections with pending or live shells', async () => {
-    let pendingShellCallback: ((err: Error | undefined, channel?: MockShellStream) => void) | undefined;
-    const liveStream = new MockShellStream();
-    mocks.shellMock.mockImplementationOnce((_opts: unknown, cb: typeof pendingShellCallback) => {
-      pendingShellCallback = cb;
-    });
-    mocks.shellMock.mockImplementationOnce((_opts: unknown, cb: (err: Error | undefined, channel?: MockShellStream) => void) => {
-      cb(undefined, liveStream);
-    });
-    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
-
-    const { SSHManager } = await loadSSHManager();
-    const manager = new SSHManager();
-    await manager.connect('running-session', {
-      host: 'jobs.example.com', port: 2202, username: 'worker', auth: 'password',
-    });
-
-    expect(manager.listRunningSessions()).toEqual([]);
-
-    const pending = manager.createShell('running-session', 'pending-term', { cols: 80, rows: 24 });
-    void pending.ready.catch(() => {});
-    expect(manager.listRunningSessions()).toEqual([{
-      id: 'running-session',
-      host: 'jobs.example.com',
-      port: 2202,
-      username: 'worker',
-      shellCount: 1,
-    }]);
-
-    await manager.createShell('running-session', 'live-term', { cols: 80, rows: 24 }).ready;
-    expect(manager.listRunningSessions()).toEqual([{
-      id: 'running-session',
-      host: 'jobs.example.com',
-      port: 2202,
-      username: 'worker',
-      shellCount: 2,
-    }]);
-
-    pendingShellCallback?.(new Error('test cleanup'));
-    await expect(pending.ready).rejects.toThrow('test cleanup');
-  });
-
-  it('removes an SSH session from the running list after its last shell is destroyed', async () => {
-    const stream = new MockShellStream();
-    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, channel?: MockShellStream) => void) => {
-      cb(undefined, stream);
-    });
-    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
-
-    const { SSHManager } = await loadSSHManager();
-    const manager = new SSHManager();
-    await manager.connect('destroy-running-session', {
-      host: 'destroy.example.com', port: 22, username: 'alice', auth: 'password',
-    });
-    await manager.createShell('destroy-running-session', 'destroy-running-term', { cols: 80, rows: 24 }).ready;
-
-    expect(manager.listRunningSessions()).toHaveLength(1);
-    expect(manager.destroyShell('destroy-running-term', 'destroy-running-session')).toBe(true);
-    expect(manager.listRunningSessions()).toEqual([]);
-  });
-
-  it('removes unexpectedly closed SSH connections from the running list', async () => {
-    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, channel?: MockShellStream) => void) => {
-      cb(undefined, new MockShellStream());
-    });
-    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
-
-    const { SSHManager } = await loadSSHManager();
-    const manager = new SSHManager();
-    await manager.connect('unexpected-running-session', {
-      host: 'unstable.example.com', port: 22, username: 'alice', auth: 'password',
-    });
-    await manager.createShell('unexpected-running-session', 'unexpected-running-term', { cols: 80, rows: 24 }).ready;
-    expect(manager.listRunningSessions()).toHaveLength(1);
-
-    mocks.lastClient?.emit('close');
-
-    expect(manager.listRunningSessions()).toEqual([]);
-  });
-
-  it('empties the running SSH session list during manager cleanup', async () => {
-    const stream = new MockShellStream();
-    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, channel?: MockShellStream) => void) => {
-      cb(undefined, stream);
-    });
-    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
-
-    const { SSHManager } = await loadSSHManager();
-    const manager = new SSHManager();
-    await manager.connect('cleanup-running-session', {
-      host: 'cleanup.example.com', port: 22, username: 'alice', auth: 'password',
-    });
-    await manager.createShell('cleanup-running-session', 'cleanup-running-term', { cols: 80, rows: 24 }).ready;
-    expect(manager.listRunningSessions()).toHaveLength(1);
-
-    manager.cleanup();
-
-    expect(manager.listRunningSessions()).toEqual([]);
-    expect(stream.close).toHaveBeenCalledTimes(1);
-  });
-
   it('decodes UTF-8 incrementally when a code point spans SSH data chunks', async () => {
     let stream: MockShellStream | undefined;
     mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, channel?: MockShellStream) => void) => {
@@ -1100,6 +999,23 @@ describe('SSHManager', () => {
     manager.writeShell('destroy-term', 'stale input', 'destroy-session');
     expect(stream?.write).not.toHaveBeenCalled();
     expect(manager.destroyShell('destroy-term', 'destroy-session')).toBe(false);
+  });
+
+  it('closes live SSH shells during manager cleanup', async () => {
+    const stream = new MockShellStream();
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (error: Error | undefined, channel?: MockShellStream) => void) => {
+      cb(undefined, stream);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('cleanup-session', { host: 'example.com', port: 22, username: 'alice', auth: 'password' });
+    await manager.createShell('cleanup-session', 'cleanup-term', { cols: 80, rows: 24 }).ready;
+
+    manager.cleanup();
+
+    expect(stream.close).toHaveBeenCalledTimes(1);
   });
 
   it('resolves and lists the remote home directory on one SFTP channel', async () => {

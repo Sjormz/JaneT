@@ -54,7 +54,6 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
       env: electronEnv({
         NODE_ENV: 'test',
         JANET_E2E_USER_DATA_DIR: userData,
-        JANET_E2E_CLOSE_DECISION: 'cancel',
       }),
     });
     const page = await app.firstWindow();

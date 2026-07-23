@@ -94,7 +94,7 @@ describe('WorkspaceClosePreparationCoordinator', () => {
     const coordinator = new WorkspaceClosePreparationCoordinator();
     const renderer = new FakeRenderer();
     const otherRenderer = new FakeRenderer();
-    const pending = coordinator.request(renderer, 'tray-stop');
+    const pending = coordinator.request(renderer, 'window-close');
     const request = renderer.send.mock.calls[0][1] as WorkspacePrepareForCloseRequest;
 
     expect(coordinator.resolve(otherRenderer, { requestId: request.requestId, resolution: 'saved' })).toBe(false);
@@ -127,7 +127,7 @@ describe('WorkspaceClosePreparationCoordinator', () => {
     sendFails.send.mockImplementation(() => {
       throw new Error('renderer unavailable');
     });
-    await expect(coordinator.request(sendFails, 'tray-stop')).resolves.toBe('cancel');
+    await expect(coordinator.request(sendFails, 'window-close')).resolves.toBe('cancel');
   });
 
   it('does not attach a second renderer to an in-flight request', async () => {

@@ -26,12 +26,8 @@ import {
   WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL,
   WorkspaceClosePreparationCoordinator,
   WorkspaceLifecycleController,
-  type WorkspaceActivity,
-  type WorkspaceCloseDecision,
   type WorkspaceCloseReason,
-  type WorkspaceClosePrompt,
   type WorkspacePrepareForCloseDecision,
-  type WorkspaceWindow,
 } from './workspaceLifecycle';
 
 let mainWindow: electron.BrowserWindow | null = null;
@@ -42,8 +38,6 @@ let fsManager: FileSystemManager;
 let gitManager: GitManager;
 let settingsManager: SettingsManager;
 let workspaceLifecycle: WorkspaceLifecycleController;
-let backgroundTray: electron.Tray | null = null;
-let allowWindowCloseOnce = false;
 let quittingAfterWorkspaceStop = false;
 const closePreparation = new WorkspaceClosePreparationCoordinator();
 
@@ -109,62 +103,6 @@ export function copyTextToClipboard(
   return true;
 }
 
-function workspaceWindow(window: electron.BrowserWindow): WorkspaceWindow {
-  return {
-    close: () => {
-      allowWindowCloseOnce = true;
-      window.close();
-    },
-    hide: () => window.hide(),
-    show: () => {
-      if (window.isMinimized()) window.restore();
-      window.show();
-    },
-    focus: () => window.focus(),
-    isDestroyed: () => window.isDestroyed(),
-  };
-}
-
-async function getWorkspaceActivity(): Promise<WorkspaceActivity> {
-  const [localWork, sshSessions] = await Promise.all([
-    terminalManager.listRunningWork(),
-    Promise.resolve(sshManager.listRunningSessions()),
-  ]);
-  return {
-    localTerminals: localWork.length,
-    sshSessions: sshSessions.length,
-    localDetails: localWork.map((work) => (
-      `${work.processName}${work.descendantPids.length > 1 ? ` + ${work.descendantPids.length - 1} related processes` : ''}`
-    )),
-    sshDetails: sshSessions.map((session) => `${session.username ? `${session.username}@` : ''}${session.host}:${session.port}`),
-  };
-}
-
-async function chooseWorkspaceCloseDecision(prompt: WorkspaceClosePrompt): Promise<WorkspaceCloseDecision> {
-  const testDecision = process.env.JANET_E2E_CLOSE_DECISION;
-  if (testDecision === 'background' || testDecision === 'stop' || testDecision === 'cancel') {
-    recordE2eEvent({ type: 'workspace:close-decision', decision: testDecision });
-    return testDecision;
-  }
-
-  const window = mainWindow;
-  if (!window || window.isDestroyed()) return 'cancel';
-  const defaultId = Math.max(0, prompt.actions.findIndex((action) => action.decision === prompt.defaultDecision));
-  const cancelId = Math.max(0, prompt.actions.findIndex((action) => action.decision === prompt.cancelDecision));
-  const { response } = await electron.dialog.showMessageBox(window, {
-    type: 'warning',
-    title: prompt.title,
-    message: prompt.message,
-    detail: prompt.detail,
-    buttons: prompt.actions.map((action) => action.label),
-    defaultId,
-    cancelId,
-    noLink: true,
-    normalizeAccessKeys: true,
-  });
-  return prompt.actions[response]?.decision ?? 'cancel';
-}
-
 async function stopWorkspaceResources(): Promise<void> {
   await terminalManager.stopAll();
   fsManager.cleanup();
@@ -185,9 +123,6 @@ async function requestRendererClosePreparation(
       return 'cancel';
     }
 
-    // A tray or OS-level quit request can arrive while JaneT is hidden. Make
-    // the renderer visible before asking it to resolve dirty editors so its
-    // confirmation cannot be stranded in an invisible window.
     if (window.isMinimized()) window.restore();
     window.show();
     window.focus();
@@ -203,122 +138,20 @@ async function requestRendererClosePreparation(
 }
 
 async function prepareForUpdateInstall(): Promise<boolean> {
-  const activity = await getWorkspaceActivity();
-  if (activity.localTerminals > 0 || activity.sshSessions > 0) {
-    const window = mainWindow;
-    if (!window || window.isDestroyed()) return false;
-    const { response } = await electron.dialog.showMessageBox(window, {
-      type: 'warning',
-      title: 'Stop terminals and install update?',
-      message: 'JaneT needs to stop active terminals and SSH connections before installing the update.',
-      detail: `${activity.localTerminals} local ${activity.localTerminals === 1 ? 'terminal has' : 'terminals have'} active work, and ${activity.sshSessions} SSH connection${activity.sshSessions === 1 ? '' : 's'} will be closed. Detached jobs on remote hosts may continue running.`,
-      buttons: ['Stop all and install', 'Cancel'],
-      defaultId: 1,
-      cancelId: 1,
-      noLink: true,
-      normalizeAccessKeys: true,
-    });
-    if (response !== 0) return false;
-  }
-
   if (!await workspaceLifecycle.prepareForClose('update-install')) return false;
   await stopWorkspaceResources();
   return true;
 }
 
-function destroyBackgroundTray(): void {
-  if (!backgroundTray) return;
-  try { backgroundTray.destroy(); } catch {}
-  backgroundTray = null;
-}
-
 function showOrCreateWindow(): void {
   const window = mainWindow;
   if (window && !window.isDestroyed()) {
-    workspaceLifecycle.show(workspaceWindow(window));
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
     return;
   }
   createWindow();
-}
-
-export async function confirmStopAllFromTray(
-  stopAllAndQuit: () => Promise<void> = () => workspaceLifecycle.stopFromTray(),
-): Promise<boolean> {
-  const { response } = await electron.dialog.showMessageBox({
-    type: 'warning',
-    title: 'Stop all terminals and quit?',
-    message: 'Stop all JaneT-managed terminals and SSH connections?',
-    detail: 'Running commands and interactive sessions will be ended. Remote jobs detached with tools such as tmux, nohup, systemd, or disown may continue on the remote machine.',
-    buttons: ['Cancel', 'Stop all and quit'],
-    defaultId: 0,
-    cancelId: 0,
-    noLink: true,
-    normalizeAccessKeys: true,
-  });
-  if (response !== 1) return false;
-  await stopAllAndQuit();
-  return true;
-}
-
-export function backgroundTrayMenuTemplate(
-  openWindow: () => void = showOrCreateWindow,
-  confirmStop: () => Promise<boolean> = () => confirmStopAllFromTray(),
-) {
-  return [
-    { label: 'Open JaneT', click: openWindow },
-    { type: 'separator' as const },
-    {
-      label: 'Stop all and quit',
-      click: () => {
-        void confirmStop().catch((error) => {
-          console.error('[workspace] failed to stop background services:', error);
-          electron.dialog.showErrorBox('Could not stop services', error instanceof Error ? error.message : String(error));
-        });
-      },
-    },
-  ];
-}
-
-function ensureBackgroundTray(): boolean {
-  if (backgroundTray) return true;
-  let tray: electron.Tray | null = null;
-  try {
-    const trayAsset = process.platform === 'darwin' ? 'trayTemplate.png' : 'tray.png';
-    const iconPath = path.join(electron.app.getAppPath(), 'assets', 'runtime', trayAsset);
-    let image = electron.nativeImage.createFromPath(iconPath);
-    if (image.isEmpty()) throw new Error(`Background tray icon is missing or invalid: ${iconPath}`);
-    if (process.platform === 'darwin' && !image.isEmpty()) {
-      image.setTemplateImage(true);
-    }
-    tray = new electron.Tray(image);
-    tray.setToolTip('JaneT — terminals and SSH connections are running');
-    tray.setContextMenu(electron.Menu.buildFromTemplate(backgroundTrayMenuTemplate()));
-    tray.on('click', showOrCreateWindow);
-    tray.on('double-click', showOrCreateWindow);
-    backgroundTray = tray;
-    return true;
-  } catch (error) {
-    try { tray?.destroy(); } catch {}
-    backgroundTray = null;
-    console.error('[workspace] failed to create background tray:', error);
-    return false;
-  }
-}
-
-function handleBackgroundChange(active: boolean): boolean {
-  recordE2eEvent({ type: 'workspace:background', active });
-  if (!active) {
-    destroyBackgroundTray();
-    return true;
-  }
-
-  const trayReady = ensureBackgroundTray();
-  if (trayReady || process.platform === 'darwin') return true;
-  electron.dialog.showErrorBox(
-    'Could not run JaneT in the background',
-    'JaneT could not create its background tray control, so the window will stay open. Resolve the desktop tray issue or choose Stop all and quit.',
-  );
-  return false;
 }
 
 function createWindow() {
@@ -404,13 +237,9 @@ function createWindow() {
   });
   window.on('close', (event) => {
     if (quittingAfterWorkspaceStop) return;
-    if (allowWindowCloseOnce) {
-      allowWindowCloseOnce = false;
-      return;
-    }
     event.preventDefault();
-    void workspaceLifecycle.handleClose(workspaceWindow(window)).catch((error) => {
-      console.error('[workspace] close decision failed:', error);
+    void workspaceLifecycle.handleClose().catch((error) => {
+      console.error('[workspace] close failed:', error);
       if (!window.isDestroyed()) {
         window.show();
         window.focus();
@@ -461,15 +290,12 @@ electron.app.whenReady().then(() => {
   });
 
   workspaceLifecycle = new WorkspaceLifecycleController({
-    getActivity: getWorkspaceActivity,
-    chooseDecision: chooseWorkspaceCloseDecision,
     requestClosePreparation: requestRendererClosePreparation,
     stopAll: stopWorkspaceResources,
     quit: () => {
       quittingAfterWorkspaceStop = true;
       electron.app.quit();
     },
-    onBackgroundChange: handleBackgroundChange,
   });
 
   // Update-driven window closes happen before the normal app `before-quit`
@@ -477,7 +303,6 @@ electron.app.whenReady().then(() => {
   // installer has committed to quitting; preparation alone can still fail.
   electron.autoUpdater.on('before-quit-for-update', () => {
     quittingAfterWorkspaceStop = true;
-    destroyBackgroundTray();
   });
 
   electron.app.on('before-quit', (event) => {
@@ -485,8 +310,8 @@ electron.app.whenReady().then(() => {
     const window = mainWindow;
     if (!window || window.isDestroyed()) return;
     event.preventDefault();
-    void workspaceLifecycle.handleQuit(workspaceWindow(window)).catch((error) => {
-      console.error('[workspace] quit decision failed:', error);
+    void workspaceLifecycle.handleQuit().catch((error) => {
+      console.error('[workspace] quit failed:', error);
       if (!window.isDestroyed()) {
         window.show();
         window.focus();
@@ -526,7 +351,6 @@ electron.app.on('window-all-closed', () => {
   terminalManager.cleanup();
   fsManager.cleanup();
   sshManager.cleanup();
-  destroyBackgroundTray();
   if (process.platform !== 'darwin') {
     electron.app.quit();
   }
@@ -705,6 +529,30 @@ function registerIpcHandlers() {
 
   handle('git:deleteBranch', async (event, { repoPath, branch, force }) => {
     return await gitManager.deleteBranch(repoPath, branch, force);
+  });
+
+  handle('git:stage', async (event, { repoPath, paths }) => {
+    return await gitManager.stage(repoPath, paths);
+  });
+
+  handle('git:unstage', async (event, { repoPath, paths }) => {
+    return await gitManager.unstage(repoPath, paths);
+  });
+
+  handle('git:commit', async (event, { repoPath, message }) => {
+    return await gitManager.commit(repoPath, message);
+  });
+
+  handle('git:fetch', async (event, { repoPath }) => {
+    return await gitManager.fetch(repoPath);
+  });
+
+  handle('git:pull', async (event, { repoPath }) => {
+    return await gitManager.pull(repoPath);
+  });
+
+  handle('git:push', async (event, { repoPath }) => {
+    return await gitManager.push(repoPath);
   });
 
   handle('git:worktrees', async (event, { repoPath }) => {

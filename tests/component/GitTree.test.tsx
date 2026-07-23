@@ -6,6 +6,12 @@ import { TERMINAL_PATH_MIME } from '../../src/renderer/terminalPathDrag';
 import type { GitStatusResult } from '../../src/renderer/useGitRepository';
 
 const gitDetails = vi.fn();
+const gitStage = vi.fn();
+const gitUnstage = vi.fn();
+const gitCommit = vi.fn();
+const gitFetch = vi.fn();
+const gitPull = vi.fn();
+const gitPush = vi.fn();
 const gitDeleteBranch = vi.fn();
 const gitRemoveWorktree = vi.fn();
 const gitPruneWorktrees = vi.fn();
@@ -52,6 +58,12 @@ function createDataTransfer() {
 
 beforeEach(() => {
   gitDetails.mockReset();
+  gitStage.mockReset().mockResolvedValue(true);
+  gitUnstage.mockReset().mockResolvedValue(true);
+  gitCommit.mockReset().mockResolvedValue(true);
+  gitFetch.mockReset().mockResolvedValue(true);
+  gitPull.mockReset().mockResolvedValue(true);
+  gitPush.mockReset().mockResolvedValue(true);
   gitDeleteBranch.mockReset().mockResolvedValue(true);
   gitRemoveWorktree.mockReset().mockResolvedValue(true);
   gitPruneWorktrees.mockReset().mockResolvedValue(true);
@@ -60,6 +72,12 @@ beforeEach(() => {
     configurable: true,
     value: {
       gitDetails,
+      gitStage,
+      gitUnstage,
+      gitCommit,
+      gitFetch,
+      gitPull,
+      gitPush,
       gitDeleteBranch,
       gitRemoveWorktree,
       gitPruneWorktrees,
@@ -73,6 +91,91 @@ afterEach(() => {
 });
 
 describe('GitTree live refresh', () => {
+  it('puts worktrees above changes and keeps both add actions compact in the section header', async () => {
+    gitDetails.mockResolvedValue(details('main'));
+    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={cleanStatus} searching={false} />);
+
+    const worktrees = await screen.findByRole('button', { name: /Worktrees/ });
+    const changes = screen.getByRole('button', { name: /Changes/ });
+    expect(worktrees.compareDocumentPosition(changes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const addNew = screen.getByRole('button', { name: 'Add worktree with new branch' });
+    const addExisting = screen.getByRole('button', { name: 'Add worktree from existing branch' });
+    expect(addNew).toHaveClass('git-section-action');
+    expect(addExisting).toHaveClass('git-section-action');
+    expect(addNew.closest('.git-section-header')).toBe(worktrees.closest('.git-section-header'));
+    expect(addExisting.closest('.git-section-header')).toBe(worktrees.closest('.git-section-header'));
+    expect(screen.queryByText('Add with new branch…')).not.toBeInTheDocument();
+    expect(screen.queryByText('Add existing branch…')).not.toBeInTheDocument();
+  });
+
+  it('supports the normal stage, unstage, commit, fetch, pull, and push workflow', async () => {
+    gitDetails.mockResolvedValue(details('main'));
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [
+        { path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true },
+        { path: 'staged.ts', working_dir: ' ', index: 'M', staged: true, unstaged: false },
+      ],
+      modified: ['working.ts', 'staged.ts'],
+    };
+    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
+    await waitFor(() => expect(gitStage).toHaveBeenCalledWith({ repoPath: '/repo', paths: ['working.ts'] }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unstage staged.ts' }));
+    await waitFor(() => expect(gitUnstage).toHaveBeenCalledWith({ repoPath: '/repo', paths: ['staged.ts'] }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage all changes' }));
+    await waitFor(() => expect(gitStage).toHaveBeenCalledWith({ repoPath: '/repo', paths: [] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unstage all changes' }));
+    await waitFor(() => expect(gitUnstage).toHaveBeenCalledWith({ repoPath: '/repo', paths: [] }));
+
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'Ship source control' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged changes' }));
+    await waitFor(() => expect(gitCommit).toHaveBeenCalledWith({ repoPath: '/repo', message: 'Ship source control' }));
+    expect(screen.getByLabelText('Commit message')).toHaveValue('');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch' }));
+    await waitFor(() => expect(gitFetch).toHaveBeenCalledWith({ repoPath: '/repo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pull' }));
+    await waitFor(() => expect(gitPull).toHaveBeenCalledWith({ repoPath: '/repo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Push' }));
+    await waitFor(() => expect(gitPush).toHaveBeenCalledWith({ repoPath: '/repo' }));
+  });
+
+  it('keeps a failed commit message and blocks overlapping Git mutations', async () => {
+    gitDetails.mockResolvedValue(details('main'));
+    gitCommit.mockResolvedValue(false);
+    let finishStage!: (value: boolean) => void;
+    gitStage.mockReturnValue(new Promise((resolve) => { finishStage = resolve; }));
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [
+        { path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true },
+        { path: 'staged.ts', working_dir: ' ', index: 'M', staged: true, unstaged: false },
+      ],
+      modified: ['working.ts', 'staged.ts'],
+    };
+    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+
+    const message = screen.getByLabelText('Commit message');
+    fireEvent.change(message, { target: { value: 'Keep this message' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged changes' }));
+    await screen.findByText('Git action failed');
+    expect(message).toHaveValue('Keep this message');
+    expect(screen.getByText('Git action failed')).toHaveAttribute('role', 'status');
+
+    const stage = screen.getByRole('button', { name: 'Stage working.ts' });
+    fireEvent.click(stage);
+    await waitFor(() => expect(stage).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Pull' })).toBeDisabled();
+    fireEvent.click(stage);
+    expect(gitStage).toHaveBeenCalledOnce();
+    await act(async () => finishStage(true));
+  });
+
   it('refreshes branch and worktree details without issuing a duplicate status request', async () => {
     gitDetails
       .mockResolvedValueOnce(details('main'))
@@ -169,7 +272,7 @@ describe('GitTree live refresh', () => {
     view.unmount();
   });
 
-  it('shows files that are both staged and modified as mixed instead of hiding the working-tree change', async () => {
+  it('shows files that are both staged and modified in both Git states', async () => {
     gitDetails.mockResolvedValue(details('main'));
     const onOpenFile = vi.fn();
     const mixedStatus: GitStatusResult = {
@@ -187,15 +290,16 @@ describe('GitTree live refresh', () => {
         onOpenFile={onOpenFile}
       />,
     );
-    const file = await screen.findByText('mixed.ts');
-    const fileButton = file.closest('.git-file-item')!;
-    expect(fileButton).toHaveClass('mixed');
-    expect(fileButton).toHaveAttribute(
-      'aria-label',
-      'Open file src/mixed.ts: Staged and modified in working tree',
-    );
+    const fileButtons = screen.getAllByRole('button', {
+      name: 'Open file src/mixed.ts: Staged and modified in working tree',
+    });
+    expect(fileButtons).toHaveLength(2);
+    expect(fileButtons[0]).toHaveClass('mixed');
+    expect(fileButtons[1]).toHaveClass('mixed');
+    expect(screen.getByRole('button', { name: 'Unstage src/mixed.ts' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stage src/mixed.ts' })).toBeInTheDocument();
 
-    fireEvent.click(fileButton);
+    fireEvent.click(fileButtons[1]);
     expect(onOpenFile).toHaveBeenCalledOnce();
     expect(onOpenFile).toHaveBeenCalledWith({ kind: 'local', path: '/repo/src/mixed.ts' });
     view.unmount();
@@ -254,7 +358,8 @@ describe('GitTree live refresh', () => {
         onCopyTerminalPath={onCopyTerminalPath}
       />,
     );
-    const row = screen.getByText('mixed.ts').closest('.git-file-item')!;
+    const changedRow = screen.getByRole('button', { name: 'Stage src/mixed.ts' }).closest('.git-file-row')!;
+    const row = changedRow.querySelector('.git-file-item')!;
     const { data, dataTransfer } = createDataTransfer();
 
     expect(row).toHaveAttribute('draggable', 'true');
@@ -270,7 +375,7 @@ describe('GitTree live refresh', () => {
       filesystem: { kind: 'local' },
     });
     expect(row).toHaveAttribute('aria-label', 'Open file src/mixed.ts: Staged and modified in working tree');
-    const copyButton = screen.getByRole('button', { name: 'Copy path for src/mixed.ts' });
+    const copyButton = changedRow.querySelector('.terminal-path-copy-button')!;
     expect(copyButton).not.toHaveAttribute('draggable', 'true');
     fireEvent.click(copyButton);
     expect(onCopyTerminalPath).toHaveBeenCalledWith('/repo/src/mixed.ts');

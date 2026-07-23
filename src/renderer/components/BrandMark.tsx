@@ -14,7 +14,7 @@ export interface BrandMarkProps {
 
 /**
  * JaneT's compact Prompt-J mark. The geometry is intentionally simple so the
- * prompt chevron and hooked J remain distinct at favicon and tray-icon sizes.
+ * prompt chevron and hooked J remain distinct at small icon sizes.
  */
 export default function BrandMark({
   size = 24,

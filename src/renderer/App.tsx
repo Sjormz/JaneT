@@ -961,9 +961,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
 
       const reason = request.reason === 'update-install'
         ? 'installing the update'
-        : request.reason === 'tray-stop'
-          ? 'stopping JaneT'
-          : 'closing JaneT';
+        : 'closing JaneT';
       const cancelClose = () => {
         void window.janet.resolvePrepareForClose({
           requestId: request.requestId,

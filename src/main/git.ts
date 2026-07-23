@@ -233,6 +233,65 @@ export class GitManager {
     }
   }
 
+  async stage(repoPath: string, paths: string[]): Promise<boolean> {
+    if (!simpleGit || !validGitPaths(paths)) return false;
+    try {
+      await simpleGit(repoPath).raw(paths.length === 0
+        ? ['add', '-A']
+        : ['--literal-pathspecs', 'add', '--', ...paths]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async unstage(repoPath: string, paths: string[]): Promise<boolean> {
+    if (!simpleGit || !validGitPaths(paths)) return false;
+    try {
+      await simpleGit(repoPath).raw([
+        ...(paths.length > 0 ? ['--literal-pathspecs'] : []),
+        'reset', '--', ...paths,
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async commit(repoPath: string, message: string): Promise<boolean> {
+    if (typeof message !== 'string') return false;
+    const cleanMessage = message.trim();
+    if (!simpleGit || !cleanMessage || cleanMessage.length > 10_000 || cleanMessage.includes('\0')) return false;
+    try {
+      await simpleGit(repoPath).raw(['commit', '-m', cleanMessage]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async fetch(repoPath: string): Promise<boolean> {
+    return this.run(repoPath, ['fetch', '--all', '--prune']);
+  }
+
+  async pull(repoPath: string): Promise<boolean> {
+    return this.run(repoPath, ['pull', '--ff-only']);
+  }
+
+  async push(repoPath: string): Promise<boolean> {
+    return this.run(repoPath, ['push']);
+  }
+
+  private async run(repoPath: string, args: string[]): Promise<boolean> {
+    if (!simpleGit) return false;
+    try {
+      await simpleGit(repoPath).raw(args);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async worktrees(repoPath: string): Promise<GitWorktreeInfo[] | null> {
     if (!simpleGit) return null;
     try {
@@ -279,4 +338,10 @@ export class GitManager {
       return false;
     }
   }
+}
+
+function validGitPaths(paths: string[]): boolean {
+  return Array.isArray(paths)
+    && paths.length <= 10_000
+    && paths.every((entry) => typeof entry === 'string' && entry.length > 0 && entry.length <= 32_768 && !entry.includes('\0'));
 }

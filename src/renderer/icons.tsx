@@ -93,6 +93,7 @@ export const SettingsIconCmp = make(SettingsIcon);
 
 // Sidebar actions
 export const PlusIcon = make(Plus);
+export const MinusIcon = make(Minus);
 export const RefreshIcon = make(RefreshCw);
 export const ArrowLeftIcon = make(ArrowLeft);
 export const EyeIcon = make(Eye);

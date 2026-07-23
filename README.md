@@ -4,7 +4,7 @@
 
 # JaneT
 
-A focused terminal workspace for local and SSH work, with durable sessions, file browsing, and Git context built in.
+A focused terminal workspace for local and SSH work, with file browsing and Git context built in.
 
 ## Features
 
@@ -40,16 +40,6 @@ npm run dev
 
 This starts the Vite dev server for hot-reload, then launches Electron.
 
-### Background workspaces
-
-When JaneT detects active local terminal processes or an open SSH shell, closing the window offers three choices:
-
-- **Keep running in background** hides JaneT while preserving the exact panes, processes, connections, and terminal output. Reopen it from the tray, the macOS Dock, or by launching JaneT again; a second launch restores the existing workspace instead of creating a competing instance.
-- **Stop all and quit** interrupts JaneT-owned local work, terminates and verifies surviving child processes, closes SSH sessions, and quits. If JaneT cannot confirm that a local process stopped, it stays open and reports the survivor so Stop can be retried.
-- **Cancel** returns to the workspace without changing anything.
-
-Idle local shells close normally without an extra prompt. This first durable-workspace release keeps the JaneT Electron process alive in the background; it does not preserve local processes through a force-quit, operating-system restart, or machine shutdown. Remote jobs deliberately detached with tools such as `tmux`, `nohup`, `systemd`, or `disown` may continue after JaneT closes its SSH connection.
-
 ### Preset startup commands
 
 Every terminal in a saved preset can run its own ordered command list when its shell starts. For example, one pane can run `git pull` followed by `npm install`, while another opens `hermes -p forge --tui`.
@@ -58,7 +48,7 @@ Commands run in order and stop at the first failure. Put interactive application
 
 POSIX shells, Fish, and PowerShell are supported. Command Prompt is not yet offered because its one-line parse rules cannot preserve independent command-row behavior reliably; use PowerShell for Windows presets.
 
-Startup commands run once each time the preset creates a fresh pane. They do not replay when switching tabs, restoring a hidden window, remounting the terminal UI, or reconnecting an existing SSH pane. Commands are stored as plain text with the preset and may also appear in shell history, so do not include passwords, tokens, or other secrets.
+Startup commands run once each time the preset creates a fresh pane. They do not replay when switching tabs, remounting the terminal UI, or reconnecting an existing SSH pane. Commands are stored as plain text with the preset and may also appear in shell history, so do not include passwords, tokens, or other secrets.
 
 ## Contributing
 

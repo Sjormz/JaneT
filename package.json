@@ -1,7 +1,7 @@
 {
   "name": "janet",
   "version": "0.4.1",
-  "description": "A focused cross-platform terminal workspace with SSH, file browsing, Git tools, and durable sessions",
+  "description": "A focused cross-platform terminal workspace with SSH, file browsing, and Git tools",
   "desktopName": "janet",
   "main": "dist/main/index.js",
   "engines": {
@@ -149,7 +149,7 @@
       "maintainer": "sjorm <sjorm@users.noreply.github.com>",
       "category": "TerminalEmulator",
       "synopsis": "A focused terminal workspace for local and SSH work",
-      "description": "JaneT combines local terminals, SSH, file browsing, Git tools, and durable sessions in one focused workspace",
+      "description": "JaneT combines local terminals, SSH, file browsing, and Git tools in one focused workspace",
       "executableName": "janet",
       "syncDesktopName": true
     },
