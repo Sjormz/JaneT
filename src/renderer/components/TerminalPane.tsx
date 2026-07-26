@@ -94,19 +94,10 @@ function usableDimensions(dims: { cols: number; rows: number } | undefined | nul
 }
 
 function copyTerminalSelection(term: Terminal): boolean {
-  const selection = term.getSelection();
-  if (!selection) return false;
-  const writeSelection = (event: ClipboardEvent) => {
-    event.clipboardData?.setData('text/plain', selection);
-    event.preventDefault();
-  };
-  document.addEventListener('copy', writeSelection, true);
-  try {
-    term.focus();
-    return document.execCommand('copy');
-  } finally {
-    document.removeEventListener('copy', writeSelection, true);
-  }
+  if (!term.hasSelection()) return false;
+  term.focus();
+  document.execCommand('copy');
+  return true;
 }
 
 interface CachedTerminalPane {

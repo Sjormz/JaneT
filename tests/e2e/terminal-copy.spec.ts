@@ -99,6 +99,7 @@ test('copies selected xterm text with keyboard shortcuts and right-click', async
     await app.evaluate(({ clipboard }) => clipboard.writeText('STALE_CLIPBOARD'));
     await selectMarker(page, position);
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+C' : 'Control+C');
+    await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toBe(MARKER);
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
     await page.keyboard.type(INPUT_SUFFIX);
     await page.keyboard.press('Enter');

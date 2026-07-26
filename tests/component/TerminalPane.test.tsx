@@ -421,15 +421,6 @@ describe('TerminalPane SSH reinitialization', () => {
     const term = MockTerminal.instances.at(-1)!;
     term.selection = 'first line\nsecond line';
     const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
-    const setClipboardData = vi.fn();
-    vi.mocked(document.execCommand).mockImplementation(() => {
-      const copyEvent = new Event('copy', { bubbles: true, cancelable: true });
-      Object.defineProperty(copyEvent, 'clipboardData', {
-        value: { setData: setClipboardData },
-      });
-      document.dispatchEvent(copyEvent);
-      return true;
-    });
 
     for (const modifiers of [
       { ctrlKey: true, metaKey: false, shiftKey: false },
@@ -449,8 +440,6 @@ describe('TerminalPane SSH reinitialization', () => {
 
     expect(document.execCommand).toHaveBeenCalledTimes(4);
     expect(document.execCommand).toHaveBeenCalledWith('copy');
-    expect(setClipboardData).toHaveBeenCalledTimes(4);
-    expect(setClipboardData).toHaveBeenCalledWith('text/plain', 'first line\nsecond line');
     expect(term.focus).toHaveBeenCalled();
     expect(terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: '\u0003' }));
   });
@@ -474,30 +463,6 @@ describe('TerminalPane SSH reinitialization', () => {
         type: 'keydown', key: 'c', altKey: false, ...modifiers, preventDefault: vi.fn(),
       })).toBe(true);
     }
-  });
-
-  it('removes the temporary copy listener when terminal focus fails', async () => {
-    const { default: TerminalPane } = await loadTerminalPane();
-    render(
-      <KeybindingsProvider>
-        <TerminalPane termId="term-copy-focus-error" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
-      </KeybindingsProvider>,
-    );
-
-    const term = MockTerminal.instances.at(-1)!;
-    term.selection = 'private selection';
-    term.focus.mockImplementationOnce(() => { throw new Error('terminal disposed'); });
-    const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
-
-    expect(() => keyHandler({
-      type: 'keydown', key: 'c', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, preventDefault: vi.fn(),
-    })).toThrow('terminal disposed');
-
-    const setClipboardData = vi.fn();
-    const copyEvent = new Event('copy', { bubbles: true, cancelable: true });
-    Object.defineProperty(copyEvent, 'clipboardData', { value: { setData: setClipboardData } });
-    document.dispatchEvent(copyEvent);
-    expect(setClipboardData).not.toHaveBeenCalled();
   });
 
   it('pastes a requested snippet into only its target terminal without adding Enter', async () => {
