@@ -6,6 +6,7 @@ import * as path from 'path';
 const root = path.resolve(__dirname, '../..');
 const USER_DATA_PREFIX = 'janet-terminal-copy-e2e-';
 const MARKER = 'JANET_TERMINAL_COPY_MARKER';
+const INPUT_SUFFIX = '_AFTER_PASTE';
 
 function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
   const env = { ...process.env, ...extra };
@@ -94,6 +95,15 @@ test('copies selected xterm text with keyboard shortcuts and right-click', async
       await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toBe(MARKER);
       await expect(page.locator('.terminal-container')).toHaveCount(1);
     }
+
+    await app.evaluate(({ clipboard }) => clipboard.writeText('STALE_CLIPBOARD'));
+    await selectMarker(page, position);
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+C' : 'Control+C');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
+    await page.keyboard.type(INPUT_SUFFIX);
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => page.locator('.xterm-rows').innerText(), { timeout: 15_000 })
+      .toContain(`${MARKER}${INPUT_SUFFIX}`);
 
     await app.evaluate(({ clipboard }) => clipboard.clear());
     await selectMarker(page, position);

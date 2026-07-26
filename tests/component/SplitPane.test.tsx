@@ -2,6 +2,7 @@ import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import App from '../../src/renderer/App';
+import SplitPane from '../../src/renderer/components/SplitPane';
 
 const mountedTermIds: string[] = [];
 const rendererMocks = vi.hoisted(() => ({
@@ -437,6 +438,8 @@ describe('split panes in the app', () => {
     await waitFor(() => {
       expect(screen.getAllByTestId(/terminal-/).map((terminal) => terminal.textContent)).toEqual([firstId]);
     });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(window.janet.terminalDestroy).toHaveBeenCalledTimes(1);
     expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: secondId });
   });
 
@@ -756,6 +759,47 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(divider).toHaveAttribute('aria-valuenow', '55'));
     fireEvent.keyDown(divider, { key: 'Home' });
     await waitFor(() => expect(divider).toHaveAttribute('aria-valuenow', '10'));
+  });
+
+  it('cancels an active divider drag when the split unmounts', () => {
+    const onResizePane = vi.fn();
+    const { unmount } = render(
+      <SplitPane
+        node={{
+          id: 'split-drag',
+          type: 'split',
+          direction: 'vertical',
+          sizes: [1, 1],
+          children: [
+            { id: 'term-drag-a', type: 'leaf' },
+            { id: 'term-drag-b', type: 'leaf' },
+          ],
+        }}
+        tabId="tab-drag"
+        tabType="local"
+        onTerminalReady={vi.fn()}
+        onTerminalRemoved={vi.fn()}
+        onSplitPane={vi.fn()}
+        onClosePane={vi.fn()}
+        onResizePane={onResizePane}
+        onMovePane={vi.fn()}
+        onPaneDragStart={vi.fn()}
+        onPaneDragOver={vi.fn()}
+        onPaneDragEnd={vi.fn()}
+        onToggleMaximizePane={vi.fn()}
+      />,
+    );
+    const children = document.querySelectorAll<HTMLElement>('.split-child');
+    for (const child of children) Object.defineProperty(child, 'offsetWidth', { configurable: true, value: 200 });
+
+    fireEvent.mouseDown(screen.getByRole('separator'), { clientX: 200 });
+    expect(document.body.style.cursor).toBe('col-resize');
+    unmount();
+    fireEvent.mouseMove(document, { clientX: 250 });
+
+    expect(onResizePane).not.toHaveBeenCalled();
+    expect(document.body.style.cursor).toBe('');
+    expect(document.body.style.userSelect).toBe('');
   });
 
   it('auto-collapses tabs at compact widths and restores responsive collapses', async () => {

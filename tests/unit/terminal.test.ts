@@ -416,7 +416,26 @@ describe('TerminalManager', () => {
   });
 
   describe('stopAll()', () => {
-    it('interrupts work, terminates stable descendants deepest-first, and kills the PTY root', async () => {
+    it('does not inject Ctrl+C into an idle shell during shutdown', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: processInspector([shell], [shell], [], []),
+        terminateGraceMs: 0,
+        forceKillGraceMs: 0,
+      });
+      manager.create('term-idle-stop', undefined, '/bin/zsh', () => {});
+
+      await manager.stopAll();
+
+      expect(pty.write).not.toHaveBeenCalled();
+      expect(pty.kill).toHaveBeenCalledOnce();
+    });
+
+    it('terminates stable descendants deepest-first and kills the PTY root', async () => {
       const pty = new MockPty();
       mocks.spawnMock.mockReturnValue(pty);
       const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
@@ -429,7 +448,6 @@ describe('TerminalManager', () => {
       const { TerminalManager } = await loadTerminalManager();
       const manager = new TerminalManager({
         processInspector: inspector,
-        stopGraceMs: 0,
         terminateGraceMs: 0,
         forceKillGraceMs: 0,
         killProcess,
@@ -438,7 +456,7 @@ describe('TerminalManager', () => {
 
       await manager.stopAll();
 
-      expect(pty.write).toHaveBeenCalledWith('\x03');
+      expect(pty.write).not.toHaveBeenCalled();
       expect(killProcess.mock.calls).toEqual([
         [5002, 'SIGTERM'],
         [5001, 'SIGTERM'],
@@ -464,7 +482,6 @@ describe('TerminalManager', () => {
       const { TerminalManager } = await loadTerminalManager();
       const manager = new TerminalManager({
         processInspector: processInspector(snapshot, snapshot, [], []),
-        stopGraceMs: 0,
         terminateGraceMs: 0,
         forceKillGraceMs: 0,
         killProcess,
@@ -479,7 +496,7 @@ describe('TerminalManager', () => {
       expect(secondPty.kill).toHaveBeenCalledOnce();
     });
 
-    it('keeps ownership of a child that reparents during the interrupt grace period', async () => {
+    it('keeps ownership of a child that reparents between process snapshots', async () => {
       const pty = new MockPty();
       mocks.spawnMock.mockReturnValue(pty);
       const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
@@ -490,7 +507,6 @@ describe('TerminalManager', () => {
       const { TerminalManager } = await loadTerminalManager();
       const manager = new TerminalManager({
         processInspector: processInspector([shell, attached], [shell, reparented], [], []),
-        stopGraceMs: 0,
         terminateGraceMs: 0,
         forceKillGraceMs: 0,
         killProcess,
@@ -514,7 +530,6 @@ describe('TerminalManager', () => {
       const { TerminalManager } = await loadTerminalManager();
       const manager = new TerminalManager({
         processInspector: processInspector(snapshot, snapshot, snapshot, snapshot),
-        stopGraceMs: 0,
         terminateGraceMs: 0,
         forceKillGraceMs: 0,
         killProcess,
@@ -553,7 +568,6 @@ describe('TerminalManager', () => {
       const { TerminalManager } = await loadTerminalManager();
       const manager = new TerminalManager({
         processInspector: inspector,
-        stopGraceMs: 0,
         terminateGraceMs: 0,
         forceKillGraceMs: 0,
         killProcess,

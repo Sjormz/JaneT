@@ -438,6 +438,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         ));
       }).finally(() => {
         connectingSshSessionIdsRef.current.delete(sessionId);
+        releasedSshSessionIdsRef.current.delete(sessionId);
       });
     }
   }, [markSshSessionReady, sshProfiles]);
@@ -494,7 +495,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           ? demoteSshLeaf(tab, leaf.leafId)
           : tab));
       })
-        .finally(() => connectingSshSessionIdsRef.current.delete(leaf.sshSessionId));
+        .finally(() => {
+          connectingSshSessionIdsRef.current.delete(leaf.sshSessionId);
+          releasedSshSessionIdsRef.current.delete(leaf.sshSessionId);
+        });
     }
   }, [markSshSessionReady, sshProfiles]);
 
@@ -626,7 +630,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     }
 
     for (const sessionId of releasedSshSessions) {
-      releasedSshSessionIdsRef.current.add(sessionId);
+      if (connectingSshSessionIdsRef.current.has(sessionId)) {
+        releasedSshSessionIdsRef.current.add(sessionId);
+      }
       window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
     }
     if (releasedSshSessions.size > 0) {
@@ -656,8 +662,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         const stillRendered = tabsRef.current.some((tab) => getAllLeafIds(tab.root).includes(termId));
         if (stillRendered) return;
 
+        setCwdByTerminal((current) => {
+          if (!(termId in current)) return current;
+          const { [termId]: _removed, ...next } = current;
+          return next;
+        });
         liveTerminalIdsRef.current.delete(termId);
-        disposeCachedTerminal(termId);
+        if (!disposeCachedTerminal(termId)) return;
         window.janet.terminalDestroy({ id: termId }).catch(() => {});
       }, 0);
     },
@@ -1123,6 +1134,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         throw reconnectErr;
       } finally {
         connectingSshSessionIdsRef.current.delete(sessionId);
+        releasedSshSessionIdsRef.current.delete(sessionId);
       }
     }
   }, [markSshSessionReady, sshProfiles]);
@@ -1246,6 +1258,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         updateTab(tab.id, (current) => demoteSshLeaf(current, leaf.id));
       } finally {
         connectingSshSessionIdsRef.current.delete(leaf.sshSessionId);
+        releasedSshSessionIdsRef.current.delete(leaf.sshSessionId);
       }
     }
   }, [markSshSessionReady, sshProfiles, updateTab]);

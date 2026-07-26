@@ -26,7 +26,6 @@ interface TerminalInstance {
 export interface TerminalManagerOptions {
   processInspector?: ProcessInspector;
   sleep?: (milliseconds: number) => Promise<void>;
-  stopGraceMs?: number;
   terminateGraceMs?: number;
   forceKillGraceMs?: number;
   killProcess?: (pid: number, signal: NodeJS.Signals) => void;
@@ -34,7 +33,6 @@ export interface TerminalManagerOptions {
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
-const DEFAULT_STOP_GRACE_MS = 300;
 const DEFAULT_TERMINATE_GRACE_MS = 750;
 const DEFAULT_FORCE_KILL_GRACE_MS = 250;
 const STARTUP_COMMAND_FALLBACK_MS = 1_000;
@@ -126,7 +124,6 @@ export class TerminalManager {
   private shellInitDir: string | null = null;
   private readonly processInspector: ProcessInspector;
   private readonly sleep: (milliseconds: number) => Promise<void>;
-  private readonly stopGraceMs: number;
   private readonly terminateGraceMs: number;
   private readonly forceKillGraceMs: number;
   private readonly killProcess: (pid: number, signal: NodeJS.Signals) => void;
@@ -134,7 +131,6 @@ export class TerminalManager {
   constructor(options: TerminalManagerOptions = {}) {
     this.processInspector = options.processInspector ?? new SystemProcessInspector();
     this.sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
-    this.stopGraceMs = Math.max(0, options.stopGraceMs ?? DEFAULT_STOP_GRACE_MS);
     this.terminateGraceMs = Math.max(0, options.terminateGraceMs ?? DEFAULT_TERMINATE_GRACE_MS);
     this.forceKillGraceMs = Math.max(0, options.forceKillGraceMs ?? DEFAULT_FORCE_KILL_GRACE_MS);
     this.killProcess = options.killProcess ?? ((pid, signal) => process.kill(pid, signal));
@@ -326,29 +322,26 @@ export class TerminalManager {
       const root = before.find((process) => process.pid === terminal.pty.pid);
       if (root) track([root]);
       track(descendantsOf(before, terminal.pty.pid));
-      try { terminal.pty.write('\x03'); } catch {}
     }
-    if (this.stopGraceMs > 0) await this.sleep(this.stopGraceMs);
-
-    let afterInterrupt: ProcessInfo[];
+    let afterInitialSnapshot: ProcessInfo[];
     try {
-      afterInterrupt = await this.processInspector.snapshot();
+      afterInitialSnapshot = await this.processInspector.snapshot();
     } catch (error) {
       this.rememberPendingStops(Array.from(tracked.values()));
-      throw new Error(`Could not verify local processes after interrupting them: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Could not refresh local processes before stopping them: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     const terminateTargets = new Map<string, ProcessInfo>();
     for (const terminal of terminals) {
-      const root = afterInterrupt.find((process) => process.pid === terminal.pty.pid);
+      const root = afterInitialSnapshot.find((process) => process.pid === terminal.pty.pid);
       if (root) track([root]);
-      const descendants = descendantsOf(afterInterrupt, terminal.pty.pid).reverse();
+      const descendants = descendantsOf(afterInitialSnapshot, terminal.pty.pid).reverse();
       track(descendants);
       for (const descendant of descendants) {
         terminateTargets.set(processIdentityKey(descendant), descendant);
       }
     }
-    const stillTracked = stableProcesses(Array.from(tracked.values()), afterInterrupt);
+    const stillTracked = stableProcesses(Array.from(tracked.values()), afterInitialSnapshot);
     for (const process of stillTracked) {
       if ((!rootPids.has(process.pid) || !isShellProcess(process.name)) && !terminateTargets.has(processIdentityKey(process))) {
         terminateTargets.set(processIdentityKey(process), process);

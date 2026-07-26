@@ -103,8 +103,8 @@ export default function VerticalTabBar({
 
   useEffect(() => {
     setTabTimestamps((prev) => {
-      const next = { ...prev };
-      for (const tab of tabs) if (!next[tab.id]) next[tab.id] = new Date();
+      const next: Record<string, Date> = {};
+      for (const tab of tabs) next[tab.id] = prev[tab.id] ?? new Date();
       return next;
     });
   }, [tabs]);

@@ -1,4 +1,4 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import {
   getAllLeafIds, PaneDropSide, PaneNode, SplitNode, TerminalLeaf,
@@ -241,9 +241,25 @@ function SplitDivider({
   fraction: number;
   onResize: (splitId: string, dividerIndex: number, leftFraction: number) => void;
 }) {
+  const activeDragRef = useRef<{
+    mouseMove: (event: MouseEvent) => void;
+    mouseUp: () => void;
+  } | null>(null);
+  const stopDragging = useCallback(() => {
+    const activeDrag = activeDragRef.current;
+    if (!activeDrag) return;
+    document.removeEventListener('mousemove', activeDrag.mouseMove);
+    document.removeEventListener('mouseup', activeDrag.mouseUp);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    activeDragRef.current = null;
+  }, []);
+  useEffect(() => stopDragging, [stopDragging]);
+
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
+      stopDragging();
 
       const divider = e.currentTarget as HTMLElement;
       const container = divider.closest('.split-container') as HTMLElement;
@@ -279,19 +295,15 @@ function SplitDivider({
         onResize(splitId, dividerIndex, newLeft / totalSize);
       };
 
-      const handleMouseUp = () => {
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-      };
+      const handleMouseUp = () => stopDragging();
 
+      activeDragRef.current = { mouseMove: handleMouseMove, mouseUp: handleMouseUp };
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
       document.body.style.cursor = isVertical ? 'col-resize' : 'row-resize';
       document.body.style.userSelect = 'none';
     },
-    [direction, dividerIndex, onResize, splitId],
+    [direction, dividerIndex, onResize, splitId, stopDragging],
   );
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
