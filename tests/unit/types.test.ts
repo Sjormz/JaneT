@@ -1,30 +1,17 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   createLeaf, splitPane, removePane, movePane, findLeaf,
-  getAllLeafIds, countLeaves, genId, PaneNode,
+  getAllLeafIds, countLeaves, resizePane, PaneNode,
 } from '../../src/renderer/types';
 
-// Reset the counter between tests so IDs are predictable
-beforeEach(() => {
-  // genId uses a module-level counter we can't easily reset.
-  // We just test structural properties rather than exact IDs.
-});
-
 describe('createLeaf', () => {
-  it('creates a leaf with type leaf', () => {
-    const leaf = createLeaf();
-    expect(leaf.type).toBe('leaf');
-  });
-
-  it('creates a leaf with a valid id', () => {
-    const leaf = createLeaf();
-    expect(leaf.id).toBeTruthy();
-    expect(leaf.id.startsWith('term-')).toBe(true);
-  });
-
-  it('creates unique ids for consecutive calls', () => {
+  it('creates distinct typed terminal leaves', () => {
     const a = createLeaf();
-    const b = createLeaf();
+    const b = createLeaf('ssh');
+
+    expect(a).toMatchObject({ type: 'leaf', terminalType: 'local', title: 'terminal' });
+    expect(b).toMatchObject({ type: 'leaf', terminalType: 'ssh', title: 'ssh' });
+    expect(a.id).toMatch(/^term-/);
     expect(a.id).not.toBe(b.id);
   });
 });
@@ -281,6 +268,38 @@ describe('movePane', () => {
 
     expect(movePane(tree, leafA.id, leafA.id, 'left')).toBe(tree);
     expect(movePane(tree, leafA.id, 'missing', 'left')).toBe(tree);
+  });
+});
+
+describe('resizePane', () => {
+  it('rejects malformed divider mutations without corrupting pane sizes', () => {
+    const tree: PaneNode = {
+      id: 'root', type: 'split', direction: 'vertical',
+      children: [createLeaf(), createLeaf()], sizes: [1, 1],
+    };
+
+    expect(resizePane(tree, 'root', -1, 0.5)).toBe(tree);
+    expect(resizePane(tree, 'root', 1, 0.5)).toBe(tree);
+    expect(resizePane(tree, 'root', 0, Number.NaN)).toBe(tree);
+    expect(resizePane(tree, 'root', 0.5, 0.5)).toBe(tree);
+    expect(tree.type === 'split' ? tree.sizes : []).toEqual([1, 1]);
+  });
+
+  it('clamps a valid resize while preserving the pair total', () => {
+    const tree: PaneNode = {
+      id: 'root', type: 'split', direction: 'vertical',
+      children: [createLeaf(), createLeaf(), createLeaf()], sizes: [2, 3, 5],
+    };
+
+    const resized = resizePane(tree, 'root', 1, 2);
+
+    expect(resized).not.toBe(tree);
+    expect(resized.type).toBe('split');
+    if (resized.type === 'split') {
+      expect(resized.sizes[0]).toBe(2);
+      expect(resized.sizes[1]).toBeCloseTo(7.2);
+      expect(resized.sizes[2]).toBeCloseTo(0.8);
+    }
   });
 });
 

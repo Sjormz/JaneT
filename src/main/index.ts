@@ -6,6 +6,7 @@ import { isAllowedExternalUrl } from './externalUrls';
 import { FileSystemManager } from './filesystem';
 import { GitManager } from './git';
 import { SettingsManager } from './settings';
+import { sendRendererEvent } from './rendererEvents';
 import type { SSHListDirParams } from '../shared/files';
 import type {
   ReadLocalTextFileRequest,
@@ -29,6 +30,7 @@ import {
   type WorkspaceCloseReason,
   type WorkspacePrepareForCloseDecision,
 } from './workspaceLifecycle';
+import { NativeTerminalCapacity } from './terminalCapacity';
 
 let mainWindow: electron.BrowserWindow | null = null;
 let initializeUpdaterForWindow: ((window: electron.BrowserWindow) => void) | null = null;
@@ -85,7 +87,6 @@ function openAllowedExternalUrl(url: string): boolean {
 // A validated 32,768-character path can expand up to 4x when POSIX single
 // quotes are escaped, plus the surrounding quotes and trailing separator.
 const MAX_CLIPBOARD_TEXT_LENGTH = 131_075;
-const MAX_TERMINAL_CLIPBOARD_TEXT_LENGTH = 1_048_576;
 const UNSAFE_CLIPBOARD_TEXT = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
 
 export function copyTextToClipboard(
@@ -98,17 +99,6 @@ export function copyTextToClipboard(
     || text.length > MAX_CLIPBOARD_TEXT_LENGTH
     || UNSAFE_CLIPBOARD_TEXT.test(text)
   ) {
-    return false;
-  }
-  writeText(text);
-  return true;
-}
-
-export function copyTerminalTextToClipboard(
-  text: unknown,
-  writeText: (selection: string) => void = (selection) => electron.clipboard.writeText(selection),
-): boolean {
-  if (typeof text !== 'string' || text.length === 0 || text.length > MAX_TERMINAL_CLIPBOARD_TEXT_LENGTH) {
     return false;
   }
   writeText(text);
@@ -270,7 +260,8 @@ electron.app.whenReady().then(() => {
       createRendererProtocolHandler(rendererRoot, (fileUrl) => electron.net.fetch(fileUrl)),
     );
   }
-  terminalManager = new TerminalManager();
+  const terminalCapacity = new NativeTerminalCapacity();
+  terminalManager = new TerminalManager({ capacity: terminalCapacity });
   fsManager = new FileSystemManager();
   gitManager = new GitManager();
   settingsManager = new SettingsManager();
@@ -299,7 +290,7 @@ electron.app.whenReady().then(() => {
     const window = mainWindow;
     if (!window || window.isDestroyed()) return;
     window.webContents.send('ssh:onConnectionClosed', event);
-  });
+  }, terminalCapacity);
 
   workspaceLifecycle = new WorkspaceLifecycleController({
     requestClosePreparation: requestRendererClosePreparation,
@@ -389,9 +380,7 @@ function registerIpcHandlers() {
   // === Terminal IPC ===
   handle('terminal:create', (event, { id, cwd, shell, startupCommands }) => {
     const pty = terminalManager.create(id, cwd, shell, (data) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('terminal:onData', { id, data });
-      }
+      sendRendererEvent(mainWindow, 'terminal:onData', { id, data });
     }, startupCommands);
     return { pid: pty.pid };
   });
@@ -431,9 +420,7 @@ function registerIpcHandlers() {
       startupShellDialect,
     );
     shell.onData((data) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('terminal:onData', { id: termId, data });
-      }
+      sendRendererEvent(mainWindow, 'terminal:onData', { id: termId, data });
     });
     return shell.ready.then(() => ({ connected: true }));
   });
@@ -608,10 +595,6 @@ function registerIpcHandlers() {
 
   handle('app:copyText', (event, text: unknown) => {
     return copyTextToClipboard(text);
-  });
-
-  handle('app:copyTerminalText', (event, text: unknown) => {
-    return copyTerminalTextToClipboard(text);
   });
 
   handle(WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL, (event, resolution: unknown) => {

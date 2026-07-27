@@ -583,6 +583,49 @@ describe('VerticalTabBar', () => {
     expect(screen.getByText('SSH · pckpr@box.local:22')).toBeInTheDocument();
   });
 
+  it('forgets timestamps for removed tabs', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.setSystemTime(new Date('2026-07-24T12:00:00Z'));
+      function Harness() {
+        const [visible, setVisible] = useState(true);
+        return (
+          <>
+            <button type="button" onClick={() => setVisible(false)}>Remove tab</button>
+            <button type="button" onClick={() => setVisible(true)}>Restore tab</button>
+            <VerticalTabBar
+              tabs={visible ? [tabs[0]] : []}
+              activeTabId="tab-1"
+              sshProfiles={sshProfiles}
+              workspaceTabs={[]}
+              onSelectTab={vi.fn()}
+              onCloseTab={vi.fn()}
+              onNewTab={vi.fn()}
+              sshConnectionsOpen={false}
+              onSSHConnectionsOpenChange={vi.fn()}
+              onSSHConnected={vi.fn()}
+              onSSHProfilesChange={vi.fn()}
+              onWorkspaceTabsChange={vi.fn()}
+              onWorkspaceTabLaunch={vi.fn()}
+              onSaveWorkspaceTab={vi.fn()}
+              onRenameTab={vi.fn()}
+              onCollapse={vi.fn()}
+            />
+          </>
+        );
+      }
+
+      render(<Harness />);
+      fireEvent.click(screen.getByRole('button', { name: 'Remove tab' }));
+      vi.setSystemTime(new Date('2026-07-24T14:00:00Z'));
+      fireEvent.click(screen.getByRole('button', { name: 'Restore tab' }));
+
+      await waitFor(() => expect(document.querySelector('.vtab-time')).toHaveTextContent('just now'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('exposes the active terminal tab to assistive technology', () => {
     renderTabs();
 

@@ -55,13 +55,16 @@ describe('bounded local text-file IO', () => {
 
   it('reads UTF-8 BOM text through a canonical path and returns a byte-backed revision', async () => {
     const root = await makeTempDirectory();
-    const target = path.join(root, 'target.txt');
-    const requested = path.join(root, 'requested.txt');
+    const targetDirectory = path.join(root, 'target');
+    const requestedDirectory = path.join(root, 'requested');
+    const target = path.join(targetDirectory, 'file.txt');
+    const requested = path.join(requestedDirectory, 'file.txt');
+    await fs.promises.mkdir(targetDirectory);
     await fs.promises.writeFile(target, Buffer.concat([
       Buffer.from([0xef, 0xbb, 0xbf]),
       Buffer.from('hello ☃', 'utf8'),
     ]));
-    await fs.promises.symlink(target, requested);
+    await fs.promises.symlink(targetDirectory, requestedDirectory, process.platform === 'win32' ? 'junction' : 'dir');
 
     const result = await new FileSystemManager().readTextFile({ filePath: requested });
 

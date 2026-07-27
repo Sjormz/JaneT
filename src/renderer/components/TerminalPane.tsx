@@ -93,6 +93,13 @@ function usableDimensions(dims: { cols: number; rows: number } | undefined | nul
   return dims;
 }
 
+function copyTerminalSelection(term: Terminal): boolean {
+  if (!term.hasSelection()) return false;
+  term.focus();
+  document.execCommand('copy');
+  return true;
+}
+
 interface CachedTerminalPane {
   term: Terminal;
   fitAddon: FitAddon;
@@ -110,14 +117,15 @@ interface CachedTerminalPane {
 
 const terminalPaneCache = new Map<string, CachedTerminalPane>();
 
-export function disposeCachedTerminal(termId: string): void {
+export function disposeCachedTerminal(termId: string): boolean {
   const cached = terminalPaneCache.get(termId);
-  if (!cached) return;
+  if (!cached) return false;
   if (cached.disposeTimer) clearTimeout(cached.disposeTimer);
   runCleanup(cached.cleanup);
   cached.cleanup = [];
   cached.term.dispose();
   terminalPaneCache.delete(termId);
+  return true;
 }
 
 function scheduleCachedTerminalDispose(termId: string): void {
@@ -311,13 +319,20 @@ export default function TerminalPane({
     const focusListener = () => onFocus?.(termId);
     container.addEventListener('focusin', focusListener);
     mountCleanup.push(() => container.removeEventListener('focusin', focusListener));
+    const contextMenuListener = (event: MouseEvent) => {
+      if (!term.hasSelection()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      copyTerminalSelection(term);
+    };
+    container.addEventListener('contextmenu', contextMenuListener, true);
+    mountCleanup.push(() => container.removeEventListener('contextmenu', contextMenuListener, true));
     term.attachCustomKeyEventHandler((e) => {
       const currentBindings = kbBindingsRef.current;
-      if (e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey) && !e.altKey) {
-        const selection = term.getSelection();
-        if (selection) {
+      if (e.type === 'keydown' && e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey) && !e.altKey) {
+        if (term.hasSelection()) {
           e.preventDefault();
-          if (e.type === 'keydown') void window.janet.copyTerminalText(selection).catch(() => {});
+          copyTerminalSelection(term);
           return false;
         }
       }
@@ -708,12 +723,6 @@ export default function TerminalPane({
       ref={containerRef}
       data-terminal-focus-target
       tabIndex={-1}
-      onContextMenu={(event) => {
-        const selection = termRef.current?.getSelection();
-        if (!selection) return;
-        event.preventDefault();
-        void window.janet.copyTerminalText(selection).catch(() => {});
-      }}
       onDragEnter={inspectTerminalPathDrag}
       onDragOver={inspectTerminalPathDrag}
       onDragLeave={(event) => {

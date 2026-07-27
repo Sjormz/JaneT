@@ -1,6 +1,7 @@
 import { autoUpdater } from 'electron-updater';
 import { BrowserWindow, ipcMain } from 'electron';
 import type { UpdateInfo, ProgressInfo } from 'builder-util-runtime';
+import { sendRendererEvent } from './rendererEvents';
 
 // Log updater events to console for debugging
 autoUpdater.logger = {
@@ -17,14 +18,32 @@ autoUpdater.autoInstallOnAppQuit = false;
 let mainWindowRef: BrowserWindow | null = null;
 let prepareForInstallRef: (() => Promise<boolean>) | null = null;
 let updateInfo: UpdateInfo | null = null;
-let updateDownloaded = false;
+let downloadedVersion: string | null = null;
+let installRequest: Promise<{ success: boolean; error?: string; cancelled?: boolean }> | null = null;
+let checkRequest: Promise<unknown> | null = null;
+let downloadRequest: Promise<{ success: boolean; error?: string }> | null = null;
+let downloadVersion: string | null = null;
 let suppressNoUpdateNotice = false;
 let initialized = false;
 
 function send(channel: string, ...args: unknown[]) {
-  if (mainWindowRef && !mainWindowRef.isDestroyed()) {
-    mainWindowRef.webContents.send(channel, ...args);
+  sendRendererEvent(mainWindowRef, channel, ...args);
+}
+
+function requestUpdateCheck(silent: boolean): Promise<unknown> {
+  if (checkRequest) {
+    if (!silent) suppressNoUpdateNotice = false;
+    return checkRequest;
   }
+  suppressNoUpdateNotice = silent;
+  const request = autoUpdater.checkForUpdates().finally(() => {
+    if (checkRequest === request) {
+      checkRequest = null;
+      suppressNoUpdateNotice = false;
+    }
+  });
+  checkRequest = request;
+  return request;
 }
 
 export function initUpdater(
@@ -39,7 +58,7 @@ export function initUpdater(
   // Register IPC handlers for renderer-initiated update actions
   ipcMain.handle('update:check', async () => {
     try {
-      await autoUpdater.checkForUpdates();
+      await requestUpdateCheck(false);
       return { success: true };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -51,32 +70,67 @@ export function initUpdater(
 
   ipcMain.handle('update:download', async () => {
     if (!updateInfo) return { success: false, error: 'No update available' };
-    try {
-      await autoUpdater.downloadUpdate();
-      return { success: true };
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { success: false, error: message };
+    const requestedVersion = updateInfo.version;
+    if (downloadRequest) {
+      if (downloadVersion !== requestedVersion) {
+        return { success: false, error: 'Another update download is already in progress' };
+      }
+      return downloadRequest;
     }
+    const request = (async () => {
+      try {
+        await autoUpdater.downloadUpdate();
+        return { success: true };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { success: false, error: message };
+      }
+    })();
+    downloadRequest = request;
+    downloadVersion = requestedVersion;
+    void request.then(() => {
+      if (downloadRequest === request) {
+        downloadRequest = null;
+        downloadVersion = null;
+      }
+    });
+    return request;
   });
 
   ipcMain.handle('update:install', async () => {
-    if (!updateInfo || !updateDownloaded) return { success: false, error: 'No update downloaded' };
+    if (installRequest) return installRequest;
+    if (!updateInfo || downloadedVersion !== updateInfo.version) {
+      return { success: false, error: 'No update downloaded' };
+    }
     if (!prepareForInstallRef) {
       return { success: false, error: 'Update shutdown protection is unavailable' };
     }
-    try {
-      const canInstall = await prepareForInstallRef();
-      if (!canInstall) return { success: false, cancelled: true };
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error('[updater] failed to prepare workspace for install:', message);
-      return { success: false, error: message };
-    }
-    setImmediate(() => {
-      autoUpdater.quitAndInstall(true, true);
+    let installScheduled = false;
+    const request = (async () => {
+      try {
+        const canInstall = await prepareForInstallRef!();
+        if (!canInstall) return { success: false, cancelled: true };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[updater] failed to prepare workspace for install:', message);
+        return { success: false, error: message };
+      }
+      installScheduled = true;
+      setImmediate(() => {
+        try {
+          autoUpdater.quitAndInstall(true, true);
+        } catch (error) {
+          console.error('[updater] quitAndInstall failed:', error);
+          if (installRequest === request) installRequest = null;
+        }
+      });
+      return { success: true };
+    })();
+    installRequest = request;
+    void request.then(() => {
+      if (!installScheduled && installRequest === request) installRequest = null;
     });
-    return { success: true };
+    return request;
   });
 
   // Register event handlers
@@ -88,7 +142,7 @@ export function initUpdater(
   autoUpdater.on('update-available', (info: UpdateInfo) => {
     console.log('[updater] update-available:', info.version);
     updateInfo = info;
-    updateDownloaded = false;
+    downloadedVersion = null;
     send('update:available', {
       version: info.version,
       releaseDate: info.releaseDate,
@@ -99,7 +153,7 @@ export function initUpdater(
   autoUpdater.on('update-not-available', (info: UpdateInfo) => {
     console.log('[updater] update-not-available (current: ' + info.version + ')');
     updateInfo = null;
-    updateDownloaded = false;
+    downloadedVersion = null;
     if (!suppressNoUpdateNotice) send('update:not-available');
   });
 
@@ -114,7 +168,8 @@ export function initUpdater(
 
   autoUpdater.on('update-downloaded', (info) => {
     console.log('[updater] update-downloaded:', info.version);
-    updateDownloaded = true;
+    if (info.version !== updateInfo?.version) return;
+    downloadedVersion = info.version;
     send('update:downloaded', { version: info.version });
   });
 
@@ -128,11 +183,8 @@ export function initUpdater(
 
 /** Check for updates now (call after app is ready, optionally delayed). */
 export function checkForUpdates(silent = false) {
-  suppressNoUpdateNotice = silent;
-  autoUpdater.checkForUpdates().catch((err: unknown) => {
+  void requestUpdateCheck(silent).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[updater] initial check failed:', message);
-  }).finally(() => {
-    suppressNoUpdateNotice = false;
   });
 }

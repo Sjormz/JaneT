@@ -21,6 +21,8 @@ vi.mock('fs', () => ({
       throw new Error('File not found');
     }),
     writeFileSync: vi.fn(),
+    renameSync: vi.fn(),
+    rmSync: vi.fn(),
     existsSync: vi.fn(() => true),
     mkdirSync: vi.fn(),
   },
@@ -28,6 +30,8 @@ vi.mock('fs', () => ({
     throw new Error('File not found');
   }),
   writeFileSync: vi.fn(),
+  renameSync: vi.fn(),
+  rmSync: vi.fn(),
   existsSync: vi.fn(() => true),
   mkdirSync: vi.fn(),
 }));
@@ -96,6 +100,19 @@ describe('SettingsManager', () => {
     expect(settings.fontSize).toBe(16);
   });
 
+  it('normalizes missing and malformed legacy SSH ports during settings load', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      sshProfiles: [
+        { id: 'missing', host: 'missing.example.com', auth: 'password' },
+        { id: 'oversized', host: 'oversized.example.com', port: 65_536, auth: 'key' },
+      ],
+    }));
+
+    const { SettingsManager } = await import('../../src/main/settings');
+    expect(new SettingsManager().get().sshProfiles.map((profile) => profile.port)).toEqual([22, 22]);
+  });
+
   it('persists settings to file on set', async () => {
     const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();
@@ -104,10 +121,255 @@ describe('SettingsManager', () => {
 
     const fsMock = await import('fs');
     expect(fsMock.writeFileSync).toHaveBeenCalledWith(
-      expect.stringContaining('settings.json'),
+      expect.stringMatching(/settings\.json\.tmp$/),
       expect.stringContaining('"fontSize": 20'),
       'utf-8',
     );
+    expect(fsMock.renameSync).toHaveBeenCalledWith(
+      expect.stringMatching(/settings\.json\.tmp$/),
+      expect.stringMatching(/settings\.json$/),
+    );
+  });
+
+  it.each([
+    ['null SSH profiles', { sshProfiles: null }],
+    ['object workspace tabs', { workspaceTabs: {} }],
+    ['null keybindings', { keybindings: null }],
+    ['undefined theme', { theme: undefined }],
+    ['undefined font size', { fontSize: undefined }],
+    ['undefined sidebar side', { sidebarSide: undefined }],
+    ['unknown field', { unexpected: true }],
+  ])('rejects malformed runtime updates without mutating or writing: %s', async (_label, updates) => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+
+    expect(() => manager.set(updates as any)).toThrow(/invalid settings/i);
+    expect(manager.get()).toMatchObject({
+      sshProfiles: [], workspaceTabs: [], keybindings: expect.any(Object),
+    });
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['snippet', { snippets: [null] }],
+    ['workspace preset', { workspaceTabs: [null] }],
+  ])('rejects a malformed live %s collection without erasing saved entries', async (_label, update) => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    manager.set({
+      snippets: [{ id: 'deploy', name: 'Deploy', content: 'npm run deploy' }],
+      workspaceTabs: [{
+        id: 'workspace', name: 'Workspace', type: 'local', terminalCount: 1, splitDirection: 'vertical',
+      }],
+    });
+    const before = manager.get();
+    vi.mocked(fsMock.writeFileSync).mockClear();
+
+    expect(() => manager.set(update as any)).toThrow(/invalid settings/i);
+    expect(manager.get().snippets).toEqual(before.snippets);
+    expect(manager.get().workspaceTabs).toEqual(before.workspaceTabs);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown nested workspace fields before retaining caller-owned data', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const extra = { nested: ['caller-owned'] };
+
+    expect(() => manager.set({
+      workspaceTabs: [{
+        id: 'workspace', name: 'Workspace', type: 'local', terminalCount: 1,
+        splitDirection: 'vertical', extra,
+      } as any],
+    })).toThrow(/invalid settings/i);
+    extra.nested[0] = 'mutated';
+
+    expect(manager.get().workspaceTabs).toEqual([]);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['snippet ids', {
+      snippets: [
+        { id: 'duplicate', name: 'First', content: 'echo first' },
+        { id: 'duplicate', name: 'Second', content: 'echo second' },
+      ],
+    }],
+    ['snippet names', {
+      snippets: [
+        { id: 'first', name: 'Deploy', content: 'echo first' },
+        { id: 'second', name: ' deploy ', content: 'echo second' },
+      ],
+    }],
+    ['SSH profile ids', {
+      sshProfiles: [
+        { id: 'duplicate', host: 'first.example.com', port: 22, auth: 'password' },
+        { id: 'duplicate', host: 'second.example.com', port: 22, auth: 'password' },
+      ],
+    }],
+    ['workspace preset ids', {
+      workspaceTabs: [
+        { id: 'duplicate', name: 'First', type: 'local', terminalCount: 1, splitDirection: 'vertical' },
+        { id: 'duplicate', name: 'Second', type: 'local', terminalCount: 1, splitDirection: 'vertical' },
+      ],
+    }],
+    ['session tab ids', {
+      session: {
+        tabs: [
+          { id: 'duplicate', title: 'First', type: 'local', root: { type: 'leaf' } },
+          { id: 'duplicate', title: 'Second', type: 'local', root: { type: 'leaf' } },
+        ],
+        activeTabId: 'duplicate', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    }],
+  ])('rejects duplicate live collection identities before mutation or I/O: %s', async (_label, update) => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const before = manager.get();
+
+    expect(() => manager.set(update as any)).toThrow(/invalid settings/i);
+    expect(manager.get()).toEqual(before);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['renderer-supplied SSH trust', { sshHostKeys: { 'attacker.example.com:22': 'SHA256:forged' } }],
+    ['unknown session field', {
+      session: {
+        tabs: [], activeTabId: null, sidebarOpen: true, tabsOpen: true,
+        sidebarSection: 'files', extra: true,
+      },
+    }],
+    ['unknown saved-tab field', {
+      session: {
+        tabs: [{
+          id: 'tab', title: 'Tab', type: 'local', root: { type: 'leaf' }, extra: true,
+        }],
+        activeTabId: 'tab', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    }],
+  ])('rejects renderer-owned trust and unknown session fields: %s', async (_label, update) => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+
+    expect(() => manager.set(update as any)).toThrow(/invalid settings/i);
+    expect(manager.getSshHostKey('attacker.example.com', 22)).toBeUndefined();
+    expect(manager.get().session.tabs).toEqual([]);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['too many snippets', {
+      snippets: new Array(257).fill(null).map((_, index) => ({
+        id: `snippet-${index}`, name: `Snippet ${index}`, content: 'echo ok',
+      })),
+    }],
+    ['too many SSH profiles', {
+      sshProfiles: new Array(257).fill(null).map((_, index) => ({
+        id: `profile-${index}`, host: `host-${index}.example.com`, port: 22, auth: 'password',
+      })),
+    }],
+    ['too many workspace presets', {
+      workspaceTabs: new Array(65).fill(null).map((_, index) => ({
+        id: `preset-${index}`, name: `Preset ${index}`, type: 'local',
+        terminalCount: 1, splitDirection: 'vertical',
+      })),
+    }],
+    ['too many keybindings', {
+      keybindings: Object.fromEntries(new Array(65).fill(null).map((_, index) => [`action-${index}`, 'Ctrl+K'])),
+    }],
+    ['out-of-range font size', { fontSize: 1_000 }],
+    ['oversized settings string', { gitWorktreeBaseDir: 'x'.repeat(8_193) }],
+    ['oversized pane startup command', {
+      workspaceTabs: [{
+        id: 'startup', name: 'Startup', type: 'local', terminalCount: 1,
+        splitDirection: 'vertical', root: {
+          type: 'leaf', terminalType: 'local', startupCommands: ['x'.repeat(4_097)],
+        },
+      }],
+    }],
+    ['unknown SSH profile field', {
+      sshProfiles: [{
+        id: 'profile', host: 'example.com', port: 22, auth: 'password', extra: { callerOwned: true },
+      }],
+    }],
+  ])('rejects bounded live settings before mutation or I/O: %s', async (_label, update) => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const before = manager.get();
+
+    expect(() => manager.set(update as any)).toThrow(/invalid settings/i);
+    expect(manager.get()).toEqual(before);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('keeps the existing settings file when atomic replacement fails', async () => {
+    const fsMock = await import('fs');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(fsMock.renameSync).mockImplementationOnce(() => {
+      throw new Error('replacement blocked');
+    });
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+
+    expect(() => manager.set({ fontSize: 20 })).toThrow(/persist settings/i);
+
+    expect(fsMock.writeFileSync).toHaveBeenCalledWith(
+      expect.stringMatching(/settings\.json\.tmp$/), expect.any(String), 'utf-8',
+    );
+    expect(fsMock.writeFileSync).not.toHaveBeenCalledWith(
+      expect.stringMatching(/settings\.json$/), expect.anything(), expect.anything(),
+    );
+    expect(fsMock.rmSync).toHaveBeenCalledWith(
+      expect.stringMatching(/settings\.json\.tmp$/), { force: true },
+    );
+    expect(manager.get().fontSize).toBe(14);
+    expect(error).toHaveBeenCalled();
+  });
+
+  it('rolls back nested settings after persistence failure and saves normally after recovery', async () => {
+    const fsMock = await import('fs');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    manager.set({
+      sshProfiles: [{
+        id: 'alice@example.com:22:password', host: 'example.com', port: 22,
+        username: 'alice', auth: 'password', password: 'original-secret',
+      }],
+    });
+    vi.mocked(fsMock.writeFileSync).mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+
+    expect(() => manager.set({
+      fontSize: 20,
+      sshProfiles: [{
+        id: 'alice@example.com:22:password', host: 'example.com', port: 22,
+        username: 'mutated', auth: 'password', password: 'replacement-secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'mutated-tab', title: 'Mutated', type: 'local', root: { type: 'leaf' },
+        }],
+        activeTabId: 'mutated-tab', sidebarOpen: false, tabsOpen: false, sidebarSection: 'git',
+      },
+    })).toThrow(/persist settings/i);
+    expect(manager.get().fontSize).toBe(14);
+    expect(manager.get().sshProfiles[0]).toMatchObject({ username: 'alice', password: 'original-secret' });
+    expect(manager.get().session.tabs).toEqual([]);
+    expect(error).toHaveBeenCalled();
+
+    expect(manager.set({ fontSize: 16 }).fontSize).toBe(16);
+    const saved = JSON.parse((fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string);
+    expect(saved.sshProfiles[0].passwordSecret).toBeTruthy();
+    expect(JSON.stringify(saved)).not.toContain('replacement-secret');
   });
 
   it('encrypts saved SSH credentials on disk and decrypts them when loading', async () => {
@@ -248,13 +510,24 @@ describe('SettingsManager', () => {
     const savedJson = (fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string;
     (fsMock.readFileSync as any).mockImplementationOnce(() => savedJson);
 
-    const loaded = new SettingsManager().get();
+    const loadedManager = new SettingsManager();
+    const loaded = loadedManager.get();
     expect(loaded.session.tabs).toHaveLength(2);
     expect(loaded.session.activeTabId).toBe('tab-2');
     expect(loaded.session.sidebarOpen).toBe(false);
     expect(loaded.session.sidebarSection).toBe('git');
     expect(loaded.session.tabs[0].cwd).toBe('C:/repo');
     expect(loaded.session.tabs[1].sshProfileId).toBe('pckpr@box.local:22:password');
+
+    loaded.keybindings['new-tab'] = 'Ctrl+Alt+M';
+    loaded.session.tabs[0].title = 'mutated';
+    if (loaded.session.tabs[0].root.type === 'split') {
+      loaded.session.tabs[0].root.sizes[0] = 99;
+    }
+    const isolated = loadedManager.get();
+    expect(isolated.keybindings['new-tab']).not.toBe('Ctrl+Alt+M');
+    expect(isolated.session.tabs[0].title).toBe('main');
+    expect(isolated.session.tabs[0].root).toMatchObject({ sizes: [1, 1] });
   });
 
   it('round-trips per-pane startup commands and isolates returned settings', async () => {
@@ -310,6 +583,90 @@ describe('SettingsManager', () => {
       startupCommands: ['git pull'],
       startupShellDialect: 'posix',
     });
+  });
+
+  it('drops deeply nested pane trees before main-process cloning can exhaust resources', async () => {
+    let root: unknown = { type: 'leaf' };
+    for (let index = 0; index < 100; index += 1) {
+      root = { type: 'split', direction: 'vertical', sizes: [1], children: [root] };
+    }
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      theme: 'dracula',
+      workspaceTabs: [{
+        id: 'deep-preset', name: 'Deep', type: 'local', terminalCount: 1,
+        splitDirection: 'vertical', root,
+      }],
+      session: {
+        tabs: [{ id: 'deep-tab', title: 'Deep', type: 'local', root }],
+      },
+    }));
+
+    const { SettingsManager } = await import('../../src/main/settings');
+    const settings = new SettingsManager().get();
+    expect(settings.theme).toBe('dracula');
+    expect(settings.workspaceTabs[0]).not.toHaveProperty('root');
+    expect(settings.session.tabs).toEqual([]);
+  });
+
+  it('keeps the earliest whole tabs when a loaded session exceeds the shared terminal budget', async () => {
+    const split = (leaves: number) => ({
+      type: 'split', direction: 'vertical', sizes: new Array(leaves).fill(1 / leaves),
+      children: new Array(leaves).fill(null).map(() => ({ type: 'leaf' })),
+    });
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      theme: 'dracula',
+      session: {
+        tabs: [
+          { id: 'first', title: 'First', type: 'local', root: split(40) },
+          { id: 'second', title: 'Second', type: 'local', root: split(25) },
+        ],
+      },
+    }));
+
+    const { SettingsManager } = await import('../../src/main/settings');
+    const settings = new SettingsManager().get();
+    expect(settings.theme).toBe('dracula');
+    expect(settings.session.tabs.map((tab) => tab.id)).toEqual(['first']);
+  });
+
+  it('rejects runtime sessions that exceed the shared terminal budget without writing', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const tabs = new Array(65).fill(null).map((_, index) => ({
+      id: `tab-${index}`, title: `Tab ${index}`, type: 'local' as const, root: { type: 'leaf' as const },
+    }));
+
+    expect(() => manager.set({
+      session: {
+        tabs, activeTabId: tabs[0].id, sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    })).toThrow(/invalid settings/i);
+    expect(manager.get().session.tabs).toEqual([]);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed runtime session trees instead of repairing them', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+
+    expect(() => manager.set({
+      session: {
+        tabs: [{
+          id: 'malformed', title: 'Malformed', type: 'local',
+          root: {
+            type: 'split', direction: 'vertical', sizes: [1, 1],
+            children: [null, { type: 'leaf' }],
+          } as any,
+        }],
+        activeTabId: 'malformed', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    })).toThrow(/invalid settings/i);
+    expect(manager.get().session.tabs).toEqual([]);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
   });
 
   it('keeps valid settings when a preset split contains malformed children', async () => {
@@ -374,14 +731,13 @@ describe('SettingsManager', () => {
     ]);
   });
 
-  it('normalizes snippets before persisting settings updates', async () => {
+  it('normalizes valid snippets before persisting settings updates', async () => {
     const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();
 
     const saved = manager.set({
       snippets: [
         { id: 'deploy', name: ' Deploy ', content: 'npm run deploy' },
-        { id: 'duplicate', name: 'deploy', content: 'duplicate' },
       ] as any,
     });
 

@@ -47,6 +47,8 @@ export type WatchDirectory = (directory: string, listener: DirectoryWatchListene
 
 const DEFAULT_FULL_STAT_INTERVAL_MS = 60_000;
 const MAX_DIRECTORY_SNAPSHOTS = 32;
+const MAX_DIRECTORY_ENTRIES = 10_000;
+const MAX_DIRECTORY_METADATA_CONCURRENCY = 32;
 const TEXT_FILE_READ_BUFFER_BYTES = MAX_TEXT_FILE_BYTES + 1;
 const TEXT_FILE_TEMP_ATTEMPTS = 8;
 
@@ -232,6 +234,9 @@ export class FileSystemManager {
       const now = Date.now();
       snapshot = this.snapshotFor(normalizedPath, now);
       const entries = await fs.promises.readdir(normalizedPath, { withFileTypes: true });
+      if (entries.length > MAX_DIRECTORY_ENTRIES) {
+        throw new Error(`Too many directory entries (limit ${MAX_DIRECTORY_ENTRIES})`);
+      }
       const dirtyNames = new Set(snapshot.dirtyNames);
       const refreshAll = snapshot.entries.size === 0 || (snapshot.watcherStarted && snapshot.watcher === null) || snapshot.dirtyAll ||
         now - snapshot.lastFullStatAt >= this.fullStatIntervalMs;
@@ -243,17 +248,21 @@ export class FileSystemManager {
 
       const currentNames = new Set(entries.map((entry) => entry.name));
       const scanSnapshot = snapshot;
-      const result = await Promise.all(entries.map(async (entry): Promise<FileEntry> => {
-        const previous = scanSnapshot.entries.get(entry.name);
-        const typeChanged = previous !== undefined && (
-          previous.isSymlink !== entry.isSymbolicLink() ||
-          (!entry.isSymbolicLink() && previous.isDirectory !== entry.isDirectory())
-        );
-        if (!refreshAll && previous && !typeChanged && !dirtyNames.has(entry.name)) {
-          return previous;
-        }
-        return this.readEntryMetadata(normalizedPath, entry, previous);
-      }));
+      const result: FileEntry[] = [];
+      for (let index = 0; index < entries.length; index += MAX_DIRECTORY_METADATA_CONCURRENCY) {
+        const batch = entries.slice(index, index + MAX_DIRECTORY_METADATA_CONCURRENCY);
+        result.push(...await Promise.all(batch.map(async (entry): Promise<FileEntry> => {
+          const previous = scanSnapshot.entries.get(entry.name);
+          const typeChanged = previous !== undefined && (
+            previous.isSymlink !== entry.isSymbolicLink() ||
+            (!entry.isSymbolicLink() && previous.isDirectory !== entry.isDirectory())
+          );
+          if (!refreshAll && previous && !typeChanged && !dirtyNames.has(entry.name)) {
+            return previous;
+          }
+          return this.readEntryMetadata(normalizedPath, entry, previous);
+        })));
+      }
 
       // `cleanup()` can run while metadata reads are in flight. Only mutate the
       // cache or attach a watcher if this is still the owned snapshot.

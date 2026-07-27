@@ -33,6 +33,7 @@ interface PendingClosePreparation {
   promise: Promise<WorkspacePrepareForCloseDecision>;
   resolve(decision: WorkspacePrepareForCloseDecision): void;
   onUnavailable(): void;
+  timeout: ReturnType<typeof setTimeout>;
 }
 
 function isPrepareForCloseDecision(value: unknown): value is WorkspacePrepareForCloseDecision {
@@ -43,6 +44,8 @@ function isPrepareForCloseDecision(value: unknown): value is WorkspacePrepareFor
 export class WorkspaceClosePreparationCoordinator {
   private nextRequestId = 1;
   private pending: PendingClosePreparation | null = null;
+
+  constructor(private readonly timeoutMs = 30_000) {}
 
   request(
     renderer: WorkspaceCloseRenderer,
@@ -63,13 +66,16 @@ export class WorkspaceClosePreparationCoordinator {
     const promise = new Promise<WorkspacePrepareForCloseDecision>((resolve) => {
       resolvePromise = resolve;
     });
-    const pending: PendingClosePreparation = {
+    const pending = {} as PendingClosePreparation;
+    Object.assign(pending, {
       request,
       renderer,
       promise,
       resolve: resolvePromise,
       onUnavailable: () => this.settle(pending, 'cancel'),
-    };
+      timeout: setTimeout(() => this.settle(pending, 'cancel'), this.timeoutMs),
+    });
+    pending.timeout.unref?.();
     this.pending = pending;
 
     try {
@@ -113,6 +119,7 @@ export class WorkspaceClosePreparationCoordinator {
   ): void {
     if (this.pending !== pending) return;
     this.pending = null;
+    clearTimeout(pending.timeout);
     try {
       pending.renderer.removeListener('destroyed', pending.onUnavailable);
       pending.renderer.removeListener('render-process-gone', pending.onUnavailable);

@@ -238,6 +238,71 @@ beforeEach(() => {
 });
 
 describe('SSHManager', () => {
+  it.each([
+    ['empty session id', ' ', { host: 'example.com', port: 22, auth: 'password' }],
+    ['empty host', 'invalid-session', { host: ' ', port: 22, auth: 'password' }],
+    ['zero port', 'invalid-session', { host: 'example.com', port: 0, auth: 'password' }],
+    ['oversized port', 'invalid-session', { host: 'example.com', port: 65_536, auth: 'password' }],
+    ['fractional port', 'invalid-session', { host: 'example.com', port: 22.5, auth: 'password' }],
+    ['unknown auth', 'invalid-session', { host: 'example.com', port: 22, auth: 'agent' }],
+  ])('rejects an invalid SSH endpoint: %s', (_label, sessionId, config) => {
+    const managerPromise = loadSSHManager();
+
+    return managerPromise.then(({ SSHManager }) => {
+      const manager = new SSHManager();
+      expect(() => manager.connect(sessionId, config)).toThrow(/valid SSH (session id|host|port|auth)/i);
+      expect(mocks.connectMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    ['username', { username: {} }],
+    ['password', { password: {} }],
+    ['private key', { privateKey: {} }],
+  ])('rejects a malformed optional SSH %s before reserving capacity', async (_label, field) => {
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+
+    expect(() => manager.connect('malformed-optional', {
+      host: 'example.com', port: 22, auth: 'password', ...field,
+    } as any)).toThrow(/valid SSH (username|password|private key)/i);
+    expect(mocks.connectMock).not.toHaveBeenCalled();
+
+    for (let index = 0; index < 64; index += 1) {
+      void manager.connect(`session-${index}`, { host: 'example.com', port: 22, auth: 'password' });
+    }
+    expect(mocks.connectMock).toHaveBeenCalledTimes(64);
+  });
+
+  it.each([
+    ['username', { username: 'u'.repeat(257) }],
+    ['password', { password: 'p'.repeat(100_001) }],
+    ['private key', { privateKey: 'k'.repeat(100_001) }],
+  ])('rejects an oversized optional SSH %s before client allocation', async (_label, field) => {
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+
+    expect(() => manager.connect('oversized-optional', {
+      host: 'example.com', port: 22, auth: 'password', ...field,
+    })).toThrow(/valid SSH (username|password|private key)/i);
+    expect(mocks.connectMock).not.toHaveBeenCalled();
+  });
+
+  it('caps distinct pending and active SSH transports before client allocation', async () => {
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    for (let index = 0; index < 64; index += 1) {
+      void manager.connect(`session-${index}`, {
+        host: 'example.com', port: 22, auth: 'password',
+      });
+    }
+
+    expect(() => manager.connect('session-64', {
+      host: 'example.com', port: 22, auth: 'password',
+    })).toThrow(/SSH connection limit of 64/i);
+    expect(mocks.connectMock).toHaveBeenCalledTimes(64);
+  });
+
   it('dispatches one compiled startup expression after the SSH shell is ready', async () => {
     const stream = new MockShellStream();
     mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, stream?: MockShellStream) => void) => {
@@ -268,6 +333,25 @@ describe('SSHManager', () => {
     );
   });
 
+  it('caps pending and active SSH shells before channel allocation', async () => {
+    mocks.shellMock.mockImplementation(() => {});
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('shell-limit-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    for (let index = 0; index < 64; index += 1) {
+      manager.createShell('shell-limit-session', `shell-limit-${index}`, { cols: 80, rows: 24 });
+    }
+
+    expect(() => manager.createShell(
+      'shell-limit-session', 'shell-limit-64', { cols: 80, rows: 24 },
+    )).toThrow(/SSH shell limit of 64/i);
+    expect(mocks.shellMock).toHaveBeenCalledTimes(64);
+  });
+
   it('cancels pending startup when the user types before the SSH channel opens', async () => {
     const stream = new MockShellStream();
     let openShell: ((err: Error | undefined, stream?: MockShellStream) => void) | undefined;
@@ -290,6 +374,35 @@ describe('SSHManager', () => {
     await handle.ready;
 
     expect(stream.write.mock.calls).toEqual([['manual input']]);
+  });
+
+  it('rejects readiness and releases capacity when queued input cannot flush', async () => {
+    const stream = new MockShellStream();
+    stream.write.mockImplementationOnce(() => { throw new Error('queued write failed'); });
+    let openShell: ((err: Error | undefined, stream?: MockShellStream) => void) | undefined;
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: typeof openShell) => {
+      openShell = cb;
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const [{ SSHManager }, { NativeTerminalCapacity }] = await Promise.all([
+      loadSSHManager(), import('../../src/main/terminalCapacity'),
+    ]);
+    const manager = new SSHManager(undefined, undefined, undefined, new NativeTerminalCapacity(1));
+    await manager.connect('flush-failure-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const handle = manager.createShell(
+      'flush-failure-session', 'flush-failure-term', { cols: 80, rows: 24 },
+    );
+    manager.writeShell('flush-failure-term', 'queued input', 'flush-failure-session');
+
+    openShell?.(undefined, stream);
+    await expect(handle.ready).rejects.toThrow(/queued write failed/i);
+    expect(manager.destroyShell('flush-failure-term', 'flush-failure-session')).toBe(false);
+    expect(() => manager.createShell(
+      'flush-failure-session', 'replacement-term', { cols: 80, rows: 24 },
+    )).not.toThrow();
   });
 
   it('keeps pending startup when an automatic terminal reply arrives first', async () => {
@@ -500,6 +613,99 @@ describe('SSHManager', () => {
     expect(received).toEqual(['early output']);
   });
 
+  it.each([
+    ['empty terminal id', '', { cols: 80, rows: 24 }],
+    ['object terminal id', {} as unknown as string, { cols: 80, rows: 24 }],
+    ['sub-unit columns', 'invalid-size', { cols: 0.5, rows: 24 }],
+    ['oversized rows', 'invalid-size', { cols: 80, rows: 1_001 }],
+  ])('rejects malformed SSH shell parameters: %s', async (_label, termId, size) => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('validated-shell-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    expect(() => manager.createShell('validated-shell-session', termId, size))
+      .toThrow(/valid SSH shell (terminal id|dimensions)/i);
+    expect(mocks.shellMock).not.toHaveBeenCalled();
+  });
+
+  it('bounds and normalizes SSH shell resize dimensions before the native call', async () => {
+    const stream = new MockShellStream();
+    mocks.shellMock.mockImplementation((_options: unknown, callback: Function) => {
+      callback(undefined, stream);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('resize-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell('resize-session', 'resize-term', { cols: 80, rows: 24 }).ready;
+
+    manager.resizeShell('resize-term', Number.NaN, 24);
+    manager.resizeShell('resize-term', 0.5, 24);
+    manager.resizeShell('resize-term', 80, 1_001);
+    expect(stream.setWindow).not.toHaveBeenCalled();
+
+    manager.resizeShell('resize-term', 80.9, 24.7);
+    expect(stream.setWindow).toHaveBeenCalledOnce();
+    expect(stream.setWindow).toHaveBeenCalledWith(24, 80, 0, 0);
+  });
+
+  it('times out and releases a shell whose open callback never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.shellMock.mockImplementation(() => {});
+      mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+      const { SSHManager } = await loadSSHManager();
+      const manager = new SSHManager();
+      const connected = manager.connect('shell-timeout-session', {
+        host: 'example.com', port: 22, username: 'alice', auth: 'password',
+      });
+      await vi.runAllTicks();
+      await connected;
+      const handle = manager.createShell('shell-timeout-session', 'shell-timeout-term', { cols: 80, rows: 24 });
+      const rejection = expect(handle.ready).rejects.toThrow(/timed out/i);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await rejection;
+      const connection = (manager as any).connections.get('shell-timeout-session');
+      expect(connection.shellHandles.has('shell-timeout-term')).toBe(false);
+      expect(connection.pendingWrites.has('shell-timeout-term')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retains only bounded recent output until onData is registered', async () => {
+    let stream: MockShellStream | undefined;
+    mocks.shellMock.mockImplementation((_opts: unknown, callback: Function) => {
+      stream = new MockShellStream();
+      callback(undefined, stream);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('bounded-output-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const handle = manager.createShell('bounded-output-session', 'bounded-output-term', { cols: 80, rows: 24 });
+    await handle.ready;
+
+    for (let index = 0; index < 300; index += 1) {
+      stream?.emit('data', Buffer.from(`${String(index).padStart(3, '0')}:${'x'.repeat(4_096)}`));
+    }
+    const received: string[] = [];
+    handle.onData((chunk) => received.push(chunk));
+
+    expect(Buffer.byteLength(received.join(''))).toBeLessThanOrEqual(1024 * 1024);
+    expect(received.join('')).toContain('299:');
+    expect(received.join('')).not.toContain('000:');
+  });
+
   it('queues writes until the SSH shell stream exists', async () => {
     type ShellCallback = Parameters<typeof mocks.shellMock.mockImplementation>[0] extends (
       opts: unknown,
@@ -535,6 +741,29 @@ describe('SSHManager', () => {
     await handle.ready;
 
     expect(stream.write).toHaveBeenCalledWith('ls -la\n');
+  });
+
+  it('cancels a pending shell before queued input can exhaust memory', async () => {
+    mocks.shellMock.mockImplementation(() => {});
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('bounded-input-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const handle = manager.createShell('bounded-input-session', 'bounded-input-term', { cols: 80, rows: 24 });
+    const rejected = expect(handle.ready).rejects.toThrow(/input limit/i);
+
+    for (let index = 0; index < 256; index += 1) {
+      manager.writeShell('bounded-input-term', 'x'.repeat(4_096), 'bounded-input-session');
+    }
+    expect(() => manager.writeShell('bounded-input-term', 'overflow', 'bounded-input-session'))
+      .toThrow(/input limit/i);
+
+    await rejected;
+    const connection = (manager as any).connections.get('bounded-input-session');
+    expect(connection.pendingWrites.has('bounded-input-term')).toBe(false);
+    expect(connection.shellHandles.has('bounded-input-term')).toBe(false);
   });
 
   it('drops queued input and the in-flight handle when opening a shell fails', async () => {
@@ -1670,6 +1899,34 @@ describe('SSHManager', () => {
     const withHidden = await manager.listDir('sftp-session', '/repo', true);
     expect(withHidden.entries.map(({ name }) => name)).toEqual(['src', '.env', 'README.md']);
     expect(sftp.end).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects oversized SFTP directory responses before mapping entries', async () => {
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('oversized-listing-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const attrs = {
+      isDirectory: vi.fn(() => false),
+      isSymbolicLink: vi.fn(() => false),
+      size: 0, mode: 0o644, mtime: 1,
+    };
+    const sftp = {
+      end: vi.fn(),
+      realpath: vi.fn((_path: string, callback: Function) => callback(undefined, '/huge')),
+      readdir: vi.fn((_path: string, callback: Function) => callback(undefined,
+        Array.from({ length: 10_001 }, (_, index) => ({ filename: `file-${index}`, attrs })))),
+      stat: vi.fn(),
+    };
+    (mocks.lastClient as any).sftp.mockImplementation((callback: Function) => callback(undefined, sftp));
+
+    await expect(manager.listDir('oversized-listing-session', '/huge'))
+      .rejects.toThrow(/too many directory entries/i);
+    expect(attrs.isDirectory).not.toHaveBeenCalled();
+    expect(sftp.stat).not.toHaveBeenCalled();
+    expect(sftp.end).toHaveBeenCalledOnce();
   });
 
   it('follows only symlink targets sequentially so directory links are navigable', async () => {

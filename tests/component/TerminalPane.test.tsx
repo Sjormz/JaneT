@@ -62,9 +62,11 @@ class MockUnicode11Addon {}
 
 class MockTerminal {
   static instances: MockTerminal[] = [];
+  static nativePasteData: string | null = null;
 
   options: Record<string, unknown> = {};
   element: HTMLElement | undefined;
+  textarea = document.createElement('textarea');
   oscHandlers = new Map<number, (data: string) => boolean | Promise<boolean>>();
   parser = {
     registerOscHandler: vi.fn((ident: number, handler: (data: string) => boolean | Promise<boolean>) => {
@@ -94,11 +96,15 @@ class MockTerminal {
   refresh = vi.fn();
   clearSelection = vi.fn();
   selection = '';
+  hasSelection = vi.fn(() => Boolean(this.selection));
   getSelection = vi.fn(() => this.selection);
   rows = 24;
 
   constructor(options: Record<string, unknown>) {
     this.options = options;
+    this.textarea.addEventListener('paste', () => {
+      if (MockTerminal.nativePasteData !== null) this.dataHandler?.(MockTerminal.nativePasteData);
+    });
     MockTerminal.instances.push(this);
   }
 }
@@ -109,7 +115,6 @@ const terminalWrite = vi.fn(() => Promise.resolve());
 const terminalWriteBinary = vi.fn(() => Promise.resolve());
 const terminalDestroy = vi.fn(() => Promise.resolve());
 const openExternal = vi.fn(() => Promise.resolve(true));
-const copyTerminalText = vi.fn(() => Promise.resolve(true));
 let sshCreateShellImpl: () => Promise<unknown> = () => Promise.resolve({ connected: true });
 const sshCreateShell = vi.fn(() => sshCreateShellImpl());
 const sshResizeShell = vi.fn(() => Promise.resolve());
@@ -161,11 +166,16 @@ vi.mock('../../src/renderer/osc7', () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   MockTerminal.instances = [];
+  MockTerminal.nativePasteData = null;
   MockWebLinksAddon.handlers = [];
   MockAddonFit.instances = [];
   MockAddonSearch.instances = [];
   MockResizeObserver.instances = [];
   searchOverlayProps = null;
+  Object.defineProperty(document, 'execCommand', {
+    configurable: true,
+    value: vi.fn(() => true),
+  });
   MockTerminal.prototype.open = vi.fn(function open(this: MockTerminal, parent: HTMLElement) {
     if (!this.element) this.element = document.createElement('div');
     this.element.dataset.testid = 'xterm-dom';
@@ -190,7 +200,6 @@ beforeEach(() => {
       sshWriteShell,
       sshWriteShellBinary,
       openExternal,
-      copyTerminalText,
     },
   });
 });
@@ -401,7 +410,7 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(searchOverlayProps.visible).toBe(true);
   });
 
-  it('copies selected terminal text from copy shortcuts and right-click without sending shell input', async () => {
+  it('copies selected terminal text synchronously without leaving xterm context-menu input behind', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     render(
       <KeybindingsProvider>
@@ -426,14 +435,12 @@ describe('TerminalPane SSH reinitialization', () => {
     }
     expect(keyHandler({
       type: 'keyup', key: 'c', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, preventDefault: vi.fn(),
-    })).toBe(false);
+    })).toBe(true);
     fireEvent.contextMenu(document.querySelector('.terminal-container')!);
 
-    await waitFor(() => expect(copyTerminalText).toHaveBeenCalledTimes(4));
-    expect(copyTerminalText).toHaveBeenNthCalledWith(1, 'first line\nsecond line');
-    expect(copyTerminalText).toHaveBeenNthCalledWith(2, 'first line\nsecond line');
-    expect(copyTerminalText).toHaveBeenNthCalledWith(3, 'first line\nsecond line');
-    expect(copyTerminalText).toHaveBeenNthCalledWith(4, 'first line\nsecond line');
+    expect(document.execCommand).toHaveBeenCalledTimes(4);
+    expect(document.execCommand).toHaveBeenCalledWith('copy');
+    expect(term.focus).toHaveBeenCalled();
     expect(terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: '\u0003' }));
   });
 
@@ -456,7 +463,6 @@ describe('TerminalPane SSH reinitialization', () => {
         type: 'keydown', key: 'c', altKey: false, ...modifiers, preventDefault: vi.fn(),
       })).toBe(true);
     }
-    expect(copyTerminalText).not.toHaveBeenCalled();
   });
 
   it('pastes a requested snippet into only its target terminal without adding Enter', async () => {
@@ -1005,6 +1011,27 @@ describe('TerminalPane SSH shell output', () => {
     });
     expect(terminalWrite).toHaveBeenNthCalledWith(2, {
       id: 'term-input-source', data: 'l', userInput: true,
+    });
+  });
+
+  it('marks native paste before xterm emits data without tainting the next automatic reply', async () => {
+    MockTerminal.nativePasteData = 'pasted text';
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-native-paste" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    const terminal = MockTerminal.instances.at(-1)!;
+    terminal.textarea.dispatchEvent(new Event('paste', { bubbles: true }));
+    terminal.dataHandler?.('\x1b[1;1R');
+
+    expect(terminalWrite).toHaveBeenNthCalledWith(1, {
+      id: 'term-native-paste', data: 'pasted text', userInput: true,
+    });
+    expect(terminalWrite).toHaveBeenNthCalledWith(2, {
+      id: 'term-native-paste', data: '\x1b[1;1R', userInput: false,
     });
   });
 

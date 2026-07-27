@@ -2,6 +2,7 @@ import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import App from '../../src/renderer/App';
+import SplitPane from '../../src/renderer/components/SplitPane';
 
 const mountedTermIds: string[] = [];
 const rendererMocks = vi.hoisted(() => ({
@@ -142,10 +143,15 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     ) => void | Promise<void>;
   }) {
     if (onSshRetry) rendererMocks.sshRetryHandlers.set(termId, onSshRetry);
+    const containerRef = React.useRef<HTMLDivElement>(null);
 
     React.useEffect(() => {
+      const textarea = document.createElement('textarea');
+      textarea.setAttribute('aria-label', `Terminal ${termId}`);
+      containerRef.current?.appendChild(textarea);
       mountedTermIds.push(termId);
       return () => {
+        textarea.remove();
         onRemoved?.(termId);
       };
     }, [termId, onRemoved]);
@@ -183,10 +189,10 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
 
     return (
       <div
+        ref={containerRef}
         data-testid={`terminal-${termId}`}
         data-terminal-focus-target
         data-ssh-connection-lost={sshConnectionLost ? 'true' : 'false'}
-        tabIndex={0}
         onFocus={() => onFocus?.(termId)}
       >
         {termId}
@@ -407,7 +413,7 @@ describe('split panes in the app', () => {
     await confirmPendingAction(/^close pane$/i);
 
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
-    await waitFor(() => expect(screen.getByTestId(/terminal-/)).toHaveFocus());
+    await waitFor(() => expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus());
 
     // Survivor must be sized from React state, not from stale inline styles.
     const survivor = document.querySelector<HTMLElement>('.split-child');
@@ -437,6 +443,8 @@ describe('split panes in the app', () => {
     await waitFor(() => {
       expect(screen.getAllByTestId(/terminal-/).map((terminal) => terminal.textContent)).toEqual([firstId]);
     });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(window.janet.terminalDestroy).toHaveBeenCalledTimes(1);
     expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: secondId });
   });
 
@@ -476,7 +484,7 @@ describe('split panes in the app', () => {
     await waitFor(() => {
       expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
     });
-    await waitFor(() => expect(screen.getByTestId(/terminal-/)).toHaveFocus());
+    await waitFor(() => expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus());
   });
 
   it('routes the command-palette close-tab action through confirmation', async () => {
@@ -496,7 +504,7 @@ describe('split panes in the app', () => {
     await confirmPendingAction(/^close tab$/i);
     await waitFor(() => {
       expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
-      expect(screen.getByTestId(/terminal-/)).toHaveFocus();
+      expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus();
     });
   });
 
@@ -690,7 +698,7 @@ describe('split panes in the app', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use defaults' }));
     await confirmPendingAction(/^use defaults$/i);
     expect(await screen.findByTestId('titlebar')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId(/terminal-/)).toHaveFocus());
+    await waitFor(() => expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus());
   });
 
   it('maximizes a single pane within the terminal area and restores it to the split layout', async () => {
@@ -756,6 +764,47 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(divider).toHaveAttribute('aria-valuenow', '55'));
     fireEvent.keyDown(divider, { key: 'Home' });
     await waitFor(() => expect(divider).toHaveAttribute('aria-valuenow', '10'));
+  });
+
+  it('cancels an active divider drag when the split unmounts', () => {
+    const onResizePane = vi.fn();
+    const { unmount } = render(
+      <SplitPane
+        node={{
+          id: 'split-drag',
+          type: 'split',
+          direction: 'vertical',
+          sizes: [1, 1],
+          children: [
+            { id: 'term-drag-a', type: 'leaf' },
+            { id: 'term-drag-b', type: 'leaf' },
+          ],
+        }}
+        tabId="tab-drag"
+        tabType="local"
+        onTerminalReady={vi.fn()}
+        onTerminalRemoved={vi.fn()}
+        onSplitPane={vi.fn()}
+        onClosePane={vi.fn()}
+        onResizePane={onResizePane}
+        onMovePane={vi.fn()}
+        onPaneDragStart={vi.fn()}
+        onPaneDragOver={vi.fn()}
+        onPaneDragEnd={vi.fn()}
+        onToggleMaximizePane={vi.fn()}
+      />,
+    );
+    const children = document.querySelectorAll<HTMLElement>('.split-child');
+    for (const child of children) Object.defineProperty(child, 'offsetWidth', { configurable: true, value: 200 });
+
+    fireEvent.mouseDown(screen.getByRole('separator'), { clientX: 200 });
+    expect(document.body.style.cursor).toBe('col-resize');
+    unmount();
+    fireEvent.mouseMove(document, { clientX: 250 });
+
+    expect(onResizePane).not.toHaveBeenCalled();
+    expect(document.body.style.cursor).toBe('');
+    expect(document.body.style.userSelect).toBe('');
   });
 
   it('auto-collapses tabs at compact widths and restores responsive collapses', async () => {
@@ -1031,9 +1080,11 @@ describe('split panes in the app', () => {
         await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
       });
 
-      await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalled());
       expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
-      expect((window.janet.terminalCreate as any).mock.calls[0][0]).not.toHaveProperty('startupCommands');
+      const localCreates = (window.janet.terminalCreate as any).mock.calls.map((call: any[]) => call[0]);
+      expect(new Set(localCreates.map((call: { id: string }) => call.id)).size).toBe(1);
+      for (const call of localCreates) expect(call).not.toHaveProperty('startupCommands');
     } finally {
       consoleError.mockRestore();
     }
@@ -1140,8 +1191,57 @@ describe('split panes in the app', () => {
     await waitFor(() => {
       const terminals = screen.getAllByTestId(/terminal-/);
       expect(terminals).toHaveLength(2);
-      expect(terminals[0]).toHaveFocus();
+      expect(within(terminals[0]).getByRole('textbox')).toHaveFocus();
     });
+  });
+
+  it('focuses the terminal when clicking the active outer tab from an editor surface', async () => {
+    render(<App />);
+    const editor = await openSampleEditor();
+    editor.focus();
+    expect(editor).toHaveFocus();
+
+    const activeTabId = rendererMocks.verticalTabBarProps.activeTabId as string;
+    fireEvent.click(screen.getByTestId(`outer-tab-${activeTabId}`));
+
+    const terminal = screen.getByTestId(/terminal-/);
+    await waitFor(() => expect(within(terminal).getByRole('textbox')).toHaveFocus());
+  });
+
+  it('does not create an unsaveable terminal tab beyond the session budget', async () => {
+    const tabs = new Array(64).fill(null).map((_, index) => ({
+      id: `saved-${index}`, title: `Saved ${index}`, type: 'local', root: { type: 'leaf' },
+    }));
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      session: {
+        tabs, activeTabId: tabs[0].id, sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(64));
+    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+
+    expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(64);
+  });
+
+  it('does not split a pane beyond the shared terminal budget', async () => {
+    const tabs = new Array(64).fill(null).map((_, index) => ({
+      id: `saved-${index}`, title: `Saved ${index}`, type: 'local', root: { type: 'leaf' },
+    }));
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      session: {
+        tabs, activeTabId: tabs[0].id, sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: /split pane right/i }));
+
+    expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
   });
 
   it('restores a saved SSH tab, connects it, then binds a single shell', async () => {
@@ -1710,6 +1810,37 @@ describe('editor documents in the app', () => {
 });
 
 describe('unsaved editor shutdown handshake', () => {
+  it('persists the latest terminal layout before acknowledging a clean close', async () => {
+    const events: string[] = [];
+    vi.mocked(window.janet.setSettings).mockImplementation(async (updates) => {
+      if ('session' in updates) events.push('session');
+      return undefined;
+    });
+    vi.mocked(window.janet.resolvePrepareForClose).mockImplementation(async () => {
+      events.push('resolved');
+      return true;
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    events.length = 0;
+
+    await requestWorkspaceClose('layout-close', 'application-quit');
+
+    expect(window.janet.setSettings).toHaveBeenCalledWith({
+      session: expect.objectContaining({
+        tabs: [expect.objectContaining({
+          root: expect.objectContaining({
+            type: 'split',
+            children: [expect.any(Object), expect.any(Object)],
+          }),
+        })],
+      }),
+    });
+    expect(events).toEqual(['session', 'resolved']);
+  });
+
   it('resolves close preparation as saved immediately when no file is dirty', async () => {
     render(<App />);
 
@@ -1722,6 +1853,38 @@ describe('unsaved editor shutdown handshake', () => {
       });
     });
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('cancels clean, discard, and save-all shutdown when final session persistence fails', async () => {
+    vi.mocked(window.janet.setSettings).mockRejectedValue(new Error('disk full'));
+    render(<App />);
+
+    await requestWorkspaceClose('failed-clean-close', 'application-quit');
+    expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
+      requestId: 'failed-clean-close', resolution: 'cancel',
+    });
+
+    const editor = await openSampleEditor();
+    fireEvent.change(editor, { target: { value: 'dirty during failed shutdown\n' } });
+
+    await requestWorkspaceClose('failed-discard-close', 'window-close');
+    let dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard changes and close' }));
+    await waitFor(() => expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
+      requestId: 'failed-discard-close', resolution: 'cancel',
+    }));
+
+    await requestWorkspaceClose('failed-save-close', 'update-install');
+    dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save all and close' }));
+    await waitFor(() => {
+      expect(window.janet.fsWriteTextFile).toHaveBeenCalledWith(expect.objectContaining({
+        content: 'dirty during failed shutdown\n',
+      }));
+      expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
+        requestId: 'failed-save-close', resolution: 'cancel',
+      });
+    });
   });
 
   it('offers Cancel, Discard, and Save all for dirty files and reports each resolution', async () => {

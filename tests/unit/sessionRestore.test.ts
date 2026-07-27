@@ -230,6 +230,31 @@ describe('restorePaneTree', () => {
       expect(restored.direction).toBe('vertical');
     }
   });
+
+  it('rejects pane trees that exceed safe depth or node ceilings', () => {
+    let tooDeep: unknown = { type: 'leaf' };
+    for (let index = 0; index < 65; index += 1) {
+      tooDeep = { type: 'split', direction: 'vertical', sizes: [1], children: [tooDeep] };
+    }
+    const tooWide = {
+      type: 'split', direction: 'vertical', sizes: new Array(129).fill(1),
+      children: new Array(129).fill(null).map(() => ({ type: 'leaf' })),
+    };
+
+    expect(() => restorePaneTree(tooDeep)).not.toThrow();
+    expect(restorePaneTree(tooDeep)).toBeNull();
+    expect(restorePaneTree(tooWide)).toBeNull();
+  });
+
+  it('caps restored leaves at the live terminal ceiling', () => {
+    const tree = (count: number) => ({
+      type: 'split', direction: 'vertical', sizes: new Array(count).fill(1),
+      children: new Array(count).fill(null).map(() => ({ type: 'leaf' })),
+    });
+
+    expect(countLeaves(restorePaneTree(tree(64))!)).toBe(64);
+    expect(restorePaneTree(tree(65))).toBeNull();
+  });
 });
 
 describe('normalizeSession', () => {
@@ -271,5 +296,42 @@ describe('normalizeSession', () => {
     expect(result.sidebarOpen).toBe(false);
     expect(result.tabsOpen).toBe(false);
     expect(result.sidebarSection).toBe('git');
+  });
+
+  it('caps restored tabs before they can allocate unbounded terminal trees', () => {
+    const tabs = new Array(65).fill(null).map((_, index) => ({
+      id: `tab-${index}`,
+      title: `Tab ${index}`,
+      type: 'local',
+      root: { type: 'leaf' },
+    }));
+
+    expect(normalizeSession({ tabs }).tabs).toHaveLength(64);
+  });
+
+  it('caps restored terminal leaves across all retained tabs', () => {
+    const tree = (count: number) => ({
+      type: 'split', direction: 'vertical', sizes: new Array(count).fill(1),
+      children: new Array(count).fill(null).map(() => ({ type: 'leaf' })),
+    });
+    const result = normalizeSession({
+      tabs: [
+        { id: 'first', title: 'First', type: 'local', root: tree(40) },
+        { id: 'second', title: 'Second', type: 'local', root: tree(25) },
+      ],
+    });
+
+    expect(result.tabs.map((tab) => tab.id)).toEqual(['first']);
+  });
+
+  it('drops tabs whose raw pane tree exceeds bounded aggregate traversal', () => {
+    let root: unknown = { type: 'leaf' };
+    for (let index = 0; index < 65; index += 1) {
+      root = { type: 'split', direction: 'vertical', sizes: [1], children: [root] };
+    }
+
+    expect(normalizeSession({
+      tabs: [{ id: 'deep', title: 'Deep', type: 'local', root }],
+    }).tabs).toEqual([]);
   });
 });
