@@ -286,11 +286,18 @@ export function resizePane(
   if (tree.type === 'leaf') return tree;
 
   if (tree.id === splitId) {
+    if (
+      !Number.isInteger(dividerIndex)
+      || dividerIndex < 0
+      || dividerIndex >= tree.children.length - 1
+      || !Number.isFinite(leftFraction)
+    ) return tree;
     const nextSizes = tree.sizes.length === tree.children.length
+      && tree.sizes.every((size) => Number.isFinite(size) && size > 0)
       ? [...tree.sizes]
       : tree.children.map(() => 1);
-    const leftSize = nextSizes[dividerIndex] ?? 1;
-    const rightSize = nextSizes[dividerIndex + 1] ?? 1;
+    const leftSize = nextSizes[dividerIndex];
+    const rightSize = nextSizes[dividerIndex + 1];
     const pairTotal = leftSize + rightSize;
     const clamped = Math.max(0.1, Math.min(0.9, leftFraction));
     nextSizes[dividerIndex] = pairTotal * clamped;

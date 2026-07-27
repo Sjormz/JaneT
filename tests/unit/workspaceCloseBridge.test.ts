@@ -143,6 +143,23 @@ describe('WorkspaceClosePreparationCoordinator', () => {
     coordinator.resolve(renderer, { requestId: request.requestId, resolution: 'saved' });
     await expect(pending).resolves.toBe('saved');
   });
+
+  it('cancels a close request when a live renderer never replies', async () => {
+    vi.useFakeTimers();
+    try {
+      const coordinator = new WorkspaceClosePreparationCoordinator(1_000);
+      const renderer = new FakeRenderer();
+      const pending = coordinator.request(renderer, 'application-quit');
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(pending).resolves.toBe('cancel');
+      const request = renderer.send.mock.calls[0][1] as WorkspacePrepareForCloseRequest;
+      expect(coordinator.resolve(renderer, { requestId: request.requestId, resolution: 'saved' })).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('preload close-preparation bridge', () => {
@@ -150,14 +167,15 @@ describe('preload close-preparation bridge', () => {
     const listeners = new Map<string, (...args: any[]) => void>();
     const invoke = vi.fn().mockResolvedValue(true);
     const removeListener = vi.fn();
+    const on = vi.fn((channel: string, listener: (...args: any[]) => void) => {
+      listeners.set(channel, listener);
+    });
     const exposeInMainWorld = vi.fn();
     vi.doMock('electron', () => ({
       contextBridge: { exposeInMainWorld },
       ipcRenderer: {
         invoke,
-        on: vi.fn((channel: string, listener: (...args: any[]) => void) => {
-          listeners.set(channel, listener);
-        }),
+        on,
         removeListener,
       },
     }));
@@ -166,6 +184,7 @@ describe('preload close-preparation bridge', () => {
     const api = exposeInMainWorld.mock.calls[0]?.[1] as {
       onPrepareForClose(callback: (request: WorkspacePrepareForCloseRequest) => void | Promise<void>): () => void;
       resolvePrepareForClose(resolution: WorkspacePrepareForCloseResolution): Promise<boolean>;
+      onTerminalData(callback: (event: { id: string; data: string }) => void): () => void;
     };
     const callback = vi.fn();
     const unsubscribe = api.onPrepareForClose(callback);
@@ -195,5 +214,16 @@ describe('preload close-preparation bridge', () => {
       { requestId: unattendedRequest.requestId, resolution: 'cancel' },
     ));
     expect(removeListener).not.toHaveBeenCalled();
+
+    const terminalCallbacks = Array.from({ length: 20 }, () => vi.fn());
+    const unsubscribeTerminal = terminalCallbacks.map((terminalCallback) => api.onTerminalData(terminalCallback));
+    expect(on.mock.calls.filter(([channel]) => channel === 'terminal:onData')).toHaveLength(1);
+    listeners.get('terminal:onData')?.({}, { id: 'term-1', data: 'output' });
+    for (const terminalCallback of terminalCallbacks) {
+      expect(terminalCallback).toHaveBeenCalledWith({ id: 'term-1', data: 'output' });
+    }
+    unsubscribeTerminal.forEach((unsubscribe) => unsubscribe());
+    listeners.get('terminal:onData')?.({}, { id: 'term-1', data: 'late' });
+    for (const terminalCallback of terminalCallbacks) expect(terminalCallback).toHaveBeenCalledOnce();
   });
 });

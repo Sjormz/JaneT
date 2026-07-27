@@ -31,11 +31,21 @@ import {
   revisionsMatch,
   textFileRevision,
 } from './textFileCodec';
+import { NativeTerminalCapacity } from './terminalCapacity';
 
 // Host verification may pause on a native Trust/Cancel dialog while the user
 // checks the fingerprint out of band. Keep the handshake bounded, but do not
 // apply the old 10-second machine-to-machine timeout to an interactive step.
 const INTERACTIVE_READY_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_SSH_CONNECTIONS = 64;
+const MAX_SSH_SHELLS = 64;
+const MAX_SSH_SHELL_QUEUE_BYTES = 1024 * 1024;
+const MAX_SSH_SHELL_QUEUE_CHUNKS = 256;
+const SSH_SHELL_OPEN_TIMEOUT_MS = 30_000;
+const MAX_SSH_SHELL_DIMENSION = 1_000;
+const MAX_SFTP_DIRECTORY_ENTRIES = 10_000;
+const MAX_SSH_USERNAME_LENGTH = 256;
+const MAX_SSH_SECRET_LENGTH = 100_000;
 const SFTP_OPERATION_TIMEOUT_MS = 30_000;
 const MAX_REMOTE_PATH_LENGTH = 8_192;
 const SFTP_IO_CHUNK_BYTES = 64 * 1024;
@@ -710,6 +720,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function utf8Tail(value: string, maxBytes: number): string {
+  const bytes = Buffer.from(value);
+  if (bytes.length <= maxBytes) return value;
+  let start = bytes.length - maxBytes;
+  while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start += 1;
+  return bytes.subarray(start).toString('utf8');
+}
+
 export type SSHHostKeyConfirmer = (
   host: string,
   port: number,
@@ -768,6 +786,7 @@ export class SSHManager {
     private readonly hostKeyStore?: SSHHostKeyStore,
     private readonly confirmHostKey: SSHHostKeyConfirmer = () => false,
     private readonly onConnectionClosed?: SSHConnectionClosedHandler,
+    private readonly capacity = new NativeTerminalCapacity(MAX_SSH_SHELLS),
   ) {}
 
   connect(id: string, config: {
@@ -778,8 +797,39 @@ export class SSHManager {
     password?: string;
     privateKey?: string;
   }): Promise<void> {
+    if (
+      typeof id !== 'string'
+      || id.trim().length === 0
+      || id.length > 256
+      || /[\u0000-\u001f\u007f-\u009f]/.test(id)
+    ) throw new Error('A valid SSH session id is required');
+    if (
+      !config
+      || typeof config.host !== 'string'
+      || config.host.trim().length === 0
+      || config.host.length > 255
+      || /[\u0000-\u001f\u007f-\u009f]/.test(config.host)
+    ) throw new Error('A valid SSH host is required');
+    if (!Number.isInteger(config.port) || config.port <= 0 || config.port > 65_535) {
+      throw new Error('A valid SSH port is required');
+    }
+    if (config.auth !== 'password' && config.auth !== 'key') {
+      throw new Error('A valid SSH auth method is required');
+    }
+    if (config.username !== undefined
+      && (typeof config.username !== 'string' || config.username.length > MAX_SSH_USERNAME_LENGTH)) {
+      throw new Error('A valid SSH username is required');
+    }
+    if (config.password !== undefined
+      && (typeof config.password !== 'string' || config.password.length > MAX_SSH_SECRET_LENGTH)) {
+      throw new Error('A valid SSH password is required');
+    }
+    if (config.privateKey !== undefined
+      && (typeof config.privateKey !== 'string' || config.privateKey.length > MAX_SSH_SECRET_LENGTH)) {
+      throw new Error('A valid SSH private key is required');
+    }
     const host = config.host.trim();
-    const port = normalizePort(config.port);
+    const port = config.port;
     const endpoint = hostKeyId(host, port);
     const activeConnection = this.connections.get(id);
     if (activeConnection) {
@@ -792,6 +842,9 @@ export class SSHManager {
       return existingAttempt.endpoint === endpoint
         ? existingAttempt.promise
         : Promise.reject(new Error(`SSH session ${id} is already connecting to another host`));
+    }
+    if (this.connections.size + this.pendingConnections.size >= MAX_SSH_CONNECTIONS) {
+      throw new Error(`SSH connection limit of ${MAX_SSH_CONNECTIONS} reached`);
     }
 
     const client = new Client();
@@ -977,6 +1030,20 @@ export class SSHManager {
   ): SSHShellHandle {
     const conn = this.connections.get(sessionId);
     if (!conn) throw new Error(`SSH session ${sessionId} not found`);
+    if (
+      typeof termId !== 'string'
+      || termId.trim().length === 0
+      || termId.length > 256
+      || /[\u0000-\u001f\u007f-\u009f]/.test(termId)
+    ) throw new Error('A valid SSH shell terminal id is required');
+    if (
+      !size
+      || !Number.isFinite(size.cols) || !Number.isFinite(size.rows)
+      || size.cols < 1 || size.rows < 1
+      || size.cols > MAX_SSH_SHELL_DIMENSION || size.rows > MAX_SSH_SHELL_DIMENSION
+    ) throw new Error('Valid SSH shell dimensions are required');
+    const cols = Math.floor(size.cols);
+    const rows = Math.floor(size.rows);
     const startupExpression = isStartupShellDialect(startupShellDialect)
       ? compileStartupCommands(startupCommands, startupShellDialect)
       : '';
@@ -990,12 +1057,27 @@ export class SSHManager {
     // issue, just over an SSH channel instead of a local pty.
     const existingHandle = conn.shellHandles.get(termId);
     if (existingHandle) return existingHandle;
+    if (Array.from(this.connections.values()).some((connection) => (
+      connection !== conn && connection.shellHandles.has(termId)
+    ))) {
+      throw new Error(`SSH terminal id ${termId} is already in use`);
+    }
+    const shellCount = Array.from(this.connections.values())
+      .reduce((total, connection) => total + connection.shellHandles.size, 0);
+    if (shellCount >= MAX_SSH_SHELLS) {
+      throw new Error(`SSH shell limit of ${MAX_SSH_SHELLS} reached`);
+    }
+    const capacityOwner = termId;
+    this.capacity.reserve(capacityOwner);
 
     let activeCallback: ((data: string) => void) | null = null;
     const pendingChunks: string[] = [];
+    let pendingChunkBytes = 0;
     let resolveReady: (() => void) | null = null;
     let rejectReady: ((err: Error) => void) | null = null;
     let readySettled = false;
+    let capacityReleased = false;
+    let openTimer: ReturnType<typeof setTimeout> | null = null;
 
     const ready = new Promise<void>((resolve, reject) => {
       resolveReady = resolve;
@@ -1005,7 +1087,15 @@ export class SSHManager {
     const dispatch = (str: string) => {
       if (!str) return;
       if (!activeCallback) {
-        pendingChunks.push(str);
+        const retained = utf8Tail(str, MAX_SSH_SHELL_QUEUE_BYTES);
+        pendingChunks.push(retained);
+        pendingChunkBytes += Buffer.byteLength(retained);
+        while (
+          pendingChunks.length > MAX_SSH_SHELL_QUEUE_CHUNKS
+          || pendingChunkBytes > MAX_SSH_SHELL_QUEUE_BYTES
+        ) {
+          pendingChunkBytes -= Buffer.byteLength(pendingChunks.shift() || '');
+        }
         return;
       }
 
@@ -1020,12 +1110,19 @@ export class SSHManager {
             cb(chunk);
           }
           pendingChunks.length = 0;
+          pendingChunkBytes = 0;
         }
       },
       ready,
       cancel: (error: Error) => {
+        if (!capacityReleased) {
+          capacityReleased = true;
+          this.capacity.release(capacityOwner);
+        }
         if (readySettled) return;
         readySettled = true;
+        if (openTimer) clearTimeout(openTimer);
+        openTimer = null;
         if (this.pendingStartupCommandHandles.get(termId) === handle) {
           this.pendingStartupCommandHandles.delete(termId);
         }
@@ -1037,9 +1134,17 @@ export class SSHManager {
       this.pendingStartupCommandHandles.set(termId, handle);
     }
 
-    conn.client.shell({
-      cols: size.cols,
-      rows: size.rows,
+    openTimer = setTimeout(() => {
+      if (conn.shellHandles.get(termId) !== handle) return;
+      conn.pendingWrites.delete(termId);
+      conn.shellHandles.delete(termId);
+      handle.cancel(new Error(`SSH shell ${termId} open timed out`));
+    }, SSH_SHELL_OPEN_TIMEOUT_MS);
+    openTimer.unref?.();
+
+    try { conn.client.shell({
+      cols,
+      rows,
       term: 'xterm-256color',
     }, (err, stream) => {
       if (this.connections.get(sessionId) !== conn || conn.shellHandles.get(termId) !== handle) {
@@ -1053,6 +1158,8 @@ export class SSHManager {
         handle.cancel(err || new Error('Failed to create SSH shell'));
         return;
       }
+      if (openTimer) clearTimeout(openTimer);
+      openTimer = null;
 
       const stdoutDecoder = new StringDecoder('utf8');
       const stderrDecoder = new StringDecoder('utf8');
@@ -1077,7 +1184,10 @@ export class SSHManager {
         const ownsHandle = conn.shellHandles.get(termId) === handle;
         if (ownsShell) conn.shells.delete(termId);
         if (ownsShell || ownsHandle) conn.pendingWrites.delete(termId);
-        if (ownsHandle) conn.shellHandles.delete(termId);
+        if (ownsHandle) {
+          conn.shellHandles.delete(termId);
+          handle.cancel(new Error(`SSH shell ${termId} closed`));
+        }
       });
 
       conn.shells.set(termId, stream);
@@ -1102,15 +1212,29 @@ export class SSHManager {
 
       const queuedWrites = conn.pendingWrites.get(termId);
       if (queuedWrites && queuedWrites.length > 0) {
-        for (const chunk of queuedWrites) {
-          stream.write(chunk);
+        try {
+          for (const chunk of queuedWrites) {
+            stream.write(chunk);
+          }
+        } catch (error) {
+          const writeError = error instanceof Error ? error : new Error(String(error));
+          conn.pendingWrites.delete(termId);
+          conn.shells.delete(termId);
+          conn.shellHandles.delete(termId);
+          handle.cancel(writeError);
+          try { stream.close(); } catch {}
+          return;
         }
         conn.pendingWrites.delete(termId);
       }
 
       readySettled = true;
       resolveReady?.();
-    });
+    }); } catch (error) {
+      conn.shellHandles.delete(termId);
+      handle.cancel(error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
     return handle;
   }
 
@@ -1142,6 +1266,24 @@ export class SSHManager {
       return;
     }
     const queued = conn.pendingWrites.get(termId) || [];
+    const dataBytes = typeof data === 'string' ? Buffer.byteLength(data) : data.byteLength;
+    const queuedBytes = queued.reduce((total, chunk) => (
+      total + (typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.byteLength)
+    ), 0);
+    if (
+      queued.length >= MAX_SSH_SHELL_QUEUE_CHUNKS
+      || queuedBytes + dataBytes > MAX_SSH_SHELL_QUEUE_BYTES
+    ) {
+      const error = new Error(`SSH shell input limit of ${MAX_SSH_SHELL_QUEUE_BYTES} bytes reached`);
+      const handle = conn.shellHandles.get(termId);
+      conn.pendingWrites.delete(termId);
+      conn.shellHandles.delete(termId);
+      if (this.pendingStartupCommandHandles.get(termId) === handle) {
+        this.pendingStartupCommandHandles.delete(termId);
+      }
+      handle?.cancel(error);
+      throw error;
+    }
     queued.push(data);
     conn.pendingWrites.set(termId, queued);
   }
@@ -1175,10 +1317,17 @@ export class SSHManager {
   }
 
   resizeShell(termId: string, cols: number, rows: number): void {
+    if (
+      !Number.isFinite(cols) || !Number.isFinite(rows)
+      || cols < 1 || rows < 1
+      || cols > MAX_SSH_SHELL_DIMENSION || rows > MAX_SSH_SHELL_DIMENSION
+    ) return;
+    const nextCols = Math.floor(cols);
+    const nextRows = Math.floor(rows);
     this.connections.forEach((conn) => {
       const shell = conn.shells.get(termId);
       if (shell) {
-        shell.setWindow(rows, cols, 0, 0);
+        shell.setWindow(nextRows, nextCols, 0, 0);
         return;
       }
     });
@@ -1210,6 +1359,10 @@ export class SSHManager {
             if (isSettled()) return;
             if (readError) {
               done(readError);
+              return;
+            }
+            if (list.length > MAX_SFTP_DIRECTORY_ENTRIES) {
+              done(new Error(`Too many directory entries (limit ${MAX_SFTP_DIRECTORY_ENTRIES})`));
               return;
             }
 
@@ -1539,10 +1692,6 @@ function normalizeUsername(username: string | undefined): string {
     if (osUsername) return osUsername;
   } catch {}
   return process.env.USERNAME || process.env.USER || 'user';
-}
-
-function normalizePort(port: number): number {
-  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 22;
 }
 
 function validateRemotePath(remotePath: string | undefined): string {

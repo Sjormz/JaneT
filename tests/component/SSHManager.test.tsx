@@ -22,12 +22,14 @@ beforeEach(() => {
 
 function renderSSHManager(props?: {
   profiles?: SavedSSHProfile[];
+  canConnect?: () => boolean;
   onConnected?: (session: SessionInfo) => void;
   onProfilesChange?: (profiles: SavedSSHProfile[]) => void;
 }) {
   return render(
     <SSHManager
       sshProfiles={props?.profiles ?? []}
+      canConnect={props?.canConnect}
       onConnected={props?.onConnected ?? vi.fn()}
       onProfilesChange={props?.onProfilesChange ?? vi.fn()}
     />,
@@ -141,6 +143,26 @@ describe('SSHManager', () => {
         sshProfileId: 'pckpr@box.local:22:password',
       }));
     });
+  });
+
+  it('does not allocate an SSH transport when terminal capacity is exhausted', () => {
+    const onConnected = vi.fn();
+    renderSSHManager({
+      canConnect: () => false,
+      onConnected,
+      profiles: [{
+        id: 'pckpr@box.local:22:password',
+        host: 'box.local',
+        port: 22,
+        username: 'pckpr',
+        auth: 'password',
+      }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /connect to pckpr@box.local/i }));
+
+    expect(sshConnect).not.toHaveBeenCalled();
+    expect(onConnected).not.toHaveBeenCalled();
   });
 
   it('identifies the saved profile while connecting and keeps failures visible with the form closed', async () => {

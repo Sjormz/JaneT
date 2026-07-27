@@ -141,6 +141,41 @@ describe('heartbeat-backed main-process IO', () => {
     readdirSpy.mockRestore();
   });
 
+  it('bounds directory entry count and concurrent metadata reads', async () => {
+    const entries = Array.from({ length: 100 }, (_, index) => ({
+      name: `file-${index}.txt`,
+      isDirectory: () => false,
+      isSymbolicLink: () => false,
+    })) as fs.Dirent[];
+    let activeStats = 0;
+    let maxActiveStats = 0;
+    const readdirSpy = vi.spyOn(fs.promises, 'readdir').mockResolvedValue(entries as any);
+    const statSpy = vi.spyOn(fs.promises, 'stat').mockImplementation(async () => {
+      activeStats += 1;
+      maxActiveStats = Math.max(maxActiveStats, activeStats);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      activeStats -= 1;
+      return {
+        isDirectory: () => false,
+        size: 1,
+        mtime: new Date(0),
+        mode: 0o644,
+      } as fs.Stats;
+    });
+    const manager = new FileSystemManager(60_000, () => ({ on() { return this; }, close() {} }));
+
+    await expect(manager.listDir('/bounded', true)).resolves.toHaveLength(100);
+    expect(maxActiveStats).toBeLessThanOrEqual(32);
+
+    readdirSpy.mockResolvedValue(new Array(10_001).fill(entries[0]) as any);
+    statSpy.mockClear();
+    await expect(manager.listDir('/too-large', true)).rejects.toThrow(/too many directory entries/i);
+    expect(statSpy).not.toHaveBeenCalled();
+    manager.cleanup();
+    readdirSpy.mockRestore();
+    statSpy.mockRestore();
+  });
+
   it('discovers a repository from a nested directory when .git is a worktree file', async () => {
     const root = await makeTempDir();
     const nested = path.join(root, 'src', 'feature');

@@ -19,12 +19,15 @@ import {
   SavedSSHProfile,
   WorkspaceTabPreset,
   PaneNode, PaneDropSide, TerminalLeaf,
-  createPaneRoot, splitPane, removePane, movePane, resizePane, getAllLeafIds, genId, mapLeaves, findLeaf,
+  createPaneRoot, splitPane, removePane, movePane, resizePane, getAllLeafIds, genId, mapLeaves, findLeaf, countLeaves,
 } from './types';
 import { ThemeName, applyCssTheme, getTheme } from './themes';
 import { KeybindingsProvider, useKeybindings } from './KeybindingsContext';
 import { KeybindingAction } from './keybindings';
-import { serializePaneTree, restorePaneTree, normalizeSession, SavedSession } from './sessionRestore';
+import {
+  serializePaneTree, restorePaneTree, normalizeSession, SavedSession,
+  MAX_RESTORED_TABS, MAX_RESTORED_TERMINALS,
+} from './sessionRestore';
 import { GitStatusSummary, summarizeGitStatus } from './gitStatus';
 import { useGitRepository } from './useGitRepository';
 import { requestTerminalSearch } from './terminalSearch';
@@ -258,8 +261,16 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null);
   const [paneDropTarget, setPaneDropTarget] = useState<{ leafId: string; side: PaneDropSide } | null>(null);
   const liveTerminalIdsRef = useRef<Set<string>>(new Set());
+  const restoreTerminalFocusRef = useRef(false);
+  const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
   const connectingSshSessionIdsRef = useRef<Set<string>>(new Set());
   const releasedSshSessionIdsRef = useRef<Set<string>>(new Set());
+
+  useLayoutEffect(() => {
+    if (!restoreTerminalFocusRef.current) return;
+    restoreTerminalFocusRef.current = false;
+    firstTerminalFocusTarget()?.focus();
+  }, [activeTabId, tabs, terminalFocusRequest]);
 
   useLayoutEffect(() => {
     if (typeof window.matchMedia !== 'function') return;
@@ -502,31 +513,35 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     }
   }, [markSshSessionReady, sshProfiles]);
 
-  // === Persist session state on changes (debounced) ===
-  // We debounce so a burst of splits/renames doesn't hammer disk. Saves
-  // only fire after the user settles for ~500ms.
-  useEffect(() => {
-    if (!settingsLoadedRef.current) return;
-    const timer = setTimeout(() => {
-      const savedTabs = tabsRef.current.map((tab) => ({
+  const persistSession = useCallback(async (): Promise<boolean> => {
+    const session: SavedSession = {
+      tabs: tabsRef.current.map((tab) => ({
         id: tab.id,
         title: tab.title,
         type: tab.type,
         cwd: tab.cwd,
         sshProfileId: tab.sshProfileId,
         root: serializePaneTree(tab.root, cwdByTerminal, { includeStartupCommands: true }),
-      }));
-      const session: SavedSession = {
-        tabs: savedTabs,
-        activeTabId,
-        sidebarOpen,
-        tabsOpen: responsiveTabsCollapsedRef.current ? true : tabsOpen,
-        sidebarSection,
-      };
-      try { window.janet.setSettings({ session }).catch(() => {}); } catch {}
-    }, 500);
+      })),
+      activeTabId,
+      sidebarOpen,
+      tabsOpen: responsiveTabsCollapsedRef.current ? true : tabsOpen,
+      sidebarSection,
+    };
+    try {
+      await window.janet.setSettings({ session });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [activeTabId, cwdByTerminal, sidebarOpen, sidebarSection, tabsOpen]);
+
+  // Debounce normal changes, but the close handshake below forces a flush.
+  useEffect(() => {
+    if (!settingsLoadedRef.current) return;
+    const timer = setTimeout(() => { void persistSession(); }, 500);
     return () => clearTimeout(timer);
-  }, [tabs, activeTabId, sidebarOpen, tabsOpen, sidebarSection, cwdByTerminal]);
+  }, [persistSession, tabs]);
 
   // Apply the loaded theme before paint and keep it synchronized thereafter.
   useLayoutEffect(() => {
@@ -574,6 +589,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     [],
   );
 
+  const terminalCount = useCallback(() => (
+    tabsRef.current.reduce((total, tab) => total + countLeaves(tab.root), 0)
+  ), []);
+  const canAddTerminalTab = useCallback(() => (
+    tabsRef.current.length < MAX_RESTORED_TABS && terminalCount() < MAX_RESTORED_TERMINALS
+  ), [terminalCount]);
+
   // Track terminal registrations
   const handleTerminalReady = useCallback((termId: string) => {
     liveTerminalIdsRef.current.add(termId);
@@ -597,9 +619,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   }, []);
 
   const selectTerminalTab = useCallback((tabId: string) => {
+    restoreTerminalFocusRef.current = true;
     setActiveTabId(tabId);
     editorDocuments.selectSurface(tabId, 'terminal');
-    requestAnimationFrame(() => firstTerminalFocusTarget()?.focus());
+    setTerminalFocusRequest((request) => request + 1);
   }, [editorDocuments.selectSurface]);
 
   const teardownTerminalOwners = useCallback((owners: TerminalOwner[], remainingTabs: TabInfo[]) => {
@@ -685,7 +708,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       sshProfileId?: string,
       cwd?: string,
       title?: string,
-    ) => {
+    ): boolean => {
+      if (!canAddTerminalTab()) {
+        return false;
+      }
       const tab: TabInfo = {
         id: genId('tab'),
         title: title || (type === 'local' ? `Terminal ${tabs.length + 1}` : `SSH ${tabs.length + 1}`),
@@ -696,10 +722,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         cwd,
         root: createTabRoot(type),
       };
-      setTabs((prev) => [...prev, tab]);
+      const next = [...tabsRef.current, tab];
+      tabsRef.current = next;
+      setTabs(next);
       setActiveTabId(tab.id);
+      return true;
     },
-    [tabs.length],
+    [canAddTerminalTab, tabs.length],
   );
 
   const openLocalTabAt = useCallback((cwd: string, title?: string) => {
@@ -712,6 +741,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       const idx = current.findIndex((tab) => tab.id === tabId);
       if (idx < 0) return;
       const tab = current[idx];
+      const shouldRestoreTerminalFocus = activeTabId === tabId;
       let next = current.filter((candidate) => candidate.id !== tabId);
 
       if (next.length === 0) {
@@ -740,6 +770,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       // Make the pending effect cleanup observe the closed tree even before
       // React commits the state update.
       tabsRef.current = next;
+      restoreTerminalFocusRef.current = shouldRestoreTerminalFocus;
       setTabs(next);
     },
     [activeTabId, editorDocuments.closeDocumentsForTab, focusedTerminalId, teardownTerminalOwners],
@@ -877,12 +908,14 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
 
   const handleSplitPane = useCallback(
     (tabId: string, leafId: string, direction: 'horizontal' | 'vertical') => {
-      updateTab(tabId, (tab) => ({
-        ...tab,
-        root: splitPane(tab.root, leafId, direction),
-      }));
+      if (terminalCount() >= MAX_RESTORED_TERMINALS) return;
+      const next = tabsRef.current.map((tab) => tab.id === tabId
+        ? { ...tab, root: splitPane(tab.root, leafId, direction) }
+        : tab);
+      tabsRef.current = next;
+      setTabs(next);
     },
-    [updateTab],
+    [terminalCount],
   );
 
   const handleToggleMaximizePane = useCallback((tabId: string, leafId: string) => {
@@ -910,6 +943,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       const next = current.map((candidate) => candidate.id === tabId ? { ...candidate, root: nextRoot } : candidate);
       teardownTerminalOwners(owners, next);
       tabsRef.current = next;
+      restoreTerminalFocusRef.current = true;
       setTabs(next);
 
       const wasMaximized = maximizedLeafByTab[tabId] === leafId;
@@ -963,9 +997,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
 
       const dirtyDocuments = editorDocuments.dirtyDocuments;
       if (dirtyDocuments.length === 0) {
+        const persisted = await persistSession();
         await window.janet.resolvePrepareForClose({
           requestId: request.requestId,
-          resolution: 'saved',
+          resolution: persisted ? 'saved' : 'cancel',
         });
         return;
       }
@@ -985,14 +1020,14 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         confirmLabel: 'Discard changes and close',
         run: async () => window.janet.resolvePrepareForClose({
           requestId: request.requestId,
-          resolution: 'discarded',
+          resolution: await persistSession() ? 'discarded' : 'cancel',
         }),
         secondaryLabel: 'Save all and close',
         runSecondary: () => saveEditorDocumentSequence(
           dirtyDocuments.map((document) => document.key),
-          () => window.janet.resolvePrepareForClose({
+          async () => window.janet.resolvePrepareForClose({
             requestId: request.requestId,
-            resolution: 'saved',
+            resolution: await persistSession() ? 'saved' : 'cancel',
           }),
           cancelClose,
         ),
@@ -1004,6 +1039,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     editorDocuments.dirtyDocuments,
     pendingDestructiveAction,
     pendingDestructiveBusy,
+    persistSession,
     saveEditorDocumentSequence,
   ]);
 
@@ -1045,12 +1081,15 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
 
   const handleSSHConnected = useCallback(
     (session: SessionInfo) => {
+      if (!addTab('ssh', session.id, true, session.sshProfileId)) {
+        window.janet.sshDisconnect({ id: session.id }).catch(() => {});
+        return;
+      }
       releasedSshSessionIdsRef.current.delete(session.id);
       setSshSessions((prev) => (
         prev.some((s) => s.id === session.id) ? prev : [...prev, session]
       ));
       markSshSessionReady(session.id);
-      addTab('ssh', session.id, true, session.sshProfileId);
       setSshConnectionsOpen(false);
     },
     [addTab, markSshSessionReady],
@@ -1206,6 +1245,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       sshSessionId: `ssh-${Date.now()}-${leaf.id}`,
       sshShellReady: false,
     });
+    if (tabsRef.current.length >= MAX_RESTORED_TABS
+      || terminalCount() + countLeaves(root) > MAX_RESTORED_TERMINALS) {
+      return;
+    }
     const tab: TabInfo = {
       id: genId('tab'), title: preset.name, workspaceId: preset.id, type: 'local', root,
     };
@@ -1261,7 +1304,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         releasedSshSessionIdsRef.current.delete(leaf.sshSessionId);
       }
     }
-  }, [markSshSessionReady, sshProfiles, updateTab]);
+  }, [markSshSessionReady, sshProfiles, terminalCount, updateTab]);
 
 
   const activeTab = getTab(activeTabId);
@@ -1579,6 +1622,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
             sshProfiles={sshProfiles}
             sshConnectionsOpen={sshConnectionsOpen}
             onSSHConnectionsOpenChange={setSshConnectionsOpen}
+            canConnectSSH={canAddTerminalTab}
             onSSHConnected={handleSSHConnected}
             onSSHProfilesChange={handleSSHProfilesChange}
             workspaceTabs={workspaceTabs}

@@ -142,8 +142,26 @@ describe('TerminalManager', () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(pty.write.mock.calls).toEqual([
       ['\x1b[1;1R'],
-      ["eval 'git pull'\r"],
+      ["eval 'git pull'" + String.fromCharCode(13)],
     ]);
+  });
+
+  it('preserves pending startup after empty or failed user input', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    manager.create('term-startup-failed-input', undefined, '/bin/zsh', () => {}, ['git pull']);
+
+    manager.write('term-startup-failed-input', '');
+    pty.write.mockImplementationOnce(() => {
+      throw new Error('native write failed');
+    });
+    expect(() => manager.write('term-startup-failed-input', 'x')).toThrow(/native write failed/i);
+    pty.emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(pty.write).toHaveBeenLastCalledWith("eval 'git pull'" + String.fromCharCode(13));
   });
 
   it('does not append startup commands to a partially typed user line', async () => {
@@ -393,6 +411,10 @@ describe('TerminalManager', () => {
     manager.create('term-1', undefined, undefined, () => {});
     manager.resize('term-1', 0, 24);
     manager.resize('term-1', Number.NaN, 24);
+    manager.resize('term-1', 0.5, 24);
+    manager.resize('term-1', 80, 0.5);
+    manager.resize('term-1', 1_001, 24);
+    manager.resize('term-1', 80, 1_001);
     manager.resize('term-1', 80, 24);
     expect(pty.resize).not.toHaveBeenCalled();
 
@@ -512,6 +534,29 @@ describe('TerminalManager', () => {
         killProcess,
       });
       manager.create('term-reparent', undefined, '/bin/zsh', () => {});
+
+      await manager.stopAll();
+
+      expect(killProcess).toHaveBeenCalledWith(5008, 'SIGTERM');
+      expect(pty.kill).toHaveBeenCalledOnce();
+    });
+
+    it('keeps ownership of a reparented child when snapshots omit start time', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const shell = processInfo(pty.pid, 1, 'zsh');
+      const attached = processInfo(5008, pty.pid, 'node');
+      const reparented = processInfo(5008, 1, 'node');
+      const killProcess = vi.fn();
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: processInspector([shell, attached], [shell, reparented], [], []),
+        terminateGraceMs: 0,
+        forceKillGraceMs: 0,
+        killProcess,
+      });
+      manager.create('term-reparent-no-start-time', undefined, '/bin/zsh', () => {});
 
       await manager.stopAll();
 

@@ -10,6 +10,7 @@ import {
   stableProcesses,
   SystemProcessInspector,
 } from './processInspector';
+import { NativeTerminalCapacity } from './terminalCapacity';
 
 interface TerminalInstance {
   pty: IPty;
@@ -29,10 +30,14 @@ export interface TerminalManagerOptions {
   terminateGraceMs?: number;
   forceKillGraceMs?: number;
   killProcess?: (pid: number, signal: NodeJS.Signals) => void;
+  capacity?: NativeTerminalCapacity;
 }
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+const MAX_TERMINAL_ID_LENGTH = 256;
+const MAX_LIVE_TERMINALS = 64;
+const MAX_TERMINAL_DIMENSION = 1_000;
 const DEFAULT_TERMINATE_GRACE_MS = 750;
 const DEFAULT_FORCE_KILL_GRACE_MS = 250;
 const STARTUP_COMMAND_FALLBACK_MS = 1_000;
@@ -127,6 +132,7 @@ export class TerminalManager {
   private readonly terminateGraceMs: number;
   private readonly forceKillGraceMs: number;
   private readonly killProcess: (pid: number, signal: NodeJS.Signals) => void;
+  private readonly capacity: NativeTerminalCapacity;
 
   constructor(options: TerminalManagerOptions = {}) {
     this.processInspector = options.processInspector ?? new SystemProcessInspector();
@@ -134,6 +140,7 @@ export class TerminalManager {
     this.terminateGraceMs = Math.max(0, options.terminateGraceMs ?? DEFAULT_TERMINATE_GRACE_MS);
     this.forceKillGraceMs = Math.max(0, options.forceKillGraceMs ?? DEFAULT_FORCE_KILL_GRACE_MS);
     this.killProcess = options.killProcess ?? ((pid, signal) => process.kill(pid, signal));
+    this.capacity = options.capacity ?? new NativeTerminalCapacity(MAX_LIVE_TERMINALS);
   }
 
   /**
@@ -158,10 +165,19 @@ export class TerminalManager {
     onData?: (data: string) => void,
     startupCommands?: unknown,
   ): IPty {
+    if (
+      typeof id !== 'string'
+      || id.trim().length === 0
+      || id.length > MAX_TERMINAL_ID_LENGTH
+      || /[\u0000-\u001f\u007f-\u009f]/.test(id)
+    ) throw new Error('A valid terminal id is required');
     const existing = this.terminals.get(id);
     if (existing) {
       if (onData && !existing.forwardData) existing.forwardData = onData;
       return existing.pty;
+    }
+    if (this.terminals.size >= MAX_LIVE_TERMINALS) {
+      throw new Error(`Terminal limit of ${MAX_LIVE_TERMINALS} reached`);
     }
 
     const defaultShell = shell || (process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || '/bin/bash');
@@ -203,13 +219,16 @@ export class TerminalManager {
     delete env.TMUX_PANE;
     delete env.STY;
 
-    const pty = spawn(defaultShell, launch.args, {
-      name: 'xterm-256color',
-      cols: DEFAULT_COLS,
-      rows: DEFAULT_ROWS,
-      cwd: defaultCwd,
-      env,
-    });
+    this.capacity.reserve(id);
+    let pty: IPty;
+    try {
+      pty = spawn(defaultShell, launch.args, {
+        name: 'xterm-256color', cols: DEFAULT_COLS, rows: DEFAULT_ROWS, cwd: defaultCwd, env,
+      });
+    } catch (error) {
+      this.capacity.release(id);
+      throw error;
+    }
 
     const terminal: TerminalInstance = {
       pty,
@@ -226,6 +245,7 @@ export class TerminalManager {
       if (current?.pty === pty) {
         if (current.startupTimer) clearTimeout(current.startupTimer);
         this.terminals.delete(id);
+        this.capacity.release(id);
       }
     });
     pty.onData((data) => {
@@ -255,7 +275,11 @@ export class TerminalManager {
   resize(id: string, cols: number, rows: number): void {
     const term = this.terminals.get(id);
     if (!term) return;
-    if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return;
+    if (
+      !Number.isFinite(cols) || !Number.isFinite(rows)
+      || cols < 1 || rows < 1
+      || cols > MAX_TERMINAL_DIMENSION || rows > MAX_TERMINAL_DIMENSION
+    ) return;
     const nextCols = Math.floor(cols);
     const nextRows = Math.floor(rows);
     if (term.cols === nextCols && term.rows === nextRows) return;
@@ -265,8 +289,9 @@ export class TerminalManager {
       term.rows = nextRows;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.includes('EBADF')) {
+      if (/EBADF|already exited/i.test(message)) {
         this.terminals.delete(id);
+        this.capacity.release(id);
         return;
       }
       throw error;
@@ -276,10 +301,10 @@ export class TerminalManager {
   write(id: string, data: string, userInput = true): void {
     const term = this.terminals.get(id);
     if (term) {
-      if (userInput && term.startupExpression && !this.startupCommandLedger.has(id)) {
+      term.pty.write(data);
+      if (data.length > 0 && userInput && term.startupExpression && !this.startupCommandLedger.has(id)) {
         this.cancelStartupCommands(term);
       }
-      term.pty.write(data);
     }
   }
 
@@ -287,10 +312,10 @@ export class TerminalManager {
     const term = this.terminals.get(id);
     if (term) {
       const binary = Buffer.from(data, 'binary');
-      if (userInput && term.startupExpression && !this.startupCommandLedger.has(id)) {
+      term.pty.write(binary);
+      if (binary.length > 0 && userInput && term.startupExpression && !this.startupCommandLedger.has(id)) {
         this.cancelStartupCommands(term);
       }
-      term.pty.write(binary);
     }
   }
 
@@ -416,7 +441,10 @@ export class TerminalManager {
     }
     this.pendingStopProcesses.clear();
     for (const terminal of terminals) {
-      if (this.terminals.get(terminal.id) === terminal) this.terminals.delete(terminal.id);
+      if (this.terminals.get(terminal.id) === terminal) {
+        this.terminals.delete(terminal.id);
+        this.capacity.release(terminal.id);
+      }
     }
     this.cleanup();
   }
@@ -427,6 +455,7 @@ export class TerminalManager {
       if (term.startupTimer) clearTimeout(term.startupTimer);
       try { term.pty.kill(); } catch {}
       this.terminals.delete(id);
+      this.capacity.release(id);
     }
     this.startupCommandLedger.delete(id);
   }

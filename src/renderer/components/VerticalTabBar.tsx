@@ -23,6 +23,7 @@ interface VerticalTabBarProps {
   onNewTab: () => void;
   sshConnectionsOpen: boolean;
   onSSHConnectionsOpenChange: (open: boolean) => void;
+  canConnectSSH?: () => boolean;
   onSSHConnected: (session: SessionInfo) => void;
   onSSHProfilesChange: (profiles: SavedSSHProfile[]) => void;
   onWorkspaceTabsChange: (presets: WorkspaceTabPreset[]) => void;
@@ -69,6 +70,7 @@ export default function VerticalTabBar({
   onNewTab,
   sshConnectionsOpen,
   onSSHConnectionsOpenChange,
+  canConnectSSH = () => true,
   onSSHConnected,
   onSSHProfilesChange,
   onWorkspaceTabsChange,
@@ -222,6 +224,7 @@ export default function VerticalTabBar({
         <div id="vtab-ssh-connections" className="vtab-ssh-connections">
           <SSHManager
             sshProfiles={sshProfiles}
+            canConnect={canConnectSSH}
             onConnected={onSSHConnected}
             onProfilesChange={onSSHProfilesChange}
           />

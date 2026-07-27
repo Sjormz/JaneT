@@ -6,6 +6,7 @@ import { isAllowedExternalUrl } from './externalUrls';
 import { FileSystemManager } from './filesystem';
 import { GitManager } from './git';
 import { SettingsManager } from './settings';
+import { sendRendererEvent } from './rendererEvents';
 import type { SSHListDirParams } from '../shared/files';
 import type {
   ReadLocalTextFileRequest,
@@ -29,6 +30,7 @@ import {
   type WorkspaceCloseReason,
   type WorkspacePrepareForCloseDecision,
 } from './workspaceLifecycle';
+import { NativeTerminalCapacity } from './terminalCapacity';
 
 let mainWindow: electron.BrowserWindow | null = null;
 let initializeUpdaterForWindow: ((window: electron.BrowserWindow) => void) | null = null;
@@ -258,7 +260,8 @@ electron.app.whenReady().then(() => {
       createRendererProtocolHandler(rendererRoot, (fileUrl) => electron.net.fetch(fileUrl)),
     );
   }
-  terminalManager = new TerminalManager();
+  const terminalCapacity = new NativeTerminalCapacity();
+  terminalManager = new TerminalManager({ capacity: terminalCapacity });
   fsManager = new FileSystemManager();
   gitManager = new GitManager();
   settingsManager = new SettingsManager();
@@ -287,7 +290,7 @@ electron.app.whenReady().then(() => {
     const window = mainWindow;
     if (!window || window.isDestroyed()) return;
     window.webContents.send('ssh:onConnectionClosed', event);
-  });
+  }, terminalCapacity);
 
   workspaceLifecycle = new WorkspaceLifecycleController({
     requestClosePreparation: requestRendererClosePreparation,
@@ -377,9 +380,7 @@ function registerIpcHandlers() {
   // === Terminal IPC ===
   handle('terminal:create', (event, { id, cwd, shell, startupCommands }) => {
     const pty = terminalManager.create(id, cwd, shell, (data) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('terminal:onData', { id, data });
-      }
+      sendRendererEvent(mainWindow, 'terminal:onData', { id, data });
     }, startupCommands);
     return { pid: pty.pid };
   });
@@ -419,9 +420,7 @@ function registerIpcHandlers() {
       startupShellDialect,
     );
     shell.onData((data) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('terminal:onData', { id: termId, data });
-      }
+      sendRendererEvent(mainWindow, 'terminal:onData', { id: termId, data });
     });
     return shell.ready.then(() => ({ connected: true }));
   });

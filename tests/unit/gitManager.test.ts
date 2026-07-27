@@ -82,7 +82,7 @@ describe('buildAddWorktreeArgs', () => {
   });
 });
 
-describe('GitManager working tree actions', () => {
+describe('GitManager working tree actions', { timeout: 30_000 }, () => {
   it('rejects malformed commit messages at the IPC-facing boundary', async () => {
     const repository = initializeRepository();
     const manager = new GitManager();

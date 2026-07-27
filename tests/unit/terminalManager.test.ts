@@ -48,11 +48,13 @@ describe('TerminalManager', () => {
     expect(pty.resize).not.toHaveBeenCalled();
   });
 
-  it('evicts a stale terminal when resize races with an already-dead pty', () => {
+  it.each([
+    'ioctl(2) failed, EBADF',
+    'Cannot resize a pty that has already exited',
+  ])('evicts a stale terminal when resize reports %s', (message) => {
     const pty = makePty();
-    const ebadf = new Error('ioctl(2) failed, EBADF');
     pty.resize.mockImplementation(() => {
-      throw ebadf;
+      throw new Error(message);
     });
     spawnMock.mockReturnValue(pty);
 
@@ -65,5 +67,17 @@ describe('TerminalManager', () => {
     pty.resize.mockClear();
     manager.resize('term-1', 120, 40);
     expect(pty.resize).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed ids and caps the number of live terminals', () => {
+    spawnMock.mockImplementation(() => makePty());
+    const manager = new TerminalManager();
+
+    expect(() => manager.create('')).toThrow(/terminal id/i);
+    expect(() => manager.create({} as unknown as string)).toThrow(/terminal id/i);
+    expect(() => manager.create('x'.repeat(257))).toThrow(/terminal id/i);
+    for (let index = 0; index < 64; index += 1) manager.create(`term-${index}`);
+    expect(() => manager.create('term-over-limit')).toThrow(/terminal limit/i);
+    expect(spawnMock).toHaveBeenCalledTimes(64);
   });
 });

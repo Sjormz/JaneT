@@ -39,6 +39,11 @@ export interface SavedSession {
 }
 
 const VALID_SECTIONS = new Set(['files', 'ssh', 'git', 'settings']);
+export const MAX_RESTORED_TABS = 64;
+export const MAX_RESTORED_TERMINALS = 64;
+const MAX_PANE_TREE_DEPTH = 64;
+const MAX_PANE_TREE_NODES = 128;
+const MAX_PANE_TREE_LEAVES = 64;
 
 function normalizeSizes(sizes: unknown, count: number): number[] {
   if (!Array.isArray(sizes) || sizes.length !== count || !sizes.every((size) => typeof size === 'number' && Number.isFinite(size) && size > 0)) {
@@ -92,7 +97,23 @@ export function serializePaneTree(
  * back to a single fresh leaf instead of crashing the app.
  */
 export function restorePaneTree(saved: unknown, prefix: 'term' | 'split' = 'term'): PaneNode | null {
+  const budget = { remaining: MAX_PANE_TREE_NODES, leavesRemaining: MAX_PANE_TREE_LEAVES, exceeded: false };
+  const restored = restorePaneTreeWithinBudget(saved, prefix, 0, budget);
+  return budget.exceeded ? null : restored;
+}
+
+function restorePaneTreeWithinBudget(
+  saved: unknown,
+  prefix: 'term' | 'split',
+  depth: number,
+  budget: { remaining: number; leavesRemaining: number; exceeded: boolean },
+): PaneNode | null {
+  if (depth > MAX_PANE_TREE_DEPTH || budget.remaining <= 0) {
+    budget.exceeded = true;
+    return null;
+  }
   if (!saved || typeof saved !== 'object') return null;
+  budget.remaining -= 1;
   const node = saved as {
     type?: string; title?: string; direction?: string; sizes?: unknown; children?: unknown;
     terminalType?: string; cwd?: string; sshProfileId?: string;
@@ -100,6 +121,11 @@ export function restorePaneTree(saved: unknown, prefix: 'term' | 'split' = 'term
   };
 
   if (node.type === 'leaf') {
+    if (budget.leavesRemaining <= 0) {
+      budget.exceeded = true;
+      return null;
+    }
+    budget.leavesRemaining -= 1;
     const hasExplicitStartupDialect = node.startupShellDialect !== undefined
       && node.startupShellDialect !== null
       && node.startupShellDialect !== '';
@@ -135,8 +161,9 @@ export function restorePaneTree(saved: unknown, prefix: 'term' | 'split' = 'term
 
     const restoredChildren: Array<{ node: PaneNode; index: number }> = [];
     for (const [index, child] of node.children.entries()) {
-      const restored = restorePaneTree(child, prefix);
+      const restored = restorePaneTreeWithinBudget(child, prefix, depth + 1, budget);
       if (restored) restoredChildren.push({ node: restored, index });
+      if (budget.exceeded) break;
     }
     if (restoredChildren.length === 0) return null;
 
@@ -174,7 +201,17 @@ export function normalizeSession(raw: unknown): SavedSession {
       ? (obj.sidebarSection as SavedSession['sidebarSection'])
       : 'files';
 
-  const tabs = Array.isArray(obj.tabs) ? obj.tabs.filter(isValidSavedTab) : [];
+  const tabs: SavedTab[] = [];
+  let terminalCount = 0;
+  if (Array.isArray(obj.tabs)) {
+    for (const tab of obj.tabs.slice(0, MAX_RESTORED_TABS)) {
+      if (!isValidSavedTab(tab)) continue;
+      const leaves = countSavedPaneLeaves(tab.root, MAX_RESTORED_TERMINALS - terminalCount);
+      if (leaves === null) continue;
+      terminalCount += leaves;
+      tabs.push(tab);
+    }
+  }
 
   return {
     tabs,
@@ -183,6 +220,29 @@ export function normalizeSession(raw: unknown): SavedSession {
     tabsOpen: obj.tabsOpen !== false,
     sidebarSection: section,
   };
+}
+
+function countSavedPaneLeaves(root: unknown, limit: number): number | null {
+  const pending = [{ node: root, depth: 0 }];
+  let nodes = 0;
+  let leaves = 0;
+  while (pending.length > 0) {
+    const { node, depth } = pending.pop()!;
+    if (!node || typeof node !== 'object' || depth > MAX_PANE_TREE_DEPTH) return null;
+    nodes += 1;
+    if (nodes > MAX_PANE_TREE_NODES) return null;
+    const candidate = node as { type?: unknown; children?: unknown };
+    if (candidate.type === 'leaf') {
+      leaves += 1;
+      if (leaves > limit) return null;
+    } else if (candidate.type === 'split' && Array.isArray(candidate.children) && candidate.children.length > 0) {
+      if (candidate.children.length > MAX_PANE_TREE_NODES - nodes) return null;
+      for (const child of candidate.children) pending.push({ node: child, depth: depth + 1 });
+    } else {
+      return null;
+    }
+  }
+  return leaves;
 }
 
 function isValidSavedTab(value: unknown): value is SavedTab {

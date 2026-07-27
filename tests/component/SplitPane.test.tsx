@@ -1075,9 +1075,11 @@ describe('split panes in the app', () => {
         await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
       });
 
-      await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalled());
       expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
-      expect((window.janet.terminalCreate as any).mock.calls[0][0]).not.toHaveProperty('startupCommands');
+      const localCreates = (window.janet.terminalCreate as any).mock.calls.map((call: any[]) => call[0]);
+      expect(new Set(localCreates.map((call: { id: string }) => call.id)).size).toBe(1);
+      for (const call of localCreates) expect(call).not.toHaveProperty('startupCommands');
     } finally {
       consoleError.mockRestore();
     }
@@ -1186,6 +1188,54 @@ describe('split panes in the app', () => {
       expect(terminals).toHaveLength(2);
       expect(terminals[0]).toHaveFocus();
     });
+  });
+
+  it('focuses the terminal when clicking the active outer tab from an editor surface', async () => {
+    render(<App />);
+    const editor = await openSampleEditor();
+    editor.focus();
+    expect(editor).toHaveFocus();
+
+    const activeTabId = rendererMocks.verticalTabBarProps.activeTabId as string;
+    fireEvent.click(screen.getByTestId(`outer-tab-${activeTabId}`));
+
+    await waitFor(() => expect(screen.getByTestId(/terminal-/)).toHaveFocus());
+  });
+
+  it('does not create an unsaveable terminal tab beyond the session budget', async () => {
+    const tabs = new Array(64).fill(null).map((_, index) => ({
+      id: `saved-${index}`, title: `Saved ${index}`, type: 'local', root: { type: 'leaf' },
+    }));
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      session: {
+        tabs, activeTabId: tabs[0].id, sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(64));
+    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+
+    expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(64);
+  });
+
+  it('does not split a pane beyond the shared terminal budget', async () => {
+    const tabs = new Array(64).fill(null).map((_, index) => ({
+      id: `saved-${index}`, title: `Saved ${index}`, type: 'local', root: { type: 'leaf' },
+    }));
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      session: {
+        tabs, activeTabId: tabs[0].id, sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: /split pane right/i }));
+
+    expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
   });
 
   it('restores a saved SSH tab, connects it, then binds a single shell', async () => {
@@ -1754,6 +1804,37 @@ describe('editor documents in the app', () => {
 });
 
 describe('unsaved editor shutdown handshake', () => {
+  it('persists the latest terminal layout before acknowledging a clean close', async () => {
+    const events: string[] = [];
+    vi.mocked(window.janet.setSettings).mockImplementation(async (updates) => {
+      if ('session' in updates) events.push('session');
+      return undefined;
+    });
+    vi.mocked(window.janet.resolvePrepareForClose).mockImplementation(async () => {
+      events.push('resolved');
+      return true;
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    events.length = 0;
+
+    await requestWorkspaceClose('layout-close', 'application-quit');
+
+    expect(window.janet.setSettings).toHaveBeenCalledWith({
+      session: expect.objectContaining({
+        tabs: [expect.objectContaining({
+          root: expect.objectContaining({
+            type: 'split',
+            children: [expect.any(Object), expect.any(Object)],
+          }),
+        })],
+      }),
+    });
+    expect(events).toEqual(['session', 'resolved']);
+  });
+
   it('resolves close preparation as saved immediately when no file is dirty', async () => {
     render(<App />);
 
@@ -1766,6 +1847,38 @@ describe('unsaved editor shutdown handshake', () => {
       });
     });
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('cancels clean, discard, and save-all shutdown when final session persistence fails', async () => {
+    vi.mocked(window.janet.setSettings).mockRejectedValue(new Error('disk full'));
+    render(<App />);
+
+    await requestWorkspaceClose('failed-clean-close', 'application-quit');
+    expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
+      requestId: 'failed-clean-close', resolution: 'cancel',
+    });
+
+    const editor = await openSampleEditor();
+    fireEvent.change(editor, { target: { value: 'dirty during failed shutdown\n' } });
+
+    await requestWorkspaceClose('failed-discard-close', 'window-close');
+    let dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard changes and close' }));
+    await waitFor(() => expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
+      requestId: 'failed-discard-close', resolution: 'cancel',
+    }));
+
+    await requestWorkspaceClose('failed-save-close', 'update-install');
+    dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save all and close' }));
+    await waitFor(() => {
+      expect(window.janet.fsWriteTextFile).toHaveBeenCalledWith(expect.objectContaining({
+        content: 'dirty during failed shutdown\n',
+      }));
+      expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
+        requestId: 'failed-save-close', resolution: 'cancel',
+      });
+    });
   });
 
   it('offers Cancel, Discard, and Save all for dirty files and reports each resolution', async () => {

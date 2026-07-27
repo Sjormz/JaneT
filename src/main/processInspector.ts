@@ -87,7 +87,7 @@ export function parseWindowsProcessSnapshot(output: string): ProcessInfo[] {
 function stableKey(process: ProcessInfo): string {
   return process.startTime
     ? `${process.pid}:${process.startTime}`
-    : `${process.pid}:${process.ppid}:${process.name.toLowerCase()}`;
+    : `${process.pid}:${process.name.toLowerCase()}`;
 }
 
 /** Keep only processes that were present in both close-time samples. */

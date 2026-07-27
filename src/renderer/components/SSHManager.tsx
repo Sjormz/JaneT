@@ -6,6 +6,7 @@ import Tooltip from './Tooltip';
 
 interface SSHManagerProps {
   sshProfiles: SavedSSHProfile[];
+  canConnect?: () => boolean;
   onConnected: (session: SessionInfo) => void;
   onProfilesChange: (profiles: SavedSSHProfile[]) => void;
 }
@@ -34,6 +35,7 @@ function privateKeyPayload(auth: 'password' | 'key', privateKey: string) {
 
 export default function SSHManager({
   sshProfiles,
+  canConnect = () => true,
   onConnected,
   onProfilesChange,
 }: SSHManagerProps) {
@@ -70,6 +72,7 @@ export default function SSHManager({
 
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canConnect()) return;
     const trimmedHost = host.trim();
     const trimmedUsername = username.trim();
     if (!trimmedHost) return;
@@ -129,6 +132,7 @@ export default function SSHManager({
   };
 
   const connectProfile = async (profile: SavedSSHProfile) => {
+    if (!canConnect()) return;
     const label = connectionLabel(profile);
     setConnectingProfileId(profile.id);
     setProfileError(null);

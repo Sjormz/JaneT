@@ -40,6 +40,13 @@ type PrepareForCloseCallback = (
 ) => void | Promise<void>;
 
 let prepareForCloseCallback: PrepareForCloseCallback | null = null;
+const terminalDataCallbacks = new Set<(params: { id: string; data: string }) => void>();
+
+ipcRenderer.on('terminal:onData', (_event: Electron.IpcRendererEvent, data: { id: string; data: string }) => {
+  for (const callback of terminalDataCallbacks) {
+    try { callback(data); } catch {}
+  }
+});
 
 function safelyCancelClosePreparation(request: WorkspacePrepareForCloseRequest): void {
   void ipcRenderer.invoke(WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL, {
@@ -89,9 +96,8 @@ const api = {
   terminalDestroy: (params: { id: string }) =>
     ipcRenderer.invoke('terminal:destroy', params),
   onTerminalData: (callback: (params: { id: string; data: string }) => void) => {
-    const handler = (_event: any, data: any) => callback(data);
-    ipcRenderer.on('terminal:onData', handler);
-    return () => ipcRenderer.removeListener('terminal:onData', handler);
+    terminalDataCallbacks.add(callback);
+    return () => terminalDataCallbacks.delete(callback);
   },
 
   // SSH
