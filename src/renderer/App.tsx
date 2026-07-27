@@ -105,10 +105,10 @@ function preferredLeafId(tab: TabInfo, focusedTerminalId: string | null, maximiz
   return leaves[0] ?? null;
 }
 
-function firstTerminalFocusTarget(): HTMLElement | null {
+function firstTerminalFocusTarget(): HTMLTextAreaElement | null {
   const containers = Array.from(document.querySelectorAll<HTMLElement>('[data-terminal-focus-target]'));
   const container = containers.find((candidate) => candidate.offsetParent !== null) ?? containers[0];
-  return container?.querySelector<HTMLElement>('textarea') ?? container ?? null;
+  return container?.querySelector<HTMLTextAreaElement>('textarea') ?? null;
 }
 
 function sshSessionInfo(sessionId: string, profile: SavedSSHProfile): SessionInfo {
@@ -268,8 +268,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
 
   useLayoutEffect(() => {
     if (!restoreTerminalFocusRef.current) return;
+    const target = firstTerminalFocusTarget();
+    if (!target) return;
     restoreTerminalFocusRef.current = false;
-    firstTerminalFocusTarget()?.focus();
+    target.focus();
   }, [activeTabId, tabs, terminalFocusRequest]);
 
   useLayoutEffect(() => {
@@ -599,6 +601,11 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   // Track terminal registrations
   const handleTerminalReady = useCallback((termId: string) => {
     liveTerminalIdsRef.current.add(termId);
+    if (!restoreTerminalFocusRef.current) return;
+    const target = firstTerminalFocusTarget();
+    if (!target) return;
+    restoreTerminalFocusRef.current = false;
+    target.focus();
   }, []);
 
   // Called by TerminalPane when the shell reports a new cwd (via OSC 7

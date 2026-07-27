@@ -143,10 +143,15 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     ) => void | Promise<void>;
   }) {
     if (onSshRetry) rendererMocks.sshRetryHandlers.set(termId, onSshRetry);
+    const containerRef = React.useRef<HTMLDivElement>(null);
 
     React.useEffect(() => {
+      const textarea = document.createElement('textarea');
+      textarea.setAttribute('aria-label', `Terminal ${termId}`);
+      containerRef.current?.appendChild(textarea);
       mountedTermIds.push(termId);
       return () => {
+        textarea.remove();
         onRemoved?.(termId);
       };
     }, [termId, onRemoved]);
@@ -184,10 +189,10 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
 
     return (
       <div
+        ref={containerRef}
         data-testid={`terminal-${termId}`}
         data-terminal-focus-target
         data-ssh-connection-lost={sshConnectionLost ? 'true' : 'false'}
-        tabIndex={0}
         onFocus={() => onFocus?.(termId)}
       >
         {termId}
@@ -408,7 +413,7 @@ describe('split panes in the app', () => {
     await confirmPendingAction(/^close pane$/i);
 
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
-    await waitFor(() => expect(screen.getByTestId(/terminal-/)).toHaveFocus());
+    await waitFor(() => expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus());
 
     // Survivor must be sized from React state, not from stale inline styles.
     const survivor = document.querySelector<HTMLElement>('.split-child');
@@ -479,7 +484,7 @@ describe('split panes in the app', () => {
     await waitFor(() => {
       expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
     });
-    await waitFor(() => expect(screen.getByTestId(/terminal-/)).toHaveFocus());
+    await waitFor(() => expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus());
   });
 
   it('routes the command-palette close-tab action through confirmation', async () => {
@@ -499,7 +504,7 @@ describe('split panes in the app', () => {
     await confirmPendingAction(/^close tab$/i);
     await waitFor(() => {
       expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
-      expect(screen.getByTestId(/terminal-/)).toHaveFocus();
+      expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus();
     });
   });
 
@@ -693,7 +698,7 @@ describe('split panes in the app', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use defaults' }));
     await confirmPendingAction(/^use defaults$/i);
     expect(await screen.findByTestId('titlebar')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId(/terminal-/)).toHaveFocus());
+    await waitFor(() => expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus());
   });
 
   it('maximizes a single pane within the terminal area and restores it to the split layout', async () => {
@@ -1186,7 +1191,7 @@ describe('split panes in the app', () => {
     await waitFor(() => {
       const terminals = screen.getAllByTestId(/terminal-/);
       expect(terminals).toHaveLength(2);
-      expect(terminals[0]).toHaveFocus();
+      expect(within(terminals[0]).getByRole('textbox')).toHaveFocus();
     });
   });
 
@@ -1199,7 +1204,8 @@ describe('split panes in the app', () => {
     const activeTabId = rendererMocks.verticalTabBarProps.activeTabId as string;
     fireEvent.click(screen.getByTestId(`outer-tab-${activeTabId}`));
 
-    await waitFor(() => expect(screen.getByTestId(/terminal-/)).toHaveFocus());
+    const terminal = screen.getByTestId(/terminal-/);
+    await waitFor(() => expect(within(terminal).getByRole('textbox')).toHaveFocus());
   });
 
   it('does not create an unsaveable terminal tab beyond the session budget', async () => {
