@@ -334,6 +334,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [sshConnectionsOpen, setSshConnectionsOpen] = useState(initialState.sshConnectionsOpen);
   const [pendingDestructiveAction, setPendingDestructiveAction] = useState<PendingDestructiveAction | null>(null);
   const [pendingDestructiveBusy, setPendingDestructiveBusy] = useState(false);
+  const pendingDestructiveBusyRef = useRef(false);
   const editorDocuments = useEditorDocuments();
 
   const setWorkspaceToolsExpanded = useCallback((expanded: boolean) => {
@@ -1581,7 +1582,8 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const runPendingDestructiveAction = async (secondary: boolean) => {
     const action = pendingDestructiveAction;
     const run = secondary ? action?.runSecondary : action?.run;
-    if (!action || !run || pendingDestructiveBusy) return;
+    if (!action || !run || pendingDestructiveBusyRef.current) return;
+    pendingDestructiveBusyRef.current = true;
     setPendingDestructiveBusy(true);
     try {
       const result = await run();
@@ -1589,6 +1591,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         setPendingDestructiveAction((current) => current === action ? null : current);
       }
     } finally {
+      pendingDestructiveBusyRef.current = false;
       setPendingDestructiveBusy(false);
     }
   };
@@ -1739,7 +1742,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         destructive={pendingDestructiveAction?.destructive ?? true}
         fallbackFocus={pendingDestructiveAction?.fallbackFocus}
         onCancel={() => {
-          if (pendingDestructiveBusy) return;
+          if (pendingDestructiveBusyRef.current) return;
           pendingDestructiveAction?.onCancel?.();
           setPendingDestructiveAction(null);
         }}

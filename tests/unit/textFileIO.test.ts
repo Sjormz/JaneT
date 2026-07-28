@@ -259,7 +259,7 @@ describe('bounded local text-file IO', () => {
     releaseRename();
     const [firstResult, secondResult] = await Promise.all([first, second]);
 
-    expect(firstResult.ok).toBe(true);
+    expect(firstResult).toEqual({ ok: true, value: expect.any(Object) });
     expect(secondResult.ok ? undefined : secondResult.error.code).toBe('CONFLICT');
     expect(rename).toHaveBeenCalledTimes(1);
     await expect(fs.promises.readFile(filePath, 'utf8')).resolves.toBe('first');

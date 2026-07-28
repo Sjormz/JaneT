@@ -113,6 +113,80 @@ describe('SettingsManager', () => {
     expect(new SettingsManager().get().sshProfiles.map((profile) => profile.port)).toEqual([22, 22]);
   });
 
+  it('drops malformed and duplicate legacy keyed entries without resetting unrelated settings', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      theme: 'dracula',
+      fontSize: 18,
+      sshProfiles: [
+        null,
+        { id: 'valid', host: 'first.example.com', port: 22, auth: 'password' },
+        { id: 'valid', host: 'duplicate.example.com', port: 22, auth: 'password' },
+        { id: 'wrong-auth', host: 'invalid.example.com', port: 22, auth: 'agent' },
+        {
+          id: 'oversized-secret',
+          host: 'secret.example.com',
+          port: 22,
+          auth: 'password',
+          passwordSecret: {
+            version: 1,
+            scheme: 'electron-safe-storage',
+            ciphertext: 'x'.repeat(512 * 1024 + 1),
+          },
+          passwordEncrypted: 'x'.repeat(512 * 1024 + 1),
+        },
+      ],
+      workspaceTabs: [
+        { id: 'workspace', name: 'First', type: 'local', terminalCount: 1, splitDirection: 'vertical' },
+        { id: 'workspace', name: 'Duplicate', type: 'local', terminalCount: 1, splitDirection: 'vertical' },
+        null,
+      ],
+    }));
+
+    const { SettingsManager } = await import('../../src/main/settings');
+    const settings = new SettingsManager().get();
+
+    expect(settings.theme).toBe('dracula');
+    expect(settings.fontSize).toBe(18);
+    expect(settings.sshProfiles).toEqual([
+      expect.objectContaining({ id: 'valid', host: 'first.example.com', port: 22, auth: 'password' }),
+      expect.not.objectContaining({ password: expect.any(String) }),
+    ]);
+    expect(settings.sshProfiles).toHaveLength(2);
+    expect(settings.sshProfiles[1]).toEqual(expect.objectContaining({
+      id: 'oversized-secret',
+      host: 'secret.example.com',
+      password: undefined,
+    }));
+    expect(safeStorage.decryptString).not.toHaveBeenCalled();
+    expect(settings.workspaceTabs).toEqual([
+      expect.objectContaining({ id: 'workspace', name: 'First' }),
+    ]);
+  });
+
+  it('drops a decrypted legacy credential above the live secret ceiling', async () => {
+    const fsMock = await import('fs');
+    const ciphertext = Buffer.from(`encrypted:${'x'.repeat(100_001)}`).toString('base64');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      sshProfiles: [{
+        id: 'oversized-decrypted-secret',
+        host: 'secret.example.com',
+        port: 22,
+        auth: 'password',
+        passwordSecret: { version: 1, scheme: 'electron-safe-storage', ciphertext },
+      }],
+    }));
+
+    const { SettingsManager } = await import('../../src/main/settings');
+    const [profile] = new SettingsManager().get().sshProfiles;
+
+    expect(safeStorage.decryptString).toHaveBeenCalledOnce();
+    expect(profile).toEqual(expect.objectContaining({
+      id: 'oversized-decrypted-secret',
+      password: undefined,
+    }));
+  });
+
   it('persists settings to file on set', async () => {
     const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();
@@ -399,14 +473,15 @@ describe('SettingsManager', () => {
     expect(loaded.sshProfiles[0].password).toBe('secret');
   });
 
-  it('does not persist a plaintext SSH credential when safeStorage is unavailable', async () => {
+  it('rejects a new SSH credential when safeStorage is unavailable', async () => {
     const fsMock = await import('fs');
     vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();
 
-    manager.set({
+    expect(() => manager.set({
       sshProfiles: [{
         id: 'alice@box.local:22:password',
         host: 'box.local',
@@ -415,13 +490,13 @@ describe('SettingsManager', () => {
         auth: 'password',
         password: 'must-not-hit-disk',
       }],
-    });
+    })).toThrow(/persist settings/i);
 
-    const savedJson = (fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string;
-    expect(savedJson).not.toContain('must-not-hit-disk');
-    expect(savedJson).not.toContain('passwordSecret');
-    expect(savedJson).not.toContain('passwordEncrypted');
+    expect(manager.get().sshProfiles).toEqual([]);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
+    expect(fsMock.renameSync).not.toHaveBeenCalled();
     expect(warning).toHaveBeenCalled();
+    error.mockRestore();
     warning.mockRestore();
   });
 

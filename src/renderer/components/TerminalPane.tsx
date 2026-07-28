@@ -542,6 +542,7 @@ export default function TerminalPane({
         ...(startupCommands?.length ? { startupCommands } : {}),
         ...(startupShellDialect ? { startupShellDialect } : {}),
       }).then(() => {
+        if (!effectActive) return;
         onReady(termId);
       }).catch(console.error);
     }

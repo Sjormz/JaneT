@@ -812,6 +812,30 @@ describe('SSHManager', () => {
     expect(stream?.write).toHaveBeenCalledWith(Buffer.from('\xff\x00', 'binary'));
   });
 
+  it.each([
+    ['text', 'x', (manager: any, value: unknown) => manager.writeShell('bounded-live-term', value, 'bounded-live-session')],
+    ['binary', '\xff', (manager: any, value: unknown) => manager.writeShellBinary('bounded-live-term', value, 'bounded-live-session')],
+  ])('rejects malformed and oversized live SSH %s writes before native code', async (_label, byte, write) => {
+    let stream: MockShellStream | undefined;
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, channel?: MockShellStream) => void) => {
+      stream = new MockShellStream();
+      cb(undefined, stream);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('bounded-live-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell('bounded-live-session', 'bounded-live-term', { cols: 80, rows: 24 }).ready;
+
+    expect(() => write(manager, null)).toThrow(/shell data/i);
+    expect(() => write(manager, byte.repeat(1024 * 1024 + 1))).toThrow(/shell data/i);
+    expect(stream?.write).not.toHaveBeenCalled();
+    expect(() => write(manager, byte.repeat(1024 * 1024))).not.toThrow();
+    expect(stream?.write).toHaveBeenCalledOnce();
+  });
+
   it('routes terminal writes only to their owning SSH connection', async () => {
     const streams: MockShellStream[] = [];
     mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, channel?: MockShellStream) => void) => {
@@ -1134,16 +1158,44 @@ describe('SSHManager', () => {
     const first = manager.connect('same-session', { host: 'example.com', port: 22, username: 'alice', auth: 'password' });
     const second = manager.connect('same-session', { host: 'example.com', port: 22, username: 'alice', auth: 'password' });
     expect(second).toBe(first);
+    const mismatchedPending = manager.connect('same-session', {
+      host: 'example.com', port: 22, username: 'bob', auth: 'password',
+    });
     expect(mocks.connectMock).toHaveBeenCalledTimes(1);
 
     mocks.lastClient?.emit('ready');
+    await expect(mismatchedPending).rejects.toThrow(/different configuration/i);
     await Promise.all([first, second]);
     await manager.connect('same-session', { host: 'example.com', port: 22, username: 'alice', auth: 'password' });
+    await expect(manager.connect('same-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'key', privateKey: 'new-key',
+    })).rejects.toThrow(/different configuration/i);
     expect(mocks.connectMock).toHaveBeenCalledTimes(1);
     expect(manager.listConnections()).toHaveLength(1);
 
     mocks.lastClient?.emit('close');
     expect(manager.listConnections()).toHaveLength(0);
+  });
+
+  it('does not expose a reusable credential digest across manager instances', async () => {
+    mocks.connectMock.mockImplementation(() => {});
+    const { SSHManager } = await loadSSHManager();
+    const config = {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password', password: 'secret',
+    };
+    const first = new SSHManager();
+    const second = new SSHManager();
+
+    const firstConnection = first.connect('session', config);
+    const secondConnection = second.connect('session', config);
+
+    expect((first as any).pendingConnections.get('session').identity)
+      .not.toBe((second as any).pendingConnections.get('session').identity);
+    const firstCancelled = expect(firstConnection).rejects.toThrow(/cancelled/i);
+    const secondCancelled = expect(secondConnection).rejects.toThrow(/cancelled/i);
+    await first.disconnect('session');
+    await second.disconnect('session');
+    await Promise.all([firstCancelled, secondCancelled]);
   });
 
   it('reports an unexpected active-client close exactly once, but ignores explicit and stale closes', async () => {

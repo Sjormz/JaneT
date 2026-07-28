@@ -3,8 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const updaterMocks = vi.hoisted(() => {
   const listeners = new Map<string, (...args: any[]) => void>();
   const handlers = new Map<string, (...args: any[]) => any>();
+  const rawHandlers = new Map<string, (...args: any[]) => any>();
+  const state = { trustedEvent: undefined as any };
   const ipcHandle = vi.fn((channel: string, handler: (...args: any[]) => any) => {
-    handlers.set(channel, handler);
+    rawHandlers.set(channel, handler);
+    handlers.set(channel, (...args: any[]) => handler(state.trustedEvent, ...args));
   });
   const on = vi.fn((event: string, listener: (...args: any[]) => void) => {
     listeners.set(event, listener);
@@ -12,7 +15,10 @@ const updaterMocks = vi.hoisted(() => {
   const quitAndInstall = vi.fn();
   const checkForUpdates = vi.fn().mockResolvedValue(undefined);
   const downloadUpdate = vi.fn().mockResolvedValue(undefined);
-  return { listeners, handlers, ipcHandle, on, quitAndInstall, checkForUpdates, downloadUpdate };
+  return {
+    listeners, handlers, rawHandlers, state, ipcHandle, on,
+    quitAndInstall, checkForUpdates, downloadUpdate,
+  };
 });
 
 vi.mock('electron', () => ({
@@ -35,10 +41,23 @@ type UpdaterModule = typeof import('../../src/main/updater');
 let checkForUpdates: UpdaterModule['checkForUpdates'];
 let initUpdater: UpdaterModule['initUpdater'];
 
+function initializeUpdater(
+  mainWindow: any,
+  prepareForInstall: () => Promise<boolean>,
+) {
+  mainWindow.webContents.mainFrame ??= {};
+  updaterMocks.state.trustedEvent = {
+    sender: mainWindow.webContents,
+    senderFrame: mainWindow.webContents.mainFrame,
+  };
+  initUpdater(mainWindow, prepareForInstall);
+}
+
 describe('updater window lifecycle', () => {
   beforeEach(async () => {
     updaterMocks.listeners.clear();
     updaterMocks.handlers.clear();
+    updaterMocks.rawHandlers.clear();
     updaterMocks.ipcHandle.mockClear();
     updaterMocks.on.mockClear();
     updaterMocks.quitAndInstall.mockReset();
@@ -60,10 +79,10 @@ describe('updater window lifecycle', () => {
       webContents: { send: secondSend },
     } as any;
 
-    initUpdater(firstWindow, async () => true);
+    initializeUpdater(firstWindow, async () => true);
     const ipcRegistrations = updaterMocks.ipcHandle.mock.calls.length;
     const eventRegistrations = updaterMocks.on.mock.calls.length;
-    initUpdater(secondWindow, async () => true);
+    initializeUpdater(secondWindow, async () => true);
 
     expect(updaterMocks.ipcHandle).toHaveBeenCalledTimes(ipcRegistrations);
     expect(updaterMocks.on).toHaveBeenCalledTimes(eventRegistrations);
@@ -76,10 +95,29 @@ describe('updater window lifecycle', () => {
     expect(secondSend).toHaveBeenCalledWith('update:available', expect.objectContaining({ version: '9.9.9' }));
   });
 
+  it.each(['update:check', 'update:download', 'update:install'])(
+    'rejects an untrusted sender before handling %s',
+    async (channel) => {
+      const prepare = vi.fn().mockResolvedValue(false);
+      const mainWindow = { isDestroyed: () => false, webContents: { send: vi.fn() } } as any;
+      initializeUpdater(mainWindow, prepare);
+      updaterMocks.listeners.get('update-available')?.({ version: '9.9.9' });
+      updaterMocks.listeners.get('update-downloaded')?.({ version: '9.9.9' });
+
+      expect(() => updaterMocks.rawHandlers.get(channel)?.({
+        sender: {}, senderFrame: {},
+      })).toThrow(/untrusted IPC sender/i);
+      expect(updaterMocks.checkForUpdates).not.toHaveBeenCalled();
+      expect(updaterMocks.downloadUpdate).not.toHaveBeenCalled();
+      expect(prepare).not.toHaveBeenCalled();
+      expect(updaterMocks.quitAndInstall).not.toHaveBeenCalled();
+    },
+  );
+
   it('coalesces concurrent update downloads into one native request', async () => {
     let release!: () => void;
     updaterMocks.downloadUpdate.mockReturnValue(new Promise<void>((resolve) => { release = resolve; }));
-    initUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, async () => true);
+    initializeUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, async () => true);
     updaterMocks.listeners.get('update-available')?.({ version: '9.9.9' });
 
     const download = updaterMocks.handlers.get('update:download')!;
@@ -94,7 +132,7 @@ describe('updater window lifecycle', () => {
   it('does not coalesce a newer version into an older in-flight download', async () => {
     let release!: () => void;
     updaterMocks.downloadUpdate.mockReturnValue(new Promise<void>((resolve) => { release = resolve; }));
-    initUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, async () => true);
+    initializeUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, async () => true);
     updaterMocks.listeners.get('update-available')?.({ version: '9.9.9' });
     const download = updaterMocks.handlers.get('update:download')!;
     const first = download();
@@ -111,7 +149,7 @@ describe('updater window lifecycle', () => {
 
   it('does not install when workspace shutdown is cancelled', async () => {
     const prepare = vi.fn().mockResolvedValue(false);
-    initUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
+    initializeUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
     updaterMocks.listeners.get('update-available')?.({ version: '9.9.9' });
     updaterMocks.listeners.get('update-downloaded')?.({ version: '9.9.9' });
 
@@ -124,7 +162,7 @@ describe('updater window lifecycle', () => {
 
   it('installs only after workspace shutdown succeeds', async () => {
     const prepare = vi.fn().mockResolvedValue(true);
-    initUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
+    initializeUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
     updaterMocks.listeners.get('update-available')?.({ version: '9.9.9' });
     updaterMocks.listeners.get('update-downloaded')?.({ version: '9.9.9' });
 
@@ -137,7 +175,7 @@ describe('updater window lifecycle', () => {
 
   it('does not install when workspace shutdown fails', async () => {
     const prepare = vi.fn().mockRejectedValue(new Error('process would not stop'));
-    initUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
+    initializeUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
     updaterMocks.listeners.get('update-available')?.({ version: '9.9.9' });
     updaterMocks.listeners.get('update-downloaded')?.({ version: '9.9.9' });
 
@@ -149,7 +187,7 @@ describe('updater window lifecycle', () => {
 
   it('does not stop the workspace before an available update finishes downloading', async () => {
     const prepare = vi.fn().mockResolvedValue(true);
-    initUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
+    initializeUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
     updaterMocks.listeners.get('update-available')?.({ version: '10.0.0' });
 
     const result = await updaterMocks.handlers.get('update:install')?.();
@@ -162,7 +200,7 @@ describe('updater window lifecycle', () => {
   it('ignores a stale downloaded event for an older available version', async () => {
     const prepare = vi.fn().mockResolvedValue(true);
     const send = vi.fn();
-    initUpdater({ isDestroyed: () => false, webContents: { send } } as any, prepare);
+    initializeUpdater({ isDestroyed: () => false, webContents: { send } } as any, prepare);
     updaterMocks.listeners.get('update-available')?.({ version: '10.0.0' });
     updaterMocks.listeners.get('update-available')?.({ version: '11.0.0' });
     send.mockClear();
@@ -179,7 +217,7 @@ describe('updater window lifecycle', () => {
   it('coalesces concurrent install requests into one shutdown transaction', async () => {
     let release!: (value: boolean) => void;
     const prepare = vi.fn(() => new Promise<boolean>((resolve) => { release = resolve; }));
-    initUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
+    initializeUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
     updaterMocks.listeners.get('update-available')?.({ version: '12.0.0' });
     updaterMocks.listeners.get('update-downloaded')?.({ version: '12.0.0' });
 
@@ -196,7 +234,7 @@ describe('updater window lifecycle', () => {
 
   it('keeps install requests coalesced until the scheduled install executes', async () => {
     const prepare = vi.fn().mockResolvedValue(true);
-    initUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
+    initializeUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
     updaterMocks.listeners.get('update-available')?.({ version: '13.0.0' });
     updaterMocks.listeners.get('update-downloaded')?.({ version: '13.0.0' });
 
@@ -219,10 +257,27 @@ describe('updater window lifecycle', () => {
     expect(updaterMocks.quitAndInstall).toHaveBeenCalledOnce();
   });
 
+  it('does not install a stale version after shutdown preparation', async () => {
+    let release!: (value: boolean) => void;
+    const prepare = vi.fn(() => new Promise<boolean>((resolve) => { release = resolve; }));
+    initializeUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
+    updaterMocks.listeners.get('update-available')?.({ version: '13.0.0' });
+    updaterMocks.listeners.get('update-downloaded')?.({ version: '13.0.0' });
+
+    const install = updaterMocks.handlers.get('update:install')!;
+    const pending = install();
+    updaterMocks.listeners.get('update-available')?.({ version: '14.0.0' });
+    release(true);
+
+    await expect(pending).resolves.toEqual({ success: false, error: 'No update downloaded' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(updaterMocks.quitAndInstall).not.toHaveBeenCalled();
+  });
+
   it('allows installation to retry after quitAndInstall throws synchronously', async () => {
     updaterMocks.quitAndInstall.mockImplementationOnce(() => { throw new Error('installer failed'); });
     const prepare = vi.fn().mockResolvedValue(true);
-    initUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
+    initializeUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);
     updaterMocks.listeners.get('update-available')?.({ version: '15.0.0' });
     updaterMocks.listeners.get('update-downloaded')?.({ version: '15.0.0' });
     const install = updaterMocks.handlers.get('update:install')!;
@@ -240,7 +295,7 @@ describe('updater window lifecycle', () => {
     let resolveCheck!: () => void;
     updaterMocks.checkForUpdates.mockReturnValue(new Promise<void>((resolve) => { resolveCheck = resolve; }));
     const send = vi.fn();
-    initUpdater({ isDestroyed: () => false, webContents: { send } } as any, async () => true);
+    initializeUpdater({ isDestroyed: () => false, webContents: { send } } as any, async () => true);
 
     checkForUpdates(true);
     const manualCheck = updaterMocks.handlers.get('update:check')?.();

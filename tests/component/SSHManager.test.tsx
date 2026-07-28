@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import SSHManager from '../../src/renderer/components/SSHManager';
 import { SavedSSHProfile, SessionInfo } from '../../src/renderer/types';
@@ -342,7 +342,7 @@ describe('SSHManager', () => {
       }],
     });
     const opener = screen.getByRole('button', { name: /remove pckpr@box.local:22/i });
-    opener.focus();
+    act(() => opener.focus());
     fireEvent.click(opener);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus());
 
@@ -367,7 +367,7 @@ describe('SSHManager', () => {
       }],
     });
     const opener = screen.getByRole('button', { name: /remove pckpr@box.local:22/i });
-    opener.focus();
+    act(() => opener.focus());
     fireEvent.click(opener);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus());
 
@@ -422,7 +422,7 @@ describe('SSHManager', () => {
     render(<Harness />);
 
     const remove = screen.getByRole('button', { name: /remove pckpr@box.local:22/i });
-    remove.focus();
+    act(() => remove.focus());
     fireEvent.click(remove);
     fireEvent.click(screen.getByRole('button', { name: 'Remove connection' }));
 

@@ -80,4 +80,20 @@ describe('TerminalManager', () => {
     expect(() => manager.create('term-over-limit')).toThrow(/terminal limit/i);
     expect(spawnMock).toHaveBeenCalledTimes(64);
   });
+
+  it.each([
+    ['text', 'x', (manager: TerminalManager, value: unknown) => manager.write('term-1', value as string)],
+    ['binary', '\xff', (manager: TerminalManager, value: unknown) => manager.writeBinary('term-1', value as string)],
+  ])('rejects malformed and oversized %s writes before native code', (_label, byte, write) => {
+    const pty = makePty();
+    spawnMock.mockReturnValue(pty);
+    const manager = new TerminalManager();
+    manager.create('term-1');
+
+    expect(() => write(manager, null)).toThrow(/terminal data/i);
+    expect(() => write(manager, byte.repeat(1024 * 1024 + 1))).toThrow(/terminal data/i);
+    expect(pty.write).not.toHaveBeenCalled();
+    expect(() => write(manager, byte.repeat(1024 * 1024))).not.toThrow();
+    expect(pty.write).toHaveBeenCalledOnce();
+  });
 });

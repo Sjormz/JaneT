@@ -1,7 +1,7 @@
 import { Client, ClientChannel } from 'ssh2';
 import type { SFTPWrapper, Stats } from 'ssh2';
 import * as os from 'os';
-import { createHash, randomUUID } from 'crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'crypto';
 import { StringDecoder } from 'string_decoder';
 import type {
   FileEntry,
@@ -745,6 +745,7 @@ interface SSHConnection {
     host: string;
     port: number;
     username?: string;
+    identity: string;
   };
   shells: Map<string, ClientChannel>;
   sftpOperations: Set<(error: Error) => void>;
@@ -760,7 +761,7 @@ interface PendingSSHConnection {
   client: Client;
   promise: Promise<void>;
   reject: (error: Error) => void;
-  endpoint: string;
+  identity: string;
 }
 
 interface SSHShellHandle {
@@ -777,6 +778,7 @@ interface SSHShellHandle {
 export class SSHManager {
   private connections: Map<string, SSHConnection> = new Map();
   private pendingConnections: Map<string, PendingSSHConnection> = new Map();
+  private readonly connectionIdentityKey = randomBytes(32);
   private readonly inMemoryHostKeys = new Map<string, string>();
   private readonly startupCommandLedger = new Set<string>();
   private readonly pendingStartupCommandHandles = new Map<string, SSHShellHandle>();
@@ -831,17 +833,18 @@ export class SSHManager {
     const host = config.host.trim();
     const port = config.port;
     const endpoint = hostKeyId(host, port);
+    const identity = connectionIdentity(this.connectionIdentityKey, endpoint, config);
     const activeConnection = this.connections.get(id);
     if (activeConnection) {
-      return hostKeyId(activeConnection.config.host, activeConnection.config.port) === endpoint
+      return activeConnection.config.identity === identity
         ? Promise.resolve()
-        : Promise.reject(new Error(`SSH session ${id} is already connected to another host`));
+        : Promise.reject(new Error(`SSH session ${id} is already connected with different configuration`));
     }
     const existingAttempt = this.pendingConnections.get(id);
     if (existingAttempt) {
-      return existingAttempt.endpoint === endpoint
+      return existingAttempt.identity === identity
         ? existingAttempt.promise
-        : Promise.reject(new Error(`SSH session ${id} is already connecting to another host`));
+        : Promise.reject(new Error(`SSH session ${id} is already connecting with different configuration`));
     }
     if (this.connections.size + this.pendingConnections.size >= MAX_SSH_CONNECTIONS) {
       throw new Error(`SSH connection limit of ${MAX_SSH_CONNECTIONS} reached`);
@@ -862,7 +865,7 @@ export class SSHManager {
       settled = true;
       rejectConnection?.(error);
     };
-    this.pendingConnections.set(id, { client, promise, reject: rejectPending, endpoint });
+    this.pendingConnections.set(id, { client, promise, reject: rejectPending, identity });
     const isCurrentPendingAttempt = () => (
       !settled && this.pendingConnections.get(id)?.client === client
     );
@@ -906,7 +909,7 @@ export class SSHManager {
           client,
           id,
           connectionId: randomUUID(),
-          config: { host, port, username: config.username },
+          config: { host, port, username: config.username, identity },
           shells: new Map(),
           sftpOperations: new Set(),
           pendingWrites: new Map(),
@@ -1289,10 +1292,12 @@ export class SSHManager {
   }
 
   writeShell(termId: string, data: string, sessionId?: string, userInput = true): void {
+    validateShellData(data);
     this.writeShellChunk(termId, data, sessionId, userInput);
   }
 
   writeShellBinary(termId: string, data: string, sessionId?: string, userInput = true): void {
+    validateShellData(data, 'binary');
     this.writeShellChunk(termId, Buffer.from(data, 'binary'), sessionId, userInput);
   }
 
@@ -1735,4 +1740,23 @@ function sortFileEntries(entries: FileEntry[]): void {
 
 function hostKeyId(host: string, port: number): string {
   return `${host.trim().toLowerCase()}:${port}`;
+}
+
+function connectionIdentity(
+  key: Buffer,
+  endpoint: string,
+  config: { username?: string; auth: string; password?: string; privateKey?: string },
+): string {
+  return createHmac('sha256', key).update(JSON.stringify([
+    endpoint,
+    normalizeUsername(config.username),
+    config.auth,
+    config.auth === 'password' ? config.password ?? '' : config.privateKey ?? '',
+  ])).digest('hex');
+}
+
+function validateShellData(data: unknown, encoding: BufferEncoding = 'utf8'): asserts data is string {
+  if (typeof data !== 'string' || Buffer.byteLength(data, encoding) > MAX_SSH_SHELL_QUEUE_BYTES) {
+    throw new Error(`SSH shell data must be a string no larger than ${MAX_SSH_SHELL_QUEUE_BYTES} bytes`);
+  }
 }

@@ -3,9 +3,15 @@ import { useEffect } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { KeybindingsProvider, useKeybindings } from '../../src/renderer/KeybindingsContext';
 
-function RegisteredShortcut({ handler }: { handler: () => void }) {
+function RegisteredShortcut({
+  action = 'close-tab',
+  handler,
+}: {
+  action?: 'close-tab' | 'close-pane';
+  handler: () => void;
+}) {
   const { on } = useKeybindings();
-  useEffect(() => on('close-tab', handler), [handler, on]);
+  useEffect(() => on(action, handler), [action, handler, on]);
   return <div className="terminal-container"><textarea aria-label="Terminal input" /></div>;
 }
 
@@ -21,5 +27,50 @@ describe('KeybindingsProvider terminal editing keys', () => {
     fireEvent.keyDown(view.getByLabelText('Terminal input'), { key: 'c', ctrlKey: true });
 
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('runs only the first registered action when configured shortcuts collide', () => {
+    const closeTab = vi.fn();
+    const closePane = vi.fn();
+    render(
+      <KeybindingsProvider initialBindings={{
+        'close-tab': 'Ctrl+W',
+        'close-pane': 'Ctrl+W',
+      }}>
+        <RegisteredShortcut action="close-tab" handler={closeTab} />
+        <RegisteredShortcut action="close-pane" handler={closePane} />
+      </KeybindingsProvider>,
+    );
+
+    fireEvent.keyDown(document, { key: 'w', ctrlKey: true });
+
+    expect(closeTab).toHaveBeenCalledOnce();
+    expect(closePane).not.toHaveBeenCalled();
+  });
+
+  it('does not let a removed colliding action block a registered action', () => {
+    const closeTab = vi.fn();
+    const closePane = vi.fn();
+    const view = render(
+      <KeybindingsProvider initialBindings={{
+        'close-tab': 'Ctrl+W',
+        'close-pane': 'Ctrl+W',
+      }}>
+        <RegisteredShortcut action="close-tab" handler={closeTab} />
+      </KeybindingsProvider>,
+    );
+    view.rerender(
+      <KeybindingsProvider initialBindings={{
+        'close-tab': 'Ctrl+W',
+        'close-pane': 'Ctrl+W',
+      }}>
+        <RegisteredShortcut action="close-pane" handler={closePane} />
+      </KeybindingsProvider>,
+    );
+
+    fireEvent.keyDown(document, { key: 'w', ctrlKey: true });
+
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(closePane).toHaveBeenCalledOnce();
   });
 });

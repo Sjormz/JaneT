@@ -196,7 +196,9 @@ describe('GitTree live refresh', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discard changes in working.ts' }));
     expect(screen.getByRole('dialog', { name: 'Discard changes in working.ts?' })).toBeInTheDocument();
 
-    view.rerender(<GitTree cwdReady isRemote={false} repoPath="/other-repo" status={status} searching={false} />);
+    await act(async () => {
+      view.rerender(<GitTree cwdReady isRemote={false} repoPath="/other-repo" status={status} searching={false} />);
+    });
 
     expect(screen.queryByRole('dialog', { name: 'Discard changes in working.ts?' })).not.toBeInTheDocument();
     expect(gitDiscard).not.toHaveBeenCalled();
@@ -264,6 +266,147 @@ describe('GitTree live refresh', () => {
     fireEvent.click(stage);
     expect(gitStage).toHaveBeenCalledOnce();
     await act(async () => finishStage(true));
+  });
+
+  it('admits only one Git mutation in the same React batch', async () => {
+    let finishStage!: (value: boolean) => void;
+    let finishPull!: (value: boolean) => void;
+    gitStage.mockReturnValue(new Promise((resolve) => { finishStage = resolve; }));
+    gitPull.mockReturnValue(new Promise((resolve) => { finishPull = resolve; }));
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
+      modified: ['working.ts'],
+    };
+    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Pull' }));
+    });
+
+    const stageCalls = gitStage.mock.calls.length;
+    const pullCalls = gitPull.mock.calls.length;
+    await act(async () => {
+      finishStage(true);
+      finishPull?.(true);
+    });
+    expect(stageCalls).toBe(1);
+    expect(pullCalls).toBe(0);
+  });
+
+  it('retains the Git mutation lock across a repository round trip', async () => {
+    let finishStage!: (value: boolean) => void;
+    gitStage.mockReturnValue(new Promise((resolve) => { finishStage = resolve; }));
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
+      modified: ['working.ts'],
+    };
+    const view = render(
+      <GitTree cwdReady isRemote={false} repoPath="/one" status={status} searching={false} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
+    act(() => {
+      view.rerender(<GitTree cwdReady isRemote={false} repoPath="/two" status={status} searching={false} />);
+    });
+    act(() => {
+      view.rerender(<GitTree cwdReady isRemote={false} repoPath="/one" status={status} searching={false} />);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
+
+    expect(gitStage).toHaveBeenCalledOnce();
+    await act(async () => finishStage(true));
+  });
+
+  it('ignores a Git mutation completion after the repository changes', async () => {
+    const invalidate = vi.spyOn(refreshCoordinator, 'invalidate');
+    let finishStage!: (value: boolean) => void;
+    gitStage.mockReturnValue(new Promise((resolve) => { finishStage = resolve; }));
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
+      modified: ['working.ts'],
+    };
+    const view = render(
+      <GitTree cwdReady isRemote={false} repoPath="/one" status={status} searching={false} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
+    invalidate.mockClear();
+
+    act(() => {
+      view.rerender(<GitTree cwdReady isRemote={false} repoPath="/two" status={cleanStatus} searching={false} />);
+    });
+    await act(async () => finishStage(true));
+
+    expect(screen.queryByText('Staged working.ts')).not.toBeInTheDocument();
+    expect(invalidate).not.toHaveBeenCalledWith('mutation');
+    invalidate.mockRestore();
+  });
+
+  it('ignores a Git mutation completion after unmount', async () => {
+    const invalidate = vi.spyOn(refreshCoordinator, 'invalidate');
+    let finishStage!: (value: boolean) => void;
+    gitStage.mockReturnValue(new Promise((resolve) => { finishStage = resolve; }));
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
+      modified: ['working.ts'],
+    };
+    const view = render(
+      <GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
+    invalidate.mockClear();
+    view.unmount();
+
+    await act(async () => finishStage(true));
+
+    expect(invalidate).not.toHaveBeenCalledWith('mutation');
+    invalidate.mockRestore();
+  });
+
+  it('retains a parent-owned Git mutation lock across unmount and remount', async () => {
+    let finishStage!: (value: boolean) => void;
+    gitStage
+      .mockReturnValueOnce(new Promise((resolve) => { finishStage = resolve; }))
+      .mockResolvedValue(true);
+    const mutationLock = { current: null as { repoPath: string } | null };
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
+      modified: ['working.ts'],
+    };
+    const first = render(
+      <GitTree
+        cwdReady
+        isRemote={false}
+        repoPath="/repo"
+        status={status}
+        searching={false}
+        mutationLock={mutationLock}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
+    first.unmount();
+
+    render(
+      <GitTree
+        cwdReady
+        isRemote={false}
+        repoPath="/repo"
+        status={status}
+        searching={false}
+        mutationLock={mutationLock}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
+
+    expect(gitStage).toHaveBeenCalledOnce();
+    await act(async () => finishStage(true));
+    fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
+    await waitFor(() => expect(gitStage).toHaveBeenCalledTimes(2));
   });
 
   it('refreshes branch and worktree details without issuing a duplicate status request', async () => {
@@ -418,7 +561,7 @@ describe('GitTree live refresh', () => {
       name: 'src/removed.ts: Deleted from the working tree',
     });
 
-    deleted.focus();
+    act(() => deleted.focus());
     expect(deleted).toHaveFocus();
     expect(deleted).toHaveAttribute('aria-disabled', 'true');
     expect(deleted).toHaveAttribute(
@@ -531,7 +674,7 @@ describe('GitTree destructive actions', () => {
     render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={cleanStatus} searching={false} />);
 
     const opener = await screen.findByRole('button', { name: 'Delete branch feature/cleanup' });
-    opener.focus();
+    act(() => opener.focus());
     fireEvent.click(opener);
 
     const forceInput = screen.getByLabelText('Type FORCE to delete even with unmerged work. Leave blank for a safe delete.');

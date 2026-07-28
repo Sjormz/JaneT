@@ -45,6 +45,7 @@ export function useEditorDocuments(): EditorDocumentsController {
   const documentsRef = useRef(documents);
   const requestGenerationRef = useRef(new Map<string, number>());
   const saveLocksRef = useRef(new Map<string, Promise<SaveOutcome>>());
+  const mountedRef = useRef(true);
   documentsRef.current = documents;
   const commitDocuments = useCallback((
     update: (current: Record<string, EditorDocument>) => Record<string, EditorDocument>,
@@ -87,7 +88,7 @@ export function useEditorDocuments(): EditorDocumentsController {
     } catch (error) {
       result = { ok: false, error: genericIoError(error instanceof Error ? error.message : 'The file could not be opened.') };
     }
-    if (requestGenerationRef.current.get(key) !== generation) return;
+    if (!mountedRef.current || requestGenerationRef.current.get(key) !== generation) return;
 
     commitDocuments((current) => {
       const document = current[key];
@@ -169,7 +170,15 @@ export function useEditorDocuments(): EditorDocumentsController {
 
   const saveDocument = useCallback((key: string, overwrite = false): Promise<SaveOutcome> => {
     const pending = saveLocksRef.current.get(key);
-    if (pending) return pending;
+    if (pending) {
+      return pending.then((outcome) => {
+        if (!mountedRef.current) return outcome;
+        const latest = documentsRef.current[key];
+        return outcome === 'saved' && latest && isEditorDocumentDirty(latest)
+          ? saveDocument(key, overwrite)
+          : outcome;
+      });
+    }
 
     const operation = (async (): Promise<SaveOutcome> => {
       const document = documentsRef.current[key];
@@ -308,7 +317,15 @@ export function useEditorDocuments(): EditorDocumentsController {
     });
   }, [commitDocuments]);
 
-  useEffect(() => () => disposeAllEditorDocumentModels(), []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      saveLocksRef.current.clear();
+      requestGenerationRef.current.clear();
+      disposeAllEditorDocumentModels();
+    };
+  }, []);
 
   const documentList = useMemo(() => Object.values(documents), [documents]);
   const documentsByTab = useMemo(() => {

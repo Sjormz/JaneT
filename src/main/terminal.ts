@@ -31,6 +31,7 @@ export interface TerminalManagerOptions {
   forceKillGraceMs?: number;
   killProcess?: (pid: number, signal: NodeJS.Signals) => void;
   capacity?: NativeTerminalCapacity;
+  platform?: NodeJS.Platform;
 }
 
 const DEFAULT_COLS = 80;
@@ -38,6 +39,7 @@ const DEFAULT_ROWS = 24;
 const MAX_TERMINAL_ID_LENGTH = 256;
 const MAX_LIVE_TERMINALS = 64;
 const MAX_TERMINAL_DIMENSION = 1_000;
+const MAX_TERMINAL_WRITE_BYTES = 1024 * 1024;
 const DEFAULT_TERMINATE_GRACE_MS = 750;
 const DEFAULT_FORCE_KILL_GRACE_MS = 250;
 const STARTUP_COMMAND_FALLBACK_MS = 1_000;
@@ -94,6 +96,12 @@ function resolveTerminalCwd(cwd?: string): string {
   return trimmed;
 }
 
+function validateTerminalData(data: unknown, encoding: BufferEncoding = 'utf8'): asserts data is string {
+  if (typeof data !== 'string' || Buffer.byteLength(data, encoding) > MAX_TERMINAL_WRITE_BYTES) {
+    throw new Error(`Terminal data must be a string no larger than ${MAX_TERMINAL_WRITE_BYTES} bytes`);
+  }
+}
+
 type ShellInitFile = (name: string, contents: string) => string;
 
 function shellLaunch(shell: string, init: string, initFile: ShellInitFile): { args: string[]; env: NodeJS.ProcessEnv } {
@@ -133,6 +141,7 @@ export class TerminalManager {
   private readonly forceKillGraceMs: number;
   private readonly killProcess: (pid: number, signal: NodeJS.Signals) => void;
   private readonly capacity: NativeTerminalCapacity;
+  private readonly platform: NodeJS.Platform;
 
   constructor(options: TerminalManagerOptions = {}) {
     this.processInspector = options.processInspector ?? new SystemProcessInspector();
@@ -141,6 +150,7 @@ export class TerminalManager {
     this.forceKillGraceMs = Math.max(0, options.forceKillGraceMs ?? DEFAULT_FORCE_KILL_GRACE_MS);
     this.killProcess = options.killProcess ?? ((pid, signal) => process.kill(pid, signal));
     this.capacity = options.capacity ?? new NativeTerminalCapacity(MAX_LIVE_TERMINALS);
+    this.platform = options.platform ?? process.platform;
   }
 
   /**
@@ -299,6 +309,7 @@ export class TerminalManager {
   }
 
   write(id: string, data: string, userInput = true): void {
+    validateTerminalData(data);
     const term = this.terminals.get(id);
     if (term) {
       term.pty.write(data);
@@ -309,6 +320,7 @@ export class TerminalManager {
   }
 
   writeBinary(id: string, data: string, userInput = true): void {
+    validateTerminalData(data, 'binary');
     const term = this.terminals.get(id);
     if (term) {
       const binary = Buffer.from(data, 'binary');
@@ -339,7 +351,7 @@ export class TerminalManager {
     const track = (processes: ProcessInfo[]) => {
       for (const process of processes) tracked.set(processIdentityKey(process), process);
     };
-    const pendingNow = stableProcesses(pendingStopProcesses, before)
+    const pendingNow = this.stableProcessesOrRemember(pendingStopProcesses, before)
       .filter((process) => !process.state?.toUpperCase().startsWith('Z'));
     this.pendingStopProcesses.clear();
     track(pendingNow);
@@ -356,22 +368,23 @@ export class TerminalManager {
       throw new Error(`Could not refresh local processes before stopping them: ${error instanceof Error ? error.message : String(error)}`);
     }
 
+    const stillTracked = this.stableProcessesOrRemember(Array.from(tracked.values()), afterInitialSnapshot);
+    const verifiedInitialIdentities = new Set(stillTracked.map(processIdentityKey));
     const terminateTargets = new Map<string, ProcessInfo>();
     for (const terminal of terminals) {
-      const root = afterInitialSnapshot.find((process) => process.pid === terminal.pty.pid);
-      if (root) track([root]);
       const descendants = descendantsOf(afterInitialSnapshot, terminal.pty.pid).reverse();
-      track(descendants);
       for (const descendant of descendants) {
-        terminateTargets.set(processIdentityKey(descendant), descendant);
+        const identity = processIdentityKey(descendant);
+        if (verifiedInitialIdentities.has(identity)) terminateTargets.set(identity, descendant);
       }
     }
-    const stillTracked = stableProcesses(Array.from(tracked.values()), afterInitialSnapshot);
     for (const process of stillTracked) {
       if ((!rootPids.has(process.pid) || !isShellProcess(process.name)) && !terminateTargets.has(processIdentityKey(process))) {
         terminateTargets.set(processIdentityKey(process), process);
       }
     }
+    tracked.clear();
+    track(stillTracked);
     for (const process of terminateTargets.values()) {
       try { this.killProcess(process.pid, 'SIGTERM'); } catch {}
     }
@@ -385,29 +398,17 @@ export class TerminalManager {
       throw new Error(`Could not verify local processes after terminating them: ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    const forceTargets = new Map<string, ProcessInfo>();
-    for (const process of stableProcesses(Array.from(tracked.values()), afterTerminate)) {
-      forceTargets.set(processIdentityKey(process), process);
-    }
-    for (const terminal of terminals) {
-      const root = afterTerminate.find((process) => process.pid === terminal.pty.pid);
-      if (root) {
-        track([root]);
-        forceTargets.set(processIdentityKey(root), root);
-      }
-      for (const descendant of descendantsOf(afterTerminate, terminal.pty.pid).reverse()) {
-        track([descendant]);
-        forceTargets.set(processIdentityKey(descendant), descendant);
-      }
-    }
-    track(Array.from(forceTargets.values()));
+    const stillTrackedAfterTerminate = this.stableProcessesOrRemember(Array.from(tracked.values()), afterTerminate);
+    tracked.clear();
+    track(stillTrackedAfterTerminate);
+    const forceTargets = new Map(
+      stillTrackedAfterTerminate.map((process) => [processIdentityKey(process), process]),
+    );
     for (const process of forceTargets.values()) {
       try { this.killProcess(process.pid, 'SIGKILL'); } catch {}
     }
 
-    for (const terminal of terminals) {
-      try { terminal.pty.kill(); } catch {}
-    }
+    for (const terminal of terminals) this.destroyPty(terminal.pty);
     if (this.forceKillGraceMs > 0) await this.sleep(this.forceKillGraceMs);
 
     let finalSnapshot: ProcessInfo[];
@@ -417,7 +418,7 @@ export class TerminalManager {
       this.rememberPendingStops(Array.from(tracked.values()));
       throw new Error(`Could not verify that local processes stopped: ${error instanceof Error ? error.message : String(error)}`);
     }
-    let remaining = stableProcesses(Array.from(tracked.values()), finalSnapshot)
+    let remaining = this.stableProcessesOrRemember(Array.from(tracked.values()), finalSnapshot)
       .filter((process) => !process.state?.toUpperCase().startsWith('Z'));
     if (remaining.length > 0) {
       for (const process of remaining) {
@@ -431,7 +432,7 @@ export class TerminalManager {
         this.rememberPendingStops(remaining);
         throw new Error(`Could not verify force-killed local processes: ${error instanceof Error ? error.message : String(error)}`);
       }
-      remaining = stableProcesses(remaining, verificationSnapshot)
+      remaining = this.stableProcessesOrRemember(remaining, verificationSnapshot)
         .filter((process) => !process.state?.toUpperCase().startsWith('Z'));
     }
     if (remaining.length > 0) {
@@ -453,7 +454,7 @@ export class TerminalManager {
     const term = this.terminals.get(id);
     if (term) {
       if (term.startupTimer) clearTimeout(term.startupTimer);
-      try { term.pty.kill(); } catch {}
+      this.destroyPty(term.pty);
       this.terminals.delete(id);
       this.capacity.release(id);
     }
@@ -471,10 +472,30 @@ export class TerminalManager {
     }
   }
 
+  private destroyPty(pty: IPty): void {
+    try {
+      if (this.platform === 'win32') pty.kill();
+      else {
+        const disposable = pty as IPty & { destroy(): void };
+        disposable.kill = () => {};
+        disposable.destroy();
+      }
+    } catch {}
+  }
+
   private rememberPendingStops(processes: ProcessInfo[]): void {
     for (const process of processes) {
       if (process.state?.toUpperCase().startsWith('Z')) continue;
       this.pendingStopProcesses.set(processIdentityKey(process), process);
+    }
+  }
+
+  private stableProcessesOrRemember(previous: ProcessInfo[], current: ProcessInfo[]): ProcessInfo[] {
+    try {
+      return stableProcesses(previous, current);
+    } catch (error) {
+      this.rememberPendingStops(previous);
+      throw error;
     }
   }
 

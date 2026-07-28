@@ -162,7 +162,8 @@ function restorePaneTreeWithinBudget(
     const restoredChildren: Array<{ node: PaneNode; index: number }> = [];
     for (const [index, child] of node.children.entries()) {
       const restored = restorePaneTreeWithinBudget(child, prefix, depth + 1, budget);
-      if (restored) restoredChildren.push({ node: restored, index });
+      if (!restored) return null;
+      restoredChildren.push({ node: restored, index });
       if (budget.exceeded) break;
     }
     if (restoredChildren.length === 0) return null;

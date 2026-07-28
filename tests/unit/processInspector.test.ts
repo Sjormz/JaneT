@@ -37,6 +37,15 @@ describe('stableProcesses', () => {
 
     expect(stableProcesses([first], [reused])).toEqual([]);
   });
+
+  it('fails closed when either snapshot lacks process identity metadata', () => {
+    const identified = processInfo(101, 100, 'node', { startTime: '11' });
+    const degraded = processInfo(101, 100, 'node');
+
+    expect(() => stableProcesses([identified], [degraded])).toThrow(/identity.*unverifiable/i);
+    expect(() => stableProcesses([degraded], [identified])).toThrow(/identity.*unverifiable/i);
+    expect(() => stableProcesses([degraded], [{ ...degraded }])).toThrow(/identity.*unverifiable/i);
+  });
 });
 
 describe('process snapshot parsing', () => {

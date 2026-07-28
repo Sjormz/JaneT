@@ -217,6 +217,15 @@ describe('restorePaneTree', () => {
     expect(restorePaneTree({ type: 'split', children: [] })).toBeNull();
   });
 
+  it('rejects a split containing any malformed child', () => {
+    expect(restorePaneTree({
+      type: 'split',
+      direction: 'vertical',
+      sizes: [1, 1],
+      children: [{ type: 'leaf' }, { type: 'unknown' }],
+    })).toBeNull();
+  });
+
   it('normalizes split direction to a valid value', () => {
     const restored = restorePaneTree({
       type: 'split',
