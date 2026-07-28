@@ -83,6 +83,16 @@ describe('buildAddWorktreeArgs', () => {
 });
 
 describe('GitManager working tree actions', { timeout: 30_000 }, () => {
+  it('rejects invalid and unbounded Git history limits while accepting the exact ceiling', async () => {
+    const repository = initializeRepository();
+    const manager = new GitManager();
+
+    for (const limit of [0, -1, 1.5, Number.NaN, 1_001]) {
+      await expect(manager.log(repository, limit)).resolves.toBeNull();
+    }
+    await expect(manager.log(repository, 1_000)).resolves.toHaveLength(1);
+  });
+
   it('rejects malformed commit messages at the IPC-facing boundary', async () => {
     const repository = initializeRepository();
     const manager = new GitManager();

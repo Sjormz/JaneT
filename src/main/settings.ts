@@ -156,6 +156,7 @@ const MAX_WORKSPACE_STRING_LENGTH = 8_192;
 const MAX_SETTINGS_COLLECTION_ITEMS = 256;
 const MAX_KEYBINDINGS = 64;
 const MAX_SSH_SECRET_LENGTH = 100_000;
+const MAX_SSH_SECRET_CIPHERTEXT_LENGTH = 512 * 1024;
 const WORKSPACE_PRESET_KEYS = new Set([
   'id', 'name', 'type', 'cwd', 'sshProfileId', 'root', 'terminalCount', 'splitDirection',
 ]);
@@ -288,7 +289,11 @@ export class SettingsManager {
     try {
       const raw = fs.readFileSync(this.filePath, 'utf-8');
       const parsed = JSON.parse(raw) as Partial<StoredAppSettings>;
-      const stored = { ...DEFAULT_SETTINGS, ...parsed } as StoredAppSettings;
+      const stored = {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        sshProfiles: normalizeStoredSshProfiles(parsed.sshProfiles),
+      } as StoredAppSettings;
       this.captureStoredSecrets(stored.sshProfiles);
       return this.deserialize(stored);
     } catch {
@@ -324,6 +329,8 @@ export class SettingsManager {
         const previous = this.storedSshSecrets.get(profile.id);
         const passwordSecret = password ? protectSecret(password) : undefined;
         const privateKeySecret = privateKey ? protectSecret(privateKey) : undefined;
+        if (password && !passwordSecret) throw new Error('Could not protect SSH password');
+        if (privateKey && !privateKeySecret) throw new Error('Could not protect SSH private key');
         if (passwordSecret) stored.passwordSecret = passwordSecret;
         else if (password === undefined && profile.auth === 'password') {
           if (previous?.passwordSecret) stored.passwordSecret = previous.passwordSecret;
@@ -357,7 +364,8 @@ export class SettingsManager {
       })),
       workspaceTabs: (Array.isArray(settings.workspaceTabs) ? settings.workspaceTabs : [])
         .map(cloneWorkspaceTabPreset)
-        .filter((preset): preset is AppSettings['workspaceTabs'][number] => Boolean(preset)),
+        .filter((preset): preset is AppSettings['workspaceTabs'][number] => Boolean(preset))
+        .filter(uniqueIdFilter()),
       session: cloneSavedSession(settings.session),
     };
   }
@@ -402,6 +410,55 @@ function cloneWorkspaceTabPreset(value: unknown): AppSettings['workspaceTabs'][n
 
 function normalizeStoredSshPort(port: unknown): number {
   return Number.isInteger(port) && Number(port) > 0 && Number(port) <= 65_535 ? Number(port) : 22;
+}
+
+function normalizeStoredSshProfiles(value: unknown): StoredSSHProfile[] {
+  if (!Array.isArray(value)) return [];
+  const ids = new Set<string>();
+  const profiles: StoredSSHProfile[] = [];
+  for (const candidate of value.slice(0, MAX_SETTINGS_COLLECTION_ITEMS)) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
+    const profile = candidate as Partial<StoredSSHProfile>;
+    if (
+      typeof profile.id !== 'string' || !profile.id || profile.id.length > 256
+      || ids.has(profile.id)
+      || typeof profile.host !== 'string' || !profile.host || profile.host.length > 255
+      || (profile.auth !== 'password' && profile.auth !== 'key')
+    ) continue;
+    ids.add(profile.id);
+    profiles.push({
+      id: profile.id,
+      host: profile.host,
+      port: normalizeStoredSshPort(profile.port),
+      auth: profile.auth,
+      ...(typeof profile.username === 'string' && profile.username.length <= 256
+        ? { username: profile.username }
+        : {}),
+      ...(typeof profile.password === 'string' && profile.password.length <= MAX_SSH_SECRET_LENGTH
+        ? { password: profile.password }
+        : {}),
+      ...(typeof profile.privateKey === 'string' && profile.privateKey.length <= MAX_SSH_SECRET_LENGTH
+        ? { privateKey: profile.privateKey }
+        : {}),
+      ...(isStoredSecret(profile.passwordSecret) ? { passwordSecret: profile.passwordSecret } : {}),
+      ...(isStoredSecret(profile.privateKeySecret) ? { privateKeySecret: profile.privateKeySecret } : {}),
+      ...(isBoundedCiphertext(profile.passwordEncrypted) ? { passwordEncrypted: profile.passwordEncrypted } : {}),
+      ...(isBoundedCiphertext(profile.privateKeyEncrypted) ? { privateKeyEncrypted: profile.privateKeyEncrypted } : {}),
+    });
+  }
+  return profiles;
+}
+
+function isStoredSecret(value: unknown): value is StoredSecretV1 {
+  return Boolean(value)
+    && typeof value === 'object'
+    && (value as Partial<StoredSecretV1>).version === 1
+    && (value as Partial<StoredSecretV1>).scheme === 'electron-safe-storage'
+    && isBoundedCiphertext((value as Partial<StoredSecretV1>).ciphertext);
+}
+
+function isBoundedCiphertext(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= MAX_SSH_SECRET_CIPHERTEXT_LENGTH;
 }
 
 function cloneSavedTab(value: unknown): SavedTab | undefined {
@@ -647,7 +704,8 @@ function unprotectSecret(secret: StoredSecretV1 | undefined): string | undefined
   }
   if (!safeStorage?.isEncryptionAvailable()) return undefined;
   try {
-    return safeStorage.decryptString(Buffer.from(secret.ciphertext, 'base64'));
+    const decrypted = safeStorage.decryptString(Buffer.from(secret.ciphertext, 'base64'));
+    return decrypted.length <= MAX_SSH_SECRET_LENGTH ? decrypted : undefined;
   } catch {
     return undefined;
   }
@@ -656,7 +714,8 @@ function unprotectSecret(secret: StoredSecretV1 | undefined): string | undefined
 function decryptLegacySecret(secret: string | undefined): string | undefined {
   if (!secret || !safeStorage?.isEncryptionAvailable()) return undefined;
   try {
-    return safeStorage.decryptString(Buffer.from(secret, 'base64'));
+    const decrypted = safeStorage.decryptString(Buffer.from(secret, 'base64'));
+    return decrypted.length <= MAX_SSH_SECRET_LENGTH ? decrypted : undefined;
   } catch {
     return undefined;
   }
@@ -707,6 +766,15 @@ function hasUniqueIds(values: readonly unknown[]): boolean {
     ids.add(id);
     return true;
   });
+}
+
+function uniqueIdFilter(): (value: { id: string }) => boolean {
+  const ids = new Set<string>();
+  return (value) => {
+    if (ids.has(value.id)) return false;
+    ids.add(value.id);
+    return true;
+  };
 }
 
 function hasUniqueSnippetIdentities(values: readonly unknown[]): boolean {

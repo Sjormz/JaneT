@@ -217,7 +217,7 @@ describe('Sidebar workspace tools', () => {
       />,
     );
 
-    expect(childSpies.gitTree).toHaveBeenLastCalledWith({
+    expect(childSpies.gitTree).toHaveBeenLastCalledWith(expect.objectContaining({
       cwdReady: false,
       isRemote: true,
       repoPath: '/workspace/repository',
@@ -226,6 +226,7 @@ describe('Sidebar workspace tools', () => {
       onOpenLocalTabAt,
       onCopyTerminalPath,
       onOpenFile,
-    });
+      mutationLock: expect.objectContaining({ current: null }),
+    }));
   });
 });

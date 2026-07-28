@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import React, { useState } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import VerticalTabBar from '../../src/renderer/components/VerticalTabBar';
 import { SavedSSHProfile, TabInfo, WorkspaceTabPreset } from '../../src/renderer/types';
 
@@ -507,7 +507,7 @@ describe('VerticalTabBar', () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: /^presets$/i }));
     const remove = screen.getByRole('button', { name: /delete preset janet dev/i });
-    remove.focus();
+    act(() => remove.focus());
     fireEvent.click(remove);
     fireEvent.click(screen.getByRole('button', { name: 'Delete preset' }));
 

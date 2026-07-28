@@ -9,6 +9,8 @@ try {
   // simple-git is optional at runtime; IPC methods return null/false if absent.
 }
 
+const MAX_GIT_LOG_ENTRIES = 1_000;
+
 export interface GitStatusResult {
   current: string;
   tracking: string;
@@ -182,7 +184,7 @@ export class GitManager {
   }
 
   async log(repoPath: string, maxCount: number = 20): Promise<GitLogEntry[] | null> {
-    if (!simpleGit) return null;
+    if (!simpleGit || !Number.isInteger(maxCount) || maxCount < 1 || maxCount > MAX_GIT_LOG_ENTRIES) return null;
     try {
       const log = await simpleGit(repoPath).log({ maxCount });
       return log.all.map((entry: any) => ({

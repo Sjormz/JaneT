@@ -17,6 +17,7 @@ vi.mock('../../src/renderer/components/MonacoEditor', () => ({
 }));
 
 let controller: EditorDocumentsController;
+let harness: ReturnType<typeof render>;
 
 function Harness() {
   controller = useEditorDocuments();
@@ -70,7 +71,7 @@ beforeEach(() => {
       revision: revision('c'.repeat(64)),
     },
   }));
-  render(<Harness />);
+  harness = render(<Harness />);
 });
 
 describe('useEditorDocuments', () => {
@@ -230,5 +231,88 @@ describe('useEditorDocuments', () => {
     expect(reopened?.content).toBe('new edit\n');
     expect(reopened?.savedContent).toBe('new edit\n');
     expect(reopened?.revision?.token).toBe('c'.repeat(64));
+  });
+
+  it('queues newer edits behind an in-flight save instead of reporting stale content as saved', async () => {
+    let resolveFirstSave!: (value: unknown) => void;
+    api.fsWriteTextFile
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirstSave = resolve; }))
+      .mockImplementationOnce(async (request) => ({
+        ok: true,
+        value: {
+          requestedPath: request.requestedPath,
+          resolvedPath: request.resolvedPath,
+          revision: revision('c'.repeat(64)),
+        },
+      }));
+    let key = '';
+    await act(async () => {
+      key = await controller.openDocument('tab-1', { kind: 'local', path: '/repo/readme.md' });
+      controller.updateDocumentContent(key, 'first edit\n');
+    });
+
+    let firstSave!: Promise<string>;
+    act(() => { firstSave = controller.saveDocument(key); });
+    await waitFor(() => expect(api.fsWriteTextFile).toHaveBeenCalledOnce());
+
+    let latestSave!: Promise<string>;
+    act(() => {
+      controller.updateDocumentContent(key, 'latest edit\n');
+      latestSave = controller.saveDocument(key);
+    });
+    resolveFirstSave({
+      ok: true,
+      value: {
+        requestedPath: '/repo/readme.md',
+        resolvedPath: '/repo/readme.md',
+        revision: revision('b'.repeat(64)),
+      },
+    });
+
+    await act(async () => {
+      await expect(firstSave).resolves.toBe('saved');
+      await expect(latestSave).resolves.toBe('saved');
+    });
+    expect(api.fsWriteTextFile).toHaveBeenCalledTimes(2);
+    expect(api.fsWriteTextFile).toHaveBeenNthCalledWith(1, expect.objectContaining({ content: 'first edit\n' }));
+    expect(api.fsWriteTextFile).toHaveBeenNthCalledWith(2, expect.objectContaining({ content: 'latest edit\n' }));
+    expect(controller.dirtyDocuments).toHaveLength(0);
+  });
+
+  it('does not start a queued editor write after the controller unmounts', async () => {
+    let resolveFirstSave!: (value: unknown) => void;
+    api.fsWriteTextFile
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirstSave = resolve; }));
+    let key = '';
+    await act(async () => {
+      key = await controller.openDocument('tab-1', { kind: 'local', path: '/repo/readme.md' });
+      controller.updateDocumentContent(key, 'first edit\n');
+    });
+
+    let firstSave!: Promise<string>;
+    let latestSave!: Promise<string>;
+    act(() => { firstSave = controller.saveDocument(key); });
+    await waitFor(() => expect(api.fsWriteTextFile).toHaveBeenCalledOnce());
+    act(() => {
+      controller.updateDocumentContent(key, 'latest edit\n');
+      latestSave = controller.saveDocument(key);
+    });
+    harness.unmount();
+
+    resolveFirstSave({
+      ok: true,
+      value: {
+        requestedPath: '/repo/readme.md',
+        resolvedPath: '/repo/readme.md',
+        revision: revision('b'.repeat(64)),
+      },
+    });
+    await act(async () => {
+      await firstSave;
+      await latestSave;
+    });
+
+    expect(api.fsWriteTextFile).toHaveBeenCalledOnce();
+    expect(modelMocks.disposeAll).toHaveBeenCalledOnce();
   });
 });

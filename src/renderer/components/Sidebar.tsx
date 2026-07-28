@@ -56,6 +56,7 @@ export default function Sidebar({
   onCopyTerminalPath,
   onOpenFile,
 }: SidebarProps) {
+  const gitMutationLock = React.useRef<{ repoPath: string } | null>(null);
   const activeTool = WORKSPACE_TOOLS.find((tool) => tool.id === section) ?? WORKSPACE_TOOLS[0];
   const panelId = 'workspace-tools-panel';
 
@@ -137,6 +138,7 @@ export default function Sidebar({
             onOpenLocalTabAt={onOpenLocalTabAt}
             onCopyTerminalPath={onCopyTerminalPath}
             onOpenFile={onOpenFile}
+            mutationLock={gitMutationLock}
           />
         )
       )}

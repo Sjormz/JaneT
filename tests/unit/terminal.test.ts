@@ -22,9 +22,11 @@ class MockPty {
 
   resize = vi.fn();
   write = vi.fn();
-  kill = vi.fn(() => {
+  killSignal = vi.fn((_signal?: string) => {
     this.killed = true;
   });
+  kill = this.killSignal;
+  destroy = vi.fn(() => setImmediate(() => this.kill('SIGHUP')));
 
   /** Test helper: simulate the pty emitting a chunk of output. */
   emit(data: string) {
@@ -68,6 +70,11 @@ function processInspector(...snapshots: Array<ProcessInfo[] | Error>): ProcessIn
       return next;
     }),
   };
+}
+
+function expectNativeCleanup(pty: MockPty, times = 1): void {
+  expect(pty.killSignal).toHaveBeenCalledTimes(process.platform === 'win32' ? times : 0);
+  expect(pty.destroy).toHaveBeenCalledTimes(process.platform === 'win32' ? 0 : times);
 }
 
 const prompt = '\x1b]7;file://localhost/tmp\x1b\\';
@@ -284,7 +291,7 @@ describe('TerminalManager', () => {
     expect(receivedB).toEqual([]);
   });
 
-  it('destroy() kills the pty and a later create() with the same id spawns a fresh one', async () => {
+  it('destroy() closes a Windows PTY before reusing its id', async () => {
     const ptys: MockPty[] = [];
     mocks.spawnMock.mockImplementation(() => {
       const pty = new MockPty();
@@ -293,7 +300,12 @@ describe('TerminalManager', () => {
     });
 
     const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = new TerminalManager({
+      platform: 'win32',
+      processInspector: processInspector([], [], [], []),
+      terminateGraceMs: 0,
+      forceKillGraceMs: 0,
+    });
 
     manager.create('term-1', undefined, undefined, () => {});
     manager.destroy('term-1');
@@ -301,6 +313,34 @@ describe('TerminalManager', () => {
 
     expect(mocks.spawnMock).toHaveBeenCalledTimes(2);
     expect(ptys[0].killed).toBe(true);
+  });
+
+  it('does not signal a reused POSIX PTY root during pane destruction', async () => {
+    const firstPty = new MockPty();
+    const ptys = [firstPty, new MockPty()];
+    mocks.spawnMock.mockImplementation(() => ptys.shift()!);
+    const original = processInfo(firstPty.pid, 1, 'zsh', { startTime: '1' });
+    const reused = processInfo(firstPty.pid, 1, 'zsh', { startTime: '2' });
+    const killProcess = vi.fn();
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager({
+      platform: 'linux',
+      processInspector: processInspector([original], [reused], [], []),
+      terminateGraceMs: 0,
+      forceKillGraceMs: 0,
+      killProcess,
+    });
+    manager.create('term-reused-destroy', undefined, '/bin/zsh', () => {});
+
+    manager.destroy('term-reused-destroy');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(firstPty.killSignal).not.toHaveBeenCalled();
+    expect(firstPty.destroy).toHaveBeenCalledOnce();
+    expect(() => manager.create('term-reused-destroy', undefined, '/bin/zsh', () => {})).not.toThrow();
+    expect(mocks.spawnMock).toHaveBeenCalledTimes(2);
   });
 
   it('expands a leading tilde in cwd before spawning the shell', async () => {
@@ -454,7 +494,7 @@ describe('TerminalManager', () => {
       await manager.stopAll();
 
       expect(pty.write).not.toHaveBeenCalled();
-      expect(pty.kill).toHaveBeenCalledOnce();
+      expectNativeCleanup(pty);
     });
 
     it('terminates stable descendants deepest-first and kills the PTY root', async () => {
@@ -483,7 +523,7 @@ describe('TerminalManager', () => {
         [5002, 'SIGTERM'],
         [5001, 'SIGTERM'],
       ]);
-      expect(pty.kill).toHaveBeenCalledOnce();
+      expectNativeCleanup(pty);
     });
 
     it('continues stopping other terminals when one descendant termination fails', async () => {
@@ -514,8 +554,8 @@ describe('TerminalManager', () => {
       await expect(manager.stopAll()).resolves.toBeUndefined();
       expect(killProcess).toHaveBeenCalledWith(5001, 'SIGTERM');
       expect(killProcess).toHaveBeenCalledWith(5002, 'SIGTERM');
-      expect(firstPty.kill).toHaveBeenCalledOnce();
-      expect(secondPty.kill).toHaveBeenCalledOnce();
+      expectNativeCleanup(firstPty);
+      expectNativeCleanup(secondPty);
     });
 
     it('keeps ownership of a child that reparents between process snapshots', async () => {
@@ -538,30 +578,126 @@ describe('TerminalManager', () => {
       await manager.stopAll();
 
       expect(killProcess).toHaveBeenCalledWith(5008, 'SIGTERM');
-      expect(pty.kill).toHaveBeenCalledOnce();
+      expectNativeCleanup(pty);
     });
 
-    it('keeps ownership of a reparented child when snapshots omit start time', async () => {
+    it('does not signal a descendant pid reused between shutdown snapshots', async () => {
       const pty = new MockPty();
       mocks.spawnMock.mockReturnValue(pty);
-      const shell = processInfo(pty.pid, 1, 'zsh');
-      const attached = processInfo(5008, pty.pid, 'node');
-      const reparented = processInfo(5008, 1, 'node');
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const original = processInfo(5008, pty.pid, 'node', { startTime: '2' });
+      const reused = processInfo(5008, pty.pid, 'node', { startTime: '3' });
       const killProcess = vi.fn();
 
       const { TerminalManager } = await loadTerminalManager();
       const manager = new TerminalManager({
-        processInspector: processInspector([shell, attached], [shell, reparented], [], []),
+        processInspector: processInspector([shell, original], [shell, reused], [], []),
+        terminateGraceMs: 0,
+        forceKillGraceMs: 0,
+        killProcess,
+      });
+      manager.create('term-reused-descendant', undefined, '/bin/zsh', () => {});
+
+      await manager.stopAll();
+
+      expect(killProcess).not.toHaveBeenCalledWith(5008, expect.anything());
+      expectNativeCleanup(pty);
+    });
+
+    it('does not force-kill a descendant pid reused after graceful termination', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const original = processInfo(5008, pty.pid, 'node', { startTime: '2' });
+      const reused = processInfo(5008, pty.pid, 'node', { startTime: '3' });
+      const killProcess = vi.fn();
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: processInspector(
+          [shell, original],
+          [shell, original],
+          [shell, reused],
+          [],
+        ),
+        terminateGraceMs: 0,
+        forceKillGraceMs: 0,
+        killProcess,
+      });
+      manager.create('term-reused-after-term', undefined, '/bin/zsh', () => {});
+
+      await manager.stopAll();
+
+      expect(killProcess).toHaveBeenCalledWith(5008, 'SIGTERM');
+      expect(killProcess).not.toHaveBeenCalledWith(5008, 'SIGKILL');
+      expectNativeCleanup(pty);
+    });
+
+    it('does not signal a reused POSIX PTY root through native cleanup', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const original = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const reused = processInfo(pty.pid, 1, 'zsh', { startTime: '2' });
+      const killProcess = vi.fn();
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        platform: 'linux',
+        processInspector: processInspector([original], [original], [reused], []),
+        terminateGraceMs: 0,
+        forceKillGraceMs: 0,
+        killProcess,
+      });
+      manager.create('term-reused-root', undefined, '/bin/zsh', () => {});
+
+      await manager.stopAll();
+
+      expect(killProcess).not.toHaveBeenCalledWith(pty.pid, 'SIGKILL');
+      expect(pty.killSignal).not.toHaveBeenCalled();
+      expect(pty.destroy).toHaveBeenCalledOnce();
+    });
+
+    it('retains a reparented process after identity verification fails until it disappears', async () => {
+      const pty = new MockPty();
+      mocks.spawnMock.mockReturnValue(pty);
+      const unidentifiedShell = processInfo(pty.pid, 1, 'zsh');
+      const unidentifiedAttached = processInfo(5008, pty.pid, 'node');
+      const unidentifiedReparented = processInfo(5008, 1, 'node');
+      const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
+      const reparented = processInfo(5008, 1, 'node', { startTime: '2' });
+      const killProcess = vi.fn();
+
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager({
+        processInspector: processInspector(
+          [unidentifiedShell, unidentifiedAttached],
+          [unidentifiedShell, unidentifiedReparented],
+          [shell, reparented],
+          [],
+          [],
+          [],
+          [],
+        ),
         terminateGraceMs: 0,
         forceKillGraceMs: 0,
         killProcess,
       });
       manager.create('term-reparent-no-start-time', undefined, '/bin/zsh', () => {});
 
-      await manager.stopAll();
+      await expect(manager.stopAll()).rejects.toThrow(/identity.*unverifiable/i);
+      expect(killProcess).not.toHaveBeenCalled();
+      expect(pty.kill).not.toHaveBeenCalled();
 
-      expect(killProcess).toHaveBeenCalledWith(5008, 'SIGTERM');
-      expect(pty.kill).toHaveBeenCalledOnce();
+      manager.write('term-reparent-no-start-time', 'still-owned');
+      await expect(manager.stopAll()).rejects.toThrow(/identity.*unverifiable/i);
+      expect(killProcess).not.toHaveBeenCalled();
+      expect(pty.kill).not.toHaveBeenCalled();
+
+      manager.write('term-reparent-no-start-time', 'still-owned-after-reparent');
+      await expect(manager.stopAll()).resolves.toBeUndefined();
+
+      expect(killProcess).not.toHaveBeenCalled();
+      expectNativeCleanup(pty);
     });
 
     it('escalates stubborn descendants and rejects shutdown if they survive', async () => {
@@ -585,10 +721,10 @@ describe('TerminalManager', () => {
       expect(killProcess.mock.calls).toContainEqual([5007, 'SIGTERM']);
       expect(killProcess.mock.calls).toContainEqual([5007, 'SIGKILL']);
       expect(killProcess.mock.calls).toContainEqual([pty.pid, 'SIGKILL']);
-      expect(pty.kill).toHaveBeenCalledOnce();
+      expectNativeCleanup(pty);
 
       await expect(manager.stopAll()).rejects.toThrow(/did not stop.*node \(5007\)/i);
-      expect(pty.kill).toHaveBeenCalledTimes(2);
+      expectNativeCleanup(pty, 2);
     });
 
     it('retries a remembered survivor after its PTY root exits and the child reparents', async () => {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useCallback, useId, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   RefreshIcon, ChevronDownIcon, ChevronRightIcon, PlusIcon,
@@ -35,6 +35,7 @@ interface GitTreeProps {
   onOpenLocalTabAt?: (cwd: string, title?: string) => void;
   onCopyTerminalPath?: (path: string) => Promise<void>;
   onOpenFile?: (resource: EditorResource) => void;
+  mutationLock?: { current: { repoPath: string } | null };
 }
 
 type Section = 'branches' | 'changes' | 'staged' | 'worktrees';
@@ -65,6 +66,7 @@ export default function GitTree({
   onOpenLocalTabAt,
   onCopyTerminalPath,
   onOpenFile,
+  mutationLock,
 }: GitTreeProps) {
   const [branches, setBranches] = useState<GitBranchInfo[]>([]);
   const [worktrees, setWorktrees] = useState<GitWorktreeInfo[]>([]);
@@ -83,18 +85,27 @@ export default function GitTree({
   const [commitMessage, setCommitMessage] = useState('');
   const [worktreeMenuOpen, setWorktreeMenuOpen] = useState(false);
   const detailsGeneration = useRef(0);
+  const localMutationLock = useRef<{ repoPath: string } | null>(null);
+  const gitAction = mutationLock ?? localMutationLock;
+  const mounted = useRef(true);
   const observedBranch = useRef<{ repoPath: string | null; branch: string | null }>({
     repoPath: null,
     branch: null,
   });
   const activeRepoPath = useRef(repoPath);
+  activeRepoPath.current = repoPath;
 
-  useLayoutEffect(() => {
-    activeRepoPath.current = repoPath;
-  }, [repoPath]);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      detailsGeneration.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     window.janet.getSettings().then((settings: any) => {
+      if (!mounted.current) return;
       setWorktreeBaseDir(settings.gitWorktreeBaseDir || '../');
       setWorktreeTemplate(settings.gitWorktreeNameTemplate || '{repo}-{branch}');
     }).catch(() => {});
@@ -104,11 +115,11 @@ export default function GitTree({
     const generation = ++detailsGeneration.current;
     try {
       const details = await window.janet.gitDetails({ repoPath: repo });
-      if (generation !== detailsGeneration.current) return;
+      if (!mounted.current || generation !== detailsGeneration.current) return;
       setBranches(details?.branches || []);
       setWorktrees(details?.worktrees || []);
     } catch {
-      if (generation === detailsGeneration.current) setMessage('Couldn’t load Source Control data');
+      if (mounted.current && generation === detailsGeneration.current) setMessage('Couldn’t load Source Control data');
     }
   }, []);
 
@@ -137,20 +148,27 @@ export default function GitTree({
   }, [repoPath, status?.current]);
 
   const runGitAction = async (action: () => Promise<boolean>, success: string): Promise<boolean> => {
-    if (!repoPath) return false;
+    if (!repoPath || gitAction.current) return false;
+    const operation = { repoPath };
+    gitAction.current = operation;
     setBusy(true);
     setMessage(null);
     detailsGeneration.current += 1;
     try {
       const ok = await action();
+      if (!mounted.current || gitAction.current !== operation || activeRepoPath.current !== operation.repoPath) return false;
       setMessage(ok ? success : 'Git action failed');
       if (ok) refreshCoordinator.invalidate('mutation');
       return ok;
     } catch (err: any) {
+      if (!mounted.current || gitAction.current !== operation || activeRepoPath.current !== operation.repoPath) return false;
       setMessage(err?.message || 'Git action failed');
       return false;
     } finally {
-      setBusy(false);
+      if (gitAction.current === operation) {
+        gitAction.current = null;
+        if (mounted.current) setBusy(false);
+      }
     }
   };
 

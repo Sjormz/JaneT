@@ -260,6 +260,31 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(terminalWrite).not.toHaveBeenCalled();
   });
 
+  it('does not ready a local terminal whose creation resolves after removal', async () => {
+    let resolveCreate!: (value: { pid: number }) => void;
+    terminalCreate.mockReturnValueOnce(new Promise((resolve) => { resolveCreate = resolve; }));
+    const { default: TerminalPane } = await loadTerminalPane();
+    const onReady = vi.fn();
+    const onRemoved = vi.fn();
+
+    const view = render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-removed-before-create"
+          tabType="local"
+          onReady={onReady}
+          onRemoved={onRemoved}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    view.unmount();
+    expect(onRemoved).toHaveBeenCalledWith('term-removed-before-create');
+    await act(async () => resolveCreate({ pid: 123 }));
+    expect(onReady).not.toHaveBeenCalled();
+  });
+
   it('creates a new SSH shell when the pane switches from a local terminal to SSH props', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     const onReady = vi.fn();

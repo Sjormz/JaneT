@@ -74,7 +74,9 @@ export function KeybindingsProvider({
       }
       listenersRef.current.get(action)!.add(handler);
       return () => {
-        listenersRef.current.get(action)?.delete(handler);
+        const listeners = listenersRef.current.get(action);
+        listeners?.delete(handler);
+        if (listeners?.size === 0) listenersRef.current.delete(action);
       };
     },
     [],
@@ -134,6 +136,7 @@ export function KeybindingsProvider({
           for (const fn of handlerSet) {
             fn();
           }
+          return;
         }
       }
     };

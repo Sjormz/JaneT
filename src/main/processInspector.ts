@@ -84,16 +84,17 @@ export function parseWindowsProcessSnapshot(output: string): ProcessInfo[] {
   return processes;
 }
 
-function stableKey(process: ProcessInfo): string {
-  return process.startTime
-    ? `${process.pid}:${process.startTime}`
-    : `${process.pid}:${process.name.toLowerCase()}`;
-}
-
 /** Keep only processes that were present in both close-time samples. */
 export function stableProcesses(first: ProcessInfo[], second: ProcessInfo[]): ProcessInfo[] {
-  const firstKeys = new Set(first.map(stableKey));
-  return second.filter((process) => firstKeys.has(stableKey(process)));
+  const firstByPid = new Map(first.map((process) => [process.pid, process]));
+  return second.filter((process) => {
+    const previous = firstByPid.get(process.pid);
+    if (!previous) return false;
+    if (!previous.startTime || !process.startTime) {
+      throw new Error(`Process identity is unverifiable for PID ${process.pid}`);
+    }
+    return previous.startTime === process.startTime;
+  });
 }
 
 export class SystemProcessInspector implements ProcessInspector {

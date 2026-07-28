@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import Titlebar from '../../src/renderer/components/Titlebar';
 
 function mockPlatform(platform: string) {
@@ -25,7 +25,7 @@ const baseProps = {
   paletteShortcut: 'Ctrl+K',
 };
 
-function renderControlledTitlebar() {
+async function renderControlledTitlebar() {
   const onSettingsClose = vi.fn();
 
   function Harness() {
@@ -47,7 +47,7 @@ function renderControlledTitlebar() {
     );
   }
 
-  render(<Harness />);
+  await act(async () => { render(<Harness />); });
   return { onSettingsClose };
 }
 
@@ -70,9 +70,9 @@ describe('Titlebar', () => {
     });
   });
 
-  it('toggles Settings in the right cluster and renders its supplied content', () => {
+  it('toggles Settings in the right cluster and renders its supplied content', async () => {
     mockPlatform('win32');
-    renderControlledTitlebar();
+    await renderControlledTitlebar();
 
     const settingsButton = screen.getByRole('button', { name: 'Open settings' });
     expect(settingsButton.closest('.titlebar-right')).not.toBeNull();
@@ -86,7 +86,7 @@ describe('Titlebar', () => {
 
   it('closes Settings with Escape and restores focus to its trigger', async () => {
     mockPlatform('win32');
-    const { onSettingsClose } = renderControlledTitlebar();
+    const { onSettingsClose } = await renderControlledTitlebar();
     fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
 
     fireEvent.keyDown(screen.getByRole('dialog', { name: 'Settings' }), { key: 'Escape' });
@@ -98,7 +98,7 @@ describe('Titlebar', () => {
 
   it('closes Settings on an outside pointer press and restores trigger focus', async () => {
     mockPlatform('win32');
-    const { onSettingsClose } = renderControlledTitlebar();
+    const { onSettingsClose } = await renderControlledTitlebar();
     fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
 
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Outside target' }));

@@ -287,7 +287,9 @@ beforeEach(() => {
 
 async function confirmPendingAction(name: RegExp) {
   const dialog = await screen.findByRole('alertdialog');
-  fireEvent.click(within(dialog).getByRole('button', { name }));
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole('button', { name }));
+  });
 }
 
 async function openSampleEditor(): Promise<HTMLTextAreaElement> {
@@ -1703,7 +1705,7 @@ describe('split panes in the app', () => {
     fireEvent.click(screen.getByRole('button', { name: /split pane right/i }));
 
     // Wait past the 500ms debounce window for the save to flush.
-    await new Promise((r) => setTimeout(r, 700));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 700)));
 
     const calls = (window.janet.setSettings as any).mock.calls as Array<[any]>;
     const sessionCalls = calls.filter(([arg]) => arg && Object.prototype.hasOwnProperty.call(arg, 'session'));
@@ -1884,6 +1886,33 @@ describe('unsaved editor shutdown handshake', () => {
       expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
         requestId: 'failed-save-close', resolution: 'cancel',
       });
+    });
+  });
+
+  it('resolves one shutdown request once under same-batch confirmation', async () => {
+    let releasePersist!: () => void;
+    vi.mocked(window.janet.setSettings).mockReturnValue(new Promise((resolve) => {
+      releasePersist = () => resolve(undefined);
+    }));
+    render(<App />);
+
+    const editor = await openSampleEditor();
+    fireEvent.change(editor, { target: { value: 'dirty during duplicate confirmation\n' } });
+    await requestWorkspaceClose('single-resolution-close', 'application-quit');
+    const dialog = await screen.findByRole('alertdialog');
+    const discard = within(dialog).getByRole('button', { name: 'Discard changes and close' });
+    vi.mocked(window.janet.setSettings).mockClear();
+
+    act(() => {
+      fireEvent.click(discard);
+      fireEvent.click(discard);
+    });
+
+    expect(window.janet.setSettings).toHaveBeenCalledTimes(1);
+    releasePersist();
+    await waitFor(() => expect(window.janet.resolvePrepareForClose).toHaveBeenCalledTimes(1));
+    expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
+      requestId: 'single-resolution-close', resolution: 'discarded',
     });
   });
 

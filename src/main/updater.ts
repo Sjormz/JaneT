@@ -1,5 +1,6 @@
 import { autoUpdater } from 'electron-updater';
 import { BrowserWindow, ipcMain } from 'electron';
+import type { IpcMainInvokeEvent } from 'electron';
 import type { UpdateInfo, ProgressInfo } from 'builder-util-runtime';
 import { sendRendererEvent } from './rendererEvents';
 
@@ -30,6 +31,18 @@ function send(channel: string, ...args: unknown[]) {
   sendRendererEvent(mainWindowRef, channel, ...args);
 }
 
+function handle(channel: string, listener: () => unknown): void {
+  ipcMain.handle(channel, (event: IpcMainInvokeEvent) => {
+    const window = mainWindowRef;
+    if (
+      !window || window.isDestroyed()
+      || event.sender !== window.webContents
+      || event.senderFrame !== window.webContents.mainFrame
+    ) throw new Error(`Rejected untrusted IPC sender for ${channel}`);
+    return listener();
+  });
+}
+
 function requestUpdateCheck(silent: boolean): Promise<unknown> {
   if (checkRequest) {
     if (!silent) suppressNoUpdateNotice = false;
@@ -56,7 +69,7 @@ export function initUpdater(
   initialized = true;
 
   // Register IPC handlers for renderer-initiated update actions
-  ipcMain.handle('update:check', async () => {
+  handle('update:check', async () => {
     try {
       await requestUpdateCheck(false);
       return { success: true };
@@ -68,7 +81,7 @@ export function initUpdater(
     }
   });
 
-  ipcMain.handle('update:download', async () => {
+  handle('update:download', async () => {
     if (!updateInfo) return { success: false, error: 'No update available' };
     const requestedVersion = updateInfo.version;
     if (downloadRequest) {
@@ -97,11 +110,12 @@ export function initUpdater(
     return request;
   });
 
-  ipcMain.handle('update:install', async () => {
+  handle('update:install', async () => {
     if (installRequest) return installRequest;
     if (!updateInfo || downloadedVersion !== updateInfo.version) {
       return { success: false, error: 'No update downloaded' };
     }
+    const requestedVersion = updateInfo.version;
     if (!prepareForInstallRef) {
       return { success: false, error: 'Update shutdown protection is unavailable' };
     }
@@ -114,6 +128,9 @@ export function initUpdater(
         const message = err instanceof Error ? err.message : String(err);
         console.error('[updater] failed to prepare workspace for install:', message);
         return { success: false, error: message };
+      }
+      if (updateInfo?.version !== requestedVersion || downloadedVersion !== requestedVersion) {
+        return { success: false, error: 'No update downloaded' };
       }
       installScheduled = true;
       setImmediate(() => {
