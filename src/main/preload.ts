@@ -198,6 +198,7 @@ const api = {
   getPlatform: () => ipcRenderer.invoke('app:getPlatform'),
   openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
   copyText: (text: string): Promise<boolean> => ipcRenderer.invoke('app:copyText', text),
+  copyTerminalText: (text: string): boolean => ipcRenderer.sendSync('app:copyTerminalText', text) === true,
   onPrepareForClose: (callback: PrepareForCloseCallback) => {
     prepareForCloseCallback = callback;
     return () => {

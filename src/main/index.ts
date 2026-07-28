@@ -87,6 +87,7 @@ function openAllowedExternalUrl(url: string): boolean {
 // A validated 32,768-character path can expand up to 4x when POSIX single
 // quotes are escaped, plus the surrounding quotes and trailing separator.
 const MAX_CLIPBOARD_TEXT_LENGTH = 131_075;
+const MAX_TERMINAL_CLIPBOARD_TEXT_LENGTH = 1_048_576;
 const UNSAFE_CLIPBOARD_TEXT = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
 
 export function copyTextToClipboard(
@@ -99,6 +100,17 @@ export function copyTextToClipboard(
     || text.length > MAX_CLIPBOARD_TEXT_LENGTH
     || UNSAFE_CLIPBOARD_TEXT.test(text)
   ) {
+    return false;
+  }
+  writeText(text);
+  return true;
+}
+
+export function copyTerminalTextToClipboard(
+  text: unknown,
+  writeText: (selection: string) => void = (selection) => electron.clipboard.writeText(selection),
+): boolean {
+  if (typeof text !== 'string' || text.length === 0 || text.length > MAX_TERMINAL_CLIPBOARD_TEXT_LENGTH) {
     return false;
   }
   writeText(text);
@@ -360,22 +372,29 @@ electron.app.on('window-all-closed', () => {
 });
 
 function registerIpcHandlers() {
+  const isTrustedSender = (event: electron.IpcMainEvent | electron.IpcMainInvokeEvent): boolean => {
+    const window = mainWindow;
+    return Boolean(
+      window && !window.isDestroyed() &&
+      event.sender === window.webContents &&
+      event.senderFrame === window.webContents.mainFrame
+    );
+  };
   const handle = (
     channel: string,
     listener: (event: electron.IpcMainInvokeEvent, ...args: any[]) => any,
   ): void => {
     electron.ipcMain.handle(channel, (event, ...args) => {
-      const window = mainWindow;
-      if (
-        !window || window.isDestroyed() ||
-        event.sender !== window.webContents ||
-        event.senderFrame !== window.webContents.mainFrame
-      ) {
+      if (!isTrustedSender(event)) {
         throw new Error(`Rejected untrusted IPC sender for ${channel}`);
       }
       return listener(event, ...args);
     });
   };
+
+  electron.ipcMain.on('app:copyTerminalText', (event, text: unknown) => {
+    event.returnValue = isTrustedSender(event) && copyTerminalTextToClipboard(text);
+  });
 
   // === Terminal IPC ===
   handle('terminal:create', (event, { id, cwd, shell, startupCommands }) => {

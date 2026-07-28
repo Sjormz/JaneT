@@ -115,6 +115,7 @@ const terminalWrite = vi.fn(() => Promise.resolve());
 const terminalWriteBinary = vi.fn(() => Promise.resolve());
 const terminalDestroy = vi.fn(() => Promise.resolve());
 const openExternal = vi.fn(() => Promise.resolve(true));
+const copyTerminalText = vi.fn(() => true);
 let sshCreateShellImpl: () => Promise<unknown> = () => Promise.resolve({ connected: true });
 const sshCreateShell = vi.fn(() => sshCreateShellImpl());
 const sshResizeShell = vi.fn(() => Promise.resolve());
@@ -200,6 +201,7 @@ beforeEach(() => {
       sshWriteShell,
       sshWriteShellBinary,
       openExternal,
+      copyTerminalText,
     },
   });
 });
@@ -410,7 +412,7 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(searchOverlayProps.visible).toBe(true);
   });
 
-  it('copies selected terminal text synchronously without leaving xterm context-menu input behind', async () => {
+  it('writes selected terminal text synchronously before the next paste', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     render(
       <KeybindingsProvider>
@@ -438,9 +440,9 @@ describe('TerminalPane SSH reinitialization', () => {
     })).toBe(true);
     fireEvent.contextMenu(document.querySelector('.terminal-container')!);
 
-    expect(document.execCommand).toHaveBeenCalledTimes(4);
-    expect(document.execCommand).toHaveBeenCalledWith('copy');
-    expect(term.focus).toHaveBeenCalled();
+    expect(copyTerminalText).toHaveBeenCalledTimes(4);
+    expect(copyTerminalText).toHaveBeenCalledWith('first line\nsecond line');
+    expect(document.execCommand).not.toHaveBeenCalled();
     expect(terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: '\u0003' }));
   });
 
