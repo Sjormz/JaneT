@@ -1,7 +1,7 @@
 import { Client, ClientChannel } from 'ssh2';
 import type { SFTPWrapper, Stats } from 'ssh2';
 import * as os from 'os';
-import { createHash, randomUUID } from 'crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'crypto';
 import { StringDecoder } from 'string_decoder';
 import type {
   FileEntry,
@@ -778,6 +778,7 @@ interface SSHShellHandle {
 export class SSHManager {
   private connections: Map<string, SSHConnection> = new Map();
   private pendingConnections: Map<string, PendingSSHConnection> = new Map();
+  private readonly connectionIdentityKey = randomBytes(32);
   private readonly inMemoryHostKeys = new Map<string, string>();
   private readonly startupCommandLedger = new Set<string>();
   private readonly pendingStartupCommandHandles = new Map<string, SSHShellHandle>();
@@ -832,7 +833,7 @@ export class SSHManager {
     const host = config.host.trim();
     const port = config.port;
     const endpoint = hostKeyId(host, port);
-    const identity = connectionIdentity(endpoint, config);
+    const identity = connectionIdentity(this.connectionIdentityKey, endpoint, config);
     const activeConnection = this.connections.get(id);
     if (activeConnection) {
       return activeConnection.config.identity === identity
@@ -1742,10 +1743,11 @@ function hostKeyId(host: string, port: number): string {
 }
 
 function connectionIdentity(
+  key: Buffer,
   endpoint: string,
   config: { username?: string; auth: string; password?: string; privateKey?: string },
 ): string {
-  return createHash('sha256').update(JSON.stringify([
+  return createHmac('sha256', key).update(JSON.stringify([
     endpoint,
     normalizeUsername(config.username),
     config.auth,

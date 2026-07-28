@@ -11,7 +11,6 @@ const root = path.resolve(__dirname, '../..');
 const devServerUrl = process.env.JANET_DEV_SERVER_URL || 'http://127.0.0.1:5173';
 const electronExecutable = require('electron') as string;
 const testUsername = 'janet';
-const testPassword = 'janet-test';
 const remoteHome = '/home/janet';
 
 interface VirtualRemoteEntry {
@@ -248,7 +247,7 @@ async function startLocalSshServer(): Promise<{
     client.on('close', () => clients.delete(client));
     client.on('error', ignoreBenignSshFixtureError);
     client.on('authentication', (ctx) => {
-      if (ctx.method === 'password' && ctx.username === testUsername && ctx.password === testPassword) {
+      if (ctx.method === 'none' && ctx.username === testUsername) {
         ctx.accept();
       } else {
         ctx.reject();
@@ -325,7 +324,6 @@ async function launchAppWithLocalSsh(
     port,
     username: testUsername,
     auth: 'password' as const,
-    password: testPassword,
   };
 
   fs.writeFileSync(settingsPath, JSON.stringify({

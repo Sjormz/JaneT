@@ -1177,6 +1177,27 @@ describe('SSHManager', () => {
     expect(manager.listConnections()).toHaveLength(0);
   });
 
+  it('does not expose a reusable credential digest across manager instances', async () => {
+    mocks.connectMock.mockImplementation(() => {});
+    const { SSHManager } = await loadSSHManager();
+    const config = {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password', password: 'secret',
+    };
+    const first = new SSHManager();
+    const second = new SSHManager();
+
+    const firstConnection = first.connect('session', config);
+    const secondConnection = second.connect('session', config);
+
+    expect((first as any).pendingConnections.get('session').identity)
+      .not.toBe((second as any).pendingConnections.get('session').identity);
+    const firstCancelled = expect(firstConnection).rejects.toThrow(/cancelled/i);
+    const secondCancelled = expect(secondConnection).rejects.toThrow(/cancelled/i);
+    await first.disconnect('session');
+    await second.disconnect('session');
+    await Promise.all([firstCancelled, secondCancelled]);
+  });
+
   it('reports an unexpected active-client close exactly once, but ignores explicit and stale closes', async () => {
     mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
 
