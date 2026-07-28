@@ -94,10 +94,8 @@ function usableDimensions(dims: { cols: number; rows: number } | undefined | nul
 }
 
 function copyTerminalSelection(term: Terminal): boolean {
-  if (!term.hasSelection()) return false;
-  term.focus();
-  document.execCommand('copy');
-  return true;
+  const selection = term.getSelection();
+  return Boolean(selection) && window.janet.copyTerminalText(selection);
 }
 
 interface CachedTerminalPane {
