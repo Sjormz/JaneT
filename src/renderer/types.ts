@@ -16,6 +16,7 @@ export interface TerminalLeaf {
 
 export interface WorkspaceTerminal {
   type: 'local' | 'ssh';
+  title?: string;
   cwd?: string;
   sshProfileId?: string;
   startupCommands?: string[];
@@ -85,8 +86,9 @@ export function createLeaf(type: 'local' | 'ssh' = 'local'): TerminalLeaf {
 
 function workspaceLeaf(terminal: WorkspaceTerminal): TerminalLeaf {
   const startupCommands = sanitizeStartupCommands(terminal.startupCommands);
+  const title = terminal.title?.trim();
   return {
-    id: genId('term'), type: 'leaf', title: terminal.type === 'ssh' ? 'ssh' : 'terminal',
+    id: genId('term'), type: 'leaf', ...(title ? { title } : {}),
     terminalType: terminal.type, cwd: terminal.type === 'local' ? terminal.cwd : undefined,
     sshProfileId: terminal.type === 'ssh' ? terminal.sshProfileId : undefined,
     ...(startupCommands.length > 0 ? { startupCommands } : {}),

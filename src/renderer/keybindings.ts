@@ -19,7 +19,9 @@ export type KeybindingAction =
   | 'snippets-toggle'
   | 'split-right'
   | 'split-down'
-  | 'close-pane';
+  | 'close-pane'
+  | 'rename-pane'
+  | 'rename-tab';
 
 export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   'search-toggle': 'Search terminal output',
@@ -33,6 +35,8 @@ export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   'split-right': 'Split pane right',
   'split-down': 'Split pane below',
   'close-pane': 'Close current pane',
+  'rename-pane': 'Rename current terminal',
+  'rename-tab': 'Rename current tab',
 };
 
 export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
@@ -47,6 +51,8 @@ export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'split-right': 'Ctrl+\\',
   'split-down': 'Ctrl+Shift+\\',
   'close-pane': 'Ctrl+Shift+W',
+  'rename-pane': 'F2',
+  'rename-tab': 'Ctrl+F2',
 };
 
 /** Parse a shortcut string like "Ctrl+Shift+F" into a match object */

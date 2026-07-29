@@ -721,6 +721,7 @@ export default function TerminalPane({
       className={`terminal-container${pathDropState === 'valid' ? ' is-path-drop-target' : ''}${pathDropState === 'invalid' ? ' is-path-drop-invalid' : ''}`}
       ref={containerRef}
       data-terminal-focus-target
+      data-terminal-id={termId}
       tabIndex={-1}
       onDragEnter={inspectTerminalPathDrag}
       onDragOver={inspectTerminalPathDrag}

@@ -148,6 +148,13 @@ describe('restorePaneTree', () => {
     }
   });
 
+  it('omits an oversized optional pane title during restore', () => {
+    const restored = restorePaneTree({ type: 'leaf', title: 'x'.repeat(257) });
+
+    expect(restored).toMatchObject({ type: 'leaf' });
+    expect(restored).not.toHaveProperty('title');
+  });
+
   it('gives every restored leaf a unique id', () => {
     const saved = {
       type: 'split' as const,
@@ -292,6 +299,12 @@ describe('normalizeSession', () => {
     expect(result.tabs[0].id).toBe('a');
     expect(result.sidebarSection).toBe('files');
     expect(result.activeTabId).toBe('a');
+  });
+
+  it('drops a saved tab whose required title exceeds the persisted limit', () => {
+    expect(normalizeSession({
+      tabs: [{ id: 'oversized', title: 'x'.repeat(257), type: 'local', root: { type: 'leaf' } }],
+    }).tabs).toEqual([]);
   });
 
   it('preserves valid ui state', () => {

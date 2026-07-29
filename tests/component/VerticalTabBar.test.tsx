@@ -175,6 +175,54 @@ describe('VerticalTabBar', () => {
     ]));
   });
 
+  it('creates optional names for each preset terminal', () => {
+    const onWorkspaceTabsChange = vi.fn();
+    renderTabs({ onWorkspaceTabsChange });
+
+    fireEvent.click(screen.getByRole('button', { name: /^presets$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /new preset/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /preset name/i }), { target: { value: 'Named workspace' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Terminal 1 name (optional)' }), { target: { value: '  Dev server  ' } });
+    fireEvent.click(screen.getByRole('button', { name: /^add terminal$/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Terminal 2 name (optional)' }), { target: { value: 'Tests' } });
+    fireEvent.click(screen.getByRole('button', { name: /^create preset$/i }));
+
+    const saved = onWorkspaceTabsChange.mock.calls[0][0][0] as WorkspaceTabPreset;
+    const leaves = saved.root?.type === 'split' ? saved.root.children : [saved.root];
+    expect(leaves).toEqual([
+      expect.objectContaining({ type: 'leaf', title: 'Dev server' }),
+      expect.objectContaining({ type: 'leaf', title: 'Tests' }),
+    ]);
+  });
+
+  it('loads, clears, and saves existing preset terminal names', () => {
+    const onWorkspaceTabsChange = vi.fn();
+    const namedPreset: WorkspaceTabPreset = {
+      id: 'named-workspace', name: 'Named workspace', type: 'local',
+      terminalCount: 2, splitDirection: 'vertical',
+      root: {
+        type: 'split', direction: 'vertical', sizes: [1, 1],
+        children: [
+          { type: 'leaf', terminalType: 'local', title: 'Dev server' },
+          { type: 'leaf', terminalType: 'local', title: 'Tests' },
+        ],
+      },
+    };
+    renderTabs({ workspaceTabs: [namedPreset], onWorkspaceTabsChange });
+
+    fireEvent.click(screen.getByRole('button', { name: /^presets$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /edit preset named workspace/i }));
+    expect(screen.getByRole('textbox', { name: 'Terminal 1 name (optional)' })).toHaveValue('Dev server');
+    expect(screen.getByRole('textbox', { name: 'Terminal 2 name (optional)' })).toHaveValue('Tests');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Terminal 1 name (optional)' }), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save changes$/i }));
+
+    const updated = onWorkspaceTabsChange.mock.calls[0][0][0] as WorkspaceTabPreset;
+    const updatedLeaves = updated.root?.type === 'split' ? updated.root.children : [updated.root];
+    expect(updatedLeaves[0]).not.toHaveProperty('title');
+    expect(updatedLeaves[1]).toMatchObject({ title: 'Tests' });
+  });
+
   it('creates, reorders, trims, and saves per-terminal startup commands', () => {
     const onWorkspaceTabsChange = vi.fn();
     renderTabs({ onWorkspaceTabsChange });
@@ -548,7 +596,9 @@ describe('VerticalTabBar', () => {
     fireEvent.contextMenu(screen.getAllByRole('button', { name: /^close /i })[0].closest('.vtab-item')!);
     expect(screen.getByRole('menu').parentElement).toBe(document.body);
     fireEvent.click(screen.getByRole('menuitem', { name: /rename tab/i }));
-    fireEvent.change(screen.getByRole('textbox', { name: /^tab name$/i }), { target: { value: 'Renamed' } });
+    const nameInput = screen.getByRole('textbox', { name: /^tab name$/i });
+    expect(nameInput).toHaveAttribute('maxlength', '256');
+    fireEvent.change(nameInput, { target: { value: 'Renamed' } });
     fireEvent.click(screen.getByRole('button', { name: /save tab name/i }));
 
     expect(onRenameTab).toHaveBeenCalledWith('tab-1', 'Renamed');

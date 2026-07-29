@@ -31,8 +31,7 @@ export default function ShortcutEditor() {
       e.preventDefault();
       e.stopPropagation();
       const shortcut = formatShortcut(e.nativeEvent);
-      // Require at least one modifier key
-      if (!shortcut.includes('+')) return;
+      if (!shortcut.includes('+') && !/^F(?:[1-9]|1[0-2])$/.test(shortcut)) return;
       setBinding(action, shortcut);
       setCapturing(null);
     },
@@ -62,7 +61,7 @@ export default function ShortcutEditor() {
                 onBlur={() => setCapturing(null)}
               >
                 <span>Press a shortcut…</span>
-                <small>Include Ctrl, Alt, Shift, or Command</small>
+                <small>Include a modifier, or press F1–F12</small>
               </div>
             ) : (
               <Tooltip label={`Change shortcut for ${KEYBINDING_LABELS[action]}`} shortcut={formatShortcutForDisplay(bindings[action], platform)} placement="left">

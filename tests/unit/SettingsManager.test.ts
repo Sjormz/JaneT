@@ -562,10 +562,10 @@ describe('SettingsManager', () => {
         tabs: [
           {
             id: 'tab-1',
-            title: 'main',
+            title: 'JaneT - fixes',
             type: 'local',
             cwd: 'C:/repo',
-            root: { type: 'split', direction: 'vertical', sizes: [1, 1], children: [{ type: 'leaf' }, { type: 'leaf' }] },
+            root: { type: 'split', direction: 'vertical', sizes: [1, 1], children: [{ type: 'leaf', title: 'Dev server' }, { type: 'leaf', title: 'Tests' }] },
           },
           {
             id: 'tab-2',
@@ -592,6 +592,10 @@ describe('SettingsManager', () => {
     expect(loaded.session.sidebarOpen).toBe(false);
     expect(loaded.session.sidebarSection).toBe('git');
     expect(loaded.session.tabs[0].cwd).toBe('C:/repo');
+    expect(loaded.session.tabs[0]).toMatchObject({
+      title: 'JaneT - fixes',
+      root: { children: [{ title: 'Dev server' }, { title: 'Tests' }] },
+    });
     expect(loaded.session.tabs[1].sshProfileId).toBe('pckpr@box.local:22:password');
 
     loaded.keybindings['new-tab'] = 'Ctrl+Alt+M';
@@ -601,8 +605,27 @@ describe('SettingsManager', () => {
     }
     const isolated = loadedManager.get();
     expect(isolated.keybindings['new-tab']).not.toBe('Ctrl+Alt+M');
-    expect(isolated.session.tabs[0].title).toBe('main');
+    expect(isolated.session.tabs[0].title).toBe('JaneT - fixes');
     expect(isolated.session.tabs[0].root).toMatchObject({ sizes: [1, 1] });
+  });
+
+  it('bounds saved tab and pane names while loading settings from disk', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      session: {
+        tabs: [
+          { id: 'good', title: 'Good', type: 'local', root: { type: 'leaf', title: 'x'.repeat(257) } },
+          { id: 'bad', title: 'x'.repeat(257), type: 'local', root: { type: 'leaf', title: 'Tests' } },
+        ],
+        activeTabId: 'good', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    }));
+
+    const { SettingsManager } = await import('../../src/main/settings');
+    const loaded = new SettingsManager().get();
+    expect(loaded.session.tabs).toHaveLength(1);
+    expect(loaded.session.tabs[0]).toMatchObject({ id: 'good', root: { type: 'leaf' } });
+    expect(loaded.session.tabs[0].root).not.toHaveProperty('title');
   });
 
   it('round-trips per-pane startup commands and isolates returned settings', async () => {

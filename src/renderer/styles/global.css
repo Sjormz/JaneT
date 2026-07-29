@@ -1956,6 +1956,7 @@ html, body, #root {
   background: var(--glass-bg-strong);
   box-shadow: var(--glass-shadow);
 }
+.rename-dialog { width: min(360px, 100%); }
 .confirmation-dialog-title {
   margin: 0;
   color: var(--text-primary);
@@ -2699,6 +2700,13 @@ html, body, #root {
   color: var(--text-tertiary);
   font-family: var(--font-mono);
   font-weight: 500;
+  min-width: 0;
+  gap: 6px;
+}
+.leaf-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .leaf-actions {
   display: flex;
