@@ -46,6 +46,7 @@ function terminalsFromRoot(root: SavedPaneNode | undefined): WorkspaceTerminal[]
     const startupCommands = sanitizeStartupCommands(root.startupCommands);
     return [{
       type,
+      title: root.title,
       cwd: root.cwd,
       sshProfileId: root.sshProfileId,
       startupCommands,
@@ -80,7 +81,7 @@ function applyTerminals(root: SavedPaneNode, terminals: WorkspaceTerminal[]): Sa
       const startupCommands = sanitizeStartupCommands(terminal.startupCommands);
       return {
         type: 'leaf',
-        title: node.title,
+        ...(terminal.title?.trim() ? { title: terminal.title.trim() } : {}),
         terminalType: terminal.type,
         cwd: terminal.cwd,
         sshProfileId: terminal.sshProfileId,
@@ -231,8 +232,10 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
     if (!name.trim() || missingSshProfileIndex >= 0 || oversizedStartupIndex >= 0) return;
     const normalizedTerminals = terminals.map((terminal) => {
       const startupCommands = sanitizeStartupCommands(terminal.startupCommands);
+      const title = terminal.title?.trim();
       return {
         ...terminal,
+        title: title || undefined,
         startupCommands,
         startupShellDialect: terminal.type === 'ssh' && startupCommands.length > 0
           ? terminal.startupShellDialect ?? 'posix'
@@ -288,6 +291,14 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
                 </Tooltip>
               )}
             </div>
+            <input
+              className="form-input"
+              value={terminal.title ?? ''}
+              maxLength={256}
+              onChange={(event) => updateTerminal(index, { ...terminal, title: event.target.value || undefined })}
+              placeholder="Name (optional)"
+              aria-label={`Terminal ${index + 1} name (optional)`}
+            />
             <div className="workspace-terminal-type" role="group" aria-label={`Terminal ${index + 1} type`}>
               <button id={`${formId}-terminal-${index}-type-local`} type="button" aria-pressed={terminal.type === 'local'} className={terminal.type === 'local' ? 'active' : ''} onClick={() => updateTerminal(index, { ...terminal, type: 'local', cwd: terminal.type === 'local' ? terminal.cwd : undefined, sshProfileId: undefined })}>Local terminal</button>
               <button id={`${formId}-terminal-${index}-type-ssh`} type="button" aria-pressed={terminal.type === 'ssh'} className={terminal.type === 'ssh' ? 'active' : ''} onClick={() => updateTerminal(index, { ...terminal, type: 'ssh', cwd: undefined, sshProfileId: terminal.type === 'ssh' ? terminal.sshProfileId : undefined, startupShellDialect: terminal.startupShellDialect ?? 'posix' })}>SSH connection</button>

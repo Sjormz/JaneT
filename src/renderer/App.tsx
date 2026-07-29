@@ -13,6 +13,7 @@ import UpdateBanner from './components/UpdateBanner';
 import BrandMark from './components/BrandMark';
 import Tooltip from './components/Tooltip';
 import ConfirmationDialog from './components/ConfirmationDialog';
+import RenameDialog from './components/RenameDialog';
 import WorkspaceContent from './components/WorkspaceContent';
 import {
   TabInfo, SessionInfo,
@@ -74,6 +75,10 @@ interface PendingDestructiveAction {
   fallbackFocus?: () => HTMLElement | null;
 }
 
+type RenameTarget =
+  | { kind: 'pane'; tabId: string; leafId: string; terminalId: string; initialValue: string }
+  | { kind: 'tab'; tabId: string; terminalId: string | null; initialValue: string };
+
 function collectTerminalOwners(tab: TabInfo): TerminalOwner[] {
   const owners: TerminalOwner[] = [];
   const collect = (node: PaneNode) => {
@@ -109,6 +114,22 @@ function firstTerminalFocusTarget(): HTMLTextAreaElement | null {
   const containers = Array.from(document.querySelectorAll<HTMLElement>('[data-terminal-focus-target]'));
   const container = containers.find((candidate) => candidate.offsetParent !== null) ?? containers[0];
   return container?.querySelector<HTMLTextAreaElement>('textarea') ?? null;
+}
+
+function terminalFocusTarget(termId: string | null): HTMLTextAreaElement | null {
+  if (!termId) return firstTerminalFocusTarget();
+  const container = Array.from(document.querySelectorAll<HTMLElement>('[data-terminal-id]'))
+    .find((candidate) => candidate.dataset.terminalId === termId);
+  return container?.querySelector<HTMLTextAreaElement>('textarea') ?? firstTerminalFocusTarget();
+}
+
+function displayPaneTitle(leaf: TerminalLeaf, tabType: 'local' | 'ssh'): string {
+  const stored = leaf.title?.trim();
+  const leafType = leaf.terminalType ?? tabType;
+  const legacyTitle = leafType === 'ssh' ? 'ssh' : 'terminal';
+  const isLegacyUntypedSplitTitle = !leaf.terminalType && stored?.toLowerCase() === 'terminal';
+  if (stored && stored.toLowerCase() !== legacyTitle && !isLegacyUntypedSplitTitle) return stored;
+  return leafType === 'ssh' ? 'SSH' : 'Terminal';
 }
 
 function sshSessionInfo(sessionId: string, profile: SavedSSHProfile): SessionInfo {
@@ -260,6 +281,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [maximizedLeafByTab, setMaximizedLeafByTab] = useState<Record<string, string | null>>({});
   const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null);
   const [paneDropTarget, setPaneDropTarget] = useState<{ leafId: string; side: PaneDropSide } | null>(null);
+  const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const liveTerminalIdsRef = useRef<Set<string>>(new Set());
   const restoreTerminalFocusRef = useRef(false);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
@@ -908,8 +930,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   }, [editorDocuments.closeDocument, editorDocuments.documents, saveEditorDocument]);
 
   const renameTab = useCallback((tabId: string, title: string) => {
-    if (!title) return;
-    updateTab(tabId, (tab) => ({ ...tab, title }));
+    const normalized = title.trim();
+    if (!normalized) return;
+    updateTab(tabId, (tab) => ({ ...tab, title: normalized }));
   }, [updateTab]);
 
   // === Split / close pane ===
@@ -1329,6 +1352,42 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     () => sidebarTerminalId ? findLeaf(activeTab.root, sidebarTerminalId) : null,
     [activeTab, sidebarTerminalId],
   );
+  const requestRenamePane = useCallback(() => {
+    if (!sidebarTerminalId || !sidebarLeaf) return;
+    setRenameTarget({
+      kind: 'pane',
+      tabId: activeTab.id,
+      leafId: sidebarTerminalId,
+      terminalId: sidebarTerminalId,
+      initialValue: displayPaneTitle(sidebarLeaf, activeTab.type),
+    });
+  }, [activeTab.id, activeTab.type, sidebarLeaf, sidebarTerminalId]);
+
+  const requestRenameTab = useCallback(() => {
+    setRenameTarget({
+      kind: 'tab',
+      tabId: activeTab.id,
+      terminalId: sidebarTerminalId,
+      initialValue: activeTab.title,
+    });
+  }, [activeTab.id, activeTab.title, sidebarTerminalId]);
+
+  const saveRename = useCallback((value: string) => {
+    if (!renameTarget) return;
+    const normalized = value.trim();
+    if (renameTarget.kind === 'tab') {
+      if (!normalized) return;
+      renameTab(renameTarget.tabId, normalized);
+    } else {
+      updateTab(renameTarget.tabId, (tab) => ({
+        ...tab,
+        root: mapLeaves(tab.root, (leaf) => leaf.id === renameTarget.leafId
+          ? { ...leaf, title: normalized || undefined, terminalType: leaf.terminalType ?? tab.type }
+          : leaf),
+      }));
+    }
+    setRenameTarget(null);
+  }, [renameTab, renameTarget, updateTab]);
   const copyTerminalPath = useCallback(async (path: string) => {
     const pasteToken = formatTerminalPathForPaste(path, sidebarLeaf?.startupShellDialect);
     if (!pasteToken) throw new Error('Path cannot be pasted safely');
@@ -1424,7 +1483,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     };
   }, [on, addTab, requestCloseTab, activeTabId, toggleWorkspaceTools, persistFontSize, fontSize]);
 
-  // Split/close-pane handlers depend on activeTab so register separately
+  // Pane handlers depend on the active tab and focused terminal.
   useEffect(() => {
     const unsub1 = on('split-right', () => {
       if (sidebarTerminalId) handleSplitPane(activeTab.id, sidebarTerminalId, 'vertical');
@@ -1436,8 +1495,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       const leaves = getAllLeafIds(activeTab.root);
       if (sidebarTerminalId && leaves.length > 1) requestClosePane(activeTab.id, sidebarTerminalId);
     });
-    return () => { unsub1(); unsub2(); unsub3(); };
-  }, [on, activeTab, sidebarTerminalId, handleSplitPane, requestClosePane]);
+    const unsub4 = on('rename-pane', requestRenamePane);
+    const unsub5 = on('rename-tab', requestRenameTab);
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
+  }, [
+    on, activeTab, sidebarTerminalId, handleSplitPane, requestClosePane,
+    requestRenamePane, requestRenameTab,
+  ]);
 
   // === Escape handler for palette ===
   useEffect(() => {
@@ -1460,6 +1524,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       {
         id: 'close-tab', label: 'Close current tab', category: 'Tabs',
         shortcut: bindings['close-tab'], handler: () => requestCloseTab(activeTabId),
+      },
+      {
+        id: 'rename-tab', label: 'Rename current tab', category: 'Tabs',
+        shortcut: bindings['rename-tab'], handler: requestRenameTab,
       },
       {
         id: 'toggle-sidebar', label: 'Show or hide workspace tools', category: 'View',
@@ -1539,6 +1607,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       const leaves = getAllLeafIds(activeTab.root);
       if (sidebarTerminalId) {
         actions.push({
+          id: 'rename-pane', label: 'Rename current terminal', category: 'Pane',
+          shortcut: bindings['rename-pane'], handler: requestRenamePane,
+        });
+        actions.push({
           id: 'split-right', label: 'Split pane right', category: 'Pane',
           shortcut: bindings['split-right'], handler: () => handleSplitPane(activeTab.id, sidebarTerminalId, 'vertical'),
         });
@@ -1558,6 +1630,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     return actions;
   }, [
     activeTab, activeTabId, sidebarTerminalId, addTab, requestCloseTab, handleSplitPane, requestClosePane,
+    requestRenamePane, requestRenameTab,
     fontSize, persistFontSize, persistTheme, setWorkspaceToolsExpanded, toggleWorkspaceTools, bindings,
   ]);
 
@@ -1729,6 +1802,15 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         }}
       />
       <UpdateBanner />
+      <RenameDialog
+        open={renameTarget !== null}
+        title={renameTarget?.kind === 'tab' ? 'Rename tab' : 'Rename terminal'}
+        inputLabel={renameTarget?.kind === 'tab' ? 'Tab name' : 'Terminal name'}
+        initialValue={renameTarget?.initialValue ?? ''}
+        fallbackFocus={() => terminalFocusTarget(renameTarget?.terminalId ?? null)}
+        onCancel={() => setRenameTarget(null)}
+        onSave={saveRename}
+      />
       <ConfirmationDialog
         open={pendingDestructiveAction !== null}
         title={pendingDestructiveAction?.title ?? ''}

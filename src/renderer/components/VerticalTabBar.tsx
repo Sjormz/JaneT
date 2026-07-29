@@ -272,6 +272,7 @@ export default function VerticalTabBar({
                   <input
                     className="vtab-name-input"
                     value={draftTitle}
+                    maxLength={256}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => setDraftTitle(e.target.value)}
                     onKeyDown={(e) => {

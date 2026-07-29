@@ -192,6 +192,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
         ref={containerRef}
         data-testid={`terminal-${termId}`}
         data-terminal-focus-target
+        data-terminal-id={termId}
         data-ssh-connection-lost={sshConnectionLost ? 'true' : 'false'}
         onFocus={() => onFocus?.(termId)}
       >
@@ -450,6 +451,69 @@ describe('split panes in the app', () => {
     expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: secondId });
   });
 
+  it('renames the focused pane with F2 and returns focus to its terminal', async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    const [firstTerminal, secondTerminal] = screen.getAllByTestId(/terminal-/);
+    const secondInput = within(secondTerminal).getByRole('textbox');
+    act(() => secondInput.focus());
+    vi.mocked(window.janet.terminalCreate).mockClear();
+    vi.mocked(window.janet.terminalDestroy).mockClear();
+
+    fireEvent.keyDown(secondInput, { key: 'F2' });
+
+    const dialog = await screen.findByRole('dialog', { name: 'Rename terminal' });
+    const nameInput = within(dialog).getByRole('textbox', { name: 'Terminal name' });
+    expect(nameInput).toHaveValue('Terminal');
+    fireEvent.change(nameInput, { target: { value: '  Tests  ' } });
+    fireEvent.keyDown(nameInput, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Rename terminal' })).not.toBeInTheDocument();
+      expect(screen.getByText('Tests')).toBeInTheDocument();
+      expect(secondInput).toHaveFocus();
+    });
+    expect(firstTerminal).toBeInTheDocument();
+    expect(secondTerminal).toBeInTheDocument();
+    expect(window.janet.terminalCreate).not.toHaveBeenCalled();
+    expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
+    expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
+    expect(window.janet.sshDestroyShell).not.toHaveBeenCalled();
+
+    await act(() => new Promise((resolve) => setTimeout(resolve, 700)));
+    const settingsCalls = vi.mocked(window.janet.setSettings).mock.calls;
+    const savedRoot = (settingsCalls.at(-1)?.[0] as any).session?.tabs?.[0]?.root;
+    expect(savedRoot.children[1]).toMatchObject({ title: 'Tests', terminalType: 'local' });
+  });
+
+  it('renames the active tab with Ctrl+F2 while its rail is collapsed', async () => {
+    render(<App />);
+
+    const terminal = await screen.findByTestId(/terminal-/);
+    const terminalInput = within(terminal).getByRole('textbox');
+    act(() => terminalInput.focus());
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onCollapse).toBeTypeOf('function'));
+    act(() => rendererMocks.verticalTabBarProps.onCollapse());
+    expect(await screen.findByRole('button', { name: 'Show terminal tabs' })).toBeInTheDocument();
+
+    fireEvent.keyDown(terminalInput, { key: 'F2', ctrlKey: true });
+
+    const dialog = await screen.findByRole('dialog', { name: 'Rename tab' });
+    const nameInput = within(dialog).getByRole('textbox', { name: 'Tab name' });
+    expect(nameInput).toHaveValue('Terminal');
+    fireEvent.change(nameInput, { target: { value: 'JaneT - fixes' } });
+    fireEvent.keyDown(nameInput, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Rename tab' })).not.toBeInTheDocument();
+      expect(terminalInput).toHaveFocus();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Show terminal tabs' }));
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs[0].title).toBe('JaneT - fixes'));
+  });
+
   it('requires confirmation before the close-tab shortcut destroys its terminal', async () => {
     render(<App />);
 
@@ -508,6 +572,26 @@ describe('split panes in the app', () => {
       expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
       expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus();
     });
+  });
+
+  it('exposes pane and tab rename through the command palette', async () => {
+    render(<App />);
+
+    await screen.findByTestId(/terminal-/);
+    await waitFor(() => {
+      expect(rendererMocks.paletteActions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'rename-pane', shortcut: 'F2' }),
+        expect.objectContaining({ id: 'rename-tab', shortcut: 'Ctrl+F2' }),
+      ]));
+    });
+
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'rename-pane')!.handler());
+    expect(await screen.findByRole('dialog', { name: 'Rename terminal' })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'rename-tab')!.handler());
+    expect(await screen.findByRole('dialog', { name: 'Rename tab' })).toBeInTheDocument();
   });
 
   it('applies the command-palette close action to the focused pane', async () => {
@@ -766,6 +850,30 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(divider).toHaveAttribute('aria-valuenow', '55'));
     fireEvent.keyDown(divider, { key: 'Home' });
     await waitFor(() => expect(divider).toHaveAttribute('aria-valuenow', '10'));
+  });
+
+  it('shows an untyped legacy split leaf with its inherited SSH fallback name', () => {
+    render(
+      <SplitPane
+        node={{ id: 'legacy-ssh-leaf', type: 'leaf', title: 'terminal' }}
+        tabId="legacy-ssh-tab"
+        tabType="ssh"
+        sshShellReady={false}
+        onTerminalReady={vi.fn()}
+        onTerminalRemoved={vi.fn()}
+        onSplitPane={vi.fn()}
+        onClosePane={vi.fn()}
+        onResizePane={vi.fn()}
+        onMovePane={vi.fn()}
+        onPaneDragStart={vi.fn()}
+        onPaneDragOver={vi.fn()}
+        onPaneDragEnd={vi.fn()}
+        onToggleMaximizePane={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('SSH')).toBeInTheDocument();
+    expect(screen.getByLabelText('SSH — SSH pane')).toBeInTheDocument();
   });
 
   it('cancels an active divider drag when the split unmounts', () => {

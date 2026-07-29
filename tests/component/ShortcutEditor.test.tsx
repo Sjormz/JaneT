@@ -13,6 +13,23 @@ function renderEditor(onSave: (bindings: typeof DEFAULT_KEYBINDINGS) => void) {
 }
 
 describe('ShortcutEditor', () => {
+  it('captures standalone function keys but rejects unmodified printable keys', async () => {
+    const onSave = vi.fn();
+    renderEditor(onSave);
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByRole('button', { name: /rename current terminal \(currently F2\)/i }));
+    const capture = screen.getByRole('textbox', { name: /press a shortcut for rename current terminal/i });
+    fireEvent.keyDown(capture, { key: 'q' });
+    expect(capture).toBeInTheDocument();
+
+    fireEvent.keyDown(capture, { key: 'F3' });
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+    expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({ 'rename-pane': 'F3' }));
+    expect(screen.getByRole('button', { name: /rename current terminal \(currently F3\)/i })).toBeInTheDocument();
+  });
+
   it('preserves custom shortcuts when reset confirmation is cancelled', async () => {
     const onSave = vi.fn();
     renderEditor(onSave);

@@ -65,7 +65,9 @@ export type KeybindingAction =
   | 'snippets-toggle'
   | 'split-right'
   | 'split-down'
-  | 'close-pane';
+  | 'close-pane'
+  | 'rename-pane'
+  | 'rename-tab';
 
 export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'search-toggle': 'Ctrl+F',
@@ -79,6 +81,8 @@ export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'split-right': 'Ctrl+\\',
   'split-down': 'Ctrl+Shift+\\',
   'close-pane': 'Ctrl+Shift+W',
+  'rename-pane': 'F2',
+  'rename-tab': 'Ctrl+F2',
 };
 
 export interface AppSettings {
@@ -152,6 +156,7 @@ const MAX_SAVED_SESSION_TERMINALS = 64;
 const MAX_SAVED_PANE_DEPTH = 64;
 const MAX_SAVED_PANE_NODES = 128;
 const MAX_SAVED_PANE_LEAVES = 64;
+const MAX_SAVED_TITLE_LENGTH = 256;
 const MAX_WORKSPACE_STRING_LENGTH = 8_192;
 const MAX_SETTINGS_COLLECTION_ITEMS = 256;
 const MAX_KEYBINDINGS = 64;
@@ -469,6 +474,7 @@ function cloneSavedTab(value: unknown): SavedTab | undefined {
     !root
     || typeof tab.id !== 'string'
     || typeof tab.title !== 'string'
+    || tab.title.length > MAX_SAVED_TITLE_LENGTH
     || (tab.type !== 'local' && tab.type !== 'ssh')
   ) return undefined;
   return {
@@ -666,7 +672,11 @@ function cloneSavedPaneNodeWithinBudget(
     : sanitizeStartupCommands(candidate.startupCommands);
   return {
     type: 'leaf',
-    ...(typeof candidate.title === 'string' && candidate.title ? { title: candidate.title } : {}),
+    ...(typeof candidate.title === 'string'
+      && candidate.title.length <= MAX_SAVED_TITLE_LENGTH
+      && candidate.title
+      ? { title: candidate.title }
+      : {}),
     ...(terminalType ? { terminalType } : {}),
     ...(typeof candidate.cwd === 'string' && candidate.cwd ? { cwd: candidate.cwd } : {}),
     ...(typeof candidate.sshProfileId === 'string' && candidate.sshProfileId

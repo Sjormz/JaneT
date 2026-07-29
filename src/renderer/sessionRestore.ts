@@ -41,6 +41,7 @@ export interface SavedSession {
 const VALID_SECTIONS = new Set(['files', 'ssh', 'git', 'settings']);
 export const MAX_RESTORED_TABS = 64;
 export const MAX_RESTORED_TERMINALS = 64;
+export const MAX_SAVED_TITLE_LENGTH = 256;
 const MAX_PANE_TREE_DEPTH = 64;
 const MAX_PANE_TREE_NODES = 128;
 const MAX_PANE_TREE_LEAVES = 64;
@@ -141,7 +142,9 @@ function restorePaneTreeWithinBudget(
     const leaf: TerminalLeaf = {
       id: genId(prefix),
       type: 'leaf',
-      title: typeof node.title === 'string' ? node.title : undefined,
+      ...(typeof node.title === 'string' && node.title.length <= MAX_SAVED_TITLE_LENGTH
+        ? { title: node.title }
+        : {}),
       terminalType: node.terminalType === 'ssh' || node.terminalType === 'local' ? node.terminalType : undefined,
       cwd: typeof node.cwd === 'string' ? node.cwd : undefined,
       sshProfileId: typeof node.sshProfileId === 'string' ? node.sshProfileId : undefined,
@@ -251,7 +254,7 @@ function isValidSavedTab(value: unknown): value is SavedTab {
   const tab = value as Partial<SavedTab>;
   return (
     typeof tab.id === 'string' && tab.id.length > 0 &&
-    typeof tab.title === 'string' &&
+    typeof tab.title === 'string' && tab.title.length <= MAX_SAVED_TITLE_LENGTH &&
     (tab.type === 'local' || tab.type === 'ssh')
   );
 }

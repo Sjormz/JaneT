@@ -115,7 +115,12 @@ function TerminalPaneLeaf({
   const leafType = leaf.terminalType ?? tabType;
   const PaneTypeIcon = leafType === 'ssh' ? SSHIcon : TerminalTabIcon;
   const paneTypeLabel = leafType === 'ssh' ? 'SSH' : 'Local terminal';
-  const paneTitle = leaf.title?.trim();
+  const storedTitle = leaf.title?.trim();
+  const legacyTitle = leafType === 'ssh' ? 'ssh' : 'terminal';
+  const isLegacyUntypedSplitTitle = !leaf.terminalType && storedTitle?.toLowerCase() === 'terminal';
+  const paneTitle = storedTitle && storedTitle.toLowerCase() !== legacyTitle && !isLegacyUntypedSplitTitle
+    ? storedTitle
+    : leafType === 'ssh' ? 'SSH' : 'Terminal';
   const paneLabel = paneTitle ? `${paneTitle} — ${paneTypeLabel} pane` : `${paneTypeLabel} pane`;
   const paneActionContext = paneTitle ? `${paneTitle} (${paneTypeLabel})` : paneTypeLabel;
   const hasMultiplePanes = totalPaneCount > 1;
@@ -176,7 +181,10 @@ function TerminalPaneLeaf({
         onDragEnd={onPaneDragEnd}
       >
         <Tooltip label={paneLabel} placement="bottom">
-          <span className="leaf-title" aria-label={paneLabel}><PaneTypeIcon size="sm" /></span>
+          <span className="leaf-title" aria-label={paneLabel}>
+            <PaneTypeIcon size="sm" />
+            <span className="leaf-title-text">{paneTitle}</span>
+          </span>
         </Tooltip>
         <div className="leaf-actions">
           {hasMultiplePanes && (
