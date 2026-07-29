@@ -467,7 +467,7 @@ async function readWorkingTreeFile(repoPath: string, filePath: string): Promise<
   try {
     const [root, resolved] = await Promise.all([fs.promises.realpath(repoPath), fs.promises.realpath(candidate)]);
     const relative = path.relative(root, resolved);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    if (escapesParent(relative) || path.isAbsolute(relative)) {
       return textFileFailure('INVALID_REQUEST', 'The diff path escapes the repository.');
     }
 
@@ -481,7 +481,7 @@ async function readWorkingTreeFile(repoPath: string, filePath: string): Promise<
     ]);
     const reopenedRelative = path.relative(root, reopened);
     if (
-      reopenedRelative.startsWith('..')
+      escapesParent(reopenedRelative)
       || path.isAbsolute(reopenedRelative)
       || !sameCanonicalPath(resolved, reopened)
     ) {
@@ -538,6 +538,10 @@ function sameCanonicalPath(left: string, right: string): boolean {
   return process.platform === 'win32'
     ? path.normalize(left).toLocaleLowerCase() === path.normalize(right).toLocaleLowerCase()
     : path.normalize(left) === path.normalize(right);
+}
+
+function escapesParent(relativePath: string): boolean {
+  return relativePath === '..' || relativePath.startsWith(`..${path.sep}`);
 }
 
 function decodeSnapshot(bytes: Buffer): TextFileResult<string> {
