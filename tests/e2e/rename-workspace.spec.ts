@@ -58,10 +58,11 @@ async function launch(userData: string): Promise<ElectronApplication> {
 
 async function forceClose(app: ElectronApplication | undefined): Promise<void> {
   if (!app) return;
+  const closed = app.waitForEvent('close', { timeout: 5_000 }).catch(() => {});
   try {
     await app.evaluate(({ app: electronApp }) => electronApp.exit(0));
   } catch {}
-  await app.waitForEvent('close', { timeout: 5_000 }).catch(() => {});
+  await closed;
 }
 
 async function activeElementIs(page: Page, selector: string, index: number): Promise<boolean> {

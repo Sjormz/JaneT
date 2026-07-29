@@ -12,6 +12,7 @@ import {
 interface CachedModel {
   model: MonacoEditorNamespace.ITextModel;
   viewState: MonacoEditorNamespace.ICodeEditorViewState | null;
+  eolPreference?: MonacoEditorNamespace.EndOfLinePreference;
 }
 
 const cachedModels = new Map<string, CachedModel>();
@@ -88,7 +89,11 @@ export default function MonacoEditor({
       editorRef.current = instance;
       contentSubscription = instance.onDidChangeModelContent(() => {
         if (suppressChangeRef.current) return;
-        onChangeRef.current(instance.getValue());
+        const model = instance.getModel();
+        const eolPreference = cachedModels.get(activeKeyRef.current)?.eolPreference;
+        onChangeRef.current(model && eolPreference !== undefined
+          ? model.getValue(eolPreference)
+          : instance.getValue());
       });
       instance.addCommand(
         monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
@@ -185,9 +190,16 @@ function attachDocumentModel(
   const language = editorLanguageForPath(document.resolvedPath || document.requestedPath);
   if (!cached) {
     const uri = monaco.Uri.parse(editorDocumentModelUri(document));
+    const model = monaco.editor.createModel(document.content, language, uri);
+    const firstNewline = document.content.indexOf('\n');
     cached = {
-      model: monaco.editor.createModel(document.content, language, uri),
+      model,
       viewState: null,
+      ...(firstNewline < 0 ? {} : {
+        eolPreference: document.content.charCodeAt(firstNewline - 1) === 13
+          ? monaco.editor.EndOfLinePreference.CRLF
+          : monaco.editor.EndOfLinePreference.LF,
+      }),
     };
     cachedModels.set(document.key, cached);
   } else {

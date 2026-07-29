@@ -45,6 +45,7 @@ const api = {
   fsWriteTextFile: vi.fn(),
   sshReadTextFile: vi.fn(),
   sshWriteTextFile: vi.fn(),
+  gitDiff: vi.fn(),
 };
 
 beforeEach(() => {
@@ -71,10 +72,87 @@ beforeEach(() => {
       revision: revision('c'.repeat(64)),
     },
   }));
+  api.gitDiff.mockResolvedValue({
+    ok: true,
+    value: {
+      repoPath: '/repo',
+      filePath: 'src/app.ts',
+      side: 'staged',
+      originalContent: 'const value = 1;\n',
+      modifiedContent: 'const value = 2;\n',
+    },
+  });
   harness = render(<Harness />);
 });
 
 describe('useEditorDocuments', () => {
+  it('opens staged and working-tree previews as distinct read-only documents', async () => {
+    let stagedKey = '';
+    let unstagedKey = '';
+    await act(async () => {
+      stagedKey = await controller.openDocument('tab-1', {
+        kind: 'git-diff', repoPath: '/repo', path: 'src/app.ts', side: 'staged',
+      } as any);
+      api.gitDiff.mockResolvedValueOnce({
+        ok: true,
+        value: {
+          repoPath: '/repo', filePath: 'src/app.ts', side: 'unstaged',
+          originalContent: 'const value = 2;\n', modifiedContent: 'const value = 3;\n',
+        },
+      });
+      unstagedKey = await controller.openDocument('tab-1', {
+        kind: 'git-diff', repoPath: '/repo', path: 'src/app.ts', side: 'unstaged',
+      } as any);
+    });
+
+    expect(stagedKey).not.toBe(unstagedKey);
+    expect(api.gitDiff).toHaveBeenNthCalledWith(1, {
+      repoPath: '/repo', filePath: 'src/app.ts', side: 'staged',
+    });
+    expect(controller.documentsByTab['tab-1']).toEqual([
+      expect.objectContaining({ title: 'app.ts (Staged)', originalContent: 'const value = 1;\n', content: 'const value = 2;\n' }),
+      expect.objectContaining({ title: 'app.ts (Working)', originalContent: 'const value = 2;\n', content: 'const value = 3;\n' }),
+    ]);
+    act(() => controller.updateDocumentContent(unstagedKey, 'not allowed'));
+    await expect(controller.saveDocument(unstagedKey)).resolves.toBe('INVALID_REQUEST');
+    expect(controller.dirtyDocuments).toHaveLength(0);
+  });
+
+  it('refreshes an existing Git diff when its Source Control row is reopened', async () => {
+    const resource = {
+      kind: 'git-diff' as const,
+      repoPath: '/repo',
+      path: 'src/app.ts',
+      side: 'staged' as const,
+    };
+    let key = '';
+    await act(async () => {
+      key = await controller.openDocument('tab-1', resource);
+    });
+    api.gitDiff.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        repoPath: '/repo',
+        filePath: 'src/app.ts',
+        side: 'staged',
+        originalContent: 'const value = 2;\n',
+        modifiedContent: 'const value = 3;\n',
+      },
+    });
+
+    await act(async () => {
+      expect(await controller.openDocument('tab-1', resource)).toBe(key);
+    });
+
+    expect(api.gitDiff).toHaveBeenCalledTimes(2);
+    expect(controller.documentsByTab['tab-1']).toEqual([
+      expect.objectContaining({
+        originalContent: 'const value = 2;\n',
+        content: 'const value = 3;\n',
+      }),
+    ]);
+  });
+
   it('opens, deduplicates, edits, and saves the latest local content', async () => {
     let key = '';
     await act(async () => {

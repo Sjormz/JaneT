@@ -5,6 +5,7 @@ import type {
   TextFileResult,
   TextFileSnapshot,
 } from '../shared/textFiles';
+import type { GitDiffSnapshot } from '../shared/gitDiff';
 import {
   editorResourceKey,
   editorResourceTitle,
@@ -76,14 +77,21 @@ export function useEditorDocuments(): EditorDocumentsController {
       } : current;
     });
 
-    let result: TextFileResult<TextFileSnapshot>;
+    let result: TextFileResult<TextFileSnapshot | GitDiffSnapshot>;
     try {
       result = existing.resource.kind === 'local'
         ? await window.janet.fsReadTextFile({ filePath: existing.resource.path })
-        : await window.janet.sshReadTextFile({
+        : existing.resource.kind === 'ssh'
+          ? await window.janet.sshReadTextFile({
             sessionId: existing.resource.sessionId,
             connectionId: existing.resource.connectionId,
             remotePath: existing.resource.path,
+          })
+          : await window.janet.gitDiff({
+            repoPath: existing.resource.repoPath,
+            filePath: existing.resource.path,
+            side: existing.resource.side,
+            ...(existing.resource.originalPath ? { originalPath: existing.resource.originalPath } : {}),
           });
     } catch (error) {
       result = { ok: false, error: genericIoError(error instanceof Error ? error.message : 'The file could not be opened.') };
@@ -99,6 +107,21 @@ export function useEditorDocuments(): EditorDocumentsController {
           [key]: { ...document, loadState: 'error', saveState: 'idle', error: result.error },
         };
       }
+      if (document.resource.kind === 'git-diff' && 'modifiedContent' in result.value) {
+        return {
+          ...current,
+          [key]: {
+            ...document,
+            originalContent: result.value.originalContent,
+            content: result.value.modifiedContent,
+            savedContent: result.value.modifiedContent,
+            loadState: 'ready',
+            saveState: 'idle',
+            error: null,
+          },
+        };
+      }
+      if (!('content' in result.value)) return current;
       return {
         ...current,
         [key]: {
@@ -130,7 +153,16 @@ export function useEditorDocuments(): EditorDocumentsController {
         },
       };
     });
-    if (existing) return key;
+    if (existing) {
+      if (resource.kind === 'git-diff') {
+        commitDocuments((current) => {
+          const document = current[key];
+          return document ? { ...current, [key]: { ...document, resource } } : current;
+        });
+        await loadDocument(key);
+      }
+      return key;
+    }
 
     const document: EditorDocument = {
       key,
@@ -160,7 +192,12 @@ export function useEditorDocuments(): EditorDocumentsController {
   const updateDocumentContent = useCallback((key: string, content: string) => {
     commitDocuments((current) => {
       const document = current[key];
-      if (!document || document.loadState !== 'ready' || document.content === content) return current;
+      if (
+        !document
+        || document.resource.kind === 'git-diff'
+        || document.loadState !== 'ready'
+        || document.content === content
+      ) return current;
       return {
         ...current,
         [key]: { ...document, content, saveState: 'idle', error: null },
@@ -182,7 +219,12 @@ export function useEditorDocuments(): EditorDocumentsController {
 
     const operation = (async (): Promise<SaveOutcome> => {
       const document = documentsRef.current[key];
-      if (!document || document.loadState !== 'ready' || !document.revision) return 'INVALID_REQUEST';
+      if (
+        !document
+        || document.resource.kind === 'git-diff'
+        || document.loadState !== 'ready'
+        || !document.revision
+      ) return 'INVALID_REQUEST';
       const documentGeneration = requestGenerationRef.current.get(key) ?? 0;
       const contentAtSave = document.content;
       commitDocuments((current) => {

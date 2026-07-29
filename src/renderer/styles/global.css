@@ -580,6 +580,31 @@ html, body, #root {
   min-width: 0;
   flex: 1;
 }
+.workspace-tools-following {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.workspace-tools-following strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-tools-following code {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .workspace-tools.is-collapsed .workspace-tools-header {
   justify-content: center;
   padding: 8px;
@@ -1790,6 +1815,14 @@ html, body, #root {
 .git-branch-item:hover,
 .git-worktree-item:hover { background: var(--control-hover); }
 .git-branch-item.current { color: var(--text-accent); font-weight: 500; }
+.git-worktree-item.current {
+  color: var(--text-accent);
+  font-weight: 500;
+  background: color-mix(in srgb, var(--text-accent) 10%, transparent);
+  box-shadow: inset 2px 0 0 var(--text-accent);
+}
+.git-worktree-item.current:hover { background: color-mix(in srgb, var(--text-accent) 14%, transparent); }
+.git-worktree-item.open:not(.current) .git-row-note { color: var(--text-secondary); }
 .git-row-main {
   min-width: 0;
   flex: 1;

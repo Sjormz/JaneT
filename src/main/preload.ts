@@ -21,6 +21,7 @@ import type {
   WriteLocalTextFileRequest,
   WriteSSHTextFileRequest,
 } from '../shared/textFiles';
+import type { GitDiffRequest, GitDiffResult } from '../shared/gitDiff';
 
 export interface UpdateProgress {
   percent: number;
@@ -173,6 +174,8 @@ const api = {
     ipcRenderer.invoke('git:unstage', params),
   gitDiscard: (params: { repoPath: string; paths: string[] }) =>
     ipcRenderer.invoke('git:discard', params),
+  gitDiff: (params: GitDiffRequest): Promise<GitDiffResult> =>
+    ipcRenderer.invoke('git:diff', params),
   gitCommit: (params: { repoPath: string; message: string }) =>
     ipcRenderer.invoke('git:commit', params),
   gitFetch: (params: { repoPath: string }) =>

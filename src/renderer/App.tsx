@@ -120,7 +120,7 @@ function terminalFocusTarget(termId: string | null): HTMLTextAreaElement | null 
   if (!termId) return firstTerminalFocusTarget();
   const container = Array.from(document.querySelectorAll<HTMLElement>('[data-terminal-id]'))
     .find((candidate) => candidate.dataset.terminalId === termId);
-  return container?.querySelector<HTMLTextAreaElement>('textarea') ?? firstTerminalFocusTarget();
+  return container?.querySelector<HTMLTextAreaElement>('textarea') ?? null;
 }
 
 function displayPaneTitle(leaf: TerminalLeaf, tabType: 'local' | 'ssh'): string {
@@ -284,15 +284,19 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const liveTerminalIdsRef = useRef<Set<string>>(new Set());
   const restoreTerminalFocusRef = useRef(false);
+  const terminalFocusTargetIdRef = useRef<string | null>(null);
+  const terminalLastFocusedRef = useRef<Record<string, number>>({});
+  const terminalFocusSequenceRef = useRef(0);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
   const connectingSshSessionIdsRef = useRef<Set<string>>(new Set());
   const releasedSshSessionIdsRef = useRef<Set<string>>(new Set());
 
   useLayoutEffect(() => {
     if (!restoreTerminalFocusRef.current) return;
-    const target = firstTerminalFocusTarget();
+    const target = terminalFocusTarget(terminalFocusTargetIdRef.current);
     if (!target) return;
     restoreTerminalFocusRef.current = false;
+    terminalFocusTargetIdRef.current = null;
     target.focus();
   }, [activeTabId, tabs, terminalFocusRequest]);
 
@@ -380,6 +384,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   //   Defaults to the first leaf of the active tab so the sidebar is
   //   never blank.
   const [cwdByTerminal, setCwdByTerminal] = useState<Record<string, string>>({});
+  const cwdByTerminalRef = useRef(cwdByTerminal);
   const [focusedTerminalId, setFocusedTerminalId] = useState<string | null>(null);
   // Cached home directory — used as the fallback cwd before any OSC 7
   // has arrived or for SSH tabs.
@@ -546,7 +551,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         type: tab.type,
         cwd: tab.cwd,
         sshProfileId: tab.sshProfileId,
-        root: serializePaneTree(tab.root, cwdByTerminal, { includeStartupCommands: true }),
+        root: serializePaneTree(tab.root, cwdByTerminalRef.current, { includeStartupCommands: true }),
       })),
       activeTabId,
       sidebarOpen,
@@ -607,9 +612,11 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
 
   const updateTab = useCallback(
     (tabId: string, updater: (tab: TabInfo) => TabInfo) => {
-      setTabs((prev) =>
-        prev.map((t) => (t.id === tabId ? updater(t) : t)),
-      );
+      const next = tabsRef.current.map((tab) => (
+        tab.id === tabId ? updater(tab) : tab
+      ));
+      tabsRef.current = next;
+      setTabs(next);
     },
     [],
   );
@@ -625,9 +632,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const handleTerminalReady = useCallback((termId: string) => {
     liveTerminalIdsRef.current.add(termId);
     if (!restoreTerminalFocusRef.current) return;
-    const target = firstTerminalFocusTarget();
+    const target = terminalFocusTarget(terminalFocusTargetIdRef.current);
     if (!target) return;
     restoreTerminalFocusRef.current = false;
+    terminalFocusTargetIdRef.current = null;
     target.focus();
   }, []);
 
@@ -636,20 +644,22 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   // the sidebar, but we still store the cwd for every terminal so that
   // switching focus is instant.
   const handleCwdChange = useCallback((termId: string, cwd: string) => {
-    setCwdByTerminal((prev) => {
-      if (prev[termId] === cwd) return prev;
-      return { ...prev, [termId]: cwd };
-    });
+    if (cwdByTerminalRef.current[termId] === cwd) return;
+    const next = { ...cwdByTerminalRef.current, [termId]: cwd };
+    cwdByTerminalRef.current = next;
+    setCwdByTerminal(next);
   }, []);
 
   // Called by TerminalPane when a terminal gains focus. We track this
   // so the sidebar can react when the user clicks between split panes.
   const handleTerminalFocus = useCallback((termId: string) => {
+    terminalLastFocusedRef.current[termId] = ++terminalFocusSequenceRef.current;
     setFocusedTerminalId(termId);
   }, []);
 
   const selectTerminalTab = useCallback((tabId: string) => {
     restoreTerminalFocusRef.current = true;
+    terminalFocusTargetIdRef.current = null;
     setActiveTabId(tabId);
     editorDocuments.selectSurface(tabId, 'terminal');
     setTerminalFocusRequest((request) => request + 1);
@@ -1425,6 +1435,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     }
     return sidebarLeaf?.cwd || activeTab.cwd || homeDir;
   }, [activeTab.cwd, sidebarIsRemote, sidebarLeaf?.cwd, sidebarTerminalId, cwdByTerminal, homeDir]);
+  const followingTarget = useMemo(() => ({
+    label: sidebarLeaf ? displayPaneTitle(sidebarLeaf, activeTab.type) : activeTab.title,
+    path: sidebarIsRemote ? sidebarRemoteLabel : effectiveCwd,
+  }), [activeTab.title, activeTab.type, effectiveCwd, sidebarIsRemote, sidebarLeaf, sidebarRemoteLabel]);
   const explorerSource = useMemo<FileExplorerSource>(() => {
     if (sidebarIsRemote) {
       const sessionId = sidebarSshSessionId ?? '';
@@ -1454,6 +1468,43 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     sshConnectionEpochById,
   ]);
   const gitRepository = useGitRepository(effectiveCwd, !sidebarIsRemote);
+  const openLocalTerminals = useMemo(() => {
+    const terminals: Array<{ terminalId: string; cwd: string; lastFocused: number }> = [];
+    const collect = (tab: TabInfo, node: PaneNode) => {
+      if (node.type === 'split') {
+        node.children.forEach((child) => collect(tab, child));
+        return;
+      }
+      if ((node.terminalType ?? tab.type) !== 'local') return;
+      const cwd = cwdByTerminal[node.id] ?? node.cwd ?? tab.cwd;
+      if (!cwd) return;
+      terminals.push({
+        terminalId: node.id,
+        cwd,
+        lastFocused: terminalLastFocusedRef.current[node.id] ?? 0,
+      });
+    };
+    tabs.forEach((tab) => collect(tab, tab.root));
+    return terminals;
+  }, [cwdByTerminal, focusedTerminalId, tabs]);
+  const openTerminal = useCallback((terminalId: string) => {
+    const tab = tabsRef.current.find((candidate) => {
+      const leaf = findLeaf(candidate.root, terminalId);
+      return leaf && (leaf.terminalType ?? candidate.type) === 'local';
+    });
+    if (!tab) return;
+    terminalFocusTargetIdRef.current = terminalId;
+    restoreTerminalFocusRef.current = true;
+    setMaximizedLeafByTab((current) => (
+      current[tab.id] && current[tab.id] !== terminalId
+        ? { ...current, [tab.id]: null }
+        : current
+    ));
+    setFocusedTerminalId(terminalId);
+    setActiveTabId(tab.id);
+    editorDocuments.selectSurface(tab.id, 'terminal');
+    setTerminalFocusRequest((request) => request + 1);
+  }, [editorDocuments.selectSurface]);
   const gitStatus: GitStatusSummary | null = useMemo(
     () => gitRepository.repoPath && gitRepository.status
       ? summarizeGitStatus(gitRepository.repoPath, gitRepository.status)
@@ -1646,6 +1697,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       cwdReady={Boolean(effectiveCwd)}
       isRemote={sidebarIsRemote}
       gitRepository={gitRepository}
+      followingTarget={followingTarget}
+      openLocalTerminals={openLocalTerminals}
+      onOpenTerminal={openTerminal}
       onOpenLocalTabAt={openLocalTabAt}
       onCopyTerminalPath={copyTerminalPath}
       onOpenFile={openEditorFile}

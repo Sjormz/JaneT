@@ -1,6 +1,10 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import { execFile } from 'child_process';
 import { parseWorktreePorcelain, GitWorktreeInfo } from '../shared/gitWorktrees';
+import { decodeTextFile } from './textFileCodec';
+import { MAX_TEXT_FILE_BYTES, textFileFailure, type TextFileResult } from '../shared/textFiles';
+import type { GitDiffResult, GitDiffSide } from '../shared/gitDiff';
 
 let simpleGit: any = null;
 try {
@@ -10,12 +14,14 @@ try {
 }
 
 const MAX_GIT_LOG_ENTRIES = 1_000;
+const GIT_DIFF_READ_BUFFER_BYTES = MAX_TEXT_FILE_BYTES + 1;
 
 export interface GitStatusResult {
   current: string;
   tracking: string;
   files: Array<{
     path: string;
+    originalPath?: string;
     working_dir: string;
     index: string;
     staged: boolean;
@@ -33,7 +39,7 @@ export interface GitStatusResult {
 interface SimpleGitStatusLike {
   current?: string | null;
   tracking?: string | null;
-  files?: Array<{ path: string; working_dir: string; index: string }>;
+  files?: Array<{ path: string; from?: string; working_dir: string; index: string }>;
   staged?: string[];
   ahead?: number;
   behind?: number;
@@ -53,6 +59,7 @@ export function normalizeGitStatus(status: SimpleGitStatusLike): GitStatusResult
     const indexHasChange = Boolean(file.index && file.index !== ' ' && file.index !== '?' && file.index !== '!');
     return {
       path: file.path,
+      ...(file.from ? { originalPath: file.from } : {}),
       working_dir: file.working_dir,
       index: file.index,
       // FileStatusSummary has no `staged` property. Conflicts use index codes
@@ -270,6 +277,42 @@ export class GitManager {
     }
   }
 
+  async diff(repoPath: string, filePath: string, side: GitDiffSide, originalPath?: string): Promise<GitDiffResult> {
+    if (
+      !simpleGit
+      || typeof repoPath !== 'string'
+      || !path.isAbsolute(repoPath)
+      || !validGitPath(filePath)
+      || (side !== 'staged' && side !== 'unstaged')
+      || (originalPath !== undefined && (side !== 'staged' || !validGitPath(originalPath)))
+    ) {
+      return textFileFailure('INVALID_REQUEST', 'A repository, relative file path, and diff side are required.');
+    }
+
+    const repository = await resolveGitRepository(repoPath);
+    if (!repository.ok) return repository;
+
+    const original = side === 'staged'
+      ? await readGitBlob(repository.value, `HEAD:${originalPath ?? filePath}`)
+      : await readGitBlob(repository.value, `:${filePath}`);
+    const modified = side === 'staged'
+      ? await readGitBlob(repository.value, `:${filePath}`)
+      : await readWorkingTreeFile(repository.value, filePath);
+    if (!original.ok) return original;
+    if (!modified.ok) return modified;
+    return {
+      ok: true,
+      value: {
+        repoPath,
+        filePath,
+        side,
+        ...(originalPath ? { originalPath } : {}),
+        originalContent: original.value,
+        modifiedContent: modified.value,
+      },
+    };
+  }
+
   async commit(repoPath: string, message: string): Promise<boolean> {
     if (typeof message !== 'string') return false;
     const cleanMessage = message.trim();
@@ -356,4 +399,148 @@ function validGitPaths(paths: string[]): boolean {
   return Array.isArray(paths)
     && paths.length <= 10_000
     && paths.every((entry) => typeof entry === 'string' && entry.length > 0 && entry.length <= 32_768 && !entry.includes('\0'));
+}
+
+function validGitPath(filePath: unknown): filePath is string {
+  return typeof filePath === 'string'
+    && filePath.length > 0
+    && filePath.length <= 32_768
+    && !filePath.includes('\0')
+    && !path.isAbsolute(filePath)
+    && !filePath.split(/[\\/]/).includes('..');
+}
+
+async function readGitBlob(repoPath: string, object: string): Promise<TextFileResult<string>> {
+  const exists = await gitObjectExists(repoPath, object);
+  if (!exists.ok) return exists;
+  if (!exists.value) return { ok: true, value: '' };
+  return new Promise((resolve) => {
+    execFile(
+      'git', ['show', '--no-textconv', object],
+      { cwd: repoPath, encoding: 'buffer', maxBuffer: MAX_TEXT_FILE_BYTES + 1, windowsHide: true },
+      (error, stdout) => {
+        if (error) {
+          resolve(error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+            ? textFileFailure('TOO_LARGE', 'This diff side is larger than JaneT\'s 2 MiB editor limit.')
+            : textFileFailure('IO', 'This Git snapshot could not be read.'));
+          return;
+        }
+        resolve(decodeSnapshot(Buffer.from(stdout)));
+      },
+    );
+  });
+}
+
+async function resolveGitRepository(repoPath: string): Promise<TextFileResult<string>> {
+  try {
+    const resolved = await fs.promises.realpath(repoPath);
+    const gitEntry = await fs.promises.stat(path.join(resolved, '.git'));
+    return gitEntry.isDirectory() || gitEntry.isFile()
+      ? { ok: true, value: resolved }
+      : textFileFailure('IO', 'The repository is no longer available.');
+  } catch {
+    return textFileFailure('IO', 'The repository is no longer available.');
+  }
+}
+
+async function gitObjectExists(repoPath: string, object: string): Promise<TextFileResult<boolean>> {
+  return new Promise((resolve) => {
+    execFile(
+      'git', ['rev-parse', '--verify', '--quiet', object],
+      { cwd: repoPath, encoding: 'buffer', maxBuffer: 1_024, windowsHide: true },
+      (error) => {
+        if (!error) {
+          resolve({ ok: true, value: true });
+          return;
+        }
+        resolve(error.code === 1
+          ? { ok: true, value: false }
+          : textFileFailure('IO', 'Git could not inspect this snapshot.'));
+      },
+    );
+  });
+}
+
+async function readWorkingTreeFile(repoPath: string, filePath: string): Promise<TextFileResult<string>> {
+  const candidate = path.join(repoPath, filePath);
+  let handle: fs.promises.FileHandle | undefined;
+  try {
+    const [root, resolved] = await Promise.all([fs.promises.realpath(repoPath), fs.promises.realpath(candidate)]);
+    const relative = path.relative(root, resolved);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      return textFileFailure('INVALID_REQUEST', 'The diff path escapes the repository.');
+    }
+
+    const openFlags = process.platform === 'win32'
+      ? fs.constants.O_RDONLY
+      : fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK;
+    handle = await fs.promises.open(resolved, openFlags);
+    const [before, reopened] = await Promise.all([
+      handle.stat({ bigint: true }),
+      fs.promises.realpath(candidate),
+    ]);
+    const reopenedRelative = path.relative(root, reopened);
+    if (
+      reopenedRelative.startsWith('..')
+      || path.isAbsolute(reopenedRelative)
+      || !sameCanonicalPath(resolved, reopened)
+    ) {
+      return textFileFailure('INVALID_REQUEST', 'The diff path changed outside the repository while JaneT was opening it.');
+    }
+    const selected = await fs.promises.lstat(reopened, { bigint: true });
+    if (!before.isFile() || !selected.isFile()) {
+      return textFileFailure('NOT_FILE', 'The diff path is not a regular file.');
+    }
+    if (
+      before.dev !== selected.dev
+      || before.ino !== selected.ino
+      || (process.platform === 'win32' && before.ino === 0n)
+    ) {
+      return textFileFailure('CONFLICT', 'The diff path changed while JaneT was opening it.');
+    }
+    if (before.size > BigInt(MAX_TEXT_FILE_BYTES)) {
+      return textFileFailure('TOO_LARGE', 'This diff side is larger than JaneT\'s 2 MiB editor limit.');
+    }
+
+    const buffer = Buffer.allocUnsafe(GIT_DIFF_READ_BUFFER_BYTES);
+    let bytesRead = 0;
+    while (bytesRead < buffer.byteLength) {
+      const chunk = await handle.read(buffer, bytesRead, buffer.byteLength - bytesRead, bytesRead);
+      if (chunk.bytesRead === 0) break;
+      bytesRead += chunk.bytesRead;
+    }
+    const after = await handle.stat({ bigint: true });
+    if (bytesRead > MAX_TEXT_FILE_BYTES || after.size > BigInt(MAX_TEXT_FILE_BYTES)) {
+      return textFileFailure('TOO_LARGE', 'This diff side is larger than JaneT\'s 2 MiB editor limit.');
+    }
+    if (
+      before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.size !== after.size
+      || before.mtimeNs !== after.mtimeNs
+      || after.size !== BigInt(bytesRead)
+    ) {
+      return textFileFailure('CONFLICT', 'The working-tree file changed while JaneT was reading it.');
+    }
+    return decodeSnapshot(Buffer.from(buffer.subarray(0, bytesRead)));
+  } catch (error: any) {
+    return error?.code === 'ENOENT'
+      ? { ok: true, value: '' }
+      : textFileFailure('IO', 'The working-tree file could not be read.');
+  } finally {
+    if (handle) {
+      try { await handle.close(); } catch {}
+    }
+  }
+}
+
+function sameCanonicalPath(left: string, right: string): boolean {
+  return process.platform === 'win32'
+    ? path.normalize(left).toLocaleLowerCase() === path.normalize(right).toLocaleLowerCase()
+    : path.normalize(left) === path.normalize(right);
+}
+
+function decodeSnapshot(bytes: Buffer): TextFileResult<string> {
+  const decoded = decodeTextFile(bytes);
+  return decoded.ok ? { ok: true, value: decoded.value.content } : decoded;
 }

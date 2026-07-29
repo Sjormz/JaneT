@@ -20,6 +20,7 @@ const rendererMocks = vi.hoisted(() => ({
     termId: string,
     dimensions: { cols: number; rows: number },
   ) => void | Promise<void>>(),
+  cwdChangeHandlers: new Map<string, (termId: string, cwd: string) => void>(),
 }));
 
 vi.mock('../../src/renderer/components/Titlebar', () => ({
@@ -64,6 +65,12 @@ vi.mock('../../src/renderer/components/Sidebar', () => ({
               onClick={() => props.onOpenFile({ kind: 'local', path: '/home/test/sample.ts' })}
             >
               Open sample file
+            </button>
+            <button
+              type="button"
+              onClick={() => props.onOpenTerminal(props.openLocalTerminals.at(-1).terminalId)}
+            >
+              Focus last open terminal
             </button>
           </div>
         )}
@@ -122,6 +129,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     startupShellDialect,
     onReady,
     onRemoved,
+    onCwdChange,
     onFocus,
     onSshRetry,
   }: {
@@ -136,6 +144,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     startupShellDialect?: 'posix' | 'fish' | 'powershell';
     onReady?: (id: string) => void;
     onRemoved?: (id: string) => void;
+    onCwdChange?: (id: string, cwd: string) => void;
     onFocus?: (id: string) => void;
     onSshRetry?: (
       id: string,
@@ -143,6 +152,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     ) => void | Promise<void>;
   }) {
     if (onSshRetry) rendererMocks.sshRetryHandlers.set(termId, onSshRetry);
+    if (onCwdChange) rendererMocks.cwdChangeHandlers.set(termId, onCwdChange);
     const containerRef = React.useRef<HTMLDivElement>(null);
 
     React.useEffect(() => {
@@ -214,6 +224,7 @@ beforeEach(() => {
   rendererMocks.prepareForCloseHandler = null;
   rendererMocks.sshConnectionClosedHandler = null;
   rendererMocks.sshRetryHandlers.clear();
+  rendererMocks.cwdChangeHandlers.clear();
   Object.defineProperty(document, 'startViewTransition', {
     configurable: true,
     value: vi.fn((update: () => void) => {
@@ -814,6 +825,23 @@ describe('split panes in the app', () => {
     expect(document.startViewTransition).toHaveBeenCalledTimes(2);
   });
 
+  it('restores a maximized layout before focusing an existing worktree terminal', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    const hiddenTerminalId = screen.getAllByTestId(/terminal-/)[1].getAttribute('data-terminal-id')!;
+
+    fireEvent.click(screen.getAllByRole('button', { name: /maximize pane/i })[0]);
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+
+    act(() => rendererMocks.sidebarProps.onOpenTerminal(hiddenTerminalId));
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2);
+      expect(within(screen.getByTestId(`terminal-${hiddenTerminalId}`)).getByRole('textbox')).toHaveFocus();
+    });
+  });
+
   it('clears maximized state if the maximized pane is closed', async () => {
     render(<App />);
 
@@ -1316,6 +1344,46 @@ describe('split panes in the app', () => {
 
     const terminal = screen.getByTestId(/terminal-/);
     await waitFor(() => expect(within(terminal).getByRole('textbox')).toHaveFocus());
+  });
+
+  it('focuses an existing worktree terminal without creating another tab', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [],
+      session: {
+        tabs: [
+          { id: 'tab-1', title: 'main', type: 'local', cwd: 'C:/repo', root: { type: 'leaf', cwd: 'C:/repo' } },
+          { id: 'tab-2', title: 'cleanup', type: 'local', cwd: 'C:/worktrees/cleanup', root: { type: 'leaf', cwd: 'C:/worktrees/cleanup' } },
+        ],
+        activeTabId: 'tab-1',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'git',
+      },
+    });
+    render(<App />);
+    await waitFor(() => expect(rendererMocks.sidebarProps.openLocalTerminals).toHaveLength(2));
+    expect(within(screen.getByTestId('vertical-tab-bar')).getByText('main')).toBeInTheDocument();
+    expect(window.janet.terminalCreate).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Focus last open terminal' }));
+
+    await waitFor(() => {
+      const cleanupTab = rendererMocks.verticalTabBarProps.tabs.find((tab: { title: string }) => tab.title === 'cleanup');
+      expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(cleanupTab.id);
+      expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus();
+    });
+    expect(window.janet.terminalCreate).toHaveBeenCalledTimes(2);
+    expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2);
+  });
+
+  it('describes the terminal and cwd driving workspace tools', async () => {
+    render(<App />);
+
+    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget).toEqual({
+      label: 'Terminal',
+      path: '/home/test',
+    }));
   });
 
   it('does not create an unsaveable terminal tab beyond the session budget', async () => {
@@ -1949,6 +2017,56 @@ describe('unsaved editor shutdown handshake', () => {
       }),
     });
     expect(events).toEqual(['session', 'resolved']);
+  });
+
+  it('persists a cwd reported in the same batch as close preparation', async () => {
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    const terminalId = terminal.getAttribute('data-terminal-id')!;
+    const latestCwd = 'C:/repo/latest';
+
+    await act(async () => {
+      rendererMocks.cwdChangeHandlers.get(terminalId)!(terminalId, latestCwd);
+      await rendererMocks.prepareForCloseHandler!({
+        requestId: 'cwd-close',
+        reason: 'application-quit',
+      });
+    });
+
+    expect(window.janet.setSettings).toHaveBeenCalledWith({
+      session: expect.objectContaining({
+        tabs: [expect.objectContaining({
+          root: expect.objectContaining({
+            children: [expect.objectContaining({ cwd: latestCwd })],
+          }),
+        })],
+      }),
+    });
+  });
+
+  it('persists a tab rename reported in the same batch as close preparation', async () => {
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    const terminalInput = within(terminal).getByRole('textbox');
+    act(() => terminalInput.focus());
+    fireEvent.keyDown(terminalInput, { key: 'F2', ctrlKey: true });
+    const dialog = await screen.findByRole('dialog', { name: 'Rename tab' });
+    const nameInput = within(dialog).getByRole('textbox', { name: 'Tab name' });
+    fireEvent.change(nameInput, { target: { value: 'Latest workspace' } });
+
+    await act(async () => {
+      fireEvent.keyDown(nameInput, { key: 'Enter' });
+      await rendererMocks.prepareForCloseHandler!({
+        requestId: 'rename-close',
+        reason: 'application-quit',
+      });
+    });
+
+    expect(window.janet.setSettings).toHaveBeenCalledWith({
+      session: expect.objectContaining({
+        tabs: [expect.objectContaining({ title: 'Latest workspace' })],
+      }),
+    });
   });
 
   it('resolves close preparation as saved immediately when no file is dirty', async () => {

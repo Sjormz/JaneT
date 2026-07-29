@@ -14,6 +14,13 @@ export type EditorResource =
       connectionId: string;
       path: string;
       label: string;
+    }
+  | {
+      kind: 'git-diff';
+      repoPath: string;
+      path: string;
+      originalPath?: string;
+      side: 'staged' | 'unstaged';
     };
 
 export type EditorDocumentLoadState = 'loading' | 'ready' | 'error';
@@ -27,6 +34,7 @@ export interface EditorDocument {
   requestedPath: string;
   resolvedPath: string;
   content: string;
+  originalContent?: string;
   savedContent: string;
   hasUtf8Bom: boolean;
   revision: TextFileRevision | null;
@@ -41,18 +49,24 @@ export interface TabDocumentWorkspace {
 }
 
 export function editorResourceKey(resource: EditorResource): string {
-  return resource.kind === 'local'
-    ? `local:${resource.path}`
-    : `ssh:${resource.sessionId}:${resource.connectionId}:${resource.path}`;
+  if (resource.kind === 'local') return `local:${resource.path}`;
+  if (resource.kind === 'git-diff') return `git-diff:${resource.repoPath}:${resource.side}:${resource.path}`;
+  return `ssh:${resource.sessionId}:${resource.connectionId}:${resource.path}`;
 }
 
 export function editorResourceTitle(resource: EditorResource): string {
   const segments = resource.path.split(/[\\/]/).filter(Boolean);
-  return segments[segments.length - 1] || resource.path;
+  const title = segments[segments.length - 1] || resource.path;
+  return resource.kind === 'git-diff'
+    ? `${title} (${resource.side === 'staged' ? 'Staged' : 'Working'})`
+    : title;
 }
 
 export function editorModelUri(resource: EditorResource, resolvedPath = resource.path): string {
   if (resource.kind === 'local') return resolvedPath;
+  if (resource.kind === 'git-diff') {
+    return `janet-git-diff://${resource.side}/${encodeURIComponent(resource.path)}?repo=${encodeURIComponent(resource.repoPath)}`;
+  }
   const session = encodeURIComponent(resource.sessionId);
   const path = resolvedPath
     .split('/')
@@ -71,6 +85,9 @@ export function editorDocumentModelUri(document: EditorDocument): string {
   const resolvedPath = document.resolvedPath || document.resource.path;
   const owner = encodeURIComponent(document.ownerTabId);
   if (document.resource.kind === 'ssh') {
+    return `${editorModelUri(document.resource, resolvedPath)}&owner=${owner}`;
+  }
+  if (document.resource.kind === 'git-diff') {
     return `${editorModelUri(document.resource, resolvedPath)}&owner=${owner}`;
   }
 
@@ -133,7 +150,9 @@ export function editorLanguageForPath(filePath: string): string {
 }
 
 export function isEditorDocumentDirty(document: EditorDocument): boolean {
-  return document.loadState === 'ready' && document.content !== document.savedContent;
+  return document.resource.kind !== 'git-diff'
+    && document.loadState === 'ready'
+    && document.content !== document.savedContent;
 }
 
 export function emptyTabDocumentWorkspace(): TabDocumentWorkspace {
