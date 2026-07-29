@@ -193,7 +193,8 @@ async function waitForShellCreateCount(eventsPath: string, count: number) {
 }
 
 function ignoreBenignSshFixtureError(error: unknown) {
-  if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'EPIPE') return;
+  const code = error instanceof Error && (error as NodeJS.ErrnoException).code;
+  if (code === 'EPIPE' || code === 'ECONNABORTED' || code === 'ECONNRESET') return;
   throw error;
 }
 
