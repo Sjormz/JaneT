@@ -32,10 +32,34 @@ interface GitTreeProps {
   repoPath: string | null;
   status: GitStatusResult | null;
   searching: boolean;
+  openLocalTerminals?: Array<{ terminalId: string; cwd: string; lastFocused: number }>;
+  onOpenTerminal?: (terminalId: string) => void;
   onOpenLocalTabAt?: (cwd: string, title?: string) => void;
   onCopyTerminalPath?: (path: string) => Promise<void>;
   onOpenFile?: (resource: EditorResource) => void;
   mutationLock?: { current: { repoPath: string } | null };
+}
+
+function normalizeWorktreePath(value: string): string {
+  const path = value.replace(/\\/g, '/').replace(/\/+$/, '') || '/';
+  return /^[A-Za-z]:\//.test(path) || path.startsWith('//') ? path.toLowerCase() : path;
+}
+
+function sameWorktreePath(left: string, right: string): boolean {
+  return normalizeWorktreePath(left) === normalizeWorktreePath(right);
+}
+
+function worktreeContainsPath(worktreePath: string, candidatePath: string): boolean {
+  const root = normalizeWorktreePath(worktreePath);
+  const candidate = normalizeWorktreePath(candidatePath);
+  return candidate === root || candidate.startsWith(root === '/' ? '/' : `${root}/`);
+}
+
+function worktreeOwnsPath(worktreePath: string, candidatePath: string, worktreePaths: string[]): boolean {
+  const owner = worktreePaths
+    .filter((candidate) => worktreeContainsPath(candidate, candidatePath))
+    .sort((left, right) => normalizeWorktreePath(right).length - normalizeWorktreePath(left).length)[0];
+  return Boolean(owner && sameWorktreePath(owner, worktreePath));
 }
 
 type Section = 'branches' | 'changes' | 'staged' | 'worktrees';
@@ -63,6 +87,8 @@ export default function GitTree({
   repoPath,
   status,
   searching,
+  openLocalTerminals = [],
+  onOpenTerminal,
   onOpenLocalTabAt,
   onCopyTerminalPath,
   onOpenFile,
@@ -410,22 +436,35 @@ export default function GitTree({
           </div>
         }
       >
-        {worktrees.map((tree) => (
-          <div key={tree.path} className="git-worktree-item">
-            <Tooltip label={`Open ${tree.path} in a terminal`} placement="right">
-              <button className="git-row-main" onClick={() => onOpenLocalTabAt?.(tree.path, basename(tree.path))} aria-label={`Open worktree ${basename(tree.path)} in a terminal`}>
-                <FolderIcon size="xs" />
-                <span className="branch-name">{basename(tree.path)}</span>
-                <span className="git-row-note">{tree.path === repoPath && status?.current ? status.current : tree.branch || 'detached'}</span>
-              </button>
-            </Tooltip>
-            {tree.path !== repoPath && (
-              <Tooltip label={`Remove worktree ${basename(tree.path)}`} placement="left">
-                <button className="git-mini-btn danger" onClick={() => handleRemoveWorktree(tree)} disabled={busy} aria-label={`Remove worktree ${basename(tree.path)}`}><TrashIcon size="xs" /></button>
+        {worktrees.map((tree) => {
+          const current = sameWorktreePath(tree.path, repoPath);
+          const openTerminals = openLocalTerminals
+            .filter((terminal) => worktreeOwnsPath(tree.path, terminal.cwd, worktrees.map((candidate) => candidate.path)))
+            .sort((left, right) => right.lastFocused - left.lastFocused);
+          const openTerminal = openTerminals[0];
+          const open = Boolean(openTerminal);
+          const paneNote = openTerminals.length > 1 ? ` · ${openTerminals.length} panes` : open ? ' · open' : '';
+          return (
+            <div key={tree.path} className={`git-worktree-item${current ? ' current' : ''}${open ? ' open' : ''}`} aria-current={current ? 'location' : undefined}>
+              <Tooltip label={open ? `Focus terminal at ${tree.path}` : `Open ${tree.path} in a terminal`} placement="right">
+                <button
+                  className="git-row-main"
+                  onClick={() => openTerminal ? onOpenTerminal?.(openTerminal.terminalId) : onOpenLocalTabAt?.(tree.path, basename(tree.path))}
+                  aria-label={open ? `Focus worktree ${basename(tree.path)} terminal` : `Open worktree ${basename(tree.path)} in a terminal`}
+                >
+                  <FolderIcon size="xs" />
+                  <span className="branch-name">{basename(tree.path)}</span>
+                  <span className="git-row-note">{current && status?.current ? status.current : tree.branch || 'detached'}{paneNote}</span>
+                </button>
               </Tooltip>
-            )}
-          </div>
-        ))}
+              {!current && (
+                <Tooltip label={`Remove worktree ${basename(tree.path)}`} placement="left">
+                  <button className="git-mini-btn danger" onClick={() => handleRemoveWorktree(tree)} disabled={busy} aria-label={`Remove worktree ${basename(tree.path)}`}><TrashIcon size="xs" /></button>
+                </Tooltip>
+              )}
+            </div>
+          );
+        })}
       </GitSection>
 
       <Tooltip label={repoPath} placement="right">
@@ -468,8 +507,10 @@ export default function GitTree({
               key={file.path}
               repoPath={repoPath}
               path={file.path}
+              originalPath={file.originalPath}
               onCopyTerminalPath={onCopyTerminalPath}
               onOpenFile={onOpenFile}
+              diffSide="staged"
               action="unstage"
               busy={busy}
               onAction={() => runGitAction(() => window.janet.gitUnstage({ repoPath, paths: [file.path] }), `Unstaged ${file.path}`)}
@@ -525,6 +566,7 @@ export default function GitTree({
                 path={file.path}
                 onCopyTerminalPath={onCopyTerminalPath}
                 onOpenFile={onOpenFile}
+                diffSide="unstaged"
                 action="stage"
                 busy={busy}
                 onAction={() => runGitAction(() => window.janet.gitStage({ repoPath, paths: [file.path] }), `Staged ${file.path}`)}
@@ -733,6 +775,7 @@ function renderTreeNode(
         depth={depth}
         onCopyTerminalPath={onCopyTerminalPath}
         onOpenFile={onOpenFile}
+        diffSide="unstaged"
         action={onStage ? 'stage' : undefined}
         busy={busy}
         onAction={onStage ? () => onStage(child.file.path) : undefined}
@@ -779,15 +822,17 @@ function GitTreeDir({ name, depth, children }: { name: string; depth: number; ch
   );
 }
 
-function GitFile({ repoPath, path, kind, wd, index, depth, onCopyTerminalPath, onOpenFile, action, onAction, onDiscard, busy }: {
+function GitFile({ repoPath, path, originalPath, kind, wd, index, depth, onCopyTerminalPath, onOpenFile, diffSide, action, onAction, onDiscard, busy }: {
   repoPath: string;
   path: string;
+  originalPath?: string;
   kind: 'staged' | 'unstaged' | 'mixed' | 'conflicted';
   wd?: string;
   index?: string;
   depth?: number;
   onCopyTerminalPath?: (path: string) => Promise<void>;
   onOpenFile?: (resource: EditorResource) => void;
+  diffSide: 'staged' | 'unstaged';
   action?: 'stage' | 'unstage';
   onAction?: () => void;
   onDiscard?: () => void;
@@ -798,7 +843,8 @@ function GitFile({ repoPath, path, kind, wd, index, depth, onCopyTerminalPath, o
   const FileIcon = kind === 'unstaged' && !isDeleted && wd !== 'R' ? fileIconFor(path, false) : Icon;
   const indent = depth !== undefined ? { paddingLeft: 14 + depth * 14 } : undefined;
   const absolutePath = resolveRepositoryPath(repoPath, path);
-  const canOpen = !isDeleted;
+  const canPreview = kind !== 'conflicted';
+  const previewLabel = diffSide === 'staged' ? 'staged' : 'working-tree';
   const title = kind === 'mixed'
     ? 'Staged and modified in working tree'
     : kind === 'conflicted'
@@ -808,19 +854,25 @@ function GitFile({ repoPath, path, kind, wd, index, depth, onCopyTerminalPath, o
         : 'Working-tree change';
   return (
     <div className={`git-file-row ${onDiscard ? 'has-discard' : ''}`}>
-      <Tooltip label={canOpen
-        ? `${path}: ${title} · Open in editor or drag into a terminal`
-        : `${path}: Deleted from the working tree; there is no file to open`} placement="right">
+      <Tooltip label={canPreview
+        ? `${path}: ${title} · Open ${previewLabel} diff${isDeleted ? '' : ' or drag into a terminal'}`
+        : `${path}: Merge conflicts are not previewed in JaneT`} placement="right">
         <button
           type="button"
           className={`git-file-item ${kind}`}
           style={indent}
-          aria-label={canOpen ? `Open file ${path}: ${title}` : `${path}: Deleted from the working tree`}
-          aria-disabled={!canOpen}
+          aria-label={canPreview ? `Open ${previewLabel} diff for ${path}` : `${path}: Merge conflict`}
+          aria-disabled={!canPreview}
           onClick={() => {
-            if (canOpen) onOpenFile?.({ kind: 'local', path: absolutePath });
+            if (canPreview) onOpenFile?.({
+              kind: 'git-diff',
+              repoPath,
+              path,
+              ...(diffSide === 'staged' && originalPath ? { originalPath } : {}),
+              side: diffSide,
+            });
           }}
-          draggable
+          draggable={!isDeleted}
           onDragStart={(event) => {
             const started = beginTerminalPathDrag(event.dataTransfer, {
               version: 1,

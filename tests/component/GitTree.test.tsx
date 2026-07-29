@@ -94,6 +94,85 @@ afterEach(() => {
 });
 
 describe('GitTree live refresh', () => {
+  it('highlights the worktree containing the focused terminal', async () => {
+    gitDetails.mockResolvedValue({
+      branches: [
+        { name: 'main', current: false, label: 'main', isRemote: false },
+        { name: 'feature/cleanup', current: true, label: 'feature/cleanup', isRemote: false },
+      ],
+      worktrees: [
+        { path: 'C:/x/z', head: 'abc123', branch: 'main', bare: false, detached: false },
+        { path: 'C:/x/y', head: 'def456', branch: 'feature/cleanup', bare: false, detached: false },
+      ],
+    });
+
+    render(
+      <GitTree
+        cwdReady
+        isRemote={false}
+        repoPath={'C:\\x\\y'}
+        status={{ ...cleanStatus, current: 'feature/cleanup' }}
+        searching={false}
+      />,
+    );
+
+    const current = (await screen.findByRole('button', { name: 'Open worktree y in a terminal' }))
+      .closest('.git-worktree-item');
+    expect(current).toHaveClass('current');
+    expect(current).toHaveAttribute('aria-current', 'location');
+    expect(screen.getByRole('button', { name: 'Open worktree z in a terminal' }).closest('.git-worktree-item'))
+      .not.toHaveClass('current');
+  });
+
+  it('focuses the most recently used terminal for an open worktree instead of creating another', async () => {
+    gitDetails.mockResolvedValue({
+      branches: [
+        { name: 'main', current: true, label: 'main', isRemote: false },
+        { name: 'feature/cleanup', current: false, label: 'feature/cleanup', isRemote: false },
+      ],
+      worktrees: [
+        { path: 'C:/repo', head: 'abc123', branch: 'main', bare: false, detached: false },
+        { path: 'C:/worktrees/cleanup', head: 'def456', branch: 'feature/cleanup', bare: false, detached: false },
+        { path: 'C:/worktrees/cleanup/nested', head: 'fed987', branch: 'feature/nested', bare: false, detached: false },
+      ],
+    });
+    const onOpenTerminal = vi.fn();
+    const onOpenLocalTabAt = vi.fn();
+    render(
+      <GitTree
+        cwdReady
+        isRemote={false}
+        repoPath="C:/repo"
+        status={cleanStatus}
+        searching={false}
+        openLocalTerminals={[
+          { terminalId: 'older', cwd: 'C:/worktrees/cleanup/src', lastFocused: 2 },
+          { terminalId: 'newer', cwd: 'C:\\worktrees\\cleanup\\tests', lastFocused: 7 },
+          { terminalId: 'nested', cwd: 'C:/worktrees/cleanup/nested/src', lastFocused: 8 },
+          { terminalId: 'main', cwd: 'C:/repo', lastFocused: 9 },
+        ]}
+        onOpenTerminal={onOpenTerminal}
+        onOpenLocalTabAt={onOpenLocalTabAt}
+      />,
+    );
+
+    const cleanup = await screen.findByRole('button', { name: 'Focus worktree cleanup terminal' });
+    expect(cleanup).toHaveTextContent('feature/cleanup · 2 panes');
+    expect(cleanup.closest('.git-worktree-item')).toHaveClass('open');
+    fireEvent.click(cleanup);
+
+    expect(onOpenTerminal).toHaveBeenCalledWith('newer');
+    expect(onOpenLocalTabAt).not.toHaveBeenCalled();
+
+    const nested = screen.getByRole('button', { name: 'Focus worktree nested terminal' });
+    expect(nested).toHaveTextContent('feature/nested · open');
+    fireEvent.click(nested);
+    expect(onOpenTerminal).toHaveBeenLastCalledWith('nested');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Focus worktree repo terminal' }));
+    expect(onOpenTerminal).toHaveBeenLastCalledWith('main');
+  });
+
   it('puts worktrees first and keeps create actions compact in their section headers', async () => {
     gitDetails.mockResolvedValue(details('main'));
     render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={cleanStatus} searching={false} />);
@@ -505,7 +584,7 @@ describe('GitTree live refresh', () => {
     view.unmount();
   });
 
-  it('shows files that are both staged and modified in both Git states', async () => {
+  it('opens distinct staged and working-tree previews for mixed files', async () => {
     gitDetails.mockResolvedValue(details('main'));
     const onOpenFile = vi.fn();
     const mixedStatus: GitStatusResult = {
@@ -523,22 +602,66 @@ describe('GitTree live refresh', () => {
         onOpenFile={onOpenFile}
       />,
     );
-    const fileButtons = screen.getAllByRole('button', {
-      name: 'Open file src/mixed.ts: Staged and modified in working tree',
-    });
-    expect(fileButtons).toHaveLength(2);
-    expect(fileButtons[0]).toHaveClass('mixed');
-    expect(fileButtons[1]).toHaveClass('mixed');
+    const stagedPreview = screen.getByRole('button', { name: 'Open staged diff for src/mixed.ts' });
+    const workingPreview = screen.getByRole('button', { name: 'Open working-tree diff for src/mixed.ts' });
+    expect(stagedPreview).toHaveClass('mixed');
+    expect(workingPreview).toHaveClass('mixed');
     expect(screen.getByRole('button', { name: 'Unstage src/mixed.ts' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Stage src/mixed.ts' })).toBeInTheDocument();
 
-    fireEvent.click(fileButtons[1]);
-    expect(onOpenFile).toHaveBeenCalledOnce();
-    expect(onOpenFile).toHaveBeenCalledWith({ kind: 'local', path: '/repo/src/mixed.ts' });
+    fireEvent.click(stagedPreview);
+    fireEvent.click(workingPreview);
+    expect(onOpenFile).toHaveBeenNthCalledWith(1, {
+      kind: 'git-diff', repoPath: '/repo', path: 'src/mixed.ts', side: 'staged',
+    });
+    expect(onOpenFile).toHaveBeenNthCalledWith(2, {
+      kind: 'git-diff', repoPath: '/repo', path: 'src/mixed.ts', side: 'unstaged',
+    });
     view.unmount();
   });
 
-  it('explains deleted entries to keyboard users and never opens their missing path', async () => {
+  it('opens a staged rename preview from its original Git path', () => {
+    gitDetails.mockResolvedValue(details('main'));
+    const onOpenFile = vi.fn();
+    const renamedStatus: GitStatusResult = {
+      ...cleanStatus,
+      files: [{
+        path: 'src/new-name.ts',
+        originalPath: 'src/old-name.ts',
+        working_dir: 'M',
+        index: 'R',
+        staged: true,
+        unstaged: true,
+      }],
+    };
+
+    const view = render(
+      <GitTree
+        cwdReady
+        isRemote={false}
+        repoPath="/repo"
+        status={renamedStatus}
+        searching={false}
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open staged diff for src/new-name.ts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open working-tree diff for src/new-name.ts' }));
+    expect(onOpenFile).toHaveBeenNthCalledWith(1, {
+      kind: 'git-diff',
+      repoPath: '/repo',
+      path: 'src/new-name.ts',
+      originalPath: 'src/old-name.ts',
+      side: 'staged',
+    });
+    expect(onOpenFile).toHaveBeenNthCalledWith(2, {
+      kind: 'git-diff', repoPath: '/repo', path: 'src/new-name.ts', side: 'unstaged',
+    });
+    view.unmount();
+  });
+
+  it('previews deleted entries against an empty Git side without dragging their missing path', async () => {
     gitDetails.mockResolvedValue(details('main'));
     const onOpenFile = vi.fn();
     const deletedStatus: GitStatusResult = {
@@ -557,20 +680,20 @@ describe('GitTree live refresh', () => {
         onOpenFile={onOpenFile}
       />,
     );
-    const deleted = await screen.findByRole('button', {
-      name: 'src/removed.ts: Deleted from the working tree',
-    });
+    const deleted = await screen.findByRole('button', { name: 'Open staged diff for src/removed.ts' });
 
     act(() => deleted.focus());
     expect(deleted).toHaveFocus();
-    expect(deleted).toHaveAttribute('aria-disabled', 'true');
+    expect(deleted).toHaveAttribute('aria-disabled', 'false');
+    expect(deleted).toHaveAttribute('draggable', 'false');
     expect(deleted).toHaveAttribute(
       'data-tooltip-label',
-      'src/removed.ts: Deleted from the working tree; there is no file to open',
+      'src/removed.ts: Staged change · Open staged diff',
     );
-    fireEvent.keyDown(deleted, { key: 'Enter' });
     fireEvent.click(deleted);
-    expect(onOpenFile).not.toHaveBeenCalled();
+    expect(onOpenFile).toHaveBeenCalledWith({
+      kind: 'git-diff', repoPath: '/repo', path: 'src/removed.ts', side: 'staged',
+    });
     view.unmount();
   });
 
@@ -607,7 +730,7 @@ describe('GitTree live refresh', () => {
       origin: 'source-control',
       filesystem: { kind: 'local' },
     });
-    expect(row).toHaveAttribute('aria-label', 'Open file src/mixed.ts: Staged and modified in working tree');
+    expect(row).toHaveAttribute('aria-label', 'Open working-tree diff for src/mixed.ts');
     const copyButton = changedRow.querySelector('.terminal-path-copy-button')!;
     expect(copyButton).not.toHaveAttribute('draggable', 'true');
     fireEvent.click(copyButton);
@@ -663,7 +786,9 @@ describe('GitTree live refresh', () => {
     fireEvent.dragEnd(row, { dataTransfer });
     fireEvent.click(row);
     expect(onOpenFile).toHaveBeenCalledOnce();
-    expect(onOpenFile).toHaveBeenCalledWith({ kind: 'local', path: 'C:/repo/src/nested/app.ts' });
+    expect(onOpenFile).toHaveBeenCalledWith({
+      kind: 'git-diff', repoPath: 'C:/repo', path: 'src/nested/app.ts', side: 'unstaged',
+    });
     view.unmount();
   });
 });

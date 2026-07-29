@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildAddWorktreeArgs, GitManager, normalizeGitStatus } from '../../src/main/git';
 
 const temporaryDirectories: string[] = [];
@@ -63,6 +63,21 @@ describe('normalizeGitStatus', () => {
     ]);
     expect(result.conflicted).toEqual(['conflict.ts']);
   });
+
+  it('preserves the original path reported for a rename', () => {
+    expect(normalizeGitStatus({
+      files: [{ path: 'new-name.ts', from: 'old-name.ts', index: 'R', working_dir: ' ' }],
+    }).files).toEqual([
+      {
+        path: 'new-name.ts',
+        originalPath: 'old-name.ts',
+        index: 'R',
+        working_dir: ' ',
+        staged: true,
+        unstaged: false,
+      },
+    ]);
+  });
 });
 
 describe('buildAddWorktreeArgs', () => {
@@ -83,6 +98,141 @@ describe('buildAddWorktreeArgs', () => {
 });
 
 describe('GitManager working tree actions', { timeout: 30_000 }, () => {
+  it('returns bounded staged and working-tree text snapshots for diff previews', async () => {
+    const repository = initializeRepository();
+    const manager = new GitManager();
+    const tracked = path.join(repository, 'base.txt');
+    fs.writeFileSync(tracked, 'staged\n');
+    git(repository, 'add', 'base.txt');
+    fs.writeFileSync(tracked, 'working\n');
+
+    await expect((manager as any).diff(repository, 'base.txt', 'staged')).resolves.toEqual({
+      ok: true,
+      value: expect.objectContaining({
+        side: 'staged', originalContent: 'base\n', modifiedContent: 'staged\n',
+      }),
+    });
+    await expect((manager as any).diff(repository, 'base.txt', 'unstaged')).resolves.toEqual({
+      ok: true,
+      value: expect.objectContaining({
+        side: 'unstaged', originalContent: 'staged\n', modifiedContent: 'working\n',
+      }),
+    });
+  });
+
+  it('reads the original Git path for a staged rename preview', async () => {
+    const repository = initializeRepository();
+    const manager = new GitManager();
+    git(repository, 'mv', 'base.txt', 'renamed.txt');
+    fs.writeFileSync(path.join(repository, 'renamed.txt'), 'renamed\n');
+    git(repository, 'add', 'renamed.txt');
+
+    await expect((manager.diff as any)(repository, 'renamed.txt', 'staged', 'base.txt')).resolves.toMatchObject({
+      ok: true,
+      value: {
+        filePath: 'renamed.txt',
+        originalPath: 'base.txt',
+        originalContent: 'base\n',
+        modifiedContent: 'renamed\n',
+      },
+    });
+    await expect((manager.diff as any)(repository, 'renamed.txt', 'staged', '../base.txt')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_REQUEST' },
+    });
+  });
+
+  it('uses empty snapshots for added or deleted sides and rejects unsafe preview content', async () => {
+    const repository = initializeRepository();
+    const manager = new GitManager();
+    fs.writeFileSync(path.join(repository, 'added.txt'), 'added\n');
+    git(repository, 'add', 'added.txt');
+    git(repository, 'rm', 'base.txt');
+
+    await expect((manager as any).diff(repository, 'added.txt', 'staged')).resolves.toMatchObject({
+      ok: true, value: { originalContent: '', modifiedContent: 'added\n' },
+    });
+    await expect((manager as any).diff(repository, 'base.txt', 'staged')).resolves.toMatchObject({
+      ok: true, value: { originalContent: 'base\n', modifiedContent: '' },
+    });
+    await expect((manager as any).diff(repository, '../outside.txt', 'unstaged')).resolves.toMatchObject({
+      ok: false, error: { code: 'INVALID_REQUEST' },
+    });
+
+    fs.writeFileSync(path.join(repository, 'binary.bin'), Buffer.from([0, 1, 2]));
+    await expect((manager as any).diff(repository, 'binary.bin', 'unstaged')).resolves.toMatchObject({
+      ok: false, error: { code: 'BINARY' },
+    });
+    fs.writeFileSync(path.join(repository, 'large.txt'), Buffer.alloc(2 * 1024 * 1024 + 1, 97));
+    await expect((manager as any).diff(repository, 'large.txt', 'unstaged')).resolves.toMatchObject({
+      ok: false, error: { code: 'TOO_LARGE' },
+    });
+    await expect(manager.diff(path.join(repository, 'missing'), 'base.txt', 'staged')).resolves.toMatchObject({
+      ok: false, error: { code: 'IO' },
+    });
+  });
+
+  it('keeps a working-tree preview bound to the checked in-repository file', async () => {
+    const repository = initializeRepository();
+    const manager = new GitManager();
+    const tracked = path.join(repository, 'base.txt');
+    const outside = path.join(temporaryDirectory('janet-git-outside-'), 'secret.txt');
+    fs.writeFileSync(tracked, 'working\n');
+    fs.writeFileSync(outside, 'outside secret\n');
+    const readFile = fs.promises.readFile;
+    const pathnameRead = vi.spyOn(fs.promises, 'readFile').mockImplementation((async (
+      target: any,
+      options?: any,
+    ) => readFile.call(
+      fs.promises,
+      path.resolve(String(target)) === path.resolve(tracked) ? outside : target,
+      options,
+    )) as any);
+
+    try {
+      await expect(manager.diff(repository, 'base.txt', 'unstaged')).resolves.toMatchObject({
+        ok: true,
+        value: { modifiedContent: 'working\n' },
+      });
+    } finally {
+      pathnameRead.mockRestore();
+    }
+  });
+
+  it('rejects a working-tree path redirected after repository containment is checked', async () => {
+    const repository = initializeRepository();
+    const manager = new GitManager();
+    const tracked = path.join(repository, 'base.txt');
+    const outside = path.join(temporaryDirectory('janet-git-outside-'), 'secret.txt');
+    fs.writeFileSync(tracked, 'working\n');
+    fs.writeFileSync(outside, 'outside secret\n');
+    const open = fs.promises.open;
+    const lstat = fs.promises.lstat;
+    const realpath = fs.promises.realpath;
+    let redirected = false;
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (target: any, flags: any) => {
+      if (path.resolve(String(target)) === path.resolve(tracked)) redirected = true;
+      return open.call(fs.promises, redirected ? outside : target, flags);
+    }) as any);
+    const lstatSpy = vi.spyOn(fs.promises, 'lstat').mockImplementation((async (target: any, options?: any) => (
+      lstat.call(fs.promises, redirected ? outside : target, options)
+    )) as any);
+    const realpathSpy = vi.spyOn(fs.promises, 'realpath').mockImplementation((async (target: any, options?: any) => (
+      realpath.call(fs.promises, redirected && path.resolve(String(target)) === path.resolve(tracked) ? outside : target, options)
+    )) as any);
+
+    try {
+      await expect(manager.diff(repository, 'base.txt', 'unstaged')).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'INVALID_REQUEST' },
+      });
+    } finally {
+      openSpy.mockRestore();
+      lstatSpy.mockRestore();
+      realpathSpy.mockRestore();
+    }
+  });
+
   it('rejects invalid and unbounded Git history limits while accepting the exact ceiling', async () => {
     const repository = initializeRepository();
     const manager = new GitManager();

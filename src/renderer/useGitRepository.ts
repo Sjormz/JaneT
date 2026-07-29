@@ -3,7 +3,7 @@ import { useRefreshTask } from './refreshCoordinator';
 
 export interface GitStatusResult {
   current: string;
-  files: Array<{ path: string; working_dir: string; index: string; staged: boolean; unstaged: boolean }>;
+  files: Array<{ path: string; originalPath?: string; working_dir: string; index: string; staged: boolean; unstaged: boolean }>;
   ahead: number;
   behind: number;
   created: string[];
@@ -113,6 +113,7 @@ function gitStatusesEqual(left: GitStatusResult | null, right: GitStatusResult):
     const candidate = right.files[index];
     return candidate !== undefined &&
       file.path === candidate.path &&
+      file.originalPath === candidate.originalPath &&
       file.working_dir === candidate.working_dir &&
       file.index === candidate.index &&
       file.staged === candidate.staged &&

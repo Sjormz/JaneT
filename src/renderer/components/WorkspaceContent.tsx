@@ -11,6 +11,7 @@ import {
   XCloseIcon,
 } from '../icons';
 import MonacoEditor from './MonacoEditor';
+import MonacoDiffEditor from './MonacoDiffEditor';
 import Tooltip from './Tooltip';
 
 interface WorkspaceContentProps {
@@ -120,7 +121,7 @@ export default function WorkspaceContent({
             );
           })}
         </div>
-        {activeDocument?.loadState === 'ready' && (
+        {activeDocument?.loadState === 'ready' && activeDocument.resource.kind !== 'git-diff' && (
           <Tooltip label={activeDocument.saveState === 'saving' ? 'Saving file' : 'Save file'} placement="bottom">
             <button
               type="button"
@@ -155,6 +156,13 @@ export default function WorkspaceContent({
               <span>{activeDocument.error?.message ?? 'The file could not be opened.'}</span>
               <button type="button" onClick={() => onRetryDocument(activeDocument.key)}>Try again</button>
             </div>
+          ) : activeDocument.resource.kind === 'git-diff' ? (
+            <MonacoDiffEditor
+              document={activeDocument}
+              themeName={themeName}
+              fontSize={fontSize}
+              fontFamily={fontFamily}
+            />
           ) : (
             <MonacoEditor
               document={activeDocument}

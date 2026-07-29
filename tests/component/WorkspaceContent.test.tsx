@@ -21,6 +21,12 @@ vi.mock('../../src/renderer/components/MonacoEditor', () => ({
   ),
 }));
 
+vi.mock('../../src/renderer/components/MonacoDiffEditor', () => ({
+  default: ({ document }: { document: EditorDocument }) => (
+    <div data-testid="monaco-diff-editor" data-document-key={document.key} />
+  ),
+}));
+
 const revision = {
   token: 'a'.repeat(64),
   size: 12,
@@ -162,6 +168,20 @@ describe('WorkspaceContent tabs', () => {
 });
 
 describe('WorkspaceContent actions and states', () => {
+  it('renders Git previews in a read-only diff surface without save controls', () => {
+    const diff = documentFixture('diff:staged', 'app.ts (Staged)', {
+      resource: { kind: 'git-diff', repoPath: '/repo', path: 'src/app.ts', side: 'staged' } as any,
+      originalContent: 'const value = 1;\n',
+      content: 'const value = 2;\n',
+      savedContent: 'const value = 2;\n',
+      revision: null,
+    } as any);
+    renderWorkspace({ documents: [diff], activeSurface: diff.key });
+
+    expect(screen.getByTestId('monaco-diff-editor')).toHaveAttribute('data-document-key', diff.key);
+    expect(screen.queryByRole('button', { name: /Save app\.ts/ })).not.toBeInTheDocument();
+  });
+
   it('forwards editor changes, editor saves, toolbar saves, and closes by document key', () => {
     const dirty = documentFixture('document:first', 'first.ts', {
       content: 'unsaved content',
