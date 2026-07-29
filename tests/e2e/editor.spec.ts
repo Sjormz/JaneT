@@ -91,19 +91,8 @@ async function replaceEditorContent(page: Page, editor: Locator, content: string
   await page.keyboard.press('Backspace');
   await expect.poll(() => renderedEditorLines(editor)).toEqual(['']);
 
-  let typedContent = '';
-  for (const character of content) {
-    // Monaco's native edit context can settle its caret after key dispatch, so
-    // reassert the append position before sending each next real key event.
-    await page.keyboard.press('End');
-    if (character === '\n') {
-      await page.keyboard.press('Enter');
-    } else {
-      await page.keyboard.type(character);
-    }
-    typedContent += character;
-    await expect.poll(() => renderedEditorLines(editor)).toEqual(typedContent.split('\n'));
-  }
+  await page.keyboard.insertText(content);
+  await expect.poll(() => renderedEditorLines(editor)).toEqual(content.split('\n'));
 }
 
 test('edits a local file with Monaco under the packaged JaneT origin', async ({}, testInfo) => {
