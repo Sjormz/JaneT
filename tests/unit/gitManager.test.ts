@@ -172,6 +172,17 @@ describe('GitManager working tree actions', { timeout: 30_000 }, () => {
     });
   });
 
+  it('previews repository filenames that begin with two dots', async () => {
+    const repository = initializeRepository();
+    const manager = new GitManager();
+    fs.writeFileSync(path.join(repository, '..config'), 'valid\n');
+
+    await expect(manager.diff(repository, '..config', 'unstaged')).resolves.toMatchObject({
+      ok: true,
+      value: { originalContent: '', modifiedContent: 'valid\n' },
+    });
+  });
+
   it('keeps a working-tree preview bound to the checked in-repository file', async () => {
     const repository = initializeRepository();
     const manager = new GitManager();
