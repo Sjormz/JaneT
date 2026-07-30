@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import VerticalTabBar from '../../src/renderer/components/VerticalTabBar';
 import { SavedSSHProfile, TabInfo, WorkspaceTabPreset } from '../../src/renderer/types';
+import type { AgentStatus } from '../../src/renderer/terminalAwareness';
 
 const sshProfiles: SavedSSHProfile[] = [{
   id: 'pckpr@box.local:22:password',
@@ -682,6 +683,14 @@ describe('VerticalTabBar', () => {
     expect(screen.getByRole('button', { name: /Main app Local/i })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: /SSH box SSH/i })).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('group', { name: 'Terminal tabs' })).toBeInTheDocument();
+  });
+
+  it('uses the aggregate agent status as the compact tab subtitle', () => {
+    const status: AgentStatus = { kind: 'finished', label: 'Hermes · Turn finished' };
+    renderTabs({ awarenessByTab: { 'tab-2': status } });
+
+    expect(screen.getByText('Hermes · Turn finished')).toHaveClass('vtab-sub', 'finished');
+    expect(screen.getByRole('button', { name: /SSH box Hermes · Turn finished/i })).toBeInTheDocument();
   });
 
   it('explains why an SSH preset cannot be created without a saved connection', () => {

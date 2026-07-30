@@ -5,6 +5,7 @@ import { KeybindingsProvider } from '../../src/renderer/KeybindingsContext';
 import { refreshCoordinator } from '../../src/renderer/refreshCoordinator';
 import { fileUrlToPath } from '../../src/renderer/osc7';
 import { requestTerminalSearch } from '../../src/renderer/terminalSearch';
+import type { AgentLifecycleEvent } from '../../src/renderer/terminalAwareness';
 import {
   beginTerminalPathDrag,
   endTerminalPathDrag,
@@ -383,6 +384,43 @@ describe('TerminalPane SSH reinitialization', () => {
     const term = MockTerminal.instances[0];
     expect(term.loadAddon.mock.calls[0][0]).toBeInstanceOf(MockUnicode11Addon);
     expect(term.unicode.activeVersion).toBe('11');
+  });
+
+  it('consumes only JaneT agent OSC 777 events and binds them to this terminal', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const onAgentEvent = vi.fn();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-agent"
+          tabType="local"
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          onAgentEvent={onAgentEvent}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    const handler = MockTerminal.instances[0].oscHandlers.get(777)!;
+    const event: Omit<AgentLifecycleEvent, 'provider'> = {
+      version: 1,
+      event: 'turn.start',
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+    };
+    const encoded = Buffer.from(JSON.stringify(event)).toString('base64url');
+
+    expect(await handler(`janet-agent;hermes;${encoded}`)).toBe(true);
+    expect(onAgentEvent).toHaveBeenCalledWith('term-agent', {
+      provider: 'hermes',
+      ...event,
+    });
+
+    expect(await handler('janet-agent;hermes;%%%')).toBe(true);
+    expect(onAgentEvent).toHaveBeenCalledOnce();
+    expect(await handler('notify;Build finished')).toBe(false);
+    expect(onAgentEvent).toHaveBeenCalledOnce();
   });
 
   it('enables result tracking and fully clears terminal search state', async () => {

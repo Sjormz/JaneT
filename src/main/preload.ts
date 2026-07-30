@@ -42,9 +42,16 @@ type PrepareForCloseCallback = (
 
 let prepareForCloseCallback: PrepareForCloseCallback | null = null;
 const terminalDataCallbacks = new Set<(params: { id: string; data: string }) => void>();
+const terminalExitCallbacks = new Set<(params: { id: string; exitCode: number; signal: number }) => void>();
 
 ipcRenderer.on('terminal:onData', (_event: Electron.IpcRendererEvent, data: { id: string; data: string }) => {
   for (const callback of terminalDataCallbacks) {
+    try { callback(data); } catch {}
+  }
+});
+
+ipcRenderer.on('terminal:onExit', (_event: Electron.IpcRendererEvent, data: { id: string; exitCode: number; signal: number }) => {
+  for (const callback of terminalExitCallbacks) {
     try { callback(data); } catch {}
   }
 });
@@ -98,7 +105,11 @@ const api = {
     ipcRenderer.invoke('terminal:destroy', params),
   onTerminalData: (callback: (params: { id: string; data: string }) => void) => {
     terminalDataCallbacks.add(callback);
-    return () => terminalDataCallbacks.delete(callback);
+    return () => { terminalDataCallbacks.delete(callback); };
+  },
+  onTerminalExit: (callback: (params: { id: string; exitCode: number; signal: number }) => void) => {
+    terminalExitCallbacks.add(callback);
+    return () => { terminalExitCallbacks.delete(callback); };
   },
 
   // SSH

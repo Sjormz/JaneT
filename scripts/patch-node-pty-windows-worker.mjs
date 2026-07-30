@@ -7,27 +7,25 @@ export const APP_ASAR_WORKER_REWRITE = ".replace('app.asar', 'app.asar.unpacked'
 export const CONPTY_DEFERRED_CONNECT_MARKER = 'JaneT node-pty#885 backport: defer ConPTY connect until worker readiness.';
 export const CONPTY_PID_REFRESH_MARKER = 'JaneT node-pty#885 backport: refresh pid after deferred ConPTY connect.';
 export const CONPTY_PROCESS_LIST_MARKER = 'JaneT node-pty#885 backport: tolerate an unconnected or exited ConPTY.';
+const agentPostconditions = [
+  'this._pendingPtyInfo = { pty: this._pty, commandLine: commandLine, cwd: cwd, env: env };',
+  'WindowsPtyAgent.prototype._completePtyConnection = function ()',
+  'this._pendingPtyInfo = undefined;',
+  'if (this._innerPid <= 0)',
+];
+const terminalPostconditions = ['_this._pid = _this._agent.innerPid;'];
+const consoleListPostconditions = [
+  'if (shellPid > 0)',
+  'consoleProcessList = getConsoleProcessList(shellPid);',
+];
 export const WINDOWS_PATCH_POSTCONDITIONS = {
   worker: [
     APP_ASAR_WORKER_REWRITE,
     ".replace('node_modules.asar', 'node_modules.asar.unpacked')",
   ],
-  agent: [
-    CONPTY_DEFERRED_CONNECT_MARKER,
-    'this._pendingPtyInfo = { pty: this._pty, commandLine: commandLine, cwd: cwd, env: env };',
-    'WindowsPtyAgent.prototype._completePtyConnection = function ()',
-    'this._pendingPtyInfo = undefined;',
-    'if (this._innerPid <= 0)',
-  ],
-  terminal: [
-    CONPTY_PID_REFRESH_MARKER,
-    '_this._pid = _this._agent.innerPid;',
-  ],
-  consoleListAgent: [
-    CONPTY_PROCESS_LIST_MARKER,
-    'if (shellPid > 0)',
-    'consoleProcessList = getConsoleProcessList(shellPid);',
-  ],
+  agent: agentPostconditions,
+  terminal: terminalPostconditions,
+  consoleListAgent: consoleListPostconditions,
 };
 
 function replaceRequired(source, before, after, description) {
@@ -62,8 +60,11 @@ export function patchNodePtyWindowsWorkerSource(source) {
 }
 
 export function patchNodePtyWindowsAgentSource(source) {
-  if (source.includes(CONPTY_DEFERRED_CONNECT_MARKER)) {
-    requireMarkers(source, WINDOWS_PATCH_POSTCONDITIONS.agent, 'agent');
+  if (
+    source.includes(CONPTY_DEFERRED_CONNECT_MARKER)
+    || agentPostconditions.every((marker) => source.includes(marker))
+  ) {
+    requireMarkers(source, agentPostconditions, 'agent');
     return source;
   }
 
@@ -148,8 +149,11 @@ export function patchNodePtyWindowsAgentSource(source) {
 }
 
 export function patchNodePtyWindowsTerminalSource(source) {
-  if (source.includes(CONPTY_PID_REFRESH_MARKER)) {
-    requireMarkers(source, WINDOWS_PATCH_POSTCONDITIONS.terminal, 'terminal');
+  if (
+    source.includes(CONPTY_PID_REFRESH_MARKER)
+    || terminalPostconditions.every((marker) => source.includes(marker))
+  ) {
+    requireMarkers(source, terminalPostconditions, 'terminal');
     return source;
   }
   const patched = replaceRequired(
@@ -167,8 +171,11 @@ export function patchNodePtyWindowsTerminalSource(source) {
 }
 
 export function patchNodePtyConsoleListAgentSource(source) {
-  if (source.includes(CONPTY_PROCESS_LIST_MARKER)) {
-    requireMarkers(source, WINDOWS_PATCH_POSTCONDITIONS.consoleListAgent, 'console-list agent');
+  if (
+    source.includes(CONPTY_PROCESS_LIST_MARKER)
+    || consoleListPostconditions.every((marker) => source.includes(marker))
+  ) {
+    requireMarkers(source, consoleListPostconditions, 'console-list agent');
     return source;
   }
   const patched = replaceRequired(

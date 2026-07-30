@@ -48,6 +48,19 @@ describe('TerminalManager', () => {
     expect(pty.resize).not.toHaveBeenCalled();
   });
 
+  it('reports the native exit code and signal once', () => {
+    const pty = makePty();
+    spawnMock.mockReturnValue(pty);
+    const onExit = vi.fn();
+    const manager = new TerminalManager();
+
+    manager.create('term-exit', undefined, undefined, undefined, undefined, onExit);
+    pty.emitExit({ exitCode: 17, signal: 9 });
+
+    expect(onExit).toHaveBeenCalledOnce();
+    expect(onExit).toHaveBeenCalledWith({ exitCode: 17, signal: 9 });
+  });
+
   it.each([
     'ioctl(2) failed, EBADF',
     'Cannot resize a pty that has already exited',

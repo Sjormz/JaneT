@@ -954,6 +954,22 @@ html, body, #root {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.vtab-sub.running,
+.leaf-awareness.running { color: var(--text-accent); }
+.vtab-sub.needs-input,
+.vtab-sub.interrupted,
+.leaf-awareness.needs-input,
+.leaf-awareness.interrupted { color: var(--yellow); }
+.vtab-sub.finished,
+.vtab-sub.ready,
+.leaf-awareness.finished,
+.leaf-awareness.ready { color: var(--green); }
+.vtab-sub.failed,
+.vtab-sub.exited,
+.vtab-sub.disconnected,
+.leaf-awareness.failed,
+.leaf-awareness.exited,
+.leaf-awareness.disconnected { color: var(--red); }
 .vtab-meta {
   display: flex;
   align-items: center;
@@ -2738,6 +2754,17 @@ html, body, #root {
 }
 .leaf-title-text {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leaf-awareness {
+  min-width: 0;
+  margin-left: auto;
+  padding: 0 8px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

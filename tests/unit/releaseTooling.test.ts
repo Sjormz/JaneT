@@ -153,6 +153,18 @@ describe('release tooling', () => {
     expect(() => patchNodePtyConsoleListAgentSource(`// ${CONPTY_PROCESS_LIST_MARKER}`)).toThrow(/Incomplete node-pty Windows console-list agent patch/);
 
     const installedLibRoot = path.join(projectRoot, 'node_modules', 'node-pty', 'lib');
+    const installedNodePtyRoot = path.dirname(installedLibRoot);
+    const installedNodePtyPackage = JSON.parse(
+      fs.readFileSync(path.join(installedNodePtyRoot, 'package.json'), 'utf8'),
+    );
+    const installedConptySource = fs.readFileSync(
+      path.join(installedNodePtyRoot, 'src', 'win', 'conpty.cc'),
+      'utf8',
+    );
+    expect(installedNodePtyPackage.version).toBe('1.2.0-beta.14');
+    expect(installedConptySource).toContain('static std::mutex g_ptyHandlesMutex;');
+    expect(installedConptySource).toContain('std::atomic<int> ptyCounter{0};');
+    expect(installedConptySource).not.toContain('assert(remove_pty_baton');
     const installedSources = {
       worker: fs.readFileSync(path.join(installedLibRoot, 'windowsConoutConnection.js'), 'utf8'),
       agent: fs.readFileSync(path.join(installedLibRoot, 'windowsPtyAgent.js'), 'utf8'),
@@ -160,9 +172,6 @@ describe('release tooling', () => {
       consoleListAgent: fs.readFileSync(path.join(installedLibRoot, 'conpty_console_list_agent.js'), 'utf8'),
     };
     expect(installedSources.worker).toContain(APP_ASAR_WORKER_REWRITE);
-    expect(installedSources.agent).toContain(CONPTY_DEFERRED_CONNECT_MARKER);
-    expect(installedSources.terminal).toContain(CONPTY_PID_REFRESH_MARKER);
-    expect(installedSources.consoleListAgent).toContain(CONPTY_PROCESS_LIST_MARKER);
     expect(patchNodePtyWindowsSources(installedSources)).toEqual(installedSources);
 
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-windows-worker-'));
@@ -170,6 +179,10 @@ describe('release tooling', () => {
     const libRoot = path.join(nodePtyRoot, 'lib');
     try {
       fs.mkdirSync(libRoot, { recursive: true });
+      const prebuildRoot = path.join(nodePtyRoot, 'prebuilds', 'win32-x64');
+      fs.mkdirSync(prebuildRoot, { recursive: true });
+      fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: '1.2.0-beta.14' }));
+      fs.writeFileSync(path.join(prebuildRoot, 'conpty.node'), 'native');
       fs.writeFileSync(path.join(libRoot, 'windowsConoutConnection.js'), legacy);
       for (const fileName of ['windowsPtyAgent.js', 'windowsTerminal.js', 'conpty_console_list_agent.js']) {
         fs.writeFileSync(path.join(libRoot, fileName), 'unpatched');
@@ -184,6 +197,13 @@ describe('release tooling', () => {
       ] as const) {
         fs.writeFileSync(path.join(libRoot, fileName), installedSources[name]);
       }
+      fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: '1.1.0' }));
+      expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).toThrow(/race fix #922/);
+      fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: '1.2.0-beta.14' }));
+
+      fs.rmSync(path.join(prebuildRoot, 'conpty.node'));
+      expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).toThrow(/native module/);
+      fs.writeFileSync(path.join(prebuildRoot, 'conpty.node'), 'native');
       expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).not.toThrow();
     } finally {
       fs.rmSync(fixtureRoot, { recursive: true, force: true });

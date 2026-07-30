@@ -39,6 +39,14 @@ import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../sh
 import { useEditorDocuments } from './useEditorDocuments';
 import { emptyTabDocumentWorkspace, isEditorDocumentDirty, type EditorResource } from './editorDocuments';
 import { snippetTextForPaste, type Snippet } from '../shared/snippets';
+import {
+  acknowledgeAgentAwareness,
+  aggregateAgentStatus,
+  applyAgentEvent,
+  type AgentAwareness,
+  type AgentLifecycleEvent,
+  type TerminalTransportStatus,
+} from './terminalAwareness';
 
 function createTabRoot(type: 'local' | 'ssh'): PaneNode {
   return createPaneRoot(type, 1, 'vertical');
@@ -268,6 +276,8 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const [activeTabId, setActiveTabId] = useState(initialState.activeTabId);
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
   const [sidebarOpen, setSidebarOpen] = useState(initialState.sidebarOpen);
   const [tabsOpen, setTabsOpen] = useState(initialState.tabsOpen);
   const responsiveTabsCollapsedRef = useRef(false);
@@ -386,6 +396,8 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [cwdByTerminal, setCwdByTerminal] = useState<Record<string, string>>({});
   const cwdByTerminalRef = useRef(cwdByTerminal);
   const [focusedTerminalId, setFocusedTerminalId] = useState<string | null>(null);
+  const [awarenessByTerminal, setAwarenessByTerminal] = useState<Record<string, AgentAwareness>>({});
+  const [localTransportByTerminal, setLocalTransportByTerminal] = useState<Record<string, TerminalTransportStatus>>({});
   // Cached home directory — used as the fallback cwd before any OSC 7
   // has arrived or for SSH tabs.
   const [homeDir, setHomeDir] = useState<string>('');
@@ -639,6 +651,18 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     target.focus();
   }, []);
 
+  useEffect(() => {
+    if (!window.janet.onTerminalExit) return undefined;
+    return window.janet.onTerminalExit(({ id }) => {
+      const owner = tabsRef.current.flatMap(collectTerminalOwners)
+        .find((candidate) => candidate.termId === id);
+      if (owner?.type !== 'local') return;
+      setLocalTransportByTerminal((current) => (
+        current[id] === 'exited' ? current : { ...current, [id]: 'exited' }
+      ));
+    });
+  }, []);
+
   // Called by TerminalPane when the shell reports a new cwd (via OSC 7
   // parsed from the PTY stream). Only the focused terminal's cwd drives
   // the sidebar, but we still store the cwd for every terminal so that
@@ -657,7 +681,62 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     setFocusedTerminalId(termId);
   }, []);
 
+  const handleAgentEvent = useCallback((termId: string, event: AgentLifecycleEvent) => {
+    const owner = tabsRef.current.find((tab) => getAllLeafIds(tab.root).includes(termId));
+    if (!owner) return;
+    setAwarenessByTerminal((current) => {
+      const nextAwareness = applyAgentEvent(
+        current[termId], event, Date.now(), owner.id === activeTabIdRef.current,
+      );
+      if (nextAwareness === current[termId]) return current;
+      if (nextAwareness) return { ...current, [termId]: nextAwareness };
+      if (!(termId in current)) return current;
+      const { [termId]: _removed, ...next } = current;
+      return next;
+    });
+  }, []);
+
+  const transportByTerminal = useMemo(() => Object.fromEntries(
+    tabs.flatMap((tab) => collectTerminalOwners(tab).flatMap((owner) => {
+      const transport = owner.type === 'local'
+        ? localTransportByTerminal[owner.termId]
+        : owner.sshSessionId && disconnectedSshSessionIds.has(owner.sshSessionId)
+          ? 'disconnected' as const
+          : undefined;
+      return transport ? [[owner.termId, transport]] : [];
+    })),
+  ), [disconnectedSshSessionIds, localTransportByTerminal, tabs]);
+
+  const awarenessByTab = useMemo(() => Object.fromEntries(
+    tabs.flatMap((tab) => {
+      const terminalIds = getAllLeafIds(tab.root);
+      const status = aggregateAgentStatus(
+        terminalIds.map((termId) => awarenessByTerminal[termId]),
+        terminalIds.map((termId) => transportByTerminal[termId]),
+      );
+      return status ? [[tab.id, status]] : [];
+    }),
+  ), [awarenessByTerminal, tabs, transportByTerminal]);
+
   const selectTerminalTab = useCallback((tabId: string) => {
+    const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
+    if (tab) {
+      const ownedTerminals = new Set(getAllLeafIds(tab.root));
+      setAwarenessByTerminal((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const termId of ownedTerminals) {
+          const awareness = current[termId];
+          if (!awareness) continue;
+          const acknowledged = acknowledgeAgentAwareness(awareness);
+          if (acknowledged !== awareness) {
+            next[termId] = acknowledged;
+            changed = true;
+          }
+        }
+        return changed ? next : current;
+      });
+    }
     restoreTerminalFocusRef.current = true;
     terminalFocusTargetIdRef.current = null;
     setActiveTabId(tabId);
@@ -667,6 +746,20 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
 
   const teardownTerminalOwners = useCallback((owners: TerminalOwner[], remainingTabs: TabInfo[]) => {
     if (owners.length === 0) return;
+
+    const removedTerminals = new Set(owners.map((owner) => owner.termId));
+    setLocalTransportByTerminal((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([termId]) => !removedTerminals.has(termId)),
+      );
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+    setAwarenessByTerminal((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([termId]) => !removedTerminals.has(termId)),
+      );
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
 
     const retainedSshSessions = new Set(
       remainingTabs.flatMap(collectTerminalOwners)
@@ -726,6 +819,16 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         if (stillRendered) return;
 
         setCwdByTerminal((current) => {
+          if (!(termId in current)) return current;
+          const { [termId]: _removed, ...next } = current;
+          return next;
+        });
+        setAwarenessByTerminal((current) => {
+          if (!(termId in current)) return current;
+          const { [termId]: _removed, ...next } = current;
+          return next;
+        });
+        setLocalTransportByTerminal((current) => {
           if (!(termId in current)) return current;
           const { [termId]: _removed, ...next } = current;
           return next;
@@ -1756,6 +1859,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
             tabs={tabs}
             activeTabId={activeTabId}
             dirtyTabIds={editorDocuments.dirtyTabIds}
+            awarenessByTab={awarenessByTab}
             sshProfiles={sshProfiles}
             sshConnectionsOpen={sshConnectionsOpen}
             onSSHConnectionsOpenChange={setSshConnectionsOpen}
@@ -1807,6 +1911,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
                 sshShellReady={activeTab.type !== 'ssh' || activeTab.sshShellReady === true}
                 onTerminalReady={handleTerminalReady}
                 onTerminalRemoved={handleTerminalRemoved}
+                onAgentEvent={handleAgentEvent}
+                awarenessByTerminal={awarenessByTerminal}
+                transportByTerminal={transportByTerminal}
                 onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}
                 onClosePane={(leafId) => requestClosePane(activeTab.id, leafId)}
                 onResizePane={(splitId, dividerIndex, leftFraction) => handleResizePane(activeTab.id, splitId, dividerIndex, leftFraction)}

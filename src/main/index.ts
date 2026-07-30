@@ -400,7 +400,9 @@ function registerIpcHandlers() {
   handle('terminal:create', (event, { id, cwd, shell, startupCommands }) => {
     const pty = terminalManager.create(id, cwd, shell, (data) => {
       sendRendererEvent(mainWindow, 'terminal:onData', { id, data });
-    }, startupCommands);
+    }, startupCommands, (exit) => {
+      sendRendererEvent(mainWindow, 'terminal:onExit', { id, ...exit });
+    });
     return { pid: pty.pid };
   });
 

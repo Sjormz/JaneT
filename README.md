@@ -33,8 +33,23 @@ JaneT is for work that starts in a shell and quickly spreads across more shells,
 - **Files and editing:** Browse the focused terminal's local directory or a remote machine over SFTP, then open supported text files in the built-in Monaco editor.
 - **Everyday Git tools:** Stage, unstage, commit, fetch, pull, push, switch branches, manage worktrees, and safely discard tracked unstaged changes.
 - **Durable sessions:** Keep active terminal and SSH work running when the window closes, or stop it before quitting.
+- **AI agent awareness:** See when a supported terminal agent is running, ready, waiting for input, or finished without reading its transcript.
 - **Fast navigation:** Search terminal output, launch actions from the command palette, save command snippets, and rebind every shortcut.
 - **A workspace that feels like yours:** Choose from Tokyo Night, Dracula, One Dark, Solarized Light, and Gruvbox, then tune terminal typography and sidebar placement.
+
+## Know when your agent needs you
+
+JaneT can show live agent status in pane headers and tabs, including **Running**, **Needs input**, **Ready**, and completed turn outcomes. Status comes from explicit lifecycle events rather than transcript scraping, so no agent protocol text is added to the visible terminal.
+
+Hermes Agent's classic terminal interface is supported through the included JaneT awareness plugin:
+
+```bash
+hermes plugins install Sjormz/JaneT/integrations/hermes-agent-awareness --enable
+```
+
+Restart any running Hermes sessions after installation. No JaneT configuration is required.
+
+Other terminal agents continue to work normally in JaneT, but do not show agent-aware status until they provide a compatible lifecycle integration. Hermes TUI awareness is ready in the plugin and will be advertised once its required Hermes runtime fix is available in a public release.
 
 ## Build the workspace once
 

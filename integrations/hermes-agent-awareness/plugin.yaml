@@ -1,0 +1,11 @@
+name: janet-agent-awareness
+version: 0.1.0
+description: "Emit bounded Hermes lifecycle metadata for JaneT terminal panes."
+author: "JaneT contributors"
+hooks:
+  - on_session_start
+  - pre_llm_call
+  - pre_approval_request
+  - post_approval_response
+  - on_session_end
+  - on_session_finalize
