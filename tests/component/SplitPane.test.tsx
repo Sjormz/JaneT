@@ -544,8 +544,12 @@ describe('split panes in the app', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Rename terminal' });
     const nameInput = within(dialog).getByRole('textbox', { name: 'Terminal name' });
     expect(nameInput).toHaveValue('Terminal');
+    await waitFor(() => {
+      expect(nameInput).toHaveFocus();
+      expect(nameInput).toHaveSelection('Terminal');
+    });
     fireEvent.change(nameInput, { target: { value: '  Tests  ' } });
-    fireEvent.keyDown(nameInput, { key: 'Enter' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Rename terminal' })).not.toBeInTheDocument();
@@ -580,6 +584,10 @@ describe('split panes in the app', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Rename tab' });
     const nameInput = within(dialog).getByRole('textbox', { name: 'Tab name' });
     expect(nameInput).toHaveValue('Terminal');
+    await waitFor(() => {
+      expect(nameInput).toHaveFocus();
+      expect(nameInput).toHaveSelection('Terminal');
+    });
     fireEvent.change(nameInput, { target: { value: 'JaneT - fixes' } });
     fireEvent.keyDown(nameInput, { key: 'Enter' });
 
