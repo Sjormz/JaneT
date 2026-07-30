@@ -12,6 +12,7 @@ import Tooltip from './Tooltip';
 import ConfirmationDialog from './ConfirmationDialog';
 import SSHManager from './SSHManager';
 import { sanitizeStartupCommands } from '../../shared/startupCommands';
+import type { AgentStatus } from '../terminalAwareness';
 
 interface VerticalTabBarProps {
   tabs: TabInfo[];
@@ -32,6 +33,7 @@ interface VerticalTabBarProps {
   onRenameTab: (id: string, title: string) => void;
   onCollapse: () => void;
   dirtyTabIds?: ReadonlySet<string>;
+  awarenessByTab?: Record<string, AgentStatus>;
 }
 
 function formatRelativeTime(date: Date): string {
@@ -79,6 +81,7 @@ export default function VerticalTabBar({
   onRenameTab,
   onCollapse,
   dirtyTabIds = new Set<string>(),
+  awarenessByTab = {},
 }: VerticalTabBarProps) {
   const [, setNow] = useState(Date.now());
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
@@ -239,15 +242,18 @@ export default function VerticalTabBar({
           const relTime = tabTimestamps[tab.id] ? formatRelativeTime(tabTimestamps[tab.id]) : 'now';
           const editing = editingTabId === tab.id;
           const dirty = dirtyTabIds.has(tab.id);
+          const awareness = awarenessByTab[tab.id];
           const sshProfile = tab.sshProfileId
             ? sshProfiles.find((profile) => profile.id === tab.sshProfileId)
             : undefined;
-          const subLabel = isSSH
+          const locationLabel = isSSH
             ? `SSH · ${sshProfile ? sshProfileLabel(sshProfile) : 'Saved session'}`
             : `Local · ${compactLocalTabLabel(tab.cwd)}`;
-          const subTitle = isSSH
+          const locationTitle = isSSH
             ? sshProfile ? sshProfileLabel(sshProfile) : tab.sshSessionId || 'SSH session'
             : tab.cwd || 'Home directory';
+          const subLabel = awareness?.label ?? locationLabel;
+          const subTitle = awareness?.label ?? locationTitle;
 
           return (
             <div
@@ -288,7 +294,7 @@ export default function VerticalTabBar({
                     {dirty && <span className="vtab-dirty-marker" aria-hidden="true">●</span>}
                   </div>
                 )}
-                <div className="vtab-sub" title={subTitle}>
+                <div className={`vtab-sub ${awareness?.kind ?? ''}`} title={subTitle}>
                   {subLabel}
                 </div>
               </div>

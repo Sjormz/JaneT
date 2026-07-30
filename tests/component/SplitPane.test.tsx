@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import App from '../../src/renderer/App';
 import SplitPane from '../../src/renderer/components/SplitPane';
+import type { AgentAwareness } from '../../src/renderer/terminalAwareness';
+import type { AgentLifecycleEvent } from '../../src/renderer/terminalAwareness';
 
 const mountedTermIds: string[] = [];
 const rendererMocks = vi.hoisted(() => ({
@@ -16,11 +18,13 @@ const rendererMocks = vi.hoisted(() => ({
     reason: 'window-close' | 'application-quit' | 'update-install';
   }) => void | Promise<void>),
   sshConnectionClosedHandler: null as null | ((event: { id: string; reason: string }) => void),
+  terminalExitHandler: null as null | ((event: { id: string; exitCode: number; signal: number }) => void),
   sshRetryHandlers: new Map<string, (
     termId: string,
     dimensions: { cols: number; rows: number },
   ) => void | Promise<void>>(),
   cwdChangeHandlers: new Map<string, (termId: string, cwd: string) => void>(),
+  agentEventHandlers: new Map<string, (event: AgentLifecycleEvent) => void>(),
 }));
 
 vi.mock('../../src/renderer/components/Titlebar', () => ({
@@ -132,6 +136,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     onCwdChange,
     onFocus,
     onSshRetry,
+    onAgentEvent,
   }: {
     termId: string;
     hasSession?: boolean;
@@ -150,9 +155,11 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
       id: string,
       dimensions: { cols: number; rows: number },
     ) => void | Promise<void>;
+    onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
   }) {
     if (onSshRetry) rendererMocks.sshRetryHandlers.set(termId, onSshRetry);
     if (onCwdChange) rendererMocks.cwdChangeHandlers.set(termId, onCwdChange);
+    if (onAgentEvent) rendererMocks.agentEventHandlers.set(termId, (event) => onAgentEvent(termId, event));
     const containerRef = React.useRef<HTMLDivElement>(null);
 
     React.useEffect(() => {
@@ -223,8 +230,10 @@ beforeEach(() => {
   rendererMocks.verticalTabBarProps = null;
   rendererMocks.prepareForCloseHandler = null;
   rendererMocks.sshConnectionClosedHandler = null;
+  rendererMocks.terminalExitHandler = null;
   rendererMocks.sshRetryHandlers.clear();
   rendererMocks.cwdChangeHandlers.clear();
+  rendererMocks.agentEventHandlers.clear();
   Object.defineProperty(document, 'startViewTransition', {
     configurable: true,
     value: vi.fn((update: () => void) => {
@@ -270,6 +279,12 @@ beforeEach(() => {
     terminalWrite: vi.fn(),
     terminalResize: vi.fn(),
     onTerminalData: vi.fn(() => ({ dispose: vi.fn() })),
+    onTerminalExit: vi.fn((callback: (event: { id: string; exitCode: number; signal: number }) => void) => {
+      rendererMocks.terminalExitHandler = callback;
+      return () => {
+        if (rendererMocks.terminalExitHandler === callback) rendererMocks.terminalExitHandler = null;
+      };
+    }),
     sshConnect: vi.fn().mockResolvedValue({ connected: true }),
     sshCreateShell: vi.fn().mockResolvedValue(undefined),
     sshWriteShell: vi.fn(),
@@ -325,6 +340,57 @@ async function requestWorkspaceClose(
 }
 
 describe('split panes in the app', () => {
+  it('shows an authoritative local terminal exit in its pane and tab', async () => {
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    const termId = terminal.dataset.terminalId!;
+    const tabId = rendererMocks.verticalTabBarProps.tabs[0].id;
+    await waitFor(() => expect(rendererMocks.terminalExitHandler).toBeTypeOf('function'));
+
+    act(() => rendererMocks.agentEventHandlers.get(termId)!({
+      version: 1, provider: 'hermes', event: 'session.start',
+      sessionId: 'session-1',
+    }));
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[tabId])
+      .toEqual({ kind: 'ready', label: 'Hermes · Ready' }));
+
+    act(() => rendererMocks.terminalExitHandler!({ id: termId, exitCode: 17, signal: 0 }));
+
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[tabId])
+      .toEqual({ kind: 'exited', label: 'Exited' }));
+    expect(screen.getByText('Exited')).toHaveClass('leaf-awareness', 'exited');
+  });
+
+  it('marks a background turn outcome unseen and acknowledges it when its tab is selected', async () => {
+    render(<App />);
+    const firstTerminal = await screen.findByTestId(/terminal-/);
+    const firstTerminalId = firstTerminal.dataset.terminalId!;
+    const firstTabId = rendererMocks.verticalTabBarProps.tabs[0].id;
+
+    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
+
+    const emit = rendererMocks.agentEventHandlers.get(firstTerminalId)!;
+    act(() => {
+      emit({
+        version: 1, provider: 'hermes', event: 'turn.start',
+        sessionId: 'session-1', turnId: 'turn-1',
+      });
+      emit({
+        version: 1, provider: 'hermes', event: 'turn.end',
+        sessionId: 'session-1', turnId: 'turn-1', outcome: 'succeeded',
+      });
+    });
+
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[firstTabId])
+      .toEqual({ kind: 'finished', label: 'Hermes · Turn finished' }));
+
+    act(() => rendererMocks.verticalTabBarProps.onSelectTab(firstTabId));
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[firstTabId])
+      .toEqual({ kind: 'ready', label: 'Hermes · Ready' }));
+    expect(screen.getByText('Hermes · Ready')).toHaveClass('leaf-awareness', 'ready');
+  });
+
   it('opens snippets with the configured shortcut and routes pasted content to the focused terminal', async () => {
     const pasted = vi.fn();
     window.addEventListener('janet:terminal-paste-request', pasted);
@@ -902,6 +968,33 @@ describe('split panes in the app', () => {
 
     expect(screen.getByText('SSH')).toBeInTheDocument();
     expect(screen.getByLabelText('SSH — SSH pane')).toBeInTheDocument();
+  });
+
+  it('shows the current agent phase in the owning pane header', () => {
+    const awareness: AgentAwareness = {
+      provider: 'hermes', sessionId: 'session-1', phase: 'needs-input', phaseChangedAt: 10,
+    };
+    render(
+      <SplitPane
+        node={{ id: 'agent-leaf', type: 'leaf', title: 'terminal' }}
+        tabId="agent-tab"
+        tabType="local"
+        awarenessByTerminal={{ 'agent-leaf': awareness }}
+        onTerminalReady={vi.fn()}
+        onTerminalRemoved={vi.fn()}
+        onAgentEvent={vi.fn()}
+        onSplitPane={vi.fn()}
+        onClosePane={vi.fn()}
+        onResizePane={vi.fn()}
+        onMovePane={vi.fn()}
+        onPaneDragStart={vi.fn()}
+        onPaneDragOver={vi.fn()}
+        onPaneDragEnd={vi.fn()}
+        onToggleMaximizePane={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Hermes · Needs input')).toHaveClass('leaf-awareness', 'needs-input');
   });
 
   it('cancels an active divider drag when the split unmounts', () => {
@@ -1540,6 +1633,11 @@ describe('split panes in the app', () => {
       'data-ssh-connection-lost',
       'true',
     );
+    expect(rendererMocks.verticalTabBarProps.awarenessByTab[
+      rendererMocks.verticalTabBarProps.activeTabId
+    ])
+      .toEqual({ kind: 'disconnected', label: 'SSH disconnected' });
+    expect(screen.getByText('SSH disconnected')).toHaveClass('leaf-awareness', 'disconnected');
     expect(window.janet.sshConnect).toHaveBeenCalledTimes(1);
 
     const retry = rendererMocks.sshRetryHandlers.get(shellArgs.termId);

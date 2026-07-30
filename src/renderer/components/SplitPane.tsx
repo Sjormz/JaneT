@@ -14,6 +14,12 @@ import {
   SSHIcon,
 } from '../icons';
 import Tooltip from './Tooltip';
+import {
+  terminalStatus,
+  type AgentAwareness,
+  type AgentLifecycleEvent,
+  type TerminalTransportStatus,
+} from '../terminalAwareness';
 
 interface SplitPaneProps {
   node: PaneNode;
@@ -22,6 +28,9 @@ interface SplitPaneProps {
   sshSessionId?: string;
   onTerminalReady: (termId: string) => void;
   onTerminalRemoved: (termId: string) => void;
+  onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+  awarenessByTerminal?: Record<string, AgentAwareness>;
+  transportByTerminal?: Record<string, TerminalTransportStatus>;
   onSplitPane: (leafId: string, direction: 'horizontal' | 'vertical') => void;
   onClosePane: (leafId: string) => void;
   onResizePane: (splitId: string, dividerIndex: number, leftFraction: number) => void;
@@ -61,6 +70,9 @@ function TerminalPaneLeaf({
   sshSessionId,
   onTerminalReady,
   onTerminalRemoved,
+  onAgentEvent,
+  awareness,
+  transport,
   onSplitRight,
   onSplitDown,
   onClose,
@@ -89,6 +101,9 @@ function TerminalPaneLeaf({
   sshSessionId?: string;
   onTerminalReady: (id: string) => void;
   onTerminalRemoved: (id: string) => void;
+  onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+  awareness?: AgentAwareness;
+  transport?: TerminalTransportStatus;
   onSplitRight: () => void;
   onSplitDown: () => void;
   onClose: () => void;
@@ -124,6 +139,7 @@ function TerminalPaneLeaf({
   const paneLabel = paneTitle ? `${paneTitle} — ${paneTypeLabel} pane` : `${paneTypeLabel} pane`;
   const paneActionContext = paneTitle ? `${paneTitle} (${paneTypeLabel})` : paneTypeLabel;
   const hasMultiplePanes = totalPaneCount > 1;
+  const status = terminalStatus(awareness, transport);
   const closeLabel = hasMultiplePanes
     ? `Close pane — ${paneActionContext}`
     : `Close terminal tab — ${paneActionContext}`;
@@ -186,6 +202,7 @@ function TerminalPaneLeaf({
             <span className="leaf-title-text">{paneTitle}</span>
           </span>
         </Tooltip>
+        {status && <span className={`leaf-awareness ${status.kind}`}>{status.label}</span>}
         <div className="leaf-actions">
           {hasMultiplePanes && (
             <Tooltip label={isMaximized ? 'Restore pane layout' : `Maximize pane — ${paneActionContext}`} placement="bottom">
@@ -216,6 +233,7 @@ function TerminalPaneLeaf({
           sshSessionId={effectiveSshSessionId}
           onReady={onTerminalReady}
           onRemoved={onTerminalRemoved}
+          onAgentEvent={onAgentEvent}
           themeName={themeName}
           fontSize={fontSize}
           fontFamily={fontFamily}
@@ -366,6 +384,9 @@ export default function SplitPane(props: SplitPaneProps) {
     sshSessionId,
     onTerminalReady,
     onTerminalRemoved,
+    onAgentEvent,
+    awarenessByTerminal,
+    transportByTerminal,
     onSplitPane,
     onClosePane,
     onResizePane,
@@ -398,6 +419,9 @@ export default function SplitPane(props: SplitPaneProps) {
         sshSessionId={sshSessionId}
         onTerminalReady={onTerminalReady}
         onTerminalRemoved={onTerminalRemoved}
+        onAgentEvent={onAgentEvent}
+        awareness={awarenessByTerminal?.[node.id]}
+        transport={transportByTerminal?.[node.id]}
         onSplitRight={() => onSplitPane(node.id, 'vertical')}
         onSplitDown={() => onSplitPane(node.id, 'horizontal')}
         onClose={() => onClosePane(node.id)}
@@ -438,6 +462,9 @@ export default function SplitPane(props: SplitPaneProps) {
             sshSessionId={sshSessionId}
             onTerminalReady={onTerminalReady}
             onTerminalRemoved={onTerminalRemoved}
+            onAgentEvent={onAgentEvent}
+            awarenessByTerminal={awarenessByTerminal}
+            transportByTerminal={transportByTerminal}
             onSplitPane={onSplitPane}
             onClosePane={onClosePane}
             onResizePane={onResizePane}
@@ -491,6 +518,9 @@ export default function SplitPane(props: SplitPaneProps) {
               sshSessionId={sshSessionId}
               onTerminalReady={onTerminalReady}
               onTerminalRemoved={onTerminalRemoved}
+              onAgentEvent={onAgentEvent}
+              awarenessByTerminal={awarenessByTerminal}
+              transportByTerminal={transportByTerminal}
               onSplitPane={onSplitPane}
               onClosePane={onClosePane}
               onResizePane={onResizePane}

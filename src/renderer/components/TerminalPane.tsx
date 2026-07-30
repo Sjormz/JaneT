@@ -23,6 +23,8 @@ import { getTheme, ThemeName } from '../themes';
 import { useKeybindings } from '../KeybindingsContext';
 import { matchesShortcut } from '../keybindings';
 import { fileUrlToPath } from '../osc7';
+import { decodeAgentOsc } from '../agentOsc';
+import type { AgentLifecycleEvent } from '../terminalAwareness';
 import { createKittyGraphicsLayer } from '../kittyGraphics';
 import { refreshCoordinator } from '../refreshCoordinator';
 import { TERMINAL_SEARCH_REQUEST_EVENT, TerminalSearchRequestDetail } from '../terminalSearch';
@@ -51,6 +53,7 @@ interface TerminalPaneProps {
   fontFamily?: string;
   onCwdChange?: (termId: string, cwd: string) => void;
   onFocus?: (termId: string) => void;
+  onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
   initialCwd?: string;
   startupCommands?: string[];
   startupShellDialect?: TerminalLeaf['startupShellDialect'];
@@ -109,6 +112,7 @@ interface CachedTerminalPane {
   sshShellReady: boolean;
   sshNoticeState: SshNoticeState;
   sshNoticeListener: ((state: SshNoticeState) => void) | null;
+  agentEventListener: ((termId: string, event: AgentLifecycleEvent) => void) | null;
   disposeTimer: ReturnType<typeof setTimeout> | null;
   inputSource: { userInput: boolean };
 }
@@ -148,6 +152,7 @@ export default function TerminalPane({
   fontFamily,
   onCwdChange,
   onFocus,
+  onAgentEvent,
   initialCwd,
   startupCommands,
   startupShellDialect,
@@ -175,6 +180,8 @@ export default function TerminalPane({
   const componentMountedRef = useRef(false);
   const searchVisibleRef = useRef(false);
   searchVisibleRef.current = searchVisible;
+  const cachedForAgentListener = terminalPaneCache.get(termId);
+  if (cachedForAgentListener) cachedForAgentListener.agentEventListener = onAgentEvent ?? null;
 
   useEffect(() => {
     componentMountedRef.current = true;
@@ -475,6 +482,12 @@ export default function TerminalPane({
     const inputSource = { userInput: false };
     const kittyGraphics = tabType === 'local' ? createKittyGraphicsLayer(term) : null;
     if (kittyGraphics) lifetimeCleanup.push(kittyGraphics);
+    lifetimeCleanup.push(term.parser.registerOscHandler(777, (data) => {
+      const decoded = decodeAgentOsc(data);
+      if (!decoded.recognized) return false;
+      if (decoded.event) terminalPaneCache.get(termId)?.agentEventListener?.(termId, decoded.event);
+      return true;
+    }));
 
     const disposable = term.onData((data) => {
       const userInput = inputSource.userInput;
@@ -588,6 +601,7 @@ export default function TerminalPane({
           ? { kind: 'waiting' }
           : { kind: 'reconnecting' },
       sshNoticeListener: setSshNoticeState,
+      agentEventListener: onAgentEvent ?? null,
       disposeTimer: null,
       inputSource,
     });

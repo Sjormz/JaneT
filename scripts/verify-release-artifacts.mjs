@@ -3,13 +3,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import {
-  APP_ASAR_WORKER_REWRITE,
-  CONPTY_DEFERRED_CONNECT_MARKER,
-  CONPTY_PID_REFRESH_MARKER,
-  CONPTY_PROCESS_LIST_MARKER,
-  WINDOWS_PATCH_POSTCONDITIONS,
-} from './patch-node-pty-windows-worker.mjs';
+import { WINDOWS_PATCH_POSTCONDITIONS } from './patch-node-pty-windows-worker.mjs';
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -127,6 +121,15 @@ export function validateMacPtyLayout(runtime) {
 }
 
 export function validateWindowsPtyRuntime(runtime) {
+  const packageJsonPath = path.join(runtime.nodePtyRoot, 'package.json');
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+  if (packageJson.version !== '1.2.0-beta.14') {
+    throw new Error(`Packaged node-pty Windows runtime is missing upstream race fix #922: ${packageJsonPath}`);
+  }
+  requireNonEmptyFile(
+    path.join(runtime.nodePtyRoot, 'prebuilds', 'win32-x64', 'conpty.node'),
+    'packaged node-pty Windows native module',
+  );
   const requirements = [
     ['windowsConoutConnection.js', WINDOWS_PATCH_POSTCONDITIONS.worker, 'worker cannot resolve app.asar.unpacked'],
     ['windowsPtyAgent.js', WINDOWS_PATCH_POSTCONDITIONS.agent, 'agent is missing the deferred ConPTY connection fix'],
@@ -250,8 +253,8 @@ terminal.onExit(({ exitCode }) => {
       console.error('packaged PTY failed: exit=' + exitCode + ' output=' + JSON.stringify(received));
       process.exit(4);
     }
-    // node-pty 1.1.0 keeps a ref'ed Conout worker after natural child exit.
-    // Once the isolated smoke has proved spawn, input, output, and exit, flush
+    // node-pty can keep a ref'ed Conout worker after natural child exit. Once
+    // the isolated smoke has proved spawn, input, output, and exit, flush
     // the result and terminate explicitly instead of hanging release CI.
     process.stdout.write(marker, () => process.exit(0));
   }, 25);

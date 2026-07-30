@@ -174,6 +174,7 @@ export class TerminalManager {
     shell?: string,
     onData?: (data: string) => void,
     startupCommands?: unknown,
+    onExit?: (event: { exitCode: number; signal: number }) => void,
   ): IPty {
     if (
       typeof id !== 'string'
@@ -250,12 +251,13 @@ export class TerminalManager {
       ...(startupExpression && !this.startupCommandLedger.has(id) ? { startupExpression } : {}),
     };
     this.terminals.set(id, terminal);
-    pty.onExit(() => {
+    pty.onExit((event) => {
       const current = this.terminals.get(id);
       if (current?.pty === pty) {
         if (current.startupTimer) clearTimeout(current.startupTimer);
         this.terminals.delete(id);
         this.capacity.release(id);
+        onExit?.({ exitCode: event.exitCode, signal: event.signal ?? 0 });
       }
     });
     pty.onData((data) => {

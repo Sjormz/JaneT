@@ -185,6 +185,7 @@ describe('preload close-preparation bridge', () => {
       onPrepareForClose(callback: (request: WorkspacePrepareForCloseRequest) => void | Promise<void>): () => void;
       resolvePrepareForClose(resolution: WorkspacePrepareForCloseResolution): Promise<boolean>;
       onTerminalData(callback: (event: { id: string; data: string }) => void): () => void;
+      onTerminalExit(callback: (event: { id: string; exitCode: number; signal: number }) => void): () => void;
     };
     const callback = vi.fn();
     const unsubscribe = api.onPrepareForClose(callback);
@@ -225,5 +226,16 @@ describe('preload close-preparation bridge', () => {
     unsubscribeTerminal.forEach((unsubscribe) => unsubscribe());
     listeners.get('terminal:onData')?.({}, { id: 'term-1', data: 'late' });
     for (const terminalCallback of terminalCallbacks) expect(terminalCallback).toHaveBeenCalledOnce();
+
+    const exitCallbacks = Array.from({ length: 20 }, () => vi.fn());
+    const unsubscribeExit = exitCallbacks.map((exitCallback) => api.onTerminalExit(exitCallback));
+    expect(on.mock.calls.filter(([channel]) => channel === 'terminal:onExit')).toHaveLength(1);
+    listeners.get('terminal:onExit')?.({}, { id: 'term-1', exitCode: 17, signal: 9 });
+    for (const exitCallback of exitCallbacks) {
+      expect(exitCallback).toHaveBeenCalledWith({ id: 'term-1', exitCode: 17, signal: 9 });
+    }
+    unsubscribeExit.forEach((unsubscribe) => unsubscribe());
+    listeners.get('terminal:onExit')?.({}, { id: 'term-1', exitCode: 0, signal: 0 });
+    for (const exitCallback of exitCallbacks) expect(exitCallback).toHaveBeenCalledOnce();
   });
 });
