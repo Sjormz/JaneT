@@ -86,7 +86,9 @@ def _on_turn_start(
     session = _identifier(session_id)
     turn = _identifier(turn_id)
     if session and turn:
-        _SESSIONS.add(session)
+        if session not in _SESSIONS:
+            _SESSIONS.add(session)
+            _emit("session.start", session, platform=platform)
         _TURN_BY_SESSION[session] = turn
         _PLATFORM_BY_SESSION[session] = platform
     _emit("turn.start", session, turn, platform=platform)
