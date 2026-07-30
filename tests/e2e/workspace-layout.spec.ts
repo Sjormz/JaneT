@@ -166,6 +166,10 @@ test('consumes Hermes plugin lifecycle output through the local PTY', async ({},
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-awareness-e2e-'));
   const pluginDir = path.join(root, 'integrations', 'hermes-agent-awareness');
   const probePath = path.join(userData, 'emit-hermes-awareness.py');
+  const sessionReadyPath = path.join(userData, 'session-ready');
+  const turnGatePath = path.join(userData, 'release-turn');
+  const turnStartedPath = path.join(userData, 'turn-started');
+  const turnEndGatePath = path.join(userData, 'release-turn-end');
   fs.writeFileSync(probePath, String.raw`
 import importlib.util
 import io
@@ -176,6 +180,10 @@ import time
 sys.dont_write_bytecode = True
 
 plugin_dir = pathlib.Path(sys.argv[1])
+session_ready = pathlib.Path(sys.argv[2])
+turn_gate = pathlib.Path(sys.argv[3])
+turn_started = pathlib.Path(sys.argv[4])
+turn_end_gate = pathlib.Path(sys.argv[5])
 spec = importlib.util.spec_from_file_location("janet_hermes_awareness", plugin_dir / "__init__.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
@@ -184,14 +192,19 @@ terminal_stdout = sys.stdout
 protocol_stdout = io.StringIO()
 sys.stdout = protocol_stdout
 module._on_session_start(session_id="e2e-session", platform="tui")
-time.sleep(1.5)
+session_ready.touch()
+while not turn_gate.exists():
+    time.sleep(0.05)
 module._on_turn_start(
-    session_id="e2e-session",
+    session_id="e2e-session-rotated",
     turn_id="e2e-turn",
     platform="tui",
 )
+turn_started.touch()
+while not turn_end_gate.exists():
+    time.sleep(0.05)
 module._on_turn_end(
-    session_id="e2e-session",
+    session_id="e2e-session-rotated",
     turn_id="e2e-turn",
     platform="tui",
     completed=True,
@@ -224,17 +237,25 @@ print("TUI_AWARENESS_OK")
 
     await firstTerminal.click();
     await page.keyboard.type(
-      `python "${probePath.replace(/\\/g, '/')}" "${pluginDir.replace(/\\/g, '/')}"`,
+      `python "${probePath.replace(/\\/g, '/')}" "${pluginDir.replace(/\\/g, '/')}" "${sessionReadyPath.replace(/\\/g, '/')}" "${turnGatePath.replace(/\\/g, '/')}" "${turnStartedPath.replace(/\\/g, '/')}" "${turnEndGatePath.replace(/\\/g, '/')}"`,
     );
     await page.keyboard.press('Enter');
+
+    const firstTab = page.locator('.vtab-item').first();
+    await expect.poll(() => fs.existsSync(sessionReadyPath)).toBe(true);
+    await expect(firstTab.locator('.vtab-sub')).toHaveText('Hermes · Ready');
     await page.getByRole('button', { name: 'New local terminal tab' }).click();
     await expect(page.locator('.vtab-item')).toHaveCount(2);
 
-    const firstTab = page.locator('.vtab-item').first();
-    await expect(firstTab.locator('.vtab-sub')).toHaveText('Hermes · Turn finished', {
-      timeout: 10_000,
-    });
-    await firstTab.click();
+    await page.locator('.vtab-item').nth(1).locator('.vtab-close').click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Close tab' }).click();
+    await expect(page.locator('.vtab-item')).toHaveCount(1);
+
+    fs.writeFileSync(turnGatePath, '');
+    await expect.poll(() => fs.existsSync(turnStartedPath)).toBe(true);
+    await expect(firstTab.locator('.vtab-sub')).toHaveText('Hermes · Running');
+    fs.writeFileSync(turnEndGatePath, '');
+    await expect(firstTab.locator('.vtab-sub')).toHaveText('Hermes · Ready');
     await expect(page.locator('.terminal-leaf').first().locator('.leaf-awareness'))
       .toHaveText('Hermes · Ready');
     expect(await page.locator('.terminal-leaf-header').first().evaluate((element) => (

@@ -211,19 +211,23 @@ describe('Hermes agent awareness plugin', () => {
       { version: 1, provider: 'hermes', event: 'attention.resolve', sessionId: 'session-1', turnId: 'turn-1' },
       { version: 1, provider: 'hermes', event: 'turn.end', sessionId: 'session-1', turnId: 'turn-1', outcome: 'succeeded' },
       { version: 1, provider: 'hermes', event: 'session.end', sessionId: 'session-1' },
+      { version: 1, provider: 'hermes', event: 'session.start', sessionId: 'session-2' },
       { version: 1, provider: 'hermes', event: 'turn.start', sessionId: 'session-2', turnId: 'turn-2' },
       { version: 1, provider: 'hermes', event: 'turn.end', sessionId: 'session-2', turnId: 'turn-2', outcome: 'failed' },
+      { version: 1, provider: 'hermes', event: 'session.start', sessionId: 'session-3' },
       { version: 1, provider: 'hermes', event: 'turn.start', sessionId: 'session-3', turnId: 'turn-3' },
       { version: 1, provider: 'hermes', event: 'turn.end', sessionId: 'session-3', turnId: 'turn-3', outcome: 'interrupted' },
+      { version: 1, provider: 'hermes', event: 'session.start', sessionId: 'session-4' },
       { version: 1, provider: 'hermes', event: 'turn.start', sessionId: 'session-4', turnId: 'turn-4' },
       { version: 1, provider: 'hermes', event: 'turn.end', sessionId: 'session-4', turnId: 'turn-4', outcome: 'interrupted' },
+      { version: 1, provider: 'hermes', event: 'session.start', sessionId: 'session-5' },
       { version: 1, provider: 'hermes', event: 'turn.start', sessionId: 'session-5', turnId: 'turn-a' },
       { version: 1, provider: 'hermes', event: 'turn.start', sessionId: 'session-5', turnId: 'turn-b' },
       { version: 1, provider: 'hermes', event: 'attention.request', sessionId: 'session-5', turnId: 'turn-b' },
       { version: 1, provider: 'hermes', event: 'turn.end', sessionId: 'session-5', turnId: 'turn-b', outcome: 'succeeded' },
       { version: 1, provider: 'hermes', event: 'session.end', sessionId: 'session-5' },
     ]);
-    expect(observed.flushes).toBe(17);
+    expect(observed.flushes).toBe(21);
     expect(observed.silent).toBe('');
     expect(observed.headless).toBe('');
     expect(eventsFrom(observed.proxied)).toEqual([
