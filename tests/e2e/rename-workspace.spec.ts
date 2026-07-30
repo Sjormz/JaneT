@@ -100,7 +100,12 @@ test('renames the focused pane and active tab without interrupting xterm input',
     await expect(paneDialog).toBeVisible();
     const paneName = paneDialog.getByRole('textbox', { name: 'Terminal name' });
     await expect(paneName).toHaveValue('Right');
-    await paneName.fill('Tests');
+    await expect(paneName).toBeFocused();
+    await expect.poll(() => paneName.evaluate((input: HTMLInputElement) => ({
+      start: input.selectionStart,
+      end: input.selectionEnd,
+    }))).toEqual({ start: 0, end: 'Right'.length });
+    await page.keyboard.type('Tests');
     await paneName.press('Enter');
 
     await expect(page.locator('.terminal-leaf').nth(1).locator('.leaf-title-text')).toHaveText('Tests');
@@ -113,7 +118,12 @@ test('renames the focused pane and active tab without interrupting xterm input',
     await page.keyboard.press('Control+F2');
     const tabName = page.getByRole('dialog', { name: 'Rename tab' }).getByRole('textbox', { name: 'Tab name' });
     await expect(tabName).toHaveValue('Two panes');
-    await tabName.fill('JaneT - fixes');
+    await expect(tabName).toBeFocused();
+    await expect.poll(() => tabName.evaluate((input: HTMLInputElement) => ({
+      start: input.selectionStart,
+      end: input.selectionEnd,
+    }))).toEqual({ start: 0, end: 'Two panes'.length });
+    await page.keyboard.type('JaneT - fixes');
     await tabName.press('Enter');
     await expect.poll(() => activeElementIs(page, '.xterm-helper-textarea', 1)).toBe(true);
     await page.keyboard.type(`echo ${TAB_MARKER}`);

@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalFocus } from '../useModalFocus';
 
@@ -24,14 +24,6 @@ export default function RenameDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
-  const [value, setValue] = useState(initialValue);
-
-  useEffect(() => {
-    if (!open) return;
-    setValue(initialValue);
-    const frame = requestAnimationFrame(() => inputRef.current?.select());
-    return () => cancelAnimationFrame(frame);
-  }, [initialValue, open]);
 
   useModalFocus({
     open,
@@ -40,6 +32,12 @@ export default function RenameDialog({
     initialFocusSelector: 'input',
     fallbackFocus,
   });
+
+  useEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => inputRef.current?.select());
+    return () => cancelAnimationFrame(frame);
+  }, [initialValue, open]);
 
   if (!open) return null;
 
@@ -60,18 +58,17 @@ export default function RenameDialog({
             className="form-input"
             aria-label={inputLabel}
             maxLength={256}
-            value={value}
-            onChange={(event) => setValue(event.currentTarget.value)}
+            defaultValue={initialValue}
             onKeyDown={(event) => {
               if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
               event.preventDefault();
-              onSave(value);
+              onSave(event.currentTarget.value);
             }}
           />
         </label>
         <div className="confirmation-dialog-actions">
           <button type="button" className="confirmation-dialog-button cancel" onClick={onCancel}>Cancel</button>
-          <button type="button" className="confirmation-dialog-button confirm" onClick={() => onSave(value)}>Save</button>
+          <button type="button" className="confirmation-dialog-button confirm" onClick={() => onSave(inputRef.current?.value ?? '')}>Save</button>
         </div>
       </div>
     </div>,
