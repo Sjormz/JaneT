@@ -2,6 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication } from '@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import packageMetadata from '../../package.json';
 
 const root = path.resolve(__dirname, '../..');
 
@@ -46,9 +47,9 @@ test('shows the current JaneT version and checks for updates when clicked', asyn
     });
 
     const version = page.getByRole('button', {
-      name: 'JaneT version 0.6.1. Check for updates',
+      name: `JaneT version ${packageMetadata.version}. Check for updates`,
     });
-    await expect(version).toHaveText('v0.6.1');
+    await expect(version).toHaveText(`v${packageMetadata.version}`);
 
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(800, 600));
     await expect(version).toBeVisible();
