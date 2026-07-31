@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import packageMetadata from '../../package.json';
 
 afterEach(() => {
   vi.doUnmock('electron');
@@ -40,7 +41,7 @@ describe('main-process clipboard bridge', () => {
   it('reports JaneT package version instead of the development Electron runtime version', async () => {
     const { getApplicationVersion } = await importMainClipboardBridge();
 
-    expect(getApplicationVersion()).toBe('0.6.1');
+    expect(getApplicationVersion()).toBe(packageMetadata.version);
   });
 
   it('writes a safe shell token to the Electron clipboard', async () => {
