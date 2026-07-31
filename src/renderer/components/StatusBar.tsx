@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { SessionInfo } from "../types";
 import { ArrowDownIcon, ArrowUpIcon, CircleDotIcon, CircleIcon, FolderIcon, SourceControlIcon } from "../icons";
 import { formatGitStatusTitle, GitStatusSummary } from "../gitStatus";
@@ -22,6 +22,12 @@ export default function StatusBar({
   isRemote,
   remoteHost,
 }: StatusBarProps) {
+  const [version, setVersion] = useState('');
+
+  useEffect(() => {
+    window.janet.getVersion().then(setVersion).catch(() => {});
+  }, []);
+
   return (
     <div className="status-bar">
       <div className="status-left">
@@ -58,6 +64,18 @@ export default function StatusBar({
           </Tooltip>
         )}
       </div>
+      {version && (
+        <Tooltip label="Check for updates" placement="top">
+          <button
+            type="button"
+            className="status-version"
+            aria-label={`JaneT version ${version}. Check for updates`}
+            onClick={() => { window.janet.checkForUpdates().catch(() => {}); }}
+          >
+            v{version}
+          </button>
+        </Tooltip>
+      )}
     </div>
   );
 }

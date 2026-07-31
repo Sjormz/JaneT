@@ -1,5 +1,6 @@
 import * as electron from 'electron';
 import * as path from 'path';
+import packageMetadata from '../../package.json';
 import { TerminalManager } from './terminal';
 import { SSHManager } from './ssh';
 import { isAllowedExternalUrl } from './externalUrls';
@@ -89,6 +90,10 @@ function openAllowedExternalUrl(url: string): boolean {
 const MAX_CLIPBOARD_TEXT_LENGTH = 131_075;
 const MAX_TERMINAL_CLIPBOARD_TEXT_LENGTH = 1_048_576;
 const UNSAFE_CLIPBOARD_TEXT = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
+
+export function getApplicationVersion(): string {
+  return electron.app.isPackaged ? electron.app.getVersion() : packageMetadata.version;
+}
 
 export function copyTextToClipboard(
   text: unknown,
@@ -610,6 +615,10 @@ function registerIpcHandlers() {
 
   handle('app:getPlatform', () => {
     return process.platform;
+  });
+
+  handle('app:getVersion', () => {
+    return getApplicationVersion();
   });
 
   handle('app:openExternal', async (event, url: unknown) => {

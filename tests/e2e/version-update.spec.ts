@@ -1,0 +1,70 @@
+import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+const root = path.resolve(__dirname, '../..');
+
+function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
+  const env = { ...process.env, ...extra };
+  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.ELECTRON_NO_ATTACH_CONSOLE;
+  return Object.fromEntries(
+    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+  );
+}
+
+async function forceClose(app: ElectronApplication | undefined): Promise<void> {
+  if (!app) return;
+  await app.close().catch(() => {});
+}
+
+test('shows the current JaneT version and checks for updates when clicked', async () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-version-e2e-'));
+  let app: ElectronApplication | undefined;
+
+  try {
+    app = await electron.launch({
+      args: ['.'],
+      cwd: root,
+      env: electronEnv({
+        NODE_ENV: 'test',
+        JANET_E2E_USER_DATA_DIR: userData,
+      }),
+    });
+    const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
+    await expect(page.locator('.terminal-container').first()).toBeVisible();
+
+    await app.evaluate(({ ipcMain }) => {
+      const state = globalThis as typeof globalThis & { janetUpdateChecks?: number };
+      state.janetUpdateChecks = 0;
+      ipcMain.handle('update:check', () => {
+        state.janetUpdateChecks = (state.janetUpdateChecks ?? 0) + 1;
+        return { success: true };
+      });
+    });
+
+    const version = page.getByRole('button', {
+      name: 'JaneT version 0.6.1. Check for updates',
+    });
+    await expect(version).toHaveText('v0.6.1');
+
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(800, 600));
+    await expect(version).toBeVisible();
+    const statusBounds = await page.locator('.status-bar').boundingBox();
+    const versionBounds = await version.boundingBox();
+    expect(statusBounds).not.toBeNull();
+    expect(versionBounds).not.toBeNull();
+    expect(statusBounds!.x + statusBounds!.width - versionBounds!.x - versionBounds!.width)
+      .toBeLessThanOrEqual(14);
+
+    await version.click();
+    await expect.poll(() => app!.evaluate(() => (
+      globalThis as typeof globalThis & { janetUpdateChecks?: number }
+    ).janetUpdateChecks)).toBe(1);
+  } finally {
+    await forceClose(app);
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  }
+});

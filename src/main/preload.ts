@@ -210,6 +210,7 @@ const api = {
 
   // App
   getPlatform: () => ipcRenderer.invoke('app:getPlatform'),
+  getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
   openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
   copyText: (text: string): Promise<boolean> => ipcRenderer.invoke('app:copyText', text),
   copyTerminalText: (text: string): boolean => ipcRenderer.sendSync('app:copyTerminalText', text) === true,

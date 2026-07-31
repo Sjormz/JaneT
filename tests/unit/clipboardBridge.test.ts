@@ -10,6 +10,7 @@ async function importMainClipboardBridge() {
   vi.doMock('electron', () => ({
     app: {
       commandLine: { appendSwitch: vi.fn() },
+      getVersion: vi.fn(() => '43.1.1'),
       requestSingleInstanceLock: vi.fn(() => false),
       quit: vi.fn(),
       on: vi.fn(),
@@ -30,11 +31,18 @@ async function importMainClipboardBridge() {
   return {
     copyTerminalTextToClipboard: main.copyTerminalTextToClipboard,
     copyTextToClipboard: main.copyTextToClipboard,
+    getApplicationVersion: main.getApplicationVersion,
     writeText,
   };
 }
 
 describe('main-process clipboard bridge', () => {
+  it('reports JaneT package version instead of the development Electron runtime version', async () => {
+    const { getApplicationVersion } = await importMainClipboardBridge();
+
+    expect(getApplicationVersion()).toBe('0.6.1');
+  });
+
   it('writes a safe shell token to the Electron clipboard', async () => {
     const { copyTextToClipboard, writeText } = await importMainClipboardBridge();
     const token = "'/tmp/drag target' ";
