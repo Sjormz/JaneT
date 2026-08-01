@@ -573,7 +573,7 @@ describe('split panes in the app', () => {
     render(<App />);
 
     const terminal = await screen.findByTestId(/terminal-/);
-    const terminalInput = within(terminal).getByRole('textbox');
+    const terminalInput = await within(terminal).findByRole('textbox');
     act(() => terminalInput.focus());
     await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onCollapse).toBeTypeOf('function'));
     act(() => rendererMocks.verticalTabBarProps.onCollapse());
@@ -1224,15 +1224,25 @@ describe('split panes in the app', () => {
 
     render(<App />);
     await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
-    (window.janet.sshCreateShell as any).mockClear();
+    const connectionCallStart = (window.janet.sshConnect as any).mock.calls.length;
+    const shellCallStart = (window.janet.sshCreateShell as any).mock.calls.length;
 
     await act(async () => {
       await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
     });
 
     await waitFor(() => {
-      expect(window.janet.sshConnect).toHaveBeenCalledTimes(2);
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
+      const launchedTab = rendererMocks.verticalTabBarProps.tabs.find(
+        (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+      );
+      const sessionIds = launchedTab.root.children.map((leaf: { sshSessionId: string }) => leaf.sshSessionId);
+      const connectionIds = (window.janet.sshConnect as any).mock.calls
+        .slice(connectionCallStart).map((call: any[]) => call[0].id);
+      const shellIds = (window.janet.sshCreateShell as any).mock.calls
+        .slice(shellCallStart).map((call: any[]) => call[0].id);
+      expect(sessionIds).toHaveLength(2);
+      expect([...connectionIds].sort()).toEqual([...sessionIds].sort());
+      expect([...shellIds].sort()).toEqual([...sessionIds].sort());
     });
     expect((window.janet.sshConnect as any).mock.calls.map((call: any[]) => call[0]))
       .toEqual(expect.arrayContaining([
@@ -1313,6 +1323,7 @@ describe('split panes in the app', () => {
     try {
       render(<App />);
       await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
+      await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalled());
       (window.janet.terminalCreate as any).mockClear();
 
       await act(async () => {

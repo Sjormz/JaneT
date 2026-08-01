@@ -3,7 +3,12 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildAddWorktreeArgs, GitManager, normalizeGitStatus } from '../../src/main/git';
+import {
+  buildAddWorktreeArgs,
+  GitManager,
+  normalizeGitStatus,
+  parseGitStatusPorcelain,
+} from '../../src/main/git';
 
 const temporaryDirectories: string[] = [];
 
@@ -71,6 +76,36 @@ describe('normalizeGitStatus', () => {
       {
         path: 'new-name.ts',
         originalPath: 'old-name.ts',
+        index: 'R',
+        working_dir: ' ',
+        staged: true,
+        unstaged: false,
+      },
+    ]);
+  });
+
+  it('parses machine status without treating conflicts as ordinary changes', () => {
+    const result = parseGitStatusPorcelain([
+      '## main...origin/main [gone]',
+      'AU conflict.txt',
+      'R  new name.txt',
+      'old name.txt',
+      '',
+    ].join('\0'));
+
+    expect(result).toMatchObject({
+      current: 'main',
+      tracking: 'origin/main',
+      ahead: 0,
+      behind: 0,
+      created: [],
+      conflicted: ['conflict.txt'],
+    });
+    expect(result.files).toEqual([
+      { path: 'conflict.txt', index: 'A', working_dir: 'U', staged: false, unstaged: false },
+      {
+        path: 'new name.txt',
+        originalPath: 'old name.txt',
         index: 'R',
         working_dir: ' ',
         staged: true,
@@ -322,6 +357,23 @@ describe('GitManager working tree actions', { timeout: 30_000 }, () => {
     expect(await manager.unstage(repository, filenames)).toBe(true);
     expect(git(repository, 'diff', '--cached', '--name-only')).toBe('');
     expect(await manager.stage(repository, null as unknown as string[])).toBe(false);
+  });
+
+  it('preserves leading and trailing spaces in status paths and actions', async () => {
+    const repository = initializeRepository();
+    const manager = new GitManager();
+    const filenames = [' leading-space.txt', 'trailing-space.txt '];
+    for (const filename of filenames) fs.writeFileSync(path.join(repository, filename), `${filename}\n`);
+
+    const status = await manager.status(repository);
+    expect(status?.files.map((file) => file.path).sort()).toEqual([...filenames].sort());
+    const actionable = process.platform === 'win32' ? filenames.slice(0, 1) : filenames;
+    expect(await manager.stage(repository, actionable)).toBe(true);
+    const staged = execFileSync(
+      'git', ['diff', '--cached', '--name-only', '-z'], { cwd: repository, encoding: 'utf8' },
+    );
+    expect(staged.split('\0').filter(Boolean).sort())
+      .toEqual([...actionable].sort());
   });
 
   it('fetches, pulls, and pushes against the tracked remote', async () => {

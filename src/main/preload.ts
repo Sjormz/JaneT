@@ -40,11 +40,21 @@ type PrepareForCloseCallback = (
   request: WorkspacePrepareForCloseRequest,
 ) => void | Promise<void>;
 
+export interface TerminalOutputEvent {
+  source: 'local' | 'ssh';
+  id: string;
+  data: string;
+  generation: number;
+  sequence: number;
+}
+
+export type TerminalOutputAcknowledgement = Omit<TerminalOutputEvent, 'data'>;
+
 let prepareForCloseCallback: PrepareForCloseCallback | null = null;
-const terminalDataCallbacks = new Set<(params: { id: string; data: string }) => void>();
+const terminalDataCallbacks = new Set<(params: TerminalOutputEvent) => void>();
 const terminalExitCallbacks = new Set<(params: { id: string; exitCode: number; signal: number }) => void>();
 
-ipcRenderer.on('terminal:onData', (_event: Electron.IpcRendererEvent, data: { id: string; data: string }) => {
+ipcRenderer.on('terminal:onData', (_event: Electron.IpcRendererEvent, data: TerminalOutputEvent) => {
   for (const callback of terminalDataCallbacks) {
     try { callback(data); } catch {}
   }
@@ -103,7 +113,9 @@ const api = {
     ipcRenderer.invoke('terminal:writeBinary', params),
   terminalDestroy: (params: { id: string }) =>
     ipcRenderer.invoke('terminal:destroy', params),
-  onTerminalData: (callback: (params: { id: string; data: string }) => void) => {
+  terminalAcknowledgeOutput: (params: TerminalOutputAcknowledgement) =>
+    ipcRenderer.send('terminal:acknowledgeOutput', params),
+  onTerminalData: (callback: (params: TerminalOutputEvent) => void) => {
     terminalDataCallbacks.add(callback);
     return () => { terminalDataCallbacks.delete(callback); };
   },

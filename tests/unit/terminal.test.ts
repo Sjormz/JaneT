@@ -22,6 +22,8 @@ class MockPty {
 
   resize = vi.fn();
   write = vi.fn();
+  pause = vi.fn();
+  resume = vi.fn();
   killSignal = vi.fn((_signal?: string) => {
     this.killed = true;
   });
@@ -267,7 +269,7 @@ describe('TerminalManager', () => {
     expect(first).toBe(second);
   });
 
-  it('only ever wires one onData forwarder per id, even across repeat create() calls', async () => {
+  it('replaces the onData forwarder when an existing terminal reattaches', async () => {
     const ptys: MockPty[] = [];
     mocks.spawnMock.mockImplementation(() => {
       const pty = new MockPty();
@@ -283,12 +285,87 @@ describe('TerminalManager', () => {
     manager.create('term-1', undefined, undefined, (d) => receivedA.push(d));
     manager.create('term-1', undefined, undefined, (d) => receivedB.push(d));
 
-    // Only the first forwarder should ever have been attached — a second
-    // call must not add a second listener to the same underlying pty.
     ptys[0].emit('PS C:\\Users\\pckpr> ');
 
-    expect(receivedA).toEqual(['PS C:\\Users\\pckpr> ']);
-    expect(receivedB).toEqual([]);
+    expect(receivedA).toEqual([]);
+    expect(receivedB).toEqual(['PS C:\\Users\\pckpr> ']);
+  });
+
+  it('pauses output above the high watermark and resumes after parsed output is acknowledged', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    const received: Array<{ generation: number; sequence: number }> = [];
+    manager.create('term-flow', undefined, undefined, (_data, output) => received.push(output));
+
+    pty.emit('x'.repeat(300_000));
+    pty.emit('x'.repeat(224_288));
+
+    expect(pty.pause).toHaveBeenCalledOnce();
+    manager.acknowledgeOutput('term-flow', received[0].generation, received[0].sequence);
+    expect(pty.resume).not.toHaveBeenCalled();
+    manager.acknowledgeOutput('term-flow', received[1].generation, received[1].sequence);
+    expect(pty.resume).toHaveBeenCalledOnce();
+  });
+
+  it('starts fresh flow control when an existing terminal reattaches', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    const firstOutput: Array<{ generation: number; sequence: number }> = [];
+    manager.create('term-reattach-flow', undefined, undefined, (_data, output) => firstOutput.push(output));
+
+    pty.emit('x'.repeat(600_000));
+    expect(pty.pause).toHaveBeenCalledOnce();
+
+    const currentOutput: Array<{ generation: number; sequence: number }> = [];
+    manager.create('term-reattach-flow', undefined, undefined, (_data, output) => {
+      currentOutput.push(output);
+    });
+    expect(pty.resume).toHaveBeenCalledOnce();
+
+    pty.pause.mockClear();
+    pty.emit('x'.repeat(600_000));
+    expect(pty.pause).toHaveBeenCalledOnce();
+    expect(currentOutput[0].generation).not.toBe(firstOutput[0].generation);
+    expect(currentOutput[0].sequence).toBe(600_000);
+  });
+
+  it('does not pause output that could not be delivered to the renderer', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    manager.create('term-undelivered-flow', undefined, undefined, () => false);
+
+    pty.emit('x'.repeat(600_000));
+
+    expect(pty.pause).not.toHaveBeenCalled();
+  });
+
+  it('ignores output acknowledgements from a destroyed terminal generation', async () => {
+    const firstPty = new MockPty();
+    mocks.spawnMock.mockReturnValue(firstPty);
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager({ platform: 'win32' });
+    const firstOutput: Array<{ generation: number; sequence: number }> = [];
+    manager.create('term-reused-flow', undefined, undefined, (_data, output) => firstOutput.push(output));
+    firstPty.emit('x');
+    manager.destroy('term-reused-flow');
+
+    const currentPty = new MockPty();
+    mocks.spawnMock.mockReturnValue(currentPty);
+    const currentOutput: Array<{ generation: number; sequence: number }> = [];
+    manager.create('term-reused-flow', undefined, undefined, (_data, output) => currentOutput.push(output));
+    currentPty.emit('x'.repeat(600_000));
+    expect(currentPty.pause).toHaveBeenCalledOnce();
+
+    manager.acknowledgeOutput('term-reused-flow', firstOutput[0].generation, Number.MAX_SAFE_INTEGER);
+    expect(currentPty.resume).not.toHaveBeenCalled();
+    manager.acknowledgeOutput('term-reused-flow', currentOutput[0].generation, currentOutput[0].sequence);
+    expect(currentPty.resume).toHaveBeenCalledOnce();
   });
 
   it('destroy() closes a Windows PTY before reusing its id', async () => {

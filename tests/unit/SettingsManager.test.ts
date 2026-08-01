@@ -100,6 +100,48 @@ describe('SettingsManager', () => {
     expect(settings.fontSize).toBe(16);
   });
 
+  it('discards inactive SSH credentials from legacy settings', async () => {
+    const fsMock = await import('fs');
+    const passwordSecret = {
+      version: 1,
+      scheme: 'electron-safe-storage',
+      ciphertext: Buffer.from('encrypted:password').toString('base64'),
+    };
+    const privateKeySecret = {
+      version: 1,
+      scheme: 'electron-safe-storage',
+      ciphertext: Buffer.from('encrypted:private-key').toString('base64'),
+    };
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      sshProfiles: [
+        {
+          id: 'password-profile', host: 'password.example.com', port: 22, auth: 'password',
+          passwordSecret, privateKeySecret,
+        },
+        {
+          id: 'key-profile', host: 'key.example.com', port: 22, auth: 'key',
+          passwordSecret, privateKeySecret,
+        },
+      ],
+    }));
+
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const [passwordProfile, keyProfile] = manager.get().sshProfiles;
+    expect(passwordProfile).toMatchObject({ password: 'password' });
+    expect(passwordProfile).not.toHaveProperty('privateKey');
+    expect(keyProfile).toMatchObject({ privateKey: 'private-key' });
+    expect(keyProfile).not.toHaveProperty('password');
+    expect(safeStorage.decryptString).toHaveBeenCalledTimes(2);
+
+    manager.set({ fontSize: 16 });
+    const saved = JSON.parse((fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string);
+    expect(saved.sshProfiles[0]).toMatchObject({ passwordSecret });
+    expect(saved.sshProfiles[0].privateKeySecret).toBeUndefined();
+    expect(saved.sshProfiles[1]).toMatchObject({ privateKeySecret });
+    expect(saved.sshProfiles[1].passwordSecret).toBeUndefined();
+  });
+
   it('normalizes missing and malformed legacy SSH ports during settings load', async () => {
     const fsMock = await import('fs');
     (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
@@ -471,6 +513,85 @@ describe('SettingsManager', () => {
     (fsMock.readFileSync as any).mockImplementationOnce(() => savedJson);
     const loaded = new SettingsManager().get();
     expect(loaded.sshProfiles[0].password).toBe('secret');
+  });
+
+  it('reuses encrypted SSH credentials when saving unrelated settings', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    manager.set({
+      sshProfiles: [{
+        id: 'pckpr@box.local:22:password', host: 'box.local', port: 22,
+        username: 'pckpr', auth: 'password', password: 'secret',
+      }],
+    });
+    const original = JSON.parse((fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string);
+    vi.mocked(safeStorage.encryptString).mockClear();
+
+    manager.set({ fontSize: 16 });
+
+    const rewritten = JSON.parse((fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string);
+    expect(safeStorage.encryptString).not.toHaveBeenCalled();
+    expect(rewritten.sshProfiles[0].passwordSecret).toEqual(original.sshProfiles[0].passwordSecret);
+  });
+
+  it('reuses an unchanged encrypted credential when editing profile metadata', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    manager.set({
+      sshProfiles: [{
+        id: 'pckpr@box.local:22:password', host: 'box.local', port: 22,
+        username: 'pckpr', auth: 'password', password: 'secret',
+      }],
+    });
+    const original = JSON.parse((fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string);
+    vi.mocked(safeStorage.encryptString).mockClear();
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+
+    const updated = manager.set({
+      sshProfiles: manager.get().sshProfiles.map((profile) => ({
+        ...profile,
+        username: 'renamed-pckpr',
+      })),
+    });
+
+    const rewritten = JSON.parse((fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string);
+    expect(updated.sshProfiles[0].username).toBe('renamed-pckpr');
+    expect(safeStorage.encryptString).not.toHaveBeenCalled();
+    expect(rewritten.sshProfiles[0].passwordSecret).toEqual(original.sshProfiles[0].passwordSecret);
+  });
+
+  it('discards the inactive credential when changing SSH authentication', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    manager.set({
+      sshProfiles: [
+        {
+          id: 'password-profile', host: 'password.local', port: 22,
+          username: 'alice', auth: 'password', password: 'old-password',
+        },
+        {
+          id: 'key-profile', host: 'key.local', port: 22,
+          username: 'bob', auth: 'key', privateKey: 'old-key',
+        },
+      ],
+    });
+
+    const updated = manager.set({
+      sshProfiles: manager.get().sshProfiles.map((profile) => profile.auth === 'password'
+        ? { ...profile, auth: 'key' as const, privateKey: 'new-key' }
+        : { ...profile, auth: 'password' as const, password: 'new-password' }),
+    });
+    const saved = JSON.parse((fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string);
+
+    expect(updated.sshProfiles[0]).not.toHaveProperty('password');
+    expect(updated.sshProfiles[1]).not.toHaveProperty('privateKey');
+    expect(saved.sshProfiles[0]).toHaveProperty('privateKeySecret');
+    expect(saved.sshProfiles[0]).not.toHaveProperty('passwordSecret');
+    expect(saved.sshProfiles[1]).toHaveProperty('passwordSecret');
+    expect(saved.sshProfiles[1]).not.toHaveProperty('privateKeySecret');
   });
 
   it('rejects a new SSH credential when safeStorage is unavailable', async () => {

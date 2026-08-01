@@ -41,6 +41,8 @@ const MAX_SSH_CONNECTIONS = 64;
 const MAX_SSH_SHELLS = 64;
 const MAX_SSH_SHELL_QUEUE_BYTES = 1024 * 1024;
 const MAX_SSH_SHELL_QUEUE_CHUNKS = 256;
+const OUTPUT_HIGH_WATERMARK_BYTES = 512 * 1024;
+const OUTPUT_LOW_WATERMARK_BYTES = 128 * 1024;
 const SSH_SHELL_OPEN_TIMEOUT_MS = 30_000;
 const MAX_SSH_SHELL_DIMENSION = 1_000;
 const MAX_SFTP_DIRECTORY_ENTRIES = 10_000;
@@ -770,7 +772,8 @@ interface SSHShellHandle {
    * invoke re-running the IPC handler before the first call settles)
    * replaces rather than adds a listener, so PTY-side output is never
    * dispatched to two callbacks at once. */
-  onData: (cb: (data: string) => void) => void;
+  onData: (cb: (data: string, output: { generation: number; sequence: number }) => unknown) => void;
+  acknowledgeOutput: (generation: number, sequence: number) => void;
   ready: Promise<void>;
   cancel: (error: Error) => void;
 }
@@ -783,6 +786,7 @@ export class SSHManager {
   private readonly startupCommandLedger = new Set<string>();
   private readonly pendingStartupCommandHandles = new Map<string, SSHShellHandle>();
   private readonly remoteSaveQueues = new Map<string, Promise<void>>();
+  private nextOutputGeneration = 1;
 
   constructor(
     private readonly hostKeyStore?: SSHHostKeyStore,
@@ -1073,7 +1077,12 @@ export class SSHManager {
     const capacityOwner = termId;
     this.capacity.reserve(capacityOwner);
 
-    let activeCallback: ((data: string) => void) | null = null;
+    let activeCallback: ((data: string, output: { generation: number; sequence: number }) => unknown) | null = null;
+    let outputGeneration = this.nextOutputGeneration++;
+    let outputSequence = 0;
+    let acknowledgedOutputSequence = 0;
+    let outputPaused = false;
+    let activeStream: ClientChannel | null = null;
     const pendingChunks: string[] = [];
     let pendingChunkBytes = 0;
     let resolveReady: (() => void) | null = null;
@@ -1086,6 +1095,18 @@ export class SSHManager {
       resolveReady = resolve;
       rejectReady = reject;
     });
+
+    const forwardOutput = (str: string) => {
+      const sequence = outputSequence + Buffer.byteLength(str);
+      const delivered = activeCallback?.(str, { generation: outputGeneration, sequence });
+      if (delivered === false || !activeCallback) return;
+      outputSequence = sequence;
+      if (!outputPaused && outputSequence - acknowledgedOutputSequence >= OUTPUT_HIGH_WATERMARK_BYTES) {
+        activeStream?.pause();
+        activeStream?.stderr?.pause();
+        outputPaused = true;
+      }
+    };
 
     const dispatch = (str: string) => {
       if (!str) return;
@@ -1102,18 +1123,40 @@ export class SSHManager {
         return;
       }
 
-      activeCallback(str);
+      forwardOutput(str);
     };
 
     const handle: SSHShellHandle = {
-      onData: (cb: (data: string) => void) => {
+      onData: (cb) => {
         activeCallback = cb;
+        outputGeneration = this.nextOutputGeneration++;
+        outputSequence = 0;
+        acknowledgedOutputSequence = 0;
+        if (outputPaused) {
+          activeStream?.resume();
+          activeStream?.stderr?.resume();
+          outputPaused = false;
+        }
         if (pendingChunks.length > 0) {
           for (const chunk of pendingChunks) {
-            cb(chunk);
+            forwardOutput(chunk);
           }
           pendingChunks.length = 0;
           pendingChunkBytes = 0;
+        }
+      },
+      acknowledgeOutput: (generation, sequence) => {
+        if (
+          generation !== outputGeneration
+          || !Number.isSafeInteger(sequence)
+          || sequence <= acknowledgedOutputSequence
+          || sequence > outputSequence
+        ) return;
+        acknowledgedOutputSequence = sequence;
+        if (outputPaused && outputSequence - acknowledgedOutputSequence <= OUTPUT_LOW_WATERMARK_BYTES) {
+          activeStream?.resume();
+          activeStream?.stderr?.resume();
+          outputPaused = false;
         }
       },
       ready,
@@ -1163,6 +1206,7 @@ export class SSHManager {
       }
       if (openTimer) clearTimeout(openTimer);
       openTimer = null;
+      activeStream = stream;
 
       const stdoutDecoder = new StringDecoder('utf8');
       const stderrDecoder = new StringDecoder('utf8');
@@ -1249,6 +1293,11 @@ export class SSHManager {
     return Array.from(this.connections.values()).find(
       (conn) => conn.shells.has(termId) || conn.shellHandles.has(termId),
     );
+  }
+
+  acknowledgeOutput(termId: string, generation: number, sequence: number): void {
+    if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(sequence) || sequence < 0) return;
+    this.terminalConnection(termId)?.shellHandles.get(termId)?.acknowledgeOutput(generation, sequence);
   }
 
   private writeShellChunk(

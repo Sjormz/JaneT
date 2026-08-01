@@ -113,7 +113,6 @@ interface CachedTerminalPane {
   sshNoticeState: SshNoticeState;
   sshNoticeListener: ((state: SshNoticeState) => void) | null;
   agentEventListener: ((termId: string, event: AgentLifecycleEvent) => void) | null;
-  disposeTimer: ReturnType<typeof setTimeout> | null;
   inputSource: { userInput: boolean };
 }
 
@@ -122,22 +121,11 @@ const terminalPaneCache = new Map<string, CachedTerminalPane>();
 export function disposeCachedTerminal(termId: string): boolean {
   const cached = terminalPaneCache.get(termId);
   if (!cached) return false;
-  if (cached.disposeTimer) clearTimeout(cached.disposeTimer);
   runCleanup(cached.cleanup);
   cached.cleanup = [];
   cached.term.dispose();
   terminalPaneCache.delete(termId);
   return true;
-}
-
-function scheduleCachedTerminalDispose(termId: string): void {
-  const cached = terminalPaneCache.get(termId);
-  if (!cached || cached.disposeTimer) return;
-  // A TerminalPane unmount can mean "hidden because another tab is active",
-  // not "closed". Disposing the frontend xterm here drops the visible buffer
-  // while the backend SSH/local session keeps running, so switching back shows
-  // a blank pane until fresh output arrives. App.tsx explicitly disposes the
-  // cache when the leaf is actually removed from the tab tree.
 }
 
 export default function TerminalPane({
@@ -262,9 +250,9 @@ export default function TerminalPane({
 
   const syncTerminalSize = (term: Terminal, fitAddon: FitAddon) => {
     try {
+      if (!usableDimensions(fitAddon.proposeDimensions())) return;
       fitAddon.fit();
-      const dims = usableDimensions(fitAddon.proposeDimensions());
-      if (!dims) return;
+      const dims = { cols: term.cols, rows: term.rows };
       const last = lastResizeRef.current;
       if (last?.cols === dims.cols && last?.rows === dims.rows) return;
       lastResizeRef.current = dims;
@@ -386,11 +374,6 @@ export default function TerminalPane({
       cached.sshSessionId === sshSessionId &&
       cached.sshShellReady === sshShellReady
     ) {
-      if (cached.disposeTimer) {
-        clearTimeout(cached.disposeTimer);
-        cached.disposeTimer = null;
-      }
-
       const { term, fitAddon, searchAddon } = cached;
       cached.sshNoticeListener = setSshNoticeState;
 
@@ -413,7 +396,6 @@ export default function TerminalPane({
         effectActive = false;
         runCleanup(mountCleanup);
         onRemoved(termId);
-        scheduleCachedTerminalDispose(termId);
         const currentCache = terminalPaneCache.get(termId);
         if (currentCache?.sshNoticeListener === setSshNoticeState) {
           currentCache.sshNoticeListener = null;
@@ -511,12 +493,14 @@ export default function TerminalPane({
     });
     lifetimeCleanup.push(binaryDisposable);
 
-    const cleanupListener = window.janet.onTerminalData(({ id, data }) => {
-      if (id === termId) {
+    const cleanupListener = window.janet.onTerminalData(({ source, id, data, generation, sequence }) => {
+      if (id === termId && source === tabType) {
         sshNoticeAttemptRef.current += 1;
         publishSshNoticeState({ kind: 'hidden' });
         kittyGraphics?.push(data);
-        term.write(data);
+        term.write(data, () => {
+          window.janet.terminalAcknowledgeOutput({ source, id, generation, sequence });
+        });
       }
     });
     lifetimeCleanup.push(cleanupListener);
@@ -602,7 +586,6 @@ export default function TerminalPane({
           : { kind: 'reconnecting' },
       sshNoticeListener: setSshNoticeState,
       agentEventListener: onAgentEvent ?? null,
-      disposeTimer: null,
       inputSource,
     });
 
@@ -610,7 +593,6 @@ export default function TerminalPane({
       effectActive = false;
       runCleanup(mountCleanup);
       onRemoved(termId);
-      scheduleCachedTerminalDispose(termId);
       const currentCache = terminalPaneCache.get(termId);
       if (currentCache?.sshNoticeListener === setSshNoticeState) {
         currentCache.sshNoticeListener = null;

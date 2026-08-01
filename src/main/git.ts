@@ -83,6 +83,82 @@ export function normalizeGitStatus(status: SimpleGitStatusLike): GitStatusResult
   };
 }
 
+const CONFLICTED_GIT_STATES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
+
+/** Parse Git's stable, NUL-delimited machine format without changing filenames. */
+export function parseGitStatusPorcelain(raw: string): GitStatusResult {
+  const result: GitStatusResult = {
+    current: 'HEAD',
+    tracking: '',
+    files: [],
+    ahead: 0,
+    behind: 0,
+    created: [],
+    deleted: [],
+    modified: [],
+    renamed: [],
+    conflicted: [],
+  };
+  const records = raw.split('\0');
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!record) continue;
+    if (record.startsWith('## ')) {
+      parseGitBranchHeader(record.slice(3), result);
+      continue;
+    }
+    if (record.length < 4 || record[2] !== ' ') continue;
+
+    const indexStatus = record[0];
+    const workingStatus = record[1];
+    const state = `${indexStatus}${workingStatus}`;
+    const filePath = record.slice(3);
+    const renamed = indexStatus === 'R' || indexStatus === 'C' || workingStatus === 'R' || workingStatus === 'C';
+    const originalPath = renamed ? records[index += 1] : undefined;
+    const conflicted = CONFLICTED_GIT_STATES.has(state);
+    result.files.push({
+      path: filePath,
+      ...(originalPath ? { originalPath } : {}),
+      working_dir: workingStatus,
+      index: indexStatus,
+      staged: !conflicted && indexStatus !== ' ' && indexStatus !== '?' && indexStatus !== '!',
+      unstaged: !conflicted && workingStatus !== ' ' && workingStatus !== '!',
+    });
+    if (conflicted) {
+      result.conflicted.push(filePath);
+    } else {
+      if (indexStatus === 'A' || workingStatus === 'A') result.created.push(filePath);
+      if (indexStatus === 'D' || workingStatus === 'D') result.deleted.push(filePath);
+      if (indexStatus === 'M' || workingStatus === 'M' || indexStatus === 'T' || workingStatus === 'T') {
+        result.modified.push(filePath);
+      }
+    }
+    if (renamed) result.renamed.push(filePath);
+  }
+  return result;
+}
+
+function parseGitBranchHeader(header: string, result: GitStatusResult): void {
+  const unborn = /^(?:No commits yet|Initial commit) on (.+)$/.exec(header);
+  if (unborn) {
+    result.current = unborn[1];
+    return;
+  }
+  const trackingState = / \[([^\]]+)\]$/.exec(header);
+  if (trackingState) {
+    result.ahead = Number(/(?:^|, )ahead (\d+)/.exec(trackingState[1])?.[1] ?? 0);
+    result.behind = Number(/(?:^|, )behind (\d+)/.exec(trackingState[1])?.[1] ?? 0);
+    header = header.slice(0, trackingState.index);
+  }
+  const trackingSeparator = header.indexOf('...');
+  if (trackingSeparator >= 0) {
+    result.current = header.slice(0, trackingSeparator) || 'HEAD';
+    result.tracking = header.slice(trackingSeparator + 3);
+  } else if (!header.startsWith('HEAD ')) {
+    result.current = header;
+  }
+}
+
 export function buildAddWorktreeArgs(
   worktreePath: string,
   branch: string,
@@ -147,8 +223,10 @@ export class GitManager {
   async status(repoPath: string): Promise<GitStatusResult | null> {
     if (!simpleGit) return null;
     try {
-      const status = await simpleGit(repoPath).status();
-      return normalizeGitStatus(status);
+      const status = await simpleGit(repoPath).raw([
+        '--no-optional-locks', 'status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all',
+      ]);
+      return parseGitStatusPorcelain(status);
     } catch {
       return null;
     }
