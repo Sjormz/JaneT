@@ -33,6 +33,15 @@ function privateKeyPayload(auth: 'password' | 'key', privateKey: string) {
   return auth === 'key' && privateKey ? { privateKey } : {};
 }
 
+function credentials(profile: SavedSSHProfile) {
+  return {
+    host: profile.host, port: profile.port,
+    ...(profile.username ? { username: profile.username } : {}), auth: profile.auth,
+    ...(profile.auth === 'password' && profile.password ? { password: profile.password } : {}),
+    ...(profile.auth === 'key' && profile.privateKey ? { privateKey: profile.privateKey } : {}),
+  };
+}
+
 export default function SSHManager({
   sshProfiles,
   canConnect = () => true,
@@ -46,6 +55,7 @@ export default function SSHManager({
   const [auth, setAuth] = useState<'password' | 'key'>('password');
   const [password, setPassword] = useState('');
   const [privateKey, setPrivateKey] = useState('');
+  const [jumpHostProfileId, setJumpHostProfileId] = useState('');
   const [formConnecting, setFormConnecting] = useState(false);
   const [connectingProfileId, setConnectingProfileId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -61,6 +71,7 @@ export default function SSHManager({
     setAuth('password');
     setPassword('');
     setPrivateKey('');
+    setJumpHostProfileId('');
     setFormError(null);
     setEditingProfileId(null);
   };
@@ -82,6 +93,14 @@ export default function SSHManager({
     const parsedPort = parseInt(port) || 22;
     const sessionId = `ssh-${Date.now()}`;
     const newProfileId = profileId(trimmedHost, parsedPort, trimmedUsername || undefined, auth);
+    const jumpHost = jumpHostProfileId
+      ? sshProfiles.find((profile) => profile.id === jumpHostProfileId)
+      : undefined;
+    if (jumpHostProfileId && (!jumpHost || jumpHost.id === newProfileId)) {
+      setFormError('Choose a valid jump host other than this connection');
+      setFormConnecting(false);
+      return;
+    }
 
     try {
       await window.janet.sshConnect({
@@ -92,6 +111,7 @@ export default function SSHManager({
         auth,
         ...passwordPayload(auth, password),
         ...privateKeyPayload(auth, privateKey),
+        ...(jumpHost ? { jumpHost: credentials(jumpHost) } : {}),
       });
 
       saveProfile({
@@ -102,6 +122,7 @@ export default function SSHManager({
         auth,
         password: auth === 'password' && password ? password : undefined,
         privateKey: auth === 'key' && privateKey ? privateKey : undefined,
+        ...(jumpHost ? { jumpHostProfileId: jumpHost.id } : {}),
       }, editingProfileId);
       onConnected({
         id: sessionId,
@@ -126,6 +147,7 @@ export default function SSHManager({
     setAuth(profile.auth);
     setPassword(profile.password ?? '');
     setPrivateKey(profile.privateKey ?? '');
+    setJumpHostProfileId(profile.jumpHostProfileId ?? '');
     setFormError(null);
     setEditingProfileId(profile.id);
     setShowForm(true);
@@ -137,6 +159,14 @@ export default function SSHManager({
     setConnectingProfileId(profile.id);
     setProfileError(null);
     const sessionId = `ssh-${Date.now()}`;
+    const jumpHost = profile.jumpHostProfileId
+      ? sshProfiles.find((candidate) => candidate.id === profile.jumpHostProfileId)
+      : undefined;
+    if (profile.jumpHostProfileId && (!jumpHost || jumpHost.id === profile.id)) {
+      setProfileError({ label, message: 'Saved jump host is missing or invalid' });
+      setConnectingProfileId(null);
+      return;
+    }
 
     try {
       await window.janet.sshConnect({
@@ -147,6 +177,7 @@ export default function SSHManager({
         auth: profile.auth,
         ...(profile.auth === 'password' && profile.password ? { password: profile.password } : {}),
         ...(profile.auth === 'key' && profile.privateKey ? { privateKey: profile.privateKey } : {}),
+        ...(jumpHost ? { jumpHost: credentials(jumpHost) } : {}),
       });
       onConnected({
         id: sessionId,
@@ -281,6 +312,15 @@ export default function SSHManager({
               />
             </label>
           )}
+          <label className="form-field">
+            <span>Jump host</span>
+            <select aria-label="Jump host" value={jumpHostProfileId} onChange={(e) => setJumpHostProfileId(e.target.value)} className="form-input">
+              <option value="">No jump host</option>
+              {sshProfiles.filter((profile) => profile.id !== editingProfileId).map((profile) => (
+                <option key={profile.id} value={profile.id}>{connectionLabel(profile)}</option>
+              ))}
+            </select>
+          </label>
           {formError && (
             <div className="ssh-error" role="alert">
               <AlertIcon size="sm" /> {formError}

@@ -627,6 +627,159 @@ describe('VerticalTabBar', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
+  it('creates, lists, and deliberately stops a forward for a ready live SSH tab', async () => {
+    const running = {
+      id: 'forward-test', bindHost: '127.0.0.1', localPort: 43123, status: 'running',
+      destinationHost: '127.0.0.1', destinationPort: 9000,
+    };
+    const sshListLocalForwards = vi.fn().mockResolvedValue([]);
+    const sshStartLocalForward = vi.fn().mockResolvedValue(running);
+    const sshStopLocalForward = vi.fn().mockResolvedValue(true);
+    Object.defineProperty(window, 'janet', {
+      configurable: true,
+      value: { sshListLocalForwards, sshStartLocalForward, sshStopLocalForward },
+    });
+    renderTabs({ tabs: [{ ...tabs[1], sshShellReady: true }], activeTabId: 'tab-2' });
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: /close ssh box/i }).closest('.vtab-item')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Manage local forwards' }));
+    const dialog = await screen.findByRole('dialog', { name: 'SSH local forwards' });
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
+    await waitFor(() => expect(sshListLocalForwards).toHaveBeenCalledWith({ sessionId: 'ssh-abc123' }));
+
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Local port' }), { target: { value: '0' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Destination host' }), { target: { value: '127.0.0.1' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Destination port' }), { target: { value: '9000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create forward' }));
+    await waitFor(() => expect(sshStartLocalForward).toHaveBeenCalledWith({
+      sessionId: 'ssh-abc123',
+      request: expect.objectContaining({ localPort: 0, destinationHost: '127.0.0.1', destinationPort: 9000 }),
+    }));
+    expect(await screen.findByText('127.0.0.1:43123')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop forward 127.0.0.1:43123' }));
+    await waitFor(() => expect(sshStopLocalForward).toHaveBeenCalledWith({
+      sessionId: 'ssh-abc123', id: 'forward-test',
+    }));
+    await waitFor(() => expect(screen.queryByText('127.0.0.1:43123')).not.toBeInTheDocument());
+  });
+
+  it('removes each forward after concurrent stop requests settle', async () => {
+    const running = [
+      { id: 'forward-a', bindHost: '127.0.0.1', localPort: 43123, status: 'running', destinationHost: 'a.local', destinationPort: 80 },
+      { id: 'forward-b', bindHost: '127.0.0.1', localPort: 43124, status: 'running', destinationHost: 'b.local', destinationPort: 443 },
+    ];
+    const resolutions = new Map<string, () => void>();
+    const sshStopLocalForward = vi.fn(({ id }: { id: string }) => new Promise<void>((resolve) => resolutions.set(id, resolve)));
+    Object.defineProperty(window, 'janet', {
+      configurable: true,
+      value: { sshListLocalForwards: vi.fn().mockResolvedValue(running), sshStartLocalForward: vi.fn(), sshStopLocalForward },
+    });
+    renderTabs({ tabs: [{ ...tabs[1], sshShellReady: true }], activeTabId: 'tab-2' });
+    fireEvent.contextMenu(screen.getByRole('button', { name: /close ssh box/i }).closest('.vtab-item')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Manage local forwards' }));
+    await screen.findByText('127.0.0.1:43123');
+    await screen.findByText('127.0.0.1:43124');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop forward 127.0.0.1:43123' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop forward 127.0.0.1:43124' }));
+    await waitFor(() => expect(sshStopLocalForward).toHaveBeenCalledTimes(2));
+    resolutions.get('forward-a')!();
+    await waitFor(() => expect(screen.queryByText('127.0.0.1:43123')).not.toBeInTheDocument());
+    resolutions.get('forward-b')!();
+    await waitFor(() => expect(screen.queryByText('127.0.0.1:43124')).not.toBeInTheDocument());
+  });
+
+  it('fails closed when the forward dialog SSH tab is no longer ready', async () => {
+    let resolveList!: (value: unknown[]) => void;
+    const sshListLocalForwards = vi.fn(() => new Promise<unknown[]>((resolve) => { resolveList = resolve; }));
+    Object.defineProperty(window, 'janet', {
+      configurable: true,
+      value: { sshListLocalForwards, sshStartLocalForward: vi.fn(), sshStopLocalForward: vi.fn() },
+    });
+    const readyTab = { ...tabs[1], sshShellReady: true };
+    const view = renderTabs({ tabs: [readyTab], activeTabId: 'tab-2' });
+    fireEvent.contextMenu(screen.getByRole('button', { name: /close ssh box/i }).closest('.vtab-item')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Manage local forwards' }));
+    expect(await screen.findByRole('dialog', { name: 'SSH local forwards' })).toBeInTheDocument();
+
+    view.rerender(<VerticalTabBar
+      tabs={[{ ...readyTab, sshShellReady: false }]} activeTabId="tab-2" sshProfiles={sshProfiles} workspaceTabs={[]}
+      onSelectTab={vi.fn()} onCloseTab={vi.fn()} onNewTab={vi.fn()} sshConnectionsOpen={false}
+      onSSHConnectionsOpenChange={vi.fn()} onSSHConnected={vi.fn()} onSSHProfilesChange={vi.fn()}
+      onWorkspaceTabsChange={vi.fn()} onWorkspaceTabLaunch={vi.fn()} onSaveWorkspaceTab={vi.fn()}
+      onRenameTab={vi.fn()} onCollapse={vi.fn()}
+    />);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'SSH local forwards' })).not.toBeInTheDocument());
+    resolveList([{ id: 'late', bindHost: '127.0.0.1', localPort: 49999, destinationHost: 'x', destinationPort: 1, status: 'running' }]);
+    await act(async () => {});
+    expect(screen.queryByText('127.0.0.1:49999')).not.toBeInTheDocument();
+  });
+
+  it('stops a forward that starts after its SSH tab is no longer ready', async () => {
+    const running = {
+      id: 'late-forward', bindHost: '127.0.0.1', localPort: 49999, status: 'running',
+      destinationHost: '127.0.0.1', destinationPort: 9000,
+    };
+    let resolveStart!: (value: typeof running) => void;
+    const sshStartLocalForward = vi.fn(() => new Promise<typeof running>((resolve) => { resolveStart = resolve; }));
+    const sshStopLocalForward = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window, 'janet', {
+      configurable: true,
+      value: { sshListLocalForwards: vi.fn().mockResolvedValue([]), sshStartLocalForward, sshStopLocalForward },
+    });
+    const readyTab = { ...tabs[1], sshShellReady: true };
+    const view = renderTabs({ tabs: [readyTab], activeTabId: 'tab-2' });
+    fireEvent.contextMenu(screen.getByRole('button', { name: /close ssh box/i }).closest('.vtab-item')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Manage local forwards' }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Destination host' }), { target: { value: '127.0.0.1' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Destination port' }), { target: { value: '9000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create forward' }));
+    await waitFor(() => expect(sshStartLocalForward).toHaveBeenCalledOnce());
+
+    view.rerender(<VerticalTabBar
+      tabs={[{ ...readyTab, sshShellReady: false }]} activeTabId="tab-2" sshProfiles={sshProfiles} workspaceTabs={[]}
+      onSelectTab={vi.fn()} onCloseTab={vi.fn()} onNewTab={vi.fn()} sshConnectionsOpen={false}
+      onSSHConnectionsOpenChange={vi.fn()} onSSHConnected={vi.fn()} onSSHProfilesChange={vi.fn()}
+      onWorkspaceTabsChange={vi.fn()} onWorkspaceTabLaunch={vi.fn()} onSaveWorkspaceTab={vi.fn()}
+      onRenameTab={vi.fn()} onCollapse={vi.fn()}
+    />);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'SSH local forwards' })).not.toBeInTheDocument());
+    resolveStart(running);
+
+    await waitFor(() => expect(sshStopLocalForward).toHaveBeenCalledWith({
+      sessionId: 'ssh-abc123', id: 'late-forward',
+    }));
+  });
+
+  it('stops a forward that starts after the tab rail unmounts', async () => {
+    const running = {
+      id: 'late-forward', bindHost: '127.0.0.1', localPort: 49999, status: 'running',
+      destinationHost: '127.0.0.1', destinationPort: 9000,
+    };
+    let resolveStart!: (value: typeof running) => void;
+    const sshStartLocalForward = vi.fn(() => new Promise<typeof running>((resolve) => { resolveStart = resolve; }));
+    const sshStopLocalForward = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window, 'janet', {
+      configurable: true,
+      value: { sshListLocalForwards: vi.fn().mockResolvedValue([]), sshStartLocalForward, sshStopLocalForward },
+    });
+    const view = renderTabs({ tabs: [{ ...tabs[1], sshShellReady: true }], activeTabId: 'tab-2' });
+    fireEvent.contextMenu(screen.getByRole('button', { name: /close ssh box/i }).closest('.vtab-item')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Manage local forwards' }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Destination host' }), { target: { value: '127.0.0.1' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Destination port' }), { target: { value: '9000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create forward' }));
+    await waitFor(() => expect(sshStartLocalForward).toHaveBeenCalledOnce());
+
+    view.unmount();
+    resolveStart(running);
+
+    await waitFor(() => expect(sshStopLocalForward).toHaveBeenCalledWith({
+      sessionId: 'ssh-abc123', id: 'late-forward',
+    }));
+  });
+
   it('shows scan-friendly subtitles for local and SSH tabs', () => {
     renderTabs();
 

@@ -110,6 +110,7 @@ export interface AppSettings {
     auth: 'password' | 'key';
     password?: string;
     privateKey?: string;
+    jumpHostProfileId?: string;
   }>;
   workspaceTabs: Array<{
     id: string;
@@ -180,7 +181,7 @@ const SAVED_PANE_LEAF_KEYS = new Set([
 ]);
 const SAVED_PANE_SPLIT_KEYS = new Set(['type', 'direction', 'sizes', 'children']);
 const SSH_PROFILE_KEYS = new Set([
-  'id', 'host', 'port', 'username', 'auth', 'password', 'privateKey',
+  'id', 'host', 'port', 'username', 'auth', 'password', 'privateKey', 'jumpHostProfileId',
 ]);
 const SAVED_SESSION_KEYS = new Set([
   'tabs', 'activeTabId', 'sidebarOpen', 'tabsOpen', 'sidebarSection',
@@ -385,6 +386,7 @@ export class SettingsManager {
         port: normalizeStoredSshPort(profile.port),
         username: profile.username,
         auth: profile.auth,
+        ...(profile.jumpHostProfileId ? { jumpHostProfileId: profile.jumpHostProfileId } : {}),
         ...(profile.auth === 'password'
           ? { password: profile.password ?? unprotectSecret(profile.passwordSecret) ?? decryptLegacySecret(profile.passwordEncrypted) }
           : { privateKey: profile.privateKey ?? unprotectSecret(profile.privateKeySecret) ?? decryptLegacySecret(profile.privateKeyEncrypted) }),
@@ -458,6 +460,9 @@ function normalizeStoredSshProfiles(value: unknown): StoredSSHProfile[] {
       ...(typeof profile.username === 'string' && profile.username.length <= 256
         ? { username: profile.username }
         : {}),
+      ...(typeof profile.jumpHostProfileId === 'string' && profile.jumpHostProfileId.length <= 256
+        ? { jumpHostProfileId: profile.jumpHostProfileId }
+        : {}),
       ...(typeof profile.password === 'string' && profile.password.length <= MAX_SSH_SECRET_LENGTH
         ? { password: profile.password }
         : {}),
@@ -470,7 +475,17 @@ function normalizeStoredSshProfiles(value: unknown): StoredSSHProfile[] {
       ...(isBoundedCiphertext(profile.privateKeyEncrypted) ? { privateKeyEncrypted: profile.privateKeyEncrypted } : {}),
     });
   }
-  return profiles;
+  const validIds = new Set(profiles.map(({ id }) => id));
+  const validProfiles = profiles.map((profile) => profile.jumpHostProfileId === profile.id || !validIds.has(profile.jumpHostProfileId ?? '')
+    ? (({ jumpHostProfileId: _invalid, ...rest }) => rest)(profile)
+    : profile);
+  const cyclicIds = findCyclicJumpHostProfiles(validProfiles);
+  return validProfiles.map((profile) => {
+    if (!cyclicIds.has(profile.id)) return profile;
+    const sanitized: StoredSSHProfile = { ...profile };
+    delete sanitized.jumpHostProfileId;
+    return sanitized;
+  });
 }
 
 function isStoredSecret(value: unknown): value is StoredSecretV1 {
@@ -847,6 +862,7 @@ function isValidSettingsUpdate(value: unknown): value is Partial<AppSettings> {
     && (updates.sshProfiles === undefined || (Array.isArray(updates.sshProfiles)
       && updates.sshProfiles.length <= MAX_SETTINGS_COLLECTION_ITEMS
       && updates.sshProfiles.every(isValidSshProfile)
+      && hasValidJumpHostReferences(updates.sshProfiles)
       && hasUniqueIds(updates.sshProfiles)))
     && (updates.workspaceTabs === undefined || (Array.isArray(updates.workspaceTabs)
       && updates.workspaceTabs.length <= MAX_SAVED_SESSION_TABS
@@ -903,5 +919,35 @@ function isValidSshProfile(value: unknown): value is AppSettings['sshProfiles'][
     && (profile.password === undefined
       || (typeof profile.password === 'string' && profile.password.length <= MAX_SSH_SECRET_LENGTH))
     && (profile.privateKey === undefined
-      || (typeof profile.privateKey === 'string' && profile.privateKey.length <= MAX_SSH_SECRET_LENGTH));
+      || (typeof profile.privateKey === 'string' && profile.privateKey.length <= MAX_SSH_SECRET_LENGTH))
+    && (profile.jumpHostProfileId === undefined
+      || (typeof profile.jumpHostProfileId === 'string' && profile.jumpHostProfileId.length <= 256));
+}
+
+function findCyclicJumpHostProfiles(profiles: ReadonlyArray<{ id: string; jumpHostProfileId?: string }>): Set<string> {
+  const next = new Map(profiles.map(({ id, jumpHostProfileId }) => [id, jumpHostProfileId]));
+  const cyclic = new Set<string>();
+  for (const { id } of profiles) {
+    const path: string[] = [];
+    const seen = new Map<string, number>();
+    let current: string | undefined = id;
+    while (current !== undefined && next.has(current) && !cyclic.has(current)) {
+      const start = seen.get(current);
+      if (start !== undefined) {
+        for (const cycleId of path.slice(start)) cyclic.add(cycleId);
+        break;
+      }
+      seen.set(current, path.length);
+      path.push(current);
+      current = next.get(current);
+    }
+  }
+  return cyclic;
+}
+
+function hasValidJumpHostReferences(profiles: AppSettings['sshProfiles']): boolean {
+  const ids = new Set(profiles.map(({ id }) => id));
+  return profiles.every(({ id, jumpHostProfileId }) => jumpHostProfileId === undefined
+    || (jumpHostProfileId !== id && ids.has(jumpHostProfileId)))
+    && findCyclicJumpHostProfiles(profiles).size === 0;
 }

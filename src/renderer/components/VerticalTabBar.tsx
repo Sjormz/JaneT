@@ -13,6 +13,7 @@ import ConfirmationDialog from './ConfirmationDialog';
 import SSHManager from './SSHManager';
 import { sanitizeStartupCommands } from '../../shared/startupCommands';
 import type { AgentStatus } from '../terminalAwareness';
+import type { SSHLocalForwardStatus } from '../../main/ssh';
 
 interface VerticalTabBarProps {
   tabs: TabInfo[];
@@ -92,6 +93,18 @@ export default function VerticalTabBar({
   const [draftTitle, setDraftTitle] = useState('');
   const [tabMenu, setTabMenu] = useState<{ tab: TabInfo; x: number; y: number } | null>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
+  const [forwardTarget, setForwardTarget] = useState<{ tabId: string; sessionId: string } | null>(null);
+  const [forwards, setForwards] = useState<SSHLocalForwardStatus[]>([]);
+  const [localPort, setLocalPort] = useState('0');
+  const [destinationHost, setDestinationHost] = useState('');
+  const [destinationPort, setDestinationPort] = useState('');
+  const [forwardError, setForwardError] = useState('');
+  const forwardModalRef = useRef<HTMLDivElement>(null);
+  const forwardRequestRef = useRef(0);
+  const forwardDialogRef = useRef(0);
+  const mountedRef = useRef(true);
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
   const workspaceModalRef = useRef<HTMLDivElement>(null);
   const workspaceAddButtonRef = useRef<HTMLButtonElement>(null);
   const [tabTimestamps, setTabTimestamps] = useState<Record<string, Date>>(() => {
@@ -122,6 +135,15 @@ export default function VerticalTabBar({
     document.addEventListener('pointerdown', closeOnOutsidePointerDown, true);
     return () => document.removeEventListener('pointerdown', closeOnOutsidePointerDown, true);
   }, [tabMenu]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      forwardRequestRef.current += 1;
+      forwardDialogRef.current += 1;
+    };
+  }, []);
 
   const startRename = (tab: TabInfo) => {
     setEditingTabId(tab.id);
@@ -174,6 +196,59 @@ export default function VerticalTabBar({
     if (!presetPendingDeletion) return;
     onWorkspaceTabsChange(workspaceTabs.filter((preset) => preset.id !== presetPendingDeletion.id));
     setPresetPendingDeletion(null);
+  };
+
+  const closeForwardDialog = () => {
+    forwardRequestRef.current += 1;
+    forwardDialogRef.current += 1;
+    setForwardTarget(null);
+    setForwards([]);
+    setForwardError('');
+  };
+  const isCurrentForwardTarget = (target: { tabId: string; sessionId: string }) => {
+    const tab = tabsRef.current.find((candidate) => candidate.id === target.tabId);
+    return tab?.type === 'ssh' && tab.sshSessionId === target.sessionId && tab.sshShellReady === true;
+  };
+  const openForwardDialog = (tab: TabInfo) => {
+    if (tab.type !== 'ssh' || !tab.sshSessionId || tab.sshShellReady !== true) return;
+    const target = { tabId: tab.id, sessionId: tab.sshSessionId };
+    forwardDialogRef.current += 1;
+    const request = ++forwardRequestRef.current;
+    setForwardTarget(target); setForwards([]); setForwardError('');
+    void window.janet.sshListLocalForwards({ sessionId: target.sessionId }).then((listed) => {
+      if (forwardRequestRef.current === request && isCurrentForwardTarget(target)) setForwards(listed);
+    }).catch((error) => {
+      if (forwardRequestRef.current === request && isCurrentForwardTarget(target)) setForwardError(error instanceof Error ? error.message : String(error));
+    });
+  };
+  useEffect(() => {
+    if (forwardTarget && !isCurrentForwardTarget(forwardTarget)) closeForwardDialog();
+  }, [tabs, forwardTarget]);
+  useModalFocus({ open: forwardTarget !== null, containerRef: forwardModalRef, onClose: closeForwardDialog, initialFocusSelector: 'input' });
+  const createForward = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const target = forwardTarget;
+    const parsedLocalPort = Number(localPort), parsedDestinationPort = Number(destinationPort);
+    if (!target || !isCurrentForwardTarget(target)) return closeForwardDialog();
+    if (!Number.isInteger(parsedLocalPort) || parsedLocalPort < 0 || parsedLocalPort > 65535 || !destinationHost || !Number.isInteger(parsedDestinationPort) || parsedDestinationPort < 1 || parsedDestinationPort > 65535) return setForwardError('Enter a valid host and ports.');
+    const request = ++forwardRequestRef.current; setForwardError('');
+    try {
+      const started = await window.janet.sshStartLocalForward({ sessionId: target.sessionId, request: { id: crypto.randomUUID(), localPort: parsedLocalPort, destinationHost, destinationPort: parsedDestinationPort } });
+      if (!mountedRef.current || forwardRequestRef.current !== request || !isCurrentForwardTarget(target)) {
+        void window.janet.sshStopLocalForward({ sessionId: target.sessionId, id: started.id }).catch(() => {});
+        return;
+      }
+      setForwards((current) => [...current.filter((item) => item.id !== started.id), started]);
+    } catch (error) { if (forwardRequestRef.current === request && isCurrentForwardTarget(target)) setForwardError(error instanceof Error ? error.message : String(error)); }
+  };
+  const stopForward = async (forward: SSHLocalForwardStatus) => {
+    const target = forwardTarget;
+    if (!target || !isCurrentForwardTarget(target)) return closeForwardDialog();
+    const dialog = forwardDialogRef.current; setForwardError('');
+    try {
+      await window.janet.sshStopLocalForward({ sessionId: target.sessionId, id: forward.id });
+      if (forwardDialogRef.current === dialog && isCurrentForwardTarget(target)) setForwards((current) => current.filter((item) => item.id !== forward.id));
+    } catch (error) { if (forwardDialogRef.current === dialog && isCurrentForwardTarget(target)) setForwardError(error instanceof Error ? error.message : String(error)); }
   };
 
   const workspaceModalOpen = showWorkspaceForm || editingPreset !== null;
@@ -430,6 +505,9 @@ export default function VerticalTabBar({
           <button role="menuitem" onClick={() => { startRename(tabMenu.tab); setTabMenu(null); }}>
             Rename tab
           </button>
+          {tabMenu.tab.type === 'ssh' && tabMenu.tab.sshSessionId && tabMenu.tab.sshShellReady === true && (
+            <button role="menuitem" onClick={() => { openForwardDialog(tabMenu.tab); setTabMenu(null); }}>Manage local forwards</button>
+          )}
           {tabMenu.tab.workspaceId && workspaceTabs.find((preset) => preset.id === tabMenu.tab.workspaceId) && (
             <button role="menuitem" onClick={() => { editPreset(workspaceTabs.find((preset) => preset.id === tabMenu.tab.workspaceId)!); setTabMenu(null); }}>
               Edit preset
@@ -440,6 +518,23 @@ export default function VerticalTabBar({
           </button>
         </div>,
         document.body,
+      )}
+      {forwardTarget && createPortal(
+        <div className="workspace-modal-overlay" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeForwardDialog(); }}>
+          <div ref={forwardModalRef} className="workspace-modal ssh-forward-modal" role="dialog" aria-modal="true" aria-labelledby="ssh-forward-title">
+            <div className="workspace-modal-header"><h2 id="ssh-forward-title">SSH local forwards</h2><button onClick={closeForwardDialog} aria-label="Close SSH local forwards"><XCloseIcon size="sm" /></button></div>
+            <form className="ssh-forward-form" onSubmit={createForward}>
+              <label>Local port<input aria-label="Local port" type="number" min="0" max="65535" required value={localPort} onChange={(event) => setLocalPort(event.target.value)} /></label>
+              <label>Destination host<input aria-label="Destination host" required value={destinationHost} onChange={(event) => setDestinationHost(event.target.value)} /></label>
+              <label>Destination port<input aria-label="Destination port" type="number" min="1" max="65535" required value={destinationPort} onChange={(event) => setDestinationPort(event.target.value)} /></label>
+              <button type="submit" className="connect-btn">Create forward</button>
+            </form>
+            {forwardError && <div className="form-error" role="alert">{forwardError}</div>}
+            <div className="ssh-forward-list" aria-label="Active local forwards">{forwards.length === 0 ? <p>No active forwards</p> : forwards.map((forward) => (
+              <div className="ssh-forward-row" key={forward.id}><span><strong>{forward.bindHost}:{forward.localPort}</strong> → {forward.destinationHost}:{forward.destinationPort}</span><button type="button" onClick={() => void stopForward(forward)} aria-label={`Stop forward ${forward.bindHost}:${forward.localPort}`}>Stop</button></div>
+            ))}</div>
+          </div>
+        </div>, document.body,
       )}
       {workspaceModalOpen && createPortal(
         <div

@@ -32,6 +32,7 @@ import {
   type WorkspacePrepareForCloseDecision,
 } from './workspaceLifecycle';
 import { NativeTerminalCapacity } from './terminalCapacity';
+import { registerSSHLocalForwardHandlers } from './sshLocalForwardIpc';
 
 let mainWindow: electron.BrowserWindow | null = null;
 let initializeUpdaterForWindow: ((window: electron.BrowserWindow) => void) | null = null;
@@ -441,9 +442,9 @@ function registerIpcHandlers() {
   });
 
   // === SSH IPC ===
-  handle('ssh:connect', async (event, { id, host, port, username, auth, password, privateKey }) => {
+  handle('ssh:connect', async (event, { id, host, port, username, auth, password, privateKey, jumpHost }) => {
     recordE2eEvent({ type: 'ssh:connect:start', id, host, port, username });
-    await sshManager.connect(id, { host, port, username, auth, password, privateKey });
+    await sshManager.connect(id, { host, port, username, auth, password, privateKey, jumpHost });
     recordE2eEvent({ type: 'ssh:connect:done', id });
     return { connected: true };
   });
@@ -505,6 +506,8 @@ function registerIpcHandlers() {
   handle('ssh:listConnections', () => {
     return sshManager.listConnections();
   });
+
+  registerSSHLocalForwardHandlers(handle, sshManager);
 
   // === File System IPC ===
   handle('fs:listDir', async (event, { dirPath, showHidden }) => {
