@@ -289,6 +289,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [sshProfiles, setSshProfiles] = useState<SavedSSHProfile[]>(initialState.sshProfiles);
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>(initialState.workspaceTabs);
   const [maximizedLeafByTab, setMaximizedLeafByTab] = useState<Record<string, string | null>>({});
+  const [broadcastRecipientIds, setBroadcastRecipientIds] = useState<Set<string>>(new Set());
+  const broadcastRecipientIdsRef = useRef(broadcastRecipientIds);
+  broadcastRecipientIdsRef.current = broadcastRecipientIds;
   const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null);
   const [paneDropTarget, setPaneDropTarget] = useState<{ leafId: string; side: PaneDropSide } | null>(null);
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
@@ -347,6 +350,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   useEffect(() => {
     if (!window.janet.onSSHConnectionClosed) return undefined;
     return window.janet.onSSHConnectionClosed(({ id }) => {
+      const disconnectedRecipient = tabsRef.current.flatMap(collectTerminalOwners)
+        .some((owner) => owner.sshSessionId === id && broadcastRecipientIdsRef.current.has(owner.termId));
+      if (disconnectedRecipient) setBroadcastRecipientIds(new Set());
       setSshSessions((current) => current.filter((session) => session.id !== id));
       setReadySshSessionIds((current) => {
         if (!current.has(id)) return current;
@@ -657,6 +663,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       const owner = tabsRef.current.flatMap(collectTerminalOwners)
         .find((candidate) => candidate.termId === id);
       if (owner?.type !== 'local') return;
+      if (broadcastRecipientIdsRef.current.has(id)) setBroadcastRecipientIds(new Set());
       setLocalTransportByTerminal((current) => (
         current[id] === 'exited' ? current : { ...current, [id]: 'exited' }
       ));
@@ -719,6 +726,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   ), [awarenessByTerminal, tabs, transportByTerminal]);
 
   const selectTerminalTab = useCallback((tabId: string) => {
+    setBroadcastRecipientIds(new Set());
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
     if (tab) {
       const ownedTerminals = new Set(getAllLeafIds(tab.root));
@@ -748,6 +756,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     if (owners.length === 0) return;
 
     const removedTerminals = new Set(owners.map((owner) => owner.termId));
+    setBroadcastRecipientIds((current) => (
+      [...current].some((termId) => removedTerminals.has(termId)) ? new Set() : current
+    ));
     setLocalTransportByTerminal((current) => {
       const next = Object.fromEntries(
         Object.entries(current).filter(([termId]) => !removedTerminals.has(termId)),
@@ -866,6 +877,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         root: createTabRoot(type),
       };
       const next = [...tabsRef.current, tab];
+      setBroadcastRecipientIds(new Set());
       tabsRef.current = next;
       setTabs(next);
       setActiveTabId(tab.id);
@@ -1063,12 +1075,62 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   );
 
   const handleToggleMaximizePane = useCallback((tabId: string, leafId: string) => {
+    setBroadcastRecipientIds(new Set());
     setFocusedTerminalId(leafId);
     setMaximizedLeafByTab((prev) => ({
       ...prev,
       [tabId]: prev[tabId] === leafId ? null : leafId,
     }));
   }, []);
+
+  const handleBroadcastRecipientChange = useCallback((termId: string, selected: boolean) => {
+    setBroadcastRecipientIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(termId);
+      else next.delete(termId);
+      return next;
+    });
+  }, []);
+
+  const handleBroadcastInput = useCallback((sourceTermId: string, data: string, binary = false): boolean => {
+    const recipients = [...broadcastRecipientIds];
+    if (recipients.length < 2 || !broadcastRecipientIds.has(sourceTermId)) return false;
+    const activeTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current);
+    const owners = activeTab ? collectTerminalOwners(activeTab) : [];
+    const selectedOwners = recipients.map((termId) => owners.find((owner) => owner.termId === termId));
+    const allReady = selectedOwners.every((owner) => owner
+      && liveTerminalIdsRef.current.has(owner.termId)
+      && localTransportByTerminal[owner.termId] !== 'exited'
+      && (owner.type === 'local' || (owner.sshSessionId
+        && !disconnectedSshSessionIds.has(owner.sshSessionId)
+        && readySshSessionIds.has(owner.sshSessionId))));
+    if (!allReady) {
+      setBroadcastRecipientIds(new Set());
+      return false;
+    }
+    for (const owner of selectedOwners as TerminalOwner[]) {
+      if (owner.type === 'local') {
+        if (binary) window.janet.terminalWriteBinary({ id: owner.termId, data, userInput: true });
+        else window.janet.terminalWrite({ id: owner.termId, data, userInput: true });
+      } else if (binary) {
+        window.janet.sshWriteShellBinary({ sessionId: owner.sshSessionId, termId: owner.termId, data, userInput: true });
+      } else {
+        window.janet.sshWriteShell({ sessionId: owner.sshSessionId, termId: owner.termId, data, userInput: true });
+      }
+    }
+    return true;
+  }, [broadcastRecipientIds, disconnectedSshSessionIds, localTransportByTerminal, readySshSessionIds]);
+
+  useEffect(() => {
+    if (broadcastRecipientIds.size < 2) return undefined;
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setBroadcastRecipientIds(new Set());
+    };
+    window.addEventListener('keydown', cancelOnEscape, true);
+    return () => window.removeEventListener('keydown', cancelOnEscape, true);
+  }, [broadcastRecipientIds.size]);
 
   const handleClosePane = useCallback(
     (tabId: string, leafId: string) => {
@@ -1890,6 +1952,12 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           </Tooltip>
         )}
         <div key="terminal" className="terminal-area">
+          {broadcastRecipientIds.size >= 2 && (
+            <div className="broadcast-input-banner" role="status" aria-label="Broadcast input active">
+              <strong>Broadcast input active · {broadcastRecipientIds.size} panes</strong>
+              <button type="button" onClick={() => setBroadcastRecipientIds(new Set())}>Cancel broadcast input</button>
+            </div>
+          )}
           <WorkspaceContent
             tabId={activeTab.id}
             documents={activeDocuments}
@@ -1912,6 +1980,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
                 onTerminalReady={handleTerminalReady}
                 onTerminalRemoved={handleTerminalRemoved}
                 onAgentEvent={handleAgentEvent}
+                onBroadcastInput={handleBroadcastInput}
+                broadcastRecipientIds={broadcastRecipientIds}
+                onBroadcastRecipientChange={handleBroadcastRecipientChange}
                 awarenessByTerminal={awarenessByTerminal}
                 transportByTerminal={transportByTerminal}
                 onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}

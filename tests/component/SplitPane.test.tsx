@@ -25,6 +25,7 @@ const rendererMocks = vi.hoisted(() => ({
   ) => void | Promise<void>>(),
   cwdChangeHandlers: new Map<string, (termId: string, cwd: string) => void>(),
   agentEventHandlers: new Map<string, (event: AgentLifecycleEvent) => void>(),
+  broadcastInputHandlers: new Map<string, (data: string, binary?: boolean) => boolean>(),
 }));
 
 vi.mock('../../src/renderer/components/Titlebar', () => ({
@@ -137,6 +138,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     onFocus,
     onSshRetry,
     onAgentEvent,
+    onBroadcastInput,
   }: {
     termId: string;
     hasSession?: boolean;
@@ -156,10 +158,12 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
       dimensions: { cols: number; rows: number },
     ) => void | Promise<void>;
     onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+    onBroadcastInput?: (termId: string, data: string, binary?: boolean) => boolean;
   }) {
     if (onSshRetry) rendererMocks.sshRetryHandlers.set(termId, onSshRetry);
     if (onCwdChange) rendererMocks.cwdChangeHandlers.set(termId, onCwdChange);
     if (onAgentEvent) rendererMocks.agentEventHandlers.set(termId, (event) => onAgentEvent(termId, event));
+    if (onBroadcastInput) rendererMocks.broadcastInputHandlers.set(termId, (data, binary) => onBroadcastInput(termId, data, binary));
     const containerRef = React.useRef<HTMLDivElement>(null);
 
     React.useEffect(() => {
@@ -234,6 +238,7 @@ beforeEach(() => {
   rendererMocks.sshRetryHandlers.clear();
   rendererMocks.cwdChangeHandlers.clear();
   rendererMocks.agentEventHandlers.clear();
+  rendererMocks.broadcastInputHandlers.clear();
   Object.defineProperty(document, 'startViewTransition', {
     configurable: true,
     value: vi.fn((update: () => void) => {
@@ -277,6 +282,7 @@ beforeEach(() => {
     terminalCreate: vi.fn().mockResolvedValue(undefined),
     terminalDestroy: vi.fn().mockResolvedValue(undefined),
     terminalWrite: vi.fn(),
+    terminalWriteBinary: vi.fn(),
     terminalResize: vi.fn(),
     onTerminalData: vi.fn(() => ({ dispose: vi.fn() })),
     onTerminalExit: vi.fn((callback: (event: { id: string; exitCode: number; signal: number }) => void) => {
@@ -288,6 +294,7 @@ beforeEach(() => {
     sshConnect: vi.fn().mockResolvedValue({ connected: true }),
     sshCreateShell: vi.fn().mockResolvedValue(undefined),
     sshWriteShell: vi.fn(),
+    sshWriteShellBinary: vi.fn(),
     sshResizeShell: vi.fn(),
     sshDestroyShell: vi.fn().mockResolvedValue(true),
     sshDisconnect: vi.fn().mockResolvedValue(undefined),
@@ -340,6 +347,67 @@ async function requestWorkspaceClose(
 }
 
 describe('split panes in the app', () => {
+  it('broadcasts only to deliberately selected live panes and offers immediate cancel', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    const terminals = await screen.findAllByTestId(/terminal-/);
+    const [firstId, secondId] = terminals.map((terminal) => terminal.dataset.terminalId!);
+
+    const recipients = screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i });
+    fireEvent.click(recipients[0]);
+    expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
+    expect(rendererMocks.broadcastInputHandlers.get(firstId)!('not active')).toBe(false);
+    expect(window.janet.terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: 'not active' }));
+    fireEvent.click(recipients[1]);
+
+    expect(screen.getByRole('status', { name: /broadcast input active/i })).toHaveTextContent('Broadcast input active · 2 panes');
+    expect(recipients[0].closest('.terminal-leaf')).toHaveClass('broadcast-selected');
+    expect(recipients[1].closest('.terminal-leaf')).toHaveClass('broadcast-selected');
+    expect(rendererMocks.broadcastInputHandlers.get(firstId)!('echo safe')).toBe(true);
+    expect(window.janet.terminalWrite).toHaveBeenCalledWith({ id: firstId, data: 'echo safe', userInput: true });
+    expect(window.janet.terminalWrite).toHaveBeenCalledWith({ id: secondId, data: 'echo safe', userInput: true });
+    expect(window.janet.terminalWrite).toHaveBeenCalledTimes(2);
+    expect(rendererMocks.broadcastInputHandlers.get(secondId)!('\u0000', true)).toBe(true);
+    expect(window.janet.terminalWriteBinary).toHaveBeenCalledTimes(2);
+    expect(window.janet.terminalWriteBinary).toHaveBeenCalledWith({ id: firstId, data: '\u0000', userInput: true });
+    expect(window.janet.terminalWriteBinary).toHaveBeenCalledWith({ id: secondId, data: '\u0000', userInput: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel broadcast input' }));
+    expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
+    expect(screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).every(
+      (checkbox) => !(checkbox as HTMLInputElement).checked,
+    )).toBe(true);
+  });
+
+  it('cancels broadcast immediately with Escape and when a recipient exits', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    const terminals = await screen.findAllByTestId(/terminal-/);
+    const [firstId, secondId] = terminals.map((terminal) => terminal.dataset.terminalId!);
+    screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).forEach((checkbox) => fireEvent.click(checkbox));
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
+
+    screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).forEach((checkbox) => fireEvent.click(checkbox));
+    act(() => rendererMocks.terminalExitHandler!({ id: secondId, exitCode: 0, signal: 0 }));
+    expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
+    expect(rendererMocks.broadcastInputHandlers.get(firstId)!('must not fan out')).toBe(false);
+    expect(window.janet.terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: 'must not fan out' }));
+  });
+
+  it('keeps recipients scoped to the visible tab', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).forEach((checkbox) => fireEvent.click(checkbox));
+    expect(screen.getByRole('status', { name: /broadcast input active/i })).toBeInTheDocument();
+
+    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
+    expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
+    expect(screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i })).toHaveLength(1);
+  });
+
   it('shows an authoritative local terminal exit in its pane and tab', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);

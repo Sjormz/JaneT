@@ -3655,3 +3655,34 @@ button:disabled,
   .update-banner-progress-state .update-banner-message { flex-basis: calc(100% - 28px); }
   .update-banner-progress { flex: 1; margin-left: 26px; }
 }
+.broadcast-input-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 6px 12px;
+  color: #fff;
+  background: #a33b20;
+  border-bottom: 2px solid #ffb86c;
+}
+
+.broadcast-input-banner button {
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.broadcast-recipient { accent-color: #ff8c42; }
+
+.terminal-leaf.broadcast-selected {
+  outline: 3px solid #ff8c42;
+  outline-offset: -3px;
+}
+
+.terminal-leaf.broadcast-selected .terminal-leaf-header {
+  color: #fff;
+  background: #71301d;
+}

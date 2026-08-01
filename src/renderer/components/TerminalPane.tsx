@@ -54,6 +54,7 @@ interface TerminalPaneProps {
   onCwdChange?: (termId: string, cwd: string) => void;
   onFocus?: (termId: string) => void;
   onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+  onBroadcastInput?: (termId: string, data: string, binary?: boolean) => boolean;
   initialCwd?: string;
   startupCommands?: string[];
   startupShellDialect?: TerminalLeaf['startupShellDialect'];
@@ -141,6 +142,7 @@ export default function TerminalPane({
   onCwdChange,
   onFocus,
   onAgentEvent,
+  onBroadcastInput,
   initialCwd,
   startupCommands,
   startupShellDialect,
@@ -157,6 +159,8 @@ export default function TerminalPane({
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const sshNoticeAttemptRef = useRef(0);
   const pathDropNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onBroadcastInputRef = useRef(onBroadcastInput);
+  onBroadcastInputRef.current = onBroadcastInput;
 
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -474,6 +478,7 @@ export default function TerminalPane({
     const disposable = term.onData((data) => {
       const userInput = inputSource.userInput;
       inputSource.userInput = false;
+      if (userInput && onBroadcastInputRef.current?.(termId, data)) return;
       if (tabType === 'local') {
         window.janet.terminalWrite({ id: termId, data, userInput });
       } else if (tabType === 'ssh') {
@@ -485,6 +490,7 @@ export default function TerminalPane({
     const binaryDisposable = term.onBinary((data) => {
       const userInput = inputSource.userInput;
       inputSource.userInput = false;
+      if (userInput && onBroadcastInputRef.current?.(termId, data, true)) return;
       if (tabType === 'local') {
         window.janet.terminalWriteBinary({ id: termId, data, userInput });
       } else {
