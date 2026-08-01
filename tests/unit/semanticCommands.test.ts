@@ -172,6 +172,21 @@ describe('SemanticCommandTimeline', () => {
     expect(timeline.commands).toEqual([]);
   });
 
+  it('disposes pending state when any command row is unavailable at C', () => {
+    const term = terminalAt(['$ head', 'tail', 'output'], 0, 2);
+    term.wrapped.add(1);
+    const completed = vi.fn();
+    const timeline = new SemanticCommandTimeline(term as never, completed);
+    timeline.handleOsc('A'); timeline.handleOsc('B');
+    term.lines[0] = undefined;
+    term.cursorY = 1; term.cursorX = 4; timeline.handleOsc('C');
+
+    expect(term.markers[0].isDisposed).toBe(true);
+    term.cursorY = 2; term.cursorX = 6; timeline.handleOsc('D;0');
+    expect(completed).not.toHaveBeenCalled();
+    expect(timeline.commands).toEqual([]);
+  });
+
   it('disposes pending state when C reconstructs an oversized command', () => {
     const oversized = 'x'.repeat(64 * 1024 + 1);
     const term = terminalAt([oversized], 0, 0);
@@ -225,7 +240,7 @@ describe('SemanticCommandTimeline', () => {
     expect(term.scrollToBottom).toHaveBeenCalledOnce();
   });
 
-  it('rebases navigation when earlier markers are disposed', () => {
+  it('preserves the selected command when an earlier marker is disposed', () => {
     const term = terminalAt(['$ one', '$ two', '$ tri'], 0, 2);
     const timeline = new SemanticCommandTimeline(term as never);
     for (let line = 0; line < 3; line += 1) {
@@ -234,14 +249,16 @@ describe('SemanticCommandTimeline', () => {
       term.cursorX = 5; timeline.handleOsc('C'); timeline.handleOsc('D;0');
     }
     term.viewportY = 3;
-    expect(timeline.previous()).toBe(true);
-    expect(term.scrollToLine).toHaveBeenLastCalledWith(2);
-    term.markers[0].dispose();
-    term.markers[1].dispose();
+    timeline.previous();
+    timeline.previous();
+    expect(timeline.current()?.command).toBe('two');
 
-    expect(() => timeline.previous()).not.toThrow();
+    term.markers[0].dispose();
+
+    expect(timeline.current()?.command).toBe('two');
+    expect(timeline.next()).toBe(true);
+    expect(timeline.current()?.command).toBe('tri');
     expect(term.scrollToLine).toHaveBeenLastCalledWith(2);
-    expect(timeline.current()?.marker).toBe(term.markers[2]);
   });
 
   it('marks nonzero exits and releases markers and decorations on dispose', () => {

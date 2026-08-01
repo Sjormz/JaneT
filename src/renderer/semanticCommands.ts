@@ -28,7 +28,7 @@ export class SemanticCommandTimeline {
   private outputStart: Position | null = null;
   private command = '';
   private startedAt = 0;
-  private navigationIndex: number | null = null;
+  private selectedCommand: SemanticCommand | null = null;
 
   constructor(
     private readonly terminal: Terminal,
@@ -88,7 +88,7 @@ export class SemanticCommandTimeline {
       while (this.commands.length > MAX_COMMANDS) this.disposeCommand(this.commands.shift()!);
       this.onComplete?.(event);
       this.resetPending(false);
-      this.navigationIndex = null;
+      this.selectedCommand = null;
     }
     return true;
   }
@@ -96,35 +96,35 @@ export class SemanticCommandTimeline {
   previous(): boolean {
     const available = this.liveCommands();
     if (!available.length) return false;
-    if (this.navigationIndex !== null) this.navigationIndex = Math.min(this.navigationIndex, available.length - 1);
-    if (this.navigationIndex === null) {
+    const selectedIndex = this.selectedCommand ? available.indexOf(this.selectedCommand) : -1;
+    if (selectedIndex < 0) {
       const viewport = this.terminal.buffer.active.viewportY;
       let index = available.length - 1;
       while (index >= 0 && available[index].marker.line >= viewport) index -= 1;
-      this.navigationIndex = index < 0 ? available.length - 1 : index;
-    } else if (this.navigationIndex > 0) {
-      this.navigationIndex -= 1;
+      this.selectedCommand = available[index < 0 ? available.length - 1 : index];
+    } else if (selectedIndex > 0) {
+      this.selectedCommand = available[selectedIndex - 1];
     }
-    this.terminal.scrollToLine(available[this.navigationIndex].marker.line);
+    this.terminal.scrollToLine(this.selectedCommand!.marker.line);
     return true;
   }
 
   next(): boolean {
     const available = this.liveCommands();
-    if (!available.length || this.navigationIndex === null) return false;
-    if (this.navigationIndex < available.length - 1) {
-      this.navigationIndex += 1;
-      this.terminal.scrollToLine(available[this.navigationIndex].marker.line);
+    const selectedIndex = this.selectedCommand ? available.indexOf(this.selectedCommand) : -1;
+    if (!available.length || selectedIndex < 0) return false;
+    if (selectedIndex < available.length - 1) {
+      this.selectedCommand = available[selectedIndex + 1];
+      this.terminal.scrollToLine(this.selectedCommand.marker.line);
     } else {
-      this.navigationIndex = null;
+      this.selectedCommand = null;
       this.terminal.scrollToBottom();
     }
     return true;
   }
 
   current(): SemanticCommand | null {
-    if (this.navigationIndex === null) return null;
-    return this.liveCommands()[this.navigationIndex] ?? null;
+    return this.selectedCommand?.marker.isDisposed ? null : this.selectedCommand;
   }
 
   dispose(): void {
@@ -143,12 +143,13 @@ export class SemanticCommandTimeline {
     let length = 0;
     for (let line = start.line; line <= end.line; line += 1) {
       const bufferLine = this.terminal.buffer.active.getLine(line);
-      const text = bufferLine?.translateToString(
+      if (!bufferLine) return '';
+      const text = bufferLine.translateToString(
         true,
         line === start.line ? start.column : 0,
         line === end.line ? end.column : undefined,
-      ) ?? '';
-      const separator = line > start.line && !bufferLine?.isWrapped ? '\n' : '';
+      );
+      const separator = line > start.line && !bufferLine.isWrapped ? '\n' : '';
       length += separator.length + text.length;
       if (length > MAX_TEXT) return '';
       lines.push(separator, text);
