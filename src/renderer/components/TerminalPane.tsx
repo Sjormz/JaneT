@@ -56,6 +56,7 @@ interface TerminalPaneProps {
   onFocus?: (termId: string) => void;
   onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
   onSemanticCommand?: (termId: string, event: SemanticCommandEvent) => void;
+  onBroadcastInput?: (termId: string, data: string, binary?: boolean) => boolean;
   initialCwd?: string;
   startupCommands?: string[];
   startupShellDialect?: TerminalLeaf['startupShellDialect'];
@@ -115,6 +116,7 @@ interface CachedTerminalPane {
   sshNoticeState: SshNoticeState;
   sshNoticeListener: ((state: SshNoticeState) => void) | null;
   agentEventListener: ((termId: string, event: AgentLifecycleEvent) => void) | null;
+  broadcastInputListener: TerminalPaneProps['onBroadcastInput'];
   inputSource: { userInput: boolean };
   semanticCommands: SemanticCommandTimeline;
   semanticCommandListener: { current: TerminalPaneProps['onSemanticCommand'] };
@@ -146,6 +148,7 @@ export default function TerminalPane({
   onFocus,
   onAgentEvent,
   onSemanticCommand,
+  onBroadcastInput,
   initialCwd,
   startupCommands,
   startupShellDialect,
@@ -177,6 +180,7 @@ export default function TerminalPane({
   if (cachedForAgentListener) {
     cachedForAgentListener.agentEventListener = onAgentEvent ?? null;
     cachedForAgentListener.semanticCommandListener.current = onSemanticCommand;
+    cachedForAgentListener.broadcastInputListener = onBroadcastInput;
   }
 
   useEffect(() => {
@@ -408,6 +412,7 @@ export default function TerminalPane({
       const { term, fitAddon, searchAddon } = cached;
       cached.sshNoticeListener = setSshNoticeState;
       cached.semanticCommandListener.current = onSemanticCommand;
+      cached.broadcastInputListener = onBroadcastInput;
 
       if (term.element && term.element.parentElement !== container) {
         container.appendChild(term.element);
@@ -435,6 +440,9 @@ export default function TerminalPane({
         const currentSemanticListener = currentCache?.semanticCommandListener;
         if (currentSemanticListener && currentSemanticListener.current === onSemanticCommand) {
           currentSemanticListener.current = undefined;
+        }
+        if (currentCache && currentCache.broadcastInputListener === onBroadcastInput) {
+          currentCache.broadcastInputListener = undefined;
         }
         termRef.current = null;
         fitAddonRef.current = null;
@@ -517,6 +525,7 @@ export default function TerminalPane({
     const disposable = term.onData((data) => {
       const userInput = inputSource.userInput;
       inputSource.userInput = false;
+      if (userInput && terminalPaneCache.get(termId)?.broadcastInputListener?.(termId, data)) return;
       if (tabType === 'local') {
         window.janet.terminalWrite({ id: termId, data, userInput });
       } else if (tabType === 'ssh') {
@@ -528,6 +537,7 @@ export default function TerminalPane({
     const binaryDisposable = term.onBinary((data) => {
       const userInput = inputSource.userInput;
       inputSource.userInput = false;
+      if (userInput && terminalPaneCache.get(termId)?.broadcastInputListener?.(termId, data, true)) return;
       if (tabType === 'local') {
         window.janet.terminalWriteBinary({ id: termId, data, userInput });
       } else {
@@ -629,6 +639,7 @@ export default function TerminalPane({
           : { kind: 'reconnecting' },
       sshNoticeListener: setSshNoticeState,
       agentEventListener: onAgentEvent ?? null,
+      broadcastInputListener: onBroadcastInput,
       inputSource,
       semanticCommands,
       semanticCommandListener,
@@ -645,6 +656,9 @@ export default function TerminalPane({
       const currentSemanticListener = currentCache?.semanticCommandListener;
       if (currentSemanticListener && currentSemanticListener.current === onSemanticCommand) {
         currentSemanticListener.current = undefined;
+      }
+      if (currentCache && currentCache.broadcastInputListener === onBroadcastInput) {
+        currentCache.broadcastInputListener = undefined;
       }
       termRef.current = null;
       fitAddonRef.current = null;
