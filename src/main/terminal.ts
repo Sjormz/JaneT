@@ -15,8 +15,12 @@ import { NativeTerminalCapacity } from './terminalCapacity';
 interface TerminalInstance {
   pty: IPty;
   id: string;
-  /** The first renderer forwarder registered for this PTY. */
-  forwardData?: (data: string) => void;
+  /** The current renderer forwarder registered for this PTY. */
+  forwardData?: (data: string, output: TerminalOutputSequence) => unknown;
+  outputGeneration: number;
+  outputSequence: number;
+  acknowledgedOutputSequence: number;
+  outputPaused: boolean;
   cols: number;
   rows: number;
   promptMarkerTail: string;
@@ -40,10 +44,17 @@ const MAX_TERMINAL_ID_LENGTH = 256;
 const MAX_LIVE_TERMINALS = 64;
 const MAX_TERMINAL_DIMENSION = 1_000;
 const MAX_TERMINAL_WRITE_BYTES = 1024 * 1024;
+const OUTPUT_HIGH_WATERMARK_BYTES = 512 * 1024;
+const OUTPUT_LOW_WATERMARK_BYTES = 128 * 1024;
 const DEFAULT_TERMINATE_GRACE_MS = 750;
 const DEFAULT_FORCE_KILL_GRACE_MS = 250;
 const STARTUP_COMMAND_FALLBACK_MS = 1_000;
 const PROMPT_PROBE_TAIL_LENGTH = STARTUP_READY_MARKER.length - 1;
+
+export interface TerminalOutputSequence {
+  generation: number;
+  sequence: number;
+}
 
 const SHELL_PROCESS_NAMES = new Set([
   'bash', 'cmd', 'dash', 'fish', 'ksh', 'nu', 'nushell', 'powershell', 'pwsh', 'sh', 'tcsh', 'zsh',
@@ -142,6 +153,7 @@ export class TerminalManager {
   private readonly killProcess: (pid: number, signal: NodeJS.Signals) => void;
   private readonly capacity: NativeTerminalCapacity;
   private readonly platform: NodeJS.Platform;
+  private nextOutputGeneration = 1;
 
   constructor(options: TerminalManagerOptions = {}) {
     this.processInspector = options.processInspector ?? new SystemProcessInspector();
@@ -155,14 +167,14 @@ export class TerminalManager {
 
   /**
    * Create (or reuse) the pty for `id`, and register `onData` as its
-   * single output forwarder.
+   * current output forwarder.
    *
    * Both parts of this are idempotent by id. React 18 StrictMode
    * double-invokes mount effects in dev (mount -> cleanup -> mount)
    * before the first `terminal:create` IPC round-trip resolves, so this
    * can legitimately be called twice in quick succession for the same
    * termId. Without these guards we'd either spawn a second real shell
-   * process, or attach a second onData forwarder to the same already-live
+   * process, or retain multiple onData forwarders on the same already-live
    * pty — either way the renderer ends up with two streams of output
    * landing on one xterm instance, which is what produced the "PS
    * C:\...> PS C:\...>" duplicate-prompt bug. Reusing the existing pty
@@ -172,7 +184,7 @@ export class TerminalManager {
     id: string,
     cwd?: string,
     shell?: string,
-    onData?: (data: string) => void,
+    onData?: (data: string, output: TerminalOutputSequence) => unknown,
     startupCommands?: unknown,
     onExit?: (event: { exitCode: number; signal: number }) => void,
   ): IPty {
@@ -184,7 +196,16 @@ export class TerminalManager {
     ) throw new Error('A valid terminal id is required');
     const existing = this.terminals.get(id);
     if (existing) {
-      if (onData && !existing.forwardData) existing.forwardData = onData;
+      if (onData) {
+        existing.forwardData = onData;
+        existing.outputGeneration = this.nextOutputGeneration++;
+        existing.outputSequence = 0;
+        existing.acknowledgedOutputSequence = 0;
+        if (existing.outputPaused) {
+          existing.pty.resume();
+          existing.outputPaused = false;
+        }
+      }
       return existing.pty;
     }
     if (this.terminals.size >= MAX_LIVE_TERMINALS) {
@@ -245,6 +266,10 @@ export class TerminalManager {
       pty,
       id,
       forwardData: onData,
+      outputGeneration: this.nextOutputGeneration++,
+      outputSequence: 0,
+      acknowledgedOutputSequence: 0,
+      outputPaused: false,
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
       promptMarkerTail: '',
@@ -266,7 +291,19 @@ export class TerminalManager {
       const promptProbe = current.promptMarkerTail + data;
       const reachedStartupReady = promptProbe.includes(STARTUP_READY_MARKER);
       current.promptMarkerTail = promptProbe.slice(-PROMPT_PROBE_TAIL_LENGTH);
-      current.forwardData?.(data);
+      const sequence = current.outputSequence + Buffer.byteLength(data);
+      const delivered = current.forwardData?.(data, {
+        generation: current.outputGeneration,
+        sequence,
+      });
+      if (delivered !== false && current.forwardData) current.outputSequence = sequence;
+      if (
+        !current.outputPaused
+        && current.outputSequence - current.acknowledgedOutputSequence >= OUTPUT_HIGH_WATERMARK_BYTES
+      ) {
+        current.pty.pause();
+        current.outputPaused = true;
+      }
       if (reachedStartupReady) {
         setImmediate(() => this.dispatchStartupCommands(current));
       }
@@ -282,6 +319,25 @@ export class TerminalManager {
       terminal.startupTimer.unref?.();
     }
     return pty;
+  }
+
+  acknowledgeOutput(id: string, generation: number, sequence: number): void {
+    if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(sequence) || sequence < 0) return;
+    const terminal = this.terminals.get(id);
+    if (
+      !terminal
+      || terminal.outputGeneration !== generation
+      || sequence <= terminal.acknowledgedOutputSequence
+      || sequence > terminal.outputSequence
+    ) return;
+    terminal.acknowledgedOutputSequence = sequence;
+    if (
+      terminal.outputPaused
+      && terminal.outputSequence - terminal.acknowledgedOutputSequence <= OUTPUT_LOW_WATERMARK_BYTES
+    ) {
+      terminal.pty.resume();
+      terminal.outputPaused = false;
+    }
   }
 
   resize(id: string, cols: number, rows: number): void {

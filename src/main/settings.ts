@@ -229,7 +229,9 @@ export class SettingsManager {
       snippets: updates.snippets === undefined ? this.cache.snippets : normalizeSnippets(updates.snippets),
       sshProfiles: updates.sshProfiles === undefined
         ? this.cache.sshProfiles
-        : updates.sshProfiles.map((profile) => ({ ...profile })),
+        : updates.sshProfiles.map(({ password, privateKey, ...profile }) => profile.auth === 'password'
+          ? { ...profile, ...(password === undefined ? {} : { password }) }
+          : { ...profile, ...(privateKey === undefined ? {} : { privateKey }) }),
       workspaceTabs: updates.workspaceTabs === undefined
         ? this.cache.workspaceTabs
         : updates.workspaceTabs.map(cloneWorkspaceTabPreset)
@@ -237,7 +239,7 @@ export class SettingsManager {
       sshHostKeys: updates.sshHostKeys === undefined ? this.cache.sshHostKeys : { ...updates.sshHostKeys },
       session: updates.session === undefined ? this.cache.session : cloneSavedSession(updates.session),
     };
-    if (!this.save()) {
+    if (!this.save(previous.sshProfiles)) {
       this.cache = previous;
       throw new Error('Could not persist settings');
     }
@@ -306,14 +308,14 @@ export class SettingsManager {
     }
   }
 
-  private save(): boolean {
+  private save(previousSshProfiles = this.cache.sshProfiles): boolean {
     const tempPath = `${this.filePath}.tmp`;
     try {
       const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      const serialized = this.serialize(this.cache);
+      const serialized = this.serialize(this.cache, previousSshProfiles);
       fs.writeFileSync(tempPath, JSON.stringify(serialized, null, 2), 'utf-8');
       fs.renameSync(tempPath, this.filePath);
       this.captureStoredSecrets(serialized.sshProfiles);
@@ -325,15 +327,24 @@ export class SettingsManager {
     }
   }
 
-  private serialize(settings: AppSettings): StoredAppSettings {
+  private serialize(
+    settings: AppSettings,
+    previousSshProfiles: AppSettings['sshProfiles'],
+  ): StoredAppSettings {
+    const previousProfiles = new Map(previousSshProfiles.map((profile) => [profile.id, profile]));
     return {
       ...settings,
       sshProfiles: settings.sshProfiles.map((profile) => {
         const { password, privateKey, ...publicProfile } = profile;
         const stored: StoredSSHProfile = { ...publicProfile };
         const previous = this.storedSshSecrets.get(profile.id);
-        const passwordSecret = password ? protectSecret(password) : undefined;
-        const privateKeySecret = privateKey ? protectSecret(privateKey) : undefined;
+        const previousProfile = previousProfiles.get(profile.id);
+        const passwordSecret = password
+          ? (password === previousProfile?.password && previous?.passwordSecret) || protectSecret(password)
+          : undefined;
+        const privateKeySecret = privateKey
+          ? (privateKey === previousProfile?.privateKey && previous?.privateKeySecret) || protectSecret(privateKey)
+          : undefined;
         if (password && !passwordSecret) throw new Error('Could not protect SSH password');
         if (privateKey && !privateKeySecret) throw new Error('Could not protect SSH private key');
         if (passwordSecret) stored.passwordSecret = passwordSecret;
@@ -364,8 +375,9 @@ export class SettingsManager {
         port: normalizeStoredSshPort(profile.port),
         username: profile.username,
         auth: profile.auth,
-        password: profile.password ?? unprotectSecret(profile.passwordSecret) ?? decryptLegacySecret(profile.passwordEncrypted),
-        privateKey: profile.privateKey ?? unprotectSecret(profile.privateKeySecret) ?? decryptLegacySecret(profile.privateKeyEncrypted),
+        ...(profile.auth === 'password'
+          ? { password: profile.password ?? unprotectSecret(profile.passwordSecret) ?? decryptLegacySecret(profile.passwordEncrypted) }
+          : { privateKey: profile.privateKey ?? unprotectSecret(profile.privateKeySecret) ?? decryptLegacySecret(profile.privateKeyEncrypted) }),
       })),
       workspaceTabs: (Array.isArray(settings.workspaceTabs) ? settings.workspaceTabs : [])
         .map(cloneWorkspaceTabPreset)
@@ -379,12 +391,9 @@ export class SettingsManager {
     this.storedSshSecrets.clear();
     if (!Array.isArray(profiles)) return;
     for (const profile of profiles) {
-      this.storedSshSecrets.set(profile.id, {
-        passwordSecret: profile.passwordSecret,
-        privateKeySecret: profile.privateKeySecret,
-        passwordEncrypted: profile.passwordEncrypted,
-        privateKeyEncrypted: profile.privateKeyEncrypted,
-      });
+      this.storedSshSecrets.set(profile.id, profile.auth === 'password'
+        ? { passwordSecret: profile.passwordSecret, passwordEncrypted: profile.passwordEncrypted }
+        : { privateKeySecret: profile.privateKeySecret, privateKeyEncrypted: profile.privateKeyEncrypted });
     }
   }
 }

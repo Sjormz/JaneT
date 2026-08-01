@@ -17,8 +17,13 @@ class MiniEmitter {
   }
 }
 
-class MockShellStream extends MiniEmitter {
-  stderr = new MiniEmitter();
+class MockReadable extends MiniEmitter {
+  pause = vi.fn();
+  resume = vi.fn();
+}
+
+class MockShellStream extends MockReadable {
+  stderr = new MockReadable();
   write = vi.fn();
   setWindow = vi.fn();
   close = vi.fn();
@@ -611,6 +616,122 @@ describe('SSHManager', () => {
       expect.any(Function),
     );
     expect(received).toEqual(['early output']);
+  });
+
+  it('pauses SSH output above the high watermark and resumes after parsed output is acknowledged', async () => {
+    const stream = new MockShellStream();
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: Function) => cb(undefined, stream));
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('flow-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const handle = manager.createShell('flow-session', 'flow-term', { cols: 80, rows: 24 });
+    const received: Array<{ generation: number; sequence: number }> = [];
+    handle.onData((_data, output) => received.push(output));
+    await handle.ready;
+
+    stream.emit('data', Buffer.from('x'.repeat(300_000)));
+    stream.stderr.emit('data', Buffer.from('x'.repeat(224_288)));
+
+    expect(stream.pause).toHaveBeenCalledOnce();
+    expect(stream.stderr.pause).toHaveBeenCalledOnce();
+    manager.acknowledgeOutput('flow-term', received[0].generation, received[0].sequence);
+    expect(stream.resume).not.toHaveBeenCalled();
+    manager.acknowledgeOutput('flow-term', received[1].generation, received[1].sequence);
+    expect(stream.resume).toHaveBeenCalledOnce();
+    expect(stream.stderr.resume).toHaveBeenCalledOnce();
+  });
+
+  it('starts fresh flow control when an existing SSH shell reattaches', async () => {
+    const stream = new MockShellStream();
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: Function) => cb(undefined, stream));
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('reattach-flow-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const handle = manager.createShell(
+      'reattach-flow-session', 'reattach-flow-term', { cols: 80, rows: 24 },
+    );
+    const firstOutput: Array<{ generation: number; sequence: number }> = [];
+    handle.onData((_data, output) => firstOutput.push(output));
+    await handle.ready;
+
+    stream.emit('data', Buffer.from('x'.repeat(600_000)));
+    expect(stream.pause).toHaveBeenCalledOnce();
+
+    const currentOutput: Array<{ generation: number; sequence: number }> = [];
+    handle.onData((_data, output) => {
+      currentOutput.push(output);
+    });
+    expect(stream.resume).toHaveBeenCalledOnce();
+    expect(stream.stderr.resume).toHaveBeenCalledOnce();
+
+    stream.pause.mockClear();
+    stream.stderr.pause.mockClear();
+    stream.emit('data', Buffer.from('x'.repeat(600_000)));
+    expect(stream.pause).toHaveBeenCalledOnce();
+    expect(stream.stderr.pause).toHaveBeenCalledOnce();
+    expect(currentOutput[0].generation).not.toBe(firstOutput[0].generation);
+    expect(currentOutput[0].sequence).toBe(600_000);
+  });
+
+  it('does not pause SSH output that could not be delivered to the renderer', async () => {
+    const stream = new MockShellStream();
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: Function) => cb(undefined, stream));
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('undelivered-flow-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const handle = manager.createShell(
+      'undelivered-flow-session', 'undelivered-flow-term', { cols: 80, rows: 24 },
+    );
+    handle.onData(() => false);
+    await handle.ready;
+
+    stream.emit('data', Buffer.from('x'.repeat(600_000)));
+
+    expect(stream.pause).not.toHaveBeenCalled();
+    expect(stream.stderr.pause).not.toHaveBeenCalled();
+  });
+
+  it('ignores output acknowledgements from a destroyed SSH shell generation', async () => {
+    const streams = [new MockShellStream(), new MockShellStream()];
+    mocks.shellMock
+      .mockImplementationOnce((_opts: unknown, cb: Function) => cb(undefined, streams[0]))
+      .mockImplementationOnce((_opts: unknown, cb: Function) => cb(undefined, streams[1]));
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('reused-flow-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    const firstOutput: Array<{ generation: number; sequence: number }> = [];
+    const first = manager.createShell('reused-flow-session', 'reused-flow-term', { cols: 80, rows: 24 });
+    first.onData((_data, output) => firstOutput.push(output));
+    await first.ready;
+    streams[0].emit('data', Buffer.from('x'));
+    manager.destroyShell('reused-flow-term', 'reused-flow-session');
+
+    const currentOutput: Array<{ generation: number; sequence: number }> = [];
+    const current = manager.createShell('reused-flow-session', 'reused-flow-term', { cols: 80, rows: 24 });
+    current.onData((_data, output) => currentOutput.push(output));
+    await current.ready;
+    streams[1].emit('data', Buffer.from('x'.repeat(600_000)));
+    expect(streams[1].pause).toHaveBeenCalledOnce();
+
+    manager.acknowledgeOutput('reused-flow-term', firstOutput[0].generation, Number.MAX_SAFE_INTEGER);
+    expect(streams[1].resume).not.toHaveBeenCalled();
+    manager.acknowledgeOutput(
+      'reused-flow-term', currentOutput[0].generation, currentOutput[0].sequence,
+    );
+    expect(streams[1].resume).toHaveBeenCalledOnce();
   });
 
   it.each([

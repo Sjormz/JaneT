@@ -175,6 +175,7 @@ export function initUpdater(
   });
 
   autoUpdater.on('download-progress', (progress: ProgressInfo) => {
+    if (downloadRequest && downloadVersion !== updateInfo?.version) return;
     send('update:download-progress', {
       percent: Math.round(progress.percent),
       bytesPerSecond: progress.bytesPerSecond,
@@ -190,8 +191,12 @@ export function initUpdater(
     send('update:downloaded', { version: info.version });
   });
 
-  autoUpdater.on('error', (err: Error) => {
+  autoUpdater.on('error', (err: Error, detail?: string) => {
     console.error('[updater] error:', err.message);
+    if (
+      downloadRequest && downloadVersion !== updateInfo?.version
+      && !detail?.startsWith('Cannot check for updates:')
+    ) return;
     send('update:error', { message: err.message });
   });
 

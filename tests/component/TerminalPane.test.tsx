@@ -30,8 +30,8 @@ class MockResizeObserver {
 
 class MockAddonFit {
   static instances: MockAddonFit[] = [];
+  proposeDimensions = vi.fn((): { cols: number; rows: number } | undefined => ({ cols: 80, rows: 24 }));
   fit = vi.fn();
-  proposeDimensions = vi.fn(() => ({ cols: 80, rows: 24 }));
 
   constructor() {
     MockAddonFit.instances.push(this);
@@ -87,12 +87,19 @@ class MockTerminal {
   });
   onBinary = vi.fn(() => ({ dispose: vi.fn() }));
   onKey = vi.fn(() => ({ dispose: vi.fn() }));
-  loadAddon = vi.fn();
+  loadAddon = vi.fn((addon: { activate?: (terminal: MockTerminal) => void }) => addon.activate?.(this));
   open = vi.fn();
   focus = vi.fn();
   dispose = vi.fn();
+  resize = vi.fn((cols: number, rows: number) => {
+    this.cols = cols;
+    this.rows = rows;
+  });
   attachCustomKeyEventHandler = vi.fn();
-  write = vi.fn();
+  writeCallbacks: Array<() => void> = [];
+  write = vi.fn((_data: string, callback?: () => void) => {
+    if (callback) this.writeCallbacks.push(callback);
+  });
   paste = vi.fn((data: string) => this.dataHandler?.(data));
   refresh = vi.fn();
   clearSelection = vi.fn();
@@ -100,6 +107,7 @@ class MockTerminal {
   hasSelection = vi.fn(() => Boolean(this.selection));
   getSelection = vi.fn(() => this.selection);
   rows = 24;
+  cols = 80;
 
   constructor(options: Record<string, unknown>) {
     this.options = options;
@@ -115,6 +123,7 @@ const terminalResize = vi.fn(() => Promise.resolve());
 const terminalWrite = vi.fn(() => Promise.resolve());
 const terminalWriteBinary = vi.fn(() => Promise.resolve());
 const terminalDestroy = vi.fn(() => Promise.resolve());
+const terminalAcknowledgeOutput = vi.fn(() => Promise.resolve());
 const openExternal = vi.fn(() => Promise.resolve(true));
 const copyTerminalText = vi.fn(() => true);
 let sshCreateShellImpl: () => Promise<unknown> = () => Promise.resolve({ connected: true });
@@ -122,8 +131,15 @@ const sshCreateShell = vi.fn(() => sshCreateShellImpl());
 const sshResizeShell = vi.fn(() => Promise.resolve());
 const sshWriteShell = vi.fn(() => Promise.resolve());
 const sshWriteShellBinary = vi.fn(() => Promise.resolve());
-let terminalDataHandler: ((params: { id: string; data: string }) => void) | null = null;
-const onTerminalData = vi.fn((cb: (params: { id: string; data: string }) => void) => {
+type TestTerminalOutput = {
+  source: 'local' | 'ssh';
+  id: string;
+  data: string;
+  generation: number;
+  sequence: number;
+};
+let terminalDataHandler: ((params: TestTerminalOutput) => void) | null = null;
+const onTerminalData = vi.fn((cb: (params: TestTerminalOutput) => void) => {
   terminalDataHandler = cb;
   return () => { terminalDataHandler = null; };
 });
@@ -196,6 +212,7 @@ beforeEach(() => {
       terminalWrite,
       terminalWriteBinary,
       terminalDestroy,
+      terminalAcknowledgeOutput,
       onTerminalData,
       sshCreateShell,
       sshResizeShell,
@@ -578,6 +595,38 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(term.paste).not.toHaveBeenCalledWith(`${text}\n`);
   });
 
+  it('acknowledges output only after xterm has parsed it', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-output"
+          tabType="local"
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    await waitFor(() => expect(terminalDataHandler).not.toBeNull());
+    const term = MockTerminal.instances[0];
+    act(() => terminalDataHandler?.({
+      source: 'ssh', id: 'term-output', data: 'stale SSH output', generation: 1, sequence: 16,
+    }));
+    expect(term.write).not.toHaveBeenCalledWith('stale SSH output', expect.any(Function));
+    act(() => terminalDataHandler?.({
+      source: 'local', id: 'term-output', data: 'large output', generation: 3, sequence: 7,
+    }));
+
+    expect(term.write).toHaveBeenCalledWith('large output', expect.any(Function));
+    expect(terminalAcknowledgeOutput).not.toHaveBeenCalled();
+    term.writeCallbacks.shift()?.();
+    expect(terminalAcknowledgeOutput).toHaveBeenCalledWith({
+      source: 'local', id: 'term-output', generation: 3, sequence: 7,
+    });
+  });
+
   it('propagates measured window/container resizes to the local pty and repaints', async () => {
     vi.useFakeTimers();
     try {
@@ -594,20 +643,34 @@ describe('TerminalPane SSH reinitialization', () => {
         </KeybindingsProvider>,
       );
 
-      terminalResize.mockClear();
+      await vi.runAllTimersAsync();
       const term = MockTerminal.instances[0];
       const fit = MockAddonFit.instances[0];
       fit.proposeDimensions.mockReturnValue({ cols: 132, rows: 37 });
+      fit.fit.mockImplementation(() => term.resize(132, 37));
+      terminalResize.mockClear();
+      fit.fit.mockClear();
+      fit.proposeDimensions.mockClear();
       MockResizeObserver.instances[0].trigger();
       await vi.advanceTimersByTimeAsync(50);
 
-      expect(fit.fit).toHaveBeenCalled();
+      expect(fit.fit).toHaveBeenCalledOnce();
+      expect(term.resize).toHaveBeenCalledWith(132, 37);
       expect(terminalResize).toHaveBeenCalledWith({ id: 'term-resize', cols: 132, rows: 37 });
-      expect(term.refresh).toHaveBeenCalledWith(0, 23);
+      expect(term.refresh).toHaveBeenCalledWith(0, 36);
 
       terminalResize.mockClear();
       MockResizeObserver.instances[0].trigger();
       await vi.advanceTimersByTimeAsync(50);
+      expect(terminalResize).not.toHaveBeenCalled();
+
+      term.resize.mockClear();
+      fit.proposeDimensions.mockClear();
+      fit.proposeDimensions.mockReturnValue(undefined);
+      MockResizeObserver.instances[0].trigger();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(fit.proposeDimensions).toHaveBeenCalledOnce();
+      expect(term.resize).not.toHaveBeenCalled();
       expect(terminalResize).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -637,6 +700,7 @@ describe('TerminalPane SSH reinitialization', () => {
       terminalResize.mockClear();
       fit.fit.mockClear();
       fit.proposeDimensions.mockReturnValue({ cols: 91, rows: 28 });
+      fit.fit.mockImplementation(() => term.resize(91, 28));
 
       view.rerender(
         <KeybindingsProvider>
@@ -1125,7 +1189,9 @@ describe('TerminalPane SSH shell output', () => {
     await act(async () => resolveShell({ connected: true }));
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'waiting');
 
-    act(() => terminalDataHandler!({ id: 'term-ssh', data: 'prompt' }));
+    act(() => terminalDataHandler!({
+      source: 'ssh', id: 'term-ssh', data: 'prompt', generation: 1, sequence: 6,
+    }));
     expect(screen.queryByTestId('ssh-terminal-notice')).toBeNull();
   });
 
@@ -1148,9 +1214,14 @@ describe('TerminalPane SSH shell output', () => {
 
     await waitFor(() => expect(terminalDataHandler).toBeTruthy());
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'waiting');
-    act(() => terminalDataHandler!({ id: 'term-ssh-2', data: 'terminal.shop output' }));
+    act(() => terminalDataHandler!({
+      source: 'ssh', id: 'term-ssh-2', data: 'terminal.shop output', generation: 1, sequence: 20,
+    }));
 
-    expect(MockTerminal.instances.at(-1)?.write).toHaveBeenCalledWith('terminal.shop output');
+    expect(MockTerminal.instances.at(-1)?.write).toHaveBeenCalledWith(
+      'terminal.shop output',
+      expect.any(Function),
+    );
     expect(screen.queryByTestId('ssh-terminal-notice')).toBeNull();
   });
 
@@ -1190,7 +1261,9 @@ describe('TerminalPane SSH shell output', () => {
     await act(async () => resolveRetry());
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'waiting');
 
-    act(() => terminalDataHandler!({ id: 'term-ssh-3', data: 'ready' }));
+    act(() => terminalDataHandler!({
+      source: 'ssh', id: 'term-ssh-3', data: 'ready', generation: 1, sequence: 5,
+    }));
     expect(screen.queryByTestId('ssh-terminal-notice')).toBeNull();
   });
 
@@ -1246,7 +1319,9 @@ describe('TerminalPane SSH shell output', () => {
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'waiting');
     first.unmount();
 
-    act(() => terminalDataHandler!({ id: props.termId, data: 'prompt while hidden' }));
+    act(() => terminalDataHandler!({
+      source: 'ssh', id: props.termId, data: 'prompt while hidden', generation: 1, sequence: 19,
+    }));
     render(
       <KeybindingsProvider>
         <TerminalPane {...props} />
@@ -1254,7 +1329,10 @@ describe('TerminalPane SSH shell output', () => {
     );
 
     expect(screen.queryByTestId('ssh-terminal-notice')).toBeNull();
-    expect(MockTerminal.instances.at(-1)?.write).toHaveBeenCalledWith('prompt while hidden');
+    expect(MockTerminal.instances.at(-1)?.write).toHaveBeenCalledWith(
+      'prompt while hidden',
+      expect.any(Function),
+    );
   });
 
   it('publishes an offscreen retry failure to the remounted cached pane', async () => {
@@ -1374,7 +1452,9 @@ describe('TerminalPane SSH shell output', () => {
     const { default: TerminalPane } = await loadTerminalPane();
     sshCreateShellImpl = () => {
       expect(terminalDataHandler).toBeTruthy();
-      terminalDataHandler!({ id: 'term-ssh-early-data', data: '\x1b[6n' });
+      terminalDataHandler!({
+        source: 'ssh', id: 'term-ssh-early-data', data: '\x1b[6n', generation: 1, sequence: 4,
+      });
       return Promise.resolve({ connected: true });
     };
 
@@ -1392,6 +1472,9 @@ describe('TerminalPane SSH shell output', () => {
     );
 
     await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(1));
-    expect(MockTerminal.instances.at(-1)?.write).toHaveBeenCalledWith('\x1b[6n');
+    expect(MockTerminal.instances.at(-1)?.write).toHaveBeenCalledWith(
+      '\x1b[6n',
+      expect.any(Function),
+    );
   });
 });

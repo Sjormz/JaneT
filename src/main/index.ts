@@ -304,9 +304,7 @@ electron.app.whenReady().then(() => {
     });
     return response === 0;
   }, (event) => {
-    const window = mainWindow;
-    if (!window || window.isDestroyed()) return;
-    window.webContents.send('ssh:onConnectionClosed', event);
+    sendRendererEvent(mainWindow, 'ssh:onConnectionClosed', event);
   }, terminalCapacity);
 
   workspaceLifecycle = new WorkspaceLifecycleController({
@@ -401,10 +399,26 @@ function registerIpcHandlers() {
     event.returnValue = isTrustedSender(event) && copyTerminalTextToClipboard(text);
   });
 
+  electron.ipcMain.on('terminal:acknowledgeOutput', (event, acknowledgement: unknown) => {
+    if (!isTrustedSender(event) || !acknowledgement || typeof acknowledgement !== 'object') return;
+    const { source, id, generation, sequence } = acknowledgement as Record<string, unknown>;
+    if (
+      (source !== 'local' && source !== 'ssh')
+      || typeof id !== 'string'
+      || !Number.isSafeInteger(generation)
+      || !Number.isSafeInteger(sequence)
+    ) return;
+    if (source === 'local') {
+      terminalManager.acknowledgeOutput(id, generation as number, sequence as number);
+    } else {
+      sshManager.acknowledgeOutput(id, generation as number, sequence as number);
+    }
+  });
+
   // === Terminal IPC ===
   handle('terminal:create', (event, { id, cwd, shell, startupCommands }) => {
-    const pty = terminalManager.create(id, cwd, shell, (data) => {
-      sendRendererEvent(mainWindow, 'terminal:onData', { id, data });
+    const pty = terminalManager.create(id, cwd, shell, (data, output) => {
+      return sendRendererEvent(mainWindow, 'terminal:onData', { source: 'local', id, data, ...output });
     }, startupCommands, (exit) => {
       sendRendererEvent(mainWindow, 'terminal:onExit', { id, ...exit });
     });
@@ -445,8 +459,8 @@ function registerIpcHandlers() {
       startupCommands,
       startupShellDialect,
     );
-    shell.onData((data) => {
-      sendRendererEvent(mainWindow, 'terminal:onData', { id: termId, data });
+    shell.onData((data, output) => {
+      return sendRendererEvent(mainWindow, 'terminal:onData', { source: 'ssh', id: termId, data, ...output });
     });
     return shell.ready.then(() => ({ connected: true }));
   });

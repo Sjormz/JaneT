@@ -166,6 +166,7 @@ describe('preload close-preparation bridge', () => {
   it('exposes a removable request listener and a typed resolution invoke', async () => {
     const listeners = new Map<string, (...args: any[]) => void>();
     const invoke = vi.fn().mockResolvedValue(true);
+    const send = vi.fn();
     const removeListener = vi.fn();
     const on = vi.fn((channel: string, listener: (...args: any[]) => void) => {
       listeners.set(channel, listener);
@@ -175,6 +176,7 @@ describe('preload close-preparation bridge', () => {
       contextBridge: { exposeInMainWorld },
       ipcRenderer: {
         invoke,
+        send,
         on,
         removeListener,
       },
@@ -184,7 +186,12 @@ describe('preload close-preparation bridge', () => {
     const api = exposeInMainWorld.mock.calls[0]?.[1] as {
       onPrepareForClose(callback: (request: WorkspacePrepareForCloseRequest) => void | Promise<void>): () => void;
       resolvePrepareForClose(resolution: WorkspacePrepareForCloseResolution): Promise<boolean>;
-      onTerminalData(callback: (event: { id: string; data: string }) => void): () => void;
+      terminalAcknowledgeOutput(event: {
+        source: 'local' | 'ssh'; id: string; generation: number; sequence: number;
+      }): void;
+      onTerminalData(callback: (event: {
+        source: 'local' | 'ssh'; id: string; data: string; generation: number; sequence: number;
+      }) => void): () => void;
       onTerminalExit(callback: (event: { id: string; exitCode: number; signal: number }) => void): () => void;
     };
     const callback = vi.fn();
@@ -219,10 +226,17 @@ describe('preload close-preparation bridge', () => {
     const terminalCallbacks = Array.from({ length: 20 }, () => vi.fn());
     const unsubscribeTerminal = terminalCallbacks.map((terminalCallback) => api.onTerminalData(terminalCallback));
     expect(on.mock.calls.filter(([channel]) => channel === 'terminal:onData')).toHaveLength(1);
-    listeners.get('terminal:onData')?.({}, { id: 'term-1', data: 'output' });
+    const terminalOutput = {
+      source: 'local' as const, id: 'term-1', data: 'output', generation: 2, sequence: 6,
+    };
+    listeners.get('terminal:onData')?.({}, terminalOutput);
     for (const terminalCallback of terminalCallbacks) {
-      expect(terminalCallback).toHaveBeenCalledWith({ id: 'term-1', data: 'output' });
+      expect(terminalCallback).toHaveBeenCalledWith(terminalOutput);
     }
+    api.terminalAcknowledgeOutput({ source: 'local', id: 'term-1', generation: 2, sequence: 6 });
+    expect(send).toHaveBeenCalledWith('terminal:acknowledgeOutput', {
+      source: 'local', id: 'term-1', generation: 2, sequence: 6,
+    });
     unsubscribeTerminal.forEach((unsubscribe) => unsubscribe());
     listeners.get('terminal:onData')?.({}, { id: 'term-1', data: 'late' });
     for (const terminalCallback of terminalCallbacks) expect(terminalCallback).toHaveBeenCalledOnce();

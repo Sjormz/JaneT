@@ -19,7 +19,11 @@ export default function MonacoDiffEditor({
   fontFamily,
 }: MonacoDiffEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<MonacoEditorNamespace.IStandaloneDiffEditor | null>(null);
+  const monacoRef = useRef<Awaited<ReturnType<typeof loadMonaco>> | null>(null);
+  const appearanceRef = useRef({ themeName, fontSize, fontFamily });
   const [loadError, setLoadError] = useState<string | null>(null);
+  appearanceRef.current = { themeName, fontSize, fontFamily };
 
   useEffect(() => {
     let disposed = false;
@@ -29,6 +33,7 @@ export default function MonacoDiffEditor({
 
     void loadMonaco().then((monaco) => {
       if (disposed || !containerRef.current) return;
+      const appearance = appearanceRef.current;
       const language = editorLanguageForPath(document.resource.path);
       const baseUri = editorDocumentModelUri(document);
       original = monaco.editor.createModel(
@@ -44,8 +49,8 @@ export default function MonacoDiffEditor({
       instance = monaco.editor.createDiffEditor(containerRef.current, {
         accessibilitySupport: 'auto',
         automaticLayout: true,
-        fontFamily,
-        fontSize,
+        fontFamily: appearance.fontFamily,
+        fontSize: appearance.fontSize,
         minimap: { enabled: false },
         modifiedAriaLabel: `Working version of ${document.title}`,
         originalAriaLabel: `Original version of ${document.title}`,
@@ -53,9 +58,11 @@ export default function MonacoDiffEditor({
         readOnly: true,
         renderSideBySide: true,
         scrollBeyondLastLine: false,
-        theme: defineJaneTMonacoTheme(monaco, getTheme(themeName)),
+        theme: defineJaneTMonacoTheme(monaco, getTheme(appearance.themeName)),
       });
       instance.setModel({ original, modified });
+      editorRef.current = instance;
+      monacoRef.current = monaco;
     }).catch((error) => {
       if (!disposed) setLoadError(error instanceof Error ? error.message : 'The diff editor could not be loaded.');
     });
@@ -65,8 +72,18 @@ export default function MonacoDiffEditor({
       instance?.dispose();
       original?.dispose();
       modified?.dispose();
+      if (editorRef.current === instance) editorRef.current = null;
+      monacoRef.current = null;
     };
-  }, [document, fontFamily, fontSize, themeName]);
+  }, [document]);
+
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    const instance = editorRef.current;
+    if (!monaco || !instance) return;
+    monaco.editor.setTheme(defineJaneTMonacoTheme(monaco, getTheme(themeName)));
+    instance.updateOptions({ fontFamily, fontSize });
+  }, [fontFamily, fontSize, themeName]);
 
   if (loadError) return <div className="editor-state error" role="alert">{loadError}</div>;
   return <div ref={containerRef} className="monaco-editor-host" data-editor-document={document.key} />;

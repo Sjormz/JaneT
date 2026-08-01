@@ -147,6 +147,51 @@ describe('updater window lifecycle', () => {
     await expect(first).resolves.toEqual({ success: true });
   });
 
+  it('does not publish progress or errors from an older in-flight download', async () => {
+    let release!: () => void;
+    updaterMocks.downloadUpdate.mockReturnValue(new Promise<void>((resolve) => { release = resolve; }));
+    const send = vi.fn();
+    initializeUpdater({ isDestroyed: () => false, webContents: { send } } as any, async () => true);
+    updaterMocks.listeners.get('update-available')?.({ version: '9.9.9' });
+    const pending = updaterMocks.handlers.get('update:download')?.();
+
+    updaterMocks.listeners.get('update-available')?.({ version: '10.0.0' });
+    send.mockClear();
+    updaterMocks.listeners.get('download-progress')?.({
+      percent: 50, bytesPerSecond: 1, transferred: 1, total: 2,
+    });
+    updaterMocks.listeners.get('error')?.(new Error('Old download failed'));
+
+    expect(send).not.toHaveBeenCalledWith('update:download-progress', expect.anything());
+    expect(send).not.toHaveBeenCalledWith('update:error', expect.anything());
+    release();
+    await expect(pending).resolves.toEqual({ success: true });
+  });
+
+  it('publishes a current check error while an older download is still in flight', async () => {
+    let releaseDownload!: () => void;
+    let releaseCheck!: () => void;
+    updaterMocks.downloadUpdate.mockReturnValue(new Promise<void>((resolve) => { releaseDownload = resolve; }));
+    updaterMocks.checkForUpdates.mockReturnValue(new Promise<void>((resolve) => { releaseCheck = resolve; }));
+    const send = vi.fn();
+    initializeUpdater({ isDestroyed: () => false, webContents: { send } } as any, async () => true);
+    updaterMocks.listeners.get('update-available')?.({ version: '9.9.9' });
+    const pendingDownload = updaterMocks.handlers.get('update:download')?.();
+
+    updaterMocks.listeners.get('update-available')?.({ version: '10.0.0' });
+    checkForUpdates(true);
+    send.mockClear();
+    updaterMocks.listeners.get('error')?.(
+      new Error('Current check failed'),
+      'Cannot check for updates: Current check failed',
+    );
+
+    expect(send).toHaveBeenCalledWith('update:error', { message: 'Current check failed' });
+    releaseCheck();
+    releaseDownload();
+    await expect(pendingDownload).resolves.toEqual({ success: true });
+  });
+
   it('does not install when workspace shutdown is cancelled', async () => {
     const prepare = vi.fn().mockResolvedValue(false);
     initializeUpdater({ isDestroyed: () => false, webContents: { send: vi.fn() } } as any, prepare);

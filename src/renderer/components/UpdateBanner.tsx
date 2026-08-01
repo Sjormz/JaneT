@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertIcon,
   ArrowDownIcon,
@@ -22,54 +22,113 @@ function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message.trim() ? error.message : fallback;
 }
 
+function updateFailureMessage(result: unknown, fallback: string): string | null {
+  if (!result || typeof result !== 'object') return null;
+  const { success, error, cancelled } = result as Record<string, unknown>;
+  if (success !== false || cancelled === true) return null;
+  return typeof error === 'string' && error.trim() ? error : fallback;
+}
+
 export default function UpdateBanner() {
   const [state, setState] = useState<UpdateState>({ status: 'idle' });
+  const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestEpochRef = useRef(0);
+  const setUpdateState = useCallback((next: UpdateState) => {
+    if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
+    dismissTimerRef.current = null;
+    setState(next);
+  }, []);
 
   useEffect(() => {
     const unsubs: (() => void)[] = [];
 
-    unsubs.push(window.janet.onUpdateChecking(() => setState({ status: 'checking' })));
+    unsubs.push(window.janet.onUpdateChecking(() => setUpdateState({ status: 'checking' })));
     unsubs.push(window.janet.onUpdateAvailable((info) => {
-      setState({ status: 'available', version: info.version });
+      requestEpochRef.current += 1;
+      setUpdateState({ status: 'available', version: info.version });
     }));
     unsubs.push(window.janet.onUpdateNotAvailable(() => {
-      setState({ status: 'not-available' });
-      const timer = setTimeout(() => setState({ status: 'idle' }), 3000);
-      unsubs.push(() => clearTimeout(timer));
+      requestEpochRef.current += 1;
+      setUpdateState({ status: 'not-available' });
+      dismissTimerRef.current = setTimeout(() => {
+        dismissTimerRef.current = null;
+        setState({ status: 'idle' });
+      }, 3000);
     }));
     unsubs.push(window.janet.onUpdateDownloadProgress((progress) => {
-      setState({ status: 'downloading', percent: progress.percent });
+      setUpdateState({ status: 'downloading', percent: progress.percent });
     }));
     unsubs.push(window.janet.onUpdateDownloaded((info) => {
-      setState({ status: 'downloaded', version: info.version });
+      requestEpochRef.current += 1;
+      setUpdateState({ status: 'downloaded', version: info.version });
     }));
     unsubs.push(window.janet.onUpdateError((error) => {
-      setState({ status: 'error', message: error.message });
-      const timer = setTimeout(() => setState({ status: 'idle' }), 10000);
-      unsubs.push(() => clearTimeout(timer));
+      requestEpochRef.current += 1;
+      setUpdateState({ status: 'error', message: error.message });
+      dismissTimerRef.current = setTimeout(() => {
+        dismissTimerRef.current = null;
+        setState({ status: 'idle' });
+      }, 10000);
     }));
 
-    return () => unsubs.forEach((unsubscribe) => unsubscribe());
-  }, []);
+    return () => {
+      if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
+      unsubs.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [setUpdateState]);
 
   const handleDownload = useCallback(() => {
-    void window.janet.downloadUpdate().catch((error) => {
-      setState({ status: 'error', message: errorMessage(error, 'The download could not start.') });
-    });
-  }, []);
+    const requestEpoch = requestEpochRef.current;
+    const fallback = 'The download could not start.';
+    void window.janet.downloadUpdate()
+      .then((result) => {
+        const message = updateFailureMessage(result, fallback);
+        if (message && requestEpochRef.current === requestEpoch) {
+          setUpdateState({ status: 'error', message });
+        }
+      })
+      .catch((error) => {
+        if (requestEpochRef.current === requestEpoch) {
+          setUpdateState({ status: 'error', message: errorMessage(error, fallback) });
+        }
+      });
+  }, [setUpdateState]);
 
   const handleInstall = useCallback(() => {
-    void window.janet.installUpdate().catch((error) => {
-      setState({ status: 'error', message: errorMessage(error, 'JaneT could not restart to install the update.') });
-    });
-  }, []);
+    const requestEpoch = requestEpochRef.current;
+    const fallback = 'JaneT could not restart to install the update.';
+    void window.janet.installUpdate()
+      .then((result) => {
+        const message = updateFailureMessage(result, fallback);
+        if (message && requestEpochRef.current === requestEpoch) {
+          setUpdateState({ status: 'error', message });
+        }
+      })
+      .catch((error) => {
+        if (requestEpochRef.current === requestEpoch) {
+          setUpdateState({ status: 'error', message: errorMessage(error, fallback) });
+        }
+      });
+  }, [setUpdateState]);
 
   const handleForceCheck = useCallback(() => {
-    setState({ status: 'checking' });
-    void window.janet.checkForUpdates().catch((error) => {
-      setState({ status: 'error', message: errorMessage(error, 'JaneT could not check for updates.') });
-    });
-  }, []);
+    const requestEpoch = requestEpochRef.current + 1;
+    requestEpochRef.current = requestEpoch;
+    setUpdateState({ status: 'checking' });
+    const fallback = 'JaneT could not check for updates.';
+    void window.janet.checkForUpdates()
+      .then((result) => {
+        const message = updateFailureMessage(result, fallback);
+        if (message && requestEpochRef.current === requestEpoch) {
+          setUpdateState({ status: 'error', message });
+        }
+      })
+      .catch((error) => {
+        if (requestEpochRef.current === requestEpoch) {
+          setUpdateState({ status: 'error', message: errorMessage(error, fallback) });
+        }
+      });
+  }, [setUpdateState]);
 
   if (state.status === 'idle') return null;
 
@@ -78,7 +137,10 @@ export default function UpdateBanner() {
       <button
         type="button"
         className="update-banner-dismiss"
-        onClick={() => setState({ status: 'idle' })}
+        onClick={() => {
+          requestEpochRef.current += 1;
+          setUpdateState({ status: 'idle' });
+        }}
         aria-label="Dismiss update notification"
       >
         <XCloseIcon size="sm" />
