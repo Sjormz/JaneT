@@ -40,7 +40,16 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
   (Notification as any).isSupported = vi.fn(() => options.supported ?? true);
   class BrowserWindow { constructor() { return window; } }
   if (options.e2e) vi.stubEnv('JANET_E2E_EVENTS_PATH', 'events.jsonl');
-  vi.doMock('fs', async (original) => ({ ...(await original<typeof import('fs')>()), appendFileSync: vi.fn() }));
+  const writeFileSync = vi.fn();
+  vi.doMock('fs', async (original) => ({
+    ...(await original<typeof import('fs')>()),
+    appendFileSync: vi.fn(),
+    existsSync: vi.fn(() => true),
+    readFileSync: vi.fn(() => { throw new Error('File not found'); }),
+    renameSync: vi.fn(),
+    rmSync: vi.fn(),
+    writeFileSync,
+  }));
   vi.doMock('electron', () => ({
     app: { commandLine: { appendSwitch: vi.fn() }, getAppPath: vi.fn(() => '.'), getPath: vi.fn(() => '/tmp/janet-test'), getVersion: vi.fn(), isPackaged: false, requestSingleInstanceLock: vi.fn(() => true), quit: vi.fn(), on: vi.fn(), whenReady: vi.fn(() => Promise.resolve()), setPath: vi.fn(), setAppUserModelId },
     protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() }, net: { fetch: vi.fn() }, Menu: { setApplicationMenu: vi.fn() },
@@ -48,12 +57,14 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
     ipcMain: { handle: vi.fn((channel: string, listener: Function) => handlers.set(channel, listener)), on: vi.fn() },
   }));
   const settings = await import('../../src/main/settings');
-  vi.spyOn(settings.SettingsManager.prototype, 'get').mockReturnValue({ notificationsEnabled: options.enabled ?? true, notificationThresholdSeconds: options.threshold ?? 10 } as any);
+  const settingsGetSpy = vi.spyOn(settings.SettingsManager.prototype, 'get').mockReturnValue({ notificationsEnabled: options.enabled ?? true, notificationThresholdSeconds: options.threshold ?? 10 } as any);
   await import('../../src/main/index');
   await vi.waitFor(() => expect(handlers.has('notifications:command-completed')).toBe(true));
   const invoke = (payload: unknown, sender: unknown = webContents, senderFrame: unknown = webContents.mainFrame) =>
     Promise.resolve().then(() => handlers.get('notifications:command-completed')!({ sender, senderFrame }, payload));
-  return { invoke, Notification, notificationOn, notificationShow, restore, show, focus, setAppUserModelId, webContents };
+  const setSettings = (updates: unknown) =>
+    Promise.resolve().then(() => handlers.get('settings:set')!({ sender: webContents, senderFrame: webContents.mainFrame }, updates));
+  return { invoke, setSettings, writeFileSync, settingsGetSpy, Notification, notificationOn, notificationShow, restore, show, focus, setAppUserModelId, webContents };
 }
 
 describe('main notification bridge', () => {
@@ -96,6 +107,63 @@ describe('main notification bridge', () => {
     await expect(bridge.invoke({ ...validPayload, context: throwingContext })).rejects.toThrow(/invalid notification/i);
     expect(getter).not.toHaveBeenCalled();
     expect(bridge.Notification).not.toHaveBeenCalled();
+  });
+
+  it('rejects accessor-backed notification settings without invoking accessors or mutating settings', async () => {
+    const bridge = await loadMain({ enabled: false, threshold: 10 });
+    bridge.settingsGetSpy.mockRestore();
+    let enabledCalls = 0;
+    const enabled = {};
+    Object.defineProperty(enabled, 'notificationsEnabled', {
+      enumerable: true,
+      get: () => (++enabledCalls < 4 ? true : 'attacker-enabled'),
+    });
+    const thresholdGetter = vi.fn(() => 20);
+    const threshold = {};
+    Object.defineProperty(threshold, 'notificationThresholdSeconds', { enumerable: true, get: thresholdGetter });
+
+    await expect(bridge.setSettings(enabled)).rejects.toThrow(/invalid settings/i);
+    await expect(bridge.setSettings(threshold)).rejects.toThrow(/invalid settings/i);
+    expect(enabledCalls).toBe(0);
+    expect(thresholdGetter).not.toHaveBeenCalled();
+    expect(bridge.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it.each(['ownKeys', 'getOwnPropertyDescriptor', 'getPrototypeOf'] as const)(
+    'contains a throwing %s settings proxy without mutating settings',
+    async (trap) => {
+      const bridge = await loadMain({ enabled: false, threshold: 10 });
+      bridge.settingsGetSpy.mockRestore();
+      const updates = new Proxy({ notificationsEnabled: true }, { [trap]: () => { throw new Error(`${trap} trap`); } });
+
+      await expect(bridge.setSettings(updates)).rejects.toThrow(/invalid settings/i);
+      expect(bridge.writeFileSync).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['symbol key', Object.assign({ notificationsEnabled: true }, { [Symbol('hidden')]: true })],
+    ['hidden key', Object.defineProperty({ notificationsEnabled: true }, 'hidden', { value: true })],
+    ['extra key', { notificationsEnabled: true, extra: true }],
+    ['custom prototype', Object.assign(Object.create({ polluted: true }), { notificationsEnabled: true })],
+  ])('rejects a settings update with a %s', async (_label, updates) => {
+    const bridge = await loadMain({ enabled: false, threshold: 10 });
+    bridge.settingsGetSpy.mockRestore();
+
+    await expect(bridge.setSettings(updates)).rejects.toThrow(/invalid settings/i);
+    expect(bridge.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('accepts a null-prototype notification settings update', async () => {
+    const bridge = await loadMain({ enabled: false, threshold: 10 });
+    bridge.settingsGetSpy.mockRestore();
+    const updates = Object.assign(Object.create(null), {
+      notificationsEnabled: true,
+      notificationThresholdSeconds: 20,
+    });
+
+    await expect(bridge.setSettings(updates)).resolves.toMatchObject(updates);
+    expect(bridge.writeFileSync).toHaveBeenCalledOnce();
   });
 
   it('quietly handles display failure', async () => {

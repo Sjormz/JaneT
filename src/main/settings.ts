@@ -233,8 +233,9 @@ export class SettingsManager {
     };
   }
 
-  set(updates: Partial<AppSettings>): AppSettings {
-    if (!isValidSettingsUpdate(updates)) throw new Error('Invalid settings update');
+  set(value: unknown): AppSettings {
+    const updates = parseSettingsUpdate(value);
+    if (!updates || !isValidSettingsUpdate(updates)) throw new Error('Invalid settings update');
     const previous = this.cache;
     this.cache = {
       ...this.cache,
@@ -830,17 +831,31 @@ function hasUniqueSnippetIdentities(values: readonly unknown[]): boolean {
   });
 }
 
-function isValidSettingsUpdate(value: unknown): value is Partial<AppSettings> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const allowedKeys = new Set<keyof AppSettings>([
-    'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets',
-    'notificationsEnabled', 'notificationThresholdSeconds',
-    'sshProfiles', 'workspaceTabs', 'gitWorktreeBaseDir',
-    'gitWorktreeNameTemplate', 'session',
-  ]);
-  if (Object.keys(value).some((key) => !allowedKeys.has(key as keyof AppSettings))) return false;
-  if (Object.values(value).some((entry) => entry === undefined)) return false;
-  const updates = value as Partial<AppSettings>;
+function parseSettingsUpdate(value: unknown): Partial<AppSettings> | undefined {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const prototype = Reflect.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const allowedKeys = new Set<keyof AppSettings>([
+      'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets',
+      'notificationsEnabled', 'notificationThresholdSeconds',
+      'sshProfiles', 'workspaceTabs', 'gitWorktreeBaseDir',
+      'gitWorktreeNameTemplate', 'session',
+    ]);
+    const updates: Record<string, unknown> = Object.create(null);
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string' || !allowedKeys.has(key as keyof AppSettings)) return undefined;
+      const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !('value' in descriptor) || descriptor.value === undefined) return undefined;
+      updates[key] = descriptor.value;
+    }
+    return updates as Partial<AppSettings>;
+  } catch {
+    return undefined;
+  }
+}
+
+function isValidSettingsUpdate(updates: Partial<AppSettings>): boolean {
   return (updates.theme === undefined || ['tokyo-night', 'dracula', 'one-dark', 'solarized-light', 'gruvbox'].includes(updates.theme))
     && (updates.fontSize === undefined
       || (Number.isInteger(updates.fontSize) && updates.fontSize >= 10 && updates.fontSize <= 24))
