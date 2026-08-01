@@ -664,6 +664,32 @@ describe('VerticalTabBar', () => {
     await waitFor(() => expect(screen.queryByText('127.0.0.1:43123')).not.toBeInTheDocument());
   });
 
+  it('removes each forward after concurrent stop requests settle', async () => {
+    const running = [
+      { id: 'forward-a', bindHost: '127.0.0.1', localPort: 43123, status: 'running', destinationHost: 'a.local', destinationPort: 80 },
+      { id: 'forward-b', bindHost: '127.0.0.1', localPort: 43124, status: 'running', destinationHost: 'b.local', destinationPort: 443 },
+    ];
+    const resolutions = new Map<string, () => void>();
+    const sshStopLocalForward = vi.fn(({ id }: { id: string }) => new Promise<void>((resolve) => resolutions.set(id, resolve)));
+    Object.defineProperty(window, 'janet', {
+      configurable: true,
+      value: { sshListLocalForwards: vi.fn().mockResolvedValue(running), sshStartLocalForward: vi.fn(), sshStopLocalForward },
+    });
+    renderTabs({ tabs: [{ ...tabs[1], sshShellReady: true }], activeTabId: 'tab-2' });
+    fireEvent.contextMenu(screen.getByRole('button', { name: /close ssh box/i }).closest('.vtab-item')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Manage local forwards' }));
+    await screen.findByText('127.0.0.1:43123');
+    await screen.findByText('127.0.0.1:43124');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop forward 127.0.0.1:43123' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop forward 127.0.0.1:43124' }));
+    await waitFor(() => expect(sshStopLocalForward).toHaveBeenCalledTimes(2));
+    resolutions.get('forward-a')!();
+    await waitFor(() => expect(screen.queryByText('127.0.0.1:43123')).not.toBeInTheDocument());
+    resolutions.get('forward-b')!();
+    await waitFor(() => expect(screen.queryByText('127.0.0.1:43124')).not.toBeInTheDocument());
+  });
+
   it('fails closed when the forward dialog SSH tab is no longer ready', async () => {
     let resolveList!: (value: unknown[]) => void;
     const sshListLocalForwards = vi.fn(() => new Promise<unknown[]>((resolve) => { resolveList = resolve; }));

@@ -101,6 +101,7 @@ export default function VerticalTabBar({
   const [forwardError, setForwardError] = useState('');
   const forwardModalRef = useRef<HTMLDivElement>(null);
   const forwardRequestRef = useRef(0);
+  const forwardDialogRef = useRef(0);
   const mountedRef = useRef(true);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
@@ -140,6 +141,7 @@ export default function VerticalTabBar({
     return () => {
       mountedRef.current = false;
       forwardRequestRef.current += 1;
+      forwardDialogRef.current += 1;
     };
   }, []);
 
@@ -198,6 +200,7 @@ export default function VerticalTabBar({
 
   const closeForwardDialog = () => {
     forwardRequestRef.current += 1;
+    forwardDialogRef.current += 1;
     setForwardTarget(null);
     setForwards([]);
     setForwardError('');
@@ -209,6 +212,7 @@ export default function VerticalTabBar({
   const openForwardDialog = (tab: TabInfo) => {
     if (tab.type !== 'ssh' || !tab.sshSessionId || tab.sshShellReady !== true) return;
     const target = { tabId: tab.id, sessionId: tab.sshSessionId };
+    forwardDialogRef.current += 1;
     const request = ++forwardRequestRef.current;
     setForwardTarget(target); setForwards([]); setForwardError('');
     void window.janet.sshListLocalForwards({ sessionId: target.sessionId }).then((listed) => {
@@ -240,11 +244,11 @@ export default function VerticalTabBar({
   const stopForward = async (forward: SSHLocalForwardStatus) => {
     const target = forwardTarget;
     if (!target || !isCurrentForwardTarget(target)) return closeForwardDialog();
-    const request = ++forwardRequestRef.current; setForwardError('');
+    const dialog = forwardDialogRef.current; setForwardError('');
     try {
       await window.janet.sshStopLocalForward({ sessionId: target.sessionId, id: forward.id });
-      if (forwardRequestRef.current === request && isCurrentForwardTarget(target)) setForwards((current) => current.filter((item) => item.id !== forward.id));
-    } catch (error) { if (forwardRequestRef.current === request && isCurrentForwardTarget(target)) setForwardError(error instanceof Error ? error.message : String(error)); }
+      if (forwardDialogRef.current === dialog && isCurrentForwardTarget(target)) setForwards((current) => current.filter((item) => item.id !== forward.id));
+    } catch (error) { if (forwardDialogRef.current === dialog && isCurrentForwardTarget(target)) setForwardError(error instanceof Error ? error.message : String(error)); }
   };
 
   const workspaceModalOpen = showWorkspaceForm || editingPreset !== null;
