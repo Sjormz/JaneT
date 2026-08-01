@@ -84,7 +84,7 @@ test('navigates, copies, and safely inserts a real semantic command', async () =
 
     await app.evaluate(({ clipboard }) => clipboard.clear());
     await page.keyboard.press('Control+Alt+O');
-    await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toContain(OUTPUT);
+    await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toBe(OUTPUT);
 
     await page.keyboard.press('Control+Alt+R');
     await page.waitForTimeout(500);
