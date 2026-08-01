@@ -3,6 +3,7 @@ import type { SFTPWrapper, Stats } from 'ssh2';
 import * as os from 'os';
 import { createHash, createHmac, randomBytes, randomUUID } from 'crypto';
 import { StringDecoder } from 'string_decoder';
+import { createServer, type Server, type Socket } from 'net';
 import type {
   FileEntry,
   SSHConnectionClosedEvent,
@@ -51,6 +52,33 @@ const MAX_SSH_SECRET_LENGTH = 100_000;
 const SFTP_OPERATION_TIMEOUT_MS = 30_000;
 const MAX_REMOTE_PATH_LENGTH = 8_192;
 const SFTP_IO_CHUNK_BYTES = 64 * 1024;
+const MAX_LOCAL_FORWARDS = 32;
+
+export interface SSHCredentials {
+  host: string;
+  port: number;
+  username?: string;
+  auth: string;
+  password?: string;
+  privateKey?: string;
+}
+
+export interface SSHConnectConfig extends SSHCredentials {
+  jumpHost?: SSHCredentials;
+  /** Internal connected stream and owning route session. */
+  sock?: ClientChannel;
+  routeSessionId?: string;
+  routeIdentity?: string;
+}
+
+export interface SSHLocalForwardStatus {
+  id: string;
+  bindHost: '127.0.0.1';
+  localPort: number;
+  destinationHost: string;
+  destinationPort: number;
+  status: 'running';
+}
 
 export interface SSHHostKeyStore {
   lookup(host: string, port: number): string | undefined;
@@ -757,6 +785,8 @@ interface SSHConnection {
    * reuse the in-flight/live shell instead of opening a second SSH
    * channel for the same termId. */
   shellHandles: Map<string, SSHShellHandle>;
+  routeClients: Client[];
+  localForwards: Map<string, { server: Server; status: SSHLocalForwardStatus; sockets: Set<Socket | ClientChannel> }>;
 }
 
 interface PendingSSHConnection {
@@ -764,6 +794,7 @@ interface PendingSSHConnection {
   promise: Promise<void>;
   reject: (error: Error) => void;
   identity: string;
+  routeClients: Client[];
 }
 
 interface SSHShellHandle {
@@ -779,6 +810,7 @@ interface SSHShellHandle {
 }
 
 export class SSHManager {
+  private readonly routeAttempts = new Map<string, { identity: string; promise: Promise<void>; routeSessionId: string }>();
   private connections: Map<string, SSHConnection> = new Map();
   private pendingConnections: Map<string, PendingSSHConnection> = new Map();
   private readonly connectionIdentityKey = randomBytes(32);
@@ -795,14 +827,7 @@ export class SSHManager {
     private readonly capacity = new NativeTerminalCapacity(MAX_SSH_SHELLS),
   ) {}
 
-  connect(id: string, config: {
-    host: string;
-    port: number;
-    username?: string;
-    auth: string;
-    password?: string;
-    privateKey?: string;
-  }): Promise<void> {
+  connect(id: string, config: SSHConnectConfig): Promise<void> {
     if (
       typeof id !== 'string'
       || id.trim().length === 0
@@ -837,7 +862,7 @@ export class SSHManager {
     const host = config.host.trim();
     const port = config.port;
     const endpoint = hostKeyId(host, port);
-    const identity = connectionIdentity(this.connectionIdentityKey, endpoint, config);
+    const identity = config.routeIdentity ?? connectionIdentity(this.connectionIdentityKey, endpoint, config);
     const activeConnection = this.connections.get(id);
     if (activeConnection) {
       return activeConnection.config.identity === identity
@@ -849,6 +874,35 @@ export class SSHManager {
       return existingAttempt.identity === identity
         ? existingAttempt.promise
         : Promise.reject(new Error(`SSH session ${id} is already connecting with different configuration`));
+    }
+    const existingRouteAttempt = config.routeIdentity ? undefined : this.routeAttempts.get(id);
+    if (existingRouteAttempt) {
+      return existingRouteAttempt.identity === identity
+        ? existingRouteAttempt.promise
+        : Promise.reject(new Error(`SSH session ${id} is already connecting with different configuration`));
+    }
+    if (config.jumpHost && !config.sock) {
+      if ('jumpHost' in config.jumpHost) throw new Error('SSH jump host cannot contain another jump host');
+      this.validateCredentials(config.jumpHost, 'jump host');
+      if (config.jumpHost.host.trim().toLowerCase() === config.host.trim().toLowerCase()
+        && config.jumpHost.port === config.port) throw new Error('SSH target cannot jump through itself');
+      const routeSessionId = `route-${randomUUID()}`;
+      const promise = this.connect(routeSessionId, config.jumpHost).then(() => new Promise<ClientChannel>((resolve, reject) => {
+        const route = this.connections.get(routeSessionId);
+        if (!route) return reject(new Error('SSH jump host closed before routing the target'));
+        route.client.forwardOut('127.0.0.1', 0, config.host.trim(), config.port, (error, stream) => {
+          if (error || !stream) reject(error ?? new Error('Could not open SSH jump route'));
+          else resolve(stream);
+        });
+      })).then((sock) => this.connect(id, { ...config, jumpHost: undefined, sock, routeSessionId, routeIdentity: identity })).catch(async (error) => {
+        await this.disconnect(routeSessionId);
+        throw error;
+      });
+      this.routeAttempts.set(id, { identity, promise, routeSessionId });
+      void promise.finally(() => {
+        if (this.routeAttempts.get(id)?.promise === promise) this.routeAttempts.delete(id);
+      }).catch(() => {});
+      return promise;
     }
     if (this.connections.size + this.pendingConnections.size >= MAX_SSH_CONNECTIONS) {
       throw new Error(`SSH connection limit of ${MAX_SSH_CONNECTIONS} reached`);
@@ -869,7 +923,7 @@ export class SSHManager {
       settled = true;
       rejectConnection?.(error);
     };
-    this.pendingConnections.set(id, { client, promise, reject: rejectPending, identity });
+    this.pendingConnections.set(id, { client, promise, reject: rejectPending, identity, routeClients: [] });
     const isCurrentPendingAttempt = () => (
       !settled && this.pendingConnections.get(id)?.client === client
     );
@@ -888,6 +942,8 @@ export class SSHManager {
           try { shell.close(); } catch {}
         }
         connection.shells.clear();
+        this.closeLocalForwards(connection);
+        for (const routeClient of connection.routeClients) try { routeClient.end(); } catch {}
         this.connections.delete(id);
         return true;
       }
@@ -918,7 +974,16 @@ export class SSHManager {
           sftpOperations: new Set(),
           pendingWrites: new Map(),
           shellHandles: new Map(),
+          routeClients: [],
+          localForwards: new Map(),
       });
+      if (config.routeSessionId) {
+        const route = this.connections.get(config.routeSessionId);
+        if (route) {
+          this.connections.delete(config.routeSessionId);
+          this.connections.get(id)?.routeClients.push(route.client, ...route.routeClients);
+        }
+      }
       settled = true;
       resolveConnection?.();
     });
@@ -1006,6 +1071,7 @@ export class SSHManager {
         }
       },
     };
+    if (config.sock) connectConfig.sock = config.sock;
 
     client.on('keyboard-interactive', (_name, _instructions, _instructionsLang, prompts, finish) => {
       const answer = config.password ?? '';
@@ -1547,7 +1613,69 @@ export class SSHManager {
     });
   }
 
+  async startLocalForward(sessionId: string, request: {
+    id: string; localPort: number; destinationHost: string; destinationPort: number;
+  }): Promise<SSHLocalForwardStatus> {
+    const connection = this.connections.get(sessionId);
+    if (!connection) throw new Error(`SSH session ${sessionId} not found`);
+    if (typeof request?.id !== 'string' || !request.id.trim() || request.id.length > 256) throw new Error('A valid local forward id is required');
+    if (!Number.isInteger(request.localPort) || request.localPort < 0 || request.localPort > 65_535) throw new Error('A valid local forward port is required');
+    if (typeof request.destinationHost !== 'string' || !request.destinationHost.trim() || request.destinationHost.length > 255 || /[\u0000-\u001f\u007f-\u009f]/.test(request.destinationHost)) throw new Error('A valid local forward destination host is required');
+    if (!Number.isInteger(request.destinationPort) || request.destinationPort < 1 || request.destinationPort > 65_535) throw new Error('A valid local forward destination port is required');
+    if (connection.localForwards.has(request.id)) throw new Error(`Local forward ${request.id} is already running`);
+    if (connection.localForwards.size >= MAX_LOCAL_FORWARDS) throw new Error(`Local forward limit of ${MAX_LOCAL_FORWARDS} reached`);
+
+    const sockets = new Set<Socket | ClientChannel>();
+    const server = createServer((socket) => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+      connection.client.forwardOut(socket.remoteAddress ?? '127.0.0.1', socket.remotePort ?? 0, request.destinationHost.trim(), request.destinationPort, (error, stream) => {
+        if (error || !stream) return socket.destroy(error);
+        sockets.add(stream);
+        stream.once('close', () => sockets.delete(stream));
+        socket.pipe(stream).pipe(socket);
+      });
+    });
+    const status = await new Promise<SSHLocalForwardStatus>((resolve, reject) => {
+      const fail = (error: Error) => reject(error);
+      server.once('error', fail);
+      server.listen({ host: '127.0.0.1', port: request.localPort, exclusive: true }, () => {
+        server.off('error', fail);
+        const address = server.address();
+        if (!address || typeof address === 'string') return reject(new Error('Could not determine local forward port'));
+        resolve({ id: request.id, bindHost: '127.0.0.1', localPort: address.port, destinationHost: request.destinationHost.trim(), destinationPort: request.destinationPort, status: 'running' });
+      });
+    }).catch((error) => { try { server.close(); } catch {} throw error; });
+    if (this.connections.get(sessionId) !== connection) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      throw new Error(`SSH session ${sessionId} changed while starting the local forward`);
+    }
+    connection.localForwards.set(request.id, { server, status, sockets });
+    return { ...status };
+  }
+
+  listLocalForwards(sessionId: string): SSHLocalForwardStatus[] {
+    const connection = this.connections.get(sessionId);
+    if (!connection) throw new Error(`SSH session ${sessionId} not found`);
+    return Array.from(connection.localForwards.values(), ({ status }) => ({ ...status }));
+  }
+
+  async stopLocalForward(sessionId: string, id: string): Promise<void> {
+    const connection = this.connections.get(sessionId);
+    if (!connection) throw new Error(`SSH session ${sessionId} not found`);
+    const forward = connection.localForwards.get(id);
+    if (!forward) return;
+    connection.localForwards.delete(id);
+    for (const socket of forward.sockets) socket.destroy();
+    await new Promise<void>((resolve, reject) => forward.server.close((error) => error ? reject(error) : resolve()));
+  }
+
   async disconnect(id: string): Promise<void> {
+    const routeAttempt = this.routeAttempts.get(id);
+    if (routeAttempt) {
+      this.routeAttempts.delete(id);
+      await this.disconnect(routeAttempt.routeSessionId);
+    }
     const pending = this.pendingConnections.get(id);
     if (pending) {
       this.pendingConnections.delete(id);
@@ -1560,6 +1688,7 @@ export class SSHManager {
       // Stop lifecycle events emitted synchronously by close()/end() from
       // being reported as an unexpected connection loss.
       this.connections.delete(id);
+      this.closeLocalForwards(conn);
       conn.shells.forEach((shell) => {
         try { shell.close(); } catch {}
       });
@@ -1573,6 +1702,7 @@ export class SSHManager {
       }
       conn.shellHandles.clear();
       conn.client.end();
+      for (const routeClient of conn.routeClients) try { routeClient.end(); } catch {}
     }
   }
 
@@ -1590,6 +1720,9 @@ export class SSHManager {
   }
 
   cleanup(): void {
+    for (const id of Array.from(this.routeAttempts.keys())) {
+      void this.disconnect(id);
+    }
     for (const id of Array.from(this.pendingConnections.keys())) {
       void this.disconnect(id);
     }
@@ -1598,6 +1731,26 @@ export class SSHManager {
     });
     this.pendingStartupCommandHandles.clear();
     this.startupCommandLedger.clear();
+  }
+
+  private closeLocalForwards(connection: SSHConnection): void {
+    for (const { server, sockets } of connection.localForwards.values()) {
+      for (const socket of sockets) socket.destroy();
+      try { server.close(); } catch {}
+    }
+    connection.localForwards.clear();
+  }
+
+  private validateCredentials(config: SSHCredentials, label: string): void {
+    const allowedKeys = new Set(['host', 'port', 'username', 'auth', 'password', 'privateKey']);
+    if (Object.keys(config).some((key) => !allowedKeys.has(key))) throw new Error(`A valid SSH ${label} configuration is required`);
+    if (typeof config.host !== 'string' || !config.host.trim() || config.host.length > 255
+      || /[\u0000-\u001f\u007f-\u009f]/.test(config.host)) throw new Error(`A valid SSH ${label} host is required`);
+    if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65_535) throw new Error(`A valid SSH ${label} port is required`);
+    if (config.auth !== 'password' && config.auth !== 'key') throw new Error(`A valid SSH ${label} auth method is required`);
+    if (config.username !== undefined && (typeof config.username !== 'string' || config.username.length > MAX_SSH_USERNAME_LENGTH)) throw new Error(`A valid SSH ${label} username is required`);
+    if (config.password !== undefined && (typeof config.password !== 'string' || config.password.length > MAX_SSH_SECRET_LENGTH)) throw new Error(`A valid SSH ${label} password is required`);
+    if (config.privateKey !== undefined && (typeof config.privateKey !== 'string' || config.privateKey.length > MAX_SSH_SECRET_LENGTH)) throw new Error(`A valid SSH ${label} private key is required`);
   }
 
   private withSftp<T>(
@@ -1794,13 +1947,19 @@ function hostKeyId(host: string, port: number): string {
 function connectionIdentity(
   key: Buffer,
   endpoint: string,
-  config: { username?: string; auth: string; password?: string; privateKey?: string },
+  config: SSHConnectConfig,
 ): string {
   return createHmac('sha256', key).update(JSON.stringify([
     endpoint,
     normalizeUsername(config.username),
     config.auth,
     config.auth === 'password' ? config.password ?? '' : config.privateKey ?? '',
+    config.jumpHost ? [
+      hostKeyId(config.jumpHost.host, config.jumpHost.port),
+      normalizeUsername(config.jumpHost.username),
+      config.jumpHost.auth,
+      config.jumpHost.auth === 'password' ? config.jumpHost.password ?? '' : config.jumpHost.privateKey ?? '',
+    ] : null,
   ])).digest('hex');
 }
 

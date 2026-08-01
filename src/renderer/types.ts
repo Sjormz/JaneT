@@ -61,6 +61,7 @@ export interface SavedSSHProfile {
   auth: 'password' | 'key';
   password?: string;
   privateKey?: string;
+  jumpHostProfileId?: string;
 }
 
 export interface WorkspaceTabPreset {

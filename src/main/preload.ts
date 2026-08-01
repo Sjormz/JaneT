@@ -125,7 +125,7 @@ const api = {
   },
 
   // SSH
-  sshConnect: (params: { id: string; host: string; port: number; username?: string; auth: string; password?: string; privateKey?: string }) =>
+  sshConnect: (params: { id: string; host: string; port: number; username?: string; auth: string; password?: string; privateKey?: string; jumpHost?: { host: string; port: number; username?: string; auth: string; password?: string; privateKey?: string } }) =>
     ipcRenderer.invoke('ssh:connect', params),
   sshCreateShell: (params: {
     id: string;

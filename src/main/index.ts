@@ -441,9 +441,9 @@ function registerIpcHandlers() {
   });
 
   // === SSH IPC ===
-  handle('ssh:connect', async (event, { id, host, port, username, auth, password, privateKey }) => {
+  handle('ssh:connect', async (event, { id, host, port, username, auth, password, privateKey, jumpHost }) => {
     recordE2eEvent({ type: 'ssh:connect:start', id, host, port, username });
-    await sshManager.connect(id, { host, port, username, auth, password, privateKey });
+    await sshManager.connect(id, { host, port, username, auth, password, privateKey, jumpHost });
     recordE2eEvent({ type: 'ssh:connect:done', id });
     return { connected: true };
   });

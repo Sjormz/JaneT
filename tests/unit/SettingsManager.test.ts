@@ -155,6 +155,21 @@ describe('SettingsManager', () => {
     expect(new SettingsManager().get().sshProfiles.map((profile) => profile.port)).toEqual([22, 22]);
   });
 
+  it('retains only a valid jump-host profile reference without copying credentials', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      sshProfiles: [
+        { id: 'jump', host: 'bastion.example', port: 22, auth: 'key' },
+        { id: 'target', host: 'target.internal', port: 22, auth: 'password', jumpHostProfileId: 'jump' },
+        { id: 'bad', host: 'bad.internal', port: 22, auth: 'password', jumpHostProfileId: 42 },
+      ],
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const settings = new SettingsManager().get();
+    expect(settings.sshProfiles[1]).toMatchObject({ id: 'target', jumpHostProfileId: 'jump' });
+    expect(settings.sshProfiles[2]).not.toHaveProperty('jumpHostProfileId');
+  });
+
   it('drops malformed and duplicate legacy keyed entries without resetting unrelated settings', async () => {
     const fsMock = await import('fs');
     (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({

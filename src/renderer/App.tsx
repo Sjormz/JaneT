@@ -150,6 +150,27 @@ function sshSessionInfo(sessionId: string, profile: SavedSSHProfile): SessionInf
   };
 }
 
+function sshConnectProfile(profile: SavedSSHProfile, profiles: SavedSSHProfile[]) {
+  const jumpHost = profile.jumpHostProfileId
+    ? profiles.find((candidate) => candidate.id === profile.jumpHostProfileId)
+    : undefined;
+  if (profile.jumpHostProfileId && (!jumpHost || jumpHost.id === profile.id)) {
+    throw new Error('Saved jump host is missing or invalid');
+  }
+  return {
+    host: profile.host, port: profile.port,
+    ...(profile.username ? { username: profile.username } : {}), auth: profile.auth,
+    password: profile.auth === 'password' ? profile.password : undefined,
+    privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+    ...(jumpHost ? { jumpHost: {
+      host: jumpHost.host, port: jumpHost.port,
+      ...(jumpHost.username ? { username: jumpHost.username } : {}), auth: jumpHost.auth,
+      ...(jumpHost.auth === 'password' && jumpHost.password ? { password: jumpHost.password } : {}),
+      ...(jumpHost.auth === 'key' && jumpHost.privateKey ? { privateKey: jumpHost.privateKey } : {}),
+    } } : {}),
+  };
+}
+
 function stripStartupAutomation(leaf: TerminalLeaf): TerminalLeaf {
   const {
     startupCommands: _startupCommands,
@@ -451,12 +472,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       connectingSshSessionIdsRef.current.add(sessionId);
       window.janet.sshConnect({
         id: sessionId,
-        host: profile.host,
-        port: profile.port,
-        ...(profile.username ? { username: profile.username } : {}),
-        auth: profile.auth,
-        password: profile.auth === 'password' ? profile.password : undefined,
-        privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+        ...sshConnectProfile(profile, sshProfiles),
       }).then(() => {
         if (
           releasedSshSessionIdsRef.current.has(sessionId) ||
@@ -522,10 +538,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       }
       connectingSshSessionIdsRef.current.add(leaf.sshSessionId);
       window.janet.sshConnect({
-        id: leaf.sshSessionId, host: profile.host, port: profile.port,
-        ...(profile.username ? { username: profile.username } : {}), auth: profile.auth,
-        password: profile.auth === 'password' ? profile.password : undefined,
-        privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+        id: leaf.sshSessionId, ...sshConnectProfile(profile, sshProfiles),
       }).then(() => {
         if (
           releasedSshSessionIdsRef.current.has(leaf.sshSessionId) ||
@@ -1286,12 +1299,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       try {
         await window.janet.sshConnect({
           id: sessionId,
-          host: profile.host,
-          port: profile.port,
-          ...(profile.username ? { username: profile.username } : {}),
-          auth: profile.auth,
-          password: profile.auth === 'password' ? profile.password : undefined,
-          privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+          ...sshConnectProfile(profile, sshProfiles),
         });
         if (
           releasedSshSessionIdsRef.current.has(sessionId) ||
@@ -1422,10 +1430,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       connectingSshSessionIdsRef.current.add(leaf.sshSessionId);
       try {
         await window.janet.sshConnect({
-          id: leaf.sshSessionId, host: profile.host, port: profile.port,
-          ...(profile.username ? { username: profile.username } : {}), auth: profile.auth,
-          password: profile.auth === 'password' ? profile.password : undefined,
-          privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+          id: leaf.sshSessionId, ...sshConnectProfile(profile, sshProfiles),
         });
         if (
           releasedSshSessionIdsRef.current.has(leaf.sshSessionId) ||

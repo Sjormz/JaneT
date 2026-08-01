@@ -32,7 +32,9 @@ class MockShellStream extends MockReadable {
 const mocks = {
   shellMock: vi.fn(),
   connectMock: vi.fn(),
+  forwardOutMock: vi.fn(),
   lastClient: null as MiniEmitter | null,
+  clients: [] as any[],
 };
 
 interface MockRemoteFile {
@@ -220,12 +222,14 @@ async function loadSSHManager() {
     class MockClient extends MiniEmitter {
       shell = mocks.shellMock;
       connect = mocks.connectMock;
+      forwardOut = mocks.forwardOutMock;
       sftp = vi.fn();
       end = vi.fn();
 
       constructor() {
         super();
         mocks.lastClient = this;
+        mocks.clients.push(this);
       }
     }
 
@@ -238,11 +242,86 @@ async function loadSSHManager() {
 beforeEach(() => {
   mocks.shellMock.mockReset();
   mocks.connectMock.mockReset();
+  mocks.forwardOutMock.mockReset();
   mocks.lastClient = null;
+  mocks.clients = [];
   vi.resetModules();
 });
 
 describe('SSHManager', () => {
+  it('rejects recursive and self jump routes before allocating a client', async () => {
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    expect(() => manager.connect('recursive', {
+      host: 'target.internal', port: 22, auth: 'password',
+      jumpHost: {
+        host: 'bastion.example', port: 22, auth: 'password',
+        jumpHost: { host: 'other.example', port: 22, auth: 'password' },
+      } as any,
+    })).toThrow(/jump host/i);
+    expect(() => manager.connect('self', {
+      host: 'target.internal', port: 22, auth: 'password',
+      jumpHost: { host: 'target.internal', port: 22, auth: 'password' },
+    })).toThrow(/itself/i);
+    expect(mocks.clients).toHaveLength(0);
+  });
+
+  it('connects the target through a verified jump host transport', async () => {
+    mocks.connectMock.mockImplementation(function (this: MiniEmitter) {
+      queueMicrotask(() => this.emit('ready'));
+    });
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    const tunnel = new MiniEmitter();
+    mocks.forwardOutMock.mockImplementationOnce((_srcHost, _srcPort, _host, _port, callback) => callback(undefined, tunnel));
+    const config = {
+      host: 'target.internal', port: 22, username: 'target-user', auth: 'password',
+      jumpHost: { host: 'bastion.example', port: 2222, username: 'jump-user', auth: 'key', privateKey: 'jump-key' },
+    };
+    const connected = manager.connect('routed', config);
+    const duplicate = manager.connect('routed', config);
+    expect(duplicate).toBe(connected);
+    await Promise.all([connected, duplicate]);
+
+    expect(mocks.clients).toHaveLength(2);
+    expect(mocks.clients[0].connect).toHaveBeenCalledWith(expect.objectContaining({ host: 'bastion.example', port: 2222 }));
+    expect(mocks.clients[1].connect).toHaveBeenCalledWith(expect.objectContaining({ sock: tunnel, username: 'target-user' }));
+  });
+
+  it('cancels an in-flight jump route when its target disconnects', async () => {
+    mocks.connectMock.mockImplementation(() => {});
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    const connected = manager.connect('routed', {
+      host: 'target.internal', port: 22, auth: 'password',
+      jumpHost: { host: 'bastion.example', port: 22, auth: 'password' },
+    });
+    const rejection = expect(connected).rejects.toThrow(/cancelled/i);
+
+    await manager.disconnect('routed');
+
+    await rejection;
+    expect(mocks.clients).toHaveLength(1);
+    expect(mocks.clients[0].end).toHaveBeenCalledOnce();
+  });
+
+  it('starts a loopback local forward and closes it on stop', async () => {
+    mocks.connectMock.mockImplementation(function (this: MiniEmitter) {
+      queueMicrotask(() => this.emit('ready'));
+    });
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('forwarded', { host: 'target.internal', port: 22, auth: 'password' });
+
+    const status = await manager.startLocalForward('forwarded', {
+      id: 'database', localPort: 0, destinationHost: '127.0.0.1', destinationPort: 5432,
+    });
+    expect(status).toMatchObject({ id: 'database', bindHost: '127.0.0.1', destinationPort: 5432, status: 'running' });
+    expect(status.localPort).toBeGreaterThan(0);
+    expect(manager.listLocalForwards('forwarded')).toEqual([status]);
+    await manager.stopLocalForward('forwarded', 'database');
+    expect(manager.listLocalForwards('forwarded')).toEqual([]);
+  });
   it.each([
     ['empty session id', ' ', { host: 'example.com', port: 22, auth: 'password' }],
     ['empty host', 'invalid-session', { host: ' ', port: 22, auth: 'password' }],
