@@ -165,14 +165,17 @@ describe('buildShellInit', () => {
       const output = await runPromptSequence(
         powershell,
         ['-NoLogo', '-NoProfile', '-NoExit', '-Command', init],
-        ['', 'cmd /c exit 7', 'Get-Item Z:\\definitely-missing -ErrorAction SilentlyContinue', '$null = 1', 'exit'],
+        ['', 'cmd /c exit 7', 'cmd /c exit 7 | Out-Null', 'Get-Item Z:\\definitely-missing -ErrorAction SilentlyContinue | cmd /c exit 0', 'cmd /c exit 7; Get-Item Z:\\definitely-missing -ErrorAction SilentlyContinue', 'Get-Item Z:\\definitely-missing -ErrorAction SilentlyContinue', '$null = 1', 'exit'],
       );
 
       const startup = promptSegment(output, 0);
       const blank = promptSegment(output, 1);
       const nativeFailure = promptSegment(output, 2);
-      const cmdletFailure = promptSegment(output, 3);
-      const success = promptSegment(output, 4);
+      const pipedNativeFailure = promptSegment(output, 3);
+      const failedCmdletPipeline = promptSegment(output, 4);
+      const sameLineCmdletFailure = promptSegment(output, 5);
+      const cmdletFailure = promptSegment(output, 6);
+      const success = promptSegment(output, 7);
       expect(startup.indexOf(OSC_A)).toBeLessThan(startup.indexOf('<PROMPT:True:'));
       expect(startup).not.toContain(OSC_C);
       expect(startup).not.toContain(']133;D;');
@@ -181,6 +184,17 @@ describe('buildShellInit', () => {
       expect(markerCount(nativeFailure, OSC_C)).toBe(1);
       expect(nativeFailure).toContain(oscD(7));
       expect(nativeFailure).toContain('<PROMPT:False:7>');
+      expect(markerCount(pipedNativeFailure, OSC_C)).toBe(1);
+      expect(pipedNativeFailure).toContain(oscD(7));
+      expect(pipedNativeFailure).toContain('<PROMPT:False:7>');
+      expect(markerCount(failedCmdletPipeline, OSC_C)).toBe(1);
+      expect(failedCmdletPipeline).toContain(oscD(1));
+      expect(failedCmdletPipeline).not.toContain(oscD(0));
+      expect(failedCmdletPipeline).toContain('<PROMPT:False:0>');
+      expect(markerCount(sameLineCmdletFailure, OSC_C)).toBe(1);
+      expect(sameLineCmdletFailure).toContain(oscD(1));
+      expect(sameLineCmdletFailure).not.toContain(oscD(7));
+      expect(sameLineCmdletFailure).toContain('<PROMPT:False:7>');
       expect(markerCount(cmdletFailure, OSC_C)).toBe(1);
       expect(cmdletFailure).toContain(oscD(1));
       expect(cmdletFailure).not.toContain(oscD(7));
