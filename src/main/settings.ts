@@ -100,6 +100,8 @@ export interface AppSettings {
   fontSize: number;
   fontFamily: string;
   sidebarSide: 'left' | 'right';
+  notificationsEnabled: boolean;
+  notificationThresholdSeconds: number;
   keybindings: Record<string, string>;
   snippets: Snippet[];
   sshProfiles: Array<{
@@ -194,6 +196,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   fontSize: 14,
   fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
   sidebarSide: 'right',
+  notificationsEnabled: false,
+  notificationThresholdSeconds: 10,
   keybindings: { ...DEFAULT_KEYBINDINGS },
   snippets: [],
   sshProfiles: [],
@@ -309,6 +313,10 @@ export class SettingsManager {
       const stored = {
         ...DEFAULT_SETTINGS,
         ...parsed,
+        notificationsEnabled: typeof parsed.notificationsEnabled === 'boolean' ? parsed.notificationsEnabled : false,
+        notificationThresholdSeconds: isValidNotificationThreshold(parsed.notificationThresholdSeconds)
+          ? parsed.notificationThresholdSeconds
+          : 10,
         sshProfiles: normalizeStoredSshProfiles(parsed.sshProfiles),
       } as StoredAppSettings;
       this.captureStoredSecrets(stored.sshProfiles);
@@ -826,6 +834,7 @@ function isValidSettingsUpdate(value: unknown): value is Partial<AppSettings> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const allowedKeys = new Set<keyof AppSettings>([
     'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets',
+    'notificationsEnabled', 'notificationThresholdSeconds',
     'sshProfiles', 'workspaceTabs', 'gitWorktreeBaseDir',
     'gitWorktreeNameTemplate', 'session',
   ]);
@@ -838,6 +847,8 @@ function isValidSettingsUpdate(value: unknown): value is Partial<AppSettings> {
     && (updates.fontFamily === undefined
       || (typeof updates.fontFamily === 'string' && updates.fontFamily.length <= MAX_WORKSPACE_STRING_LENGTH))
     && (updates.sidebarSide === undefined || updates.sidebarSide === 'left' || updates.sidebarSide === 'right')
+    && (updates.notificationsEnabled === undefined || typeof updates.notificationsEnabled === 'boolean')
+    && (updates.notificationThresholdSeconds === undefined || isValidNotificationThreshold(updates.notificationThresholdSeconds))
     && (updates.keybindings === undefined
       || isBoundedStringRecord(updates.keybindings, MAX_KEYBINDINGS, 256, 256))
     && (updates.snippets === undefined || (Array.isArray(updates.snippets)
@@ -860,6 +871,10 @@ function isValidSettingsUpdate(value: unknown): value is Partial<AppSettings> {
       || (typeof updates.gitWorktreeNameTemplate === 'string'
         && updates.gitWorktreeNameTemplate.length <= MAX_WORKSPACE_STRING_LENGTH))
     && (updates.session === undefined || isValidRuntimeSession(updates.session));
+}
+
+function isValidNotificationThreshold(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 86_400;
 }
 
 function isValidRuntimeSnippet(value: unknown): boolean {

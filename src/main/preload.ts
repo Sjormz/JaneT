@@ -22,6 +22,7 @@ import type {
   WriteSSHTextFileRequest,
 } from '../shared/textFiles';
 import type { GitDiffRequest, GitDiffResult } from '../shared/gitDiff';
+import type { CommandNotificationPayload } from '../shared/commandNotifications';
 
 export interface UpdateProgress {
   percent: number;
@@ -219,6 +220,8 @@ const api = {
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (updates: Record<string, unknown>) => ipcRenderer.invoke('settings:set', updates),
+  notifyCommandCompleted: (payload: CommandNotificationPayload): Promise<boolean> =>
+    ipcRenderer.invoke('notifications:command-completed', payload),
 
   // App
   getPlatform: () => ipcRenderer.invoke('app:getPlatform'),
