@@ -786,7 +786,14 @@ interface SSHConnection {
    * channel for the same termId. */
   shellHandles: Map<string, SSHShellHandle>;
   routeClients: Client[];
-  localForwards: Map<string, { server: Server; status?: SSHLocalForwardStatus; sockets: Set<Socket | ClientChannel> }>;
+  localForwards: Map<string, SSHLocalForward>;
+}
+
+interface SSHLocalForward {
+  server: Server;
+  status?: SSHLocalForwardStatus;
+  sockets: Set<Socket | ClientChannel>;
+  cancelStart: (error: Error) => boolean;
 }
 
 interface PendingSSHConnection {
@@ -1662,22 +1669,37 @@ export class SSHManager {
         socket.pipe(stream).pipe(socket);
       });
     });
-    const forward: { server: Server; status?: SSHLocalForwardStatus; sockets: Set<Socket | ClientChannel> } = { server, sockets };
+    let settleStart!: (error?: Error, status?: SSHLocalForwardStatus) => void;
+    let startSettled = false;
+    const forward: SSHLocalForward = {
+      server,
+      sockets,
+      cancelStart: (error) => {
+        if (startSettled) return false;
+        settleStart(error);
+        return true;
+      },
+    };
     connection.localForwards.set(request.id, forward);
-    const onServerError = () => {
+    const onServerError = (error: Error) => {
       if (connection.localForwards.get(request.id) === forward) connection.localForwards.delete(request.id);
       for (const socket of sockets) socket.destroy();
+      forward.cancelStart(error);
       try { server.close(); } catch {}
     };
     server.on('error', onServerError);
     const status = await new Promise<SSHLocalForwardStatus>((resolve, reject) => {
-      const fail = (error: Error) => reject(error);
-      server.once('error', fail);
+      settleStart = (error, result) => {
+        if (startSettled) return;
+        startSettled = true;
+        if (error) reject(error);
+        else resolve(result!);
+      };
       server.listen({ host: '127.0.0.1', port: request.localPort, exclusive: true }, () => {
-        server.off('error', fail);
+        if (startSettled || connection.localForwards.get(request.id) !== forward) return;
         const address = server.address();
-        if (!address || typeof address === 'string') return reject(new Error('Could not determine local forward port'));
-        resolve({ id: request.id, bindHost: '127.0.0.1', localPort: address.port, destinationHost: request.destinationHost.trim(), destinationPort: request.destinationPort, status: 'running' });
+        if (!address || typeof address === 'string') return settleStart(new Error('Could not determine local forward port'));
+        settleStart(undefined, { id: request.id, bindHost: '127.0.0.1', localPort: address.port, destinationHost: request.destinationHost.trim(), destinationPort: request.destinationPort, status: 'running' });
       });
     }).catch((error) => {
       if (connection.localForwards.get(request.id) === forward) connection.localForwards.delete(request.id);
@@ -1707,8 +1729,7 @@ export class SSHManager {
     const forward = connection.localForwards.get(id);
     if (!forward) return;
     connection.localForwards.delete(id);
-    for (const socket of forward.sockets) socket.destroy();
-    await new Promise<void>((resolve, reject) => forward.server.close((error) => error ? reject(error) : resolve()));
+    await this.closeLocalForward(forward, new Error(`Local forward ${id} was cancelled`));
   }
 
   async disconnect(id: string): Promise<void> {
@@ -1729,7 +1750,7 @@ export class SSHManager {
       // Stop lifecycle events emitted synchronously by close()/end() from
       // being reported as an unexpected connection loss.
       this.connections.delete(id);
-      this.closeLocalForwards(conn);
+      const forwardsClosed = this.closeLocalForwards(conn);
       conn.shells.forEach((shell) => {
         try { shell.close(); } catch {}
       });
@@ -1744,6 +1765,7 @@ export class SSHManager {
       conn.shellHandles.clear();
       conn.client.end();
       for (const routeClient of conn.routeClients) try { routeClient.end(); } catch {}
+      await forwardsClosed;
     }
   }
 
@@ -1774,12 +1796,21 @@ export class SSHManager {
     this.startupCommandLedger.clear();
   }
 
-  private closeLocalForwards(connection: SSHConnection): void {
-    for (const { server, sockets } of connection.localForwards.values()) {
-      for (const socket of sockets) socket.destroy();
-      try { server.close(); } catch {}
-    }
+  private closeLocalForwards(connection: SSHConnection): Promise<void> {
+    const closing = Array.from(connection.localForwards.values(), (forward) => (
+      this.closeLocalForward(forward, new Error(`SSH connection ${connection.id} was closed`))
+    ));
     connection.localForwards.clear();
+    return Promise.all(closing).then(() => undefined);
+  }
+
+  private closeLocalForward(forward: SSHLocalForward, reason: Error): Promise<void> {
+    const cancelledPendingStart = forward.cancelStart(reason);
+    for (const socket of forward.sockets) socket.destroy();
+    return new Promise((resolve, reject) => forward.server.close((error) => {
+      if (!error || (cancelledPendingStart && (error as NodeJS.ErrnoException).code === 'ERR_SERVER_NOT_RUNNING')) resolve();
+      else reject(error);
+    }));
   }
 
   private validateCredentials(config: SSHCredentials, label: string): void {

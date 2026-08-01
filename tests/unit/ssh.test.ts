@@ -366,6 +366,50 @@ describe('SSHManager', () => {
     expect(manager.listLocalForwards('forwarded')).toEqual([]);
   });
 
+  it('settles a pending local-forward start when stopped before listen completes', async () => {
+    mocks.connectMock.mockImplementation(function (this: MiniEmitter) { queueMicrotask(() => this.emit('ready')); });
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('forwarded', { host: 'target.internal', port: 22, auth: 'password' });
+    const started = manager.startLocalForward('forwarded', {
+      id: 'cancelled', localPort: 0, destinationHost: '127.0.0.1', destinationPort: 5432,
+    });
+
+    await expect(manager.stopLocalForward('forwarded', 'cancelled')).resolves.toBeUndefined();
+    await expect(Promise.race([
+      started,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('start remained pending')), 250)),
+    ])).rejects.toThrow(/cancelled/i);
+    expect(manager.listLocalForwards('forwarded')).toEqual([]);
+    await expect(manager.stopLocalForward('forwarded', 'cancelled')).resolves.toBeUndefined();
+    const restarted = await manager.startLocalForward('forwarded', {
+      id: 'cancelled', localPort: 0, destinationHost: '127.0.0.1', destinationPort: 5432,
+    });
+    expect(restarted.status).toBe('running');
+    await manager.stopLocalForward('forwarded', 'cancelled');
+  });
+
+  it('cancels a pending local-forward start during disconnect and cleanup', async () => {
+    mocks.connectMock.mockImplementation(function (this: MiniEmitter) { queueMicrotask(() => this.emit('ready')); });
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('disconnecting', { host: 'target.internal', port: 22, auth: 'password' });
+    const disconnectStart = manager.startLocalForward('disconnecting', {
+      id: 'pending', localPort: 0, destinationHost: '127.0.0.1', destinationPort: 5432,
+    });
+    await expect(manager.disconnect('disconnecting')).resolves.toBeUndefined();
+    await expect(disconnectStart).rejects.toThrow(/closed/i);
+
+    await manager.connect('cleaning', { host: 'target.internal', port: 22, auth: 'password' });
+    const cleanupStart = manager.startLocalForward('cleaning', {
+      id: 'pending', localPort: 0, destinationHost: '127.0.0.1', destinationPort: 5432,
+    });
+    manager.cleanup();
+    manager.cleanup();
+    await expect(cleanupStart).rejects.toThrow(/closed/i);
+    expect(manager.listConnections()).toEqual([]);
+  });
+
   it('reserves a local-forward id before asynchronous listen completes', async () => {
     mocks.connectMock.mockImplementation(function (this: MiniEmitter) { queueMicrotask(() => this.emit('ready')); });
     const { SSHManager } = await loadSSHManager();
