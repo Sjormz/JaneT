@@ -62,6 +62,42 @@ describe('SettingsManager', () => {
     });
   });
 
+  it('defaults, loads, deep-clones, and round-trips output-free command history', async () => {
+    const fsMock = await import('fs');
+    const valid = {
+      id: 'old', command: 'printf old', startedAt: 1, durationMs: 2, exitCode: 0,
+      context: { kind: 'local' as const, cwd: '/repo' },
+    };
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      theme: 'dracula', commandHistory: [valid, { ...valid, id: 'bad', output: 'secret' }],
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const loaded = manager.get();
+    expect(loaded.commandHistory).toEqual([valid]);
+    (loaded.commandHistory[0].context as any).cwd = '/mutated';
+    expect((manager.get().commandHistory[0].context as any).cwd).toBe('/repo');
+    const next = { ...valid, id: 'new', context: { kind: 'ssh' as const, label: 'prod' } };
+    expect(manager.set({ commandHistory: [next] }).commandHistory).toEqual([next]);
+    const saved = JSON.parse((fsMock.writeFileSync as any).mock.calls.at(-1)[1]);
+    expect(saved.commandHistory).toEqual([next]);
+    expect(JSON.stringify(saved.commandHistory)).not.toContain('output');
+  });
+
+  it('rejects malformed, duplicate, and 257-entry live history atomically and rolls cache back on write failure', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const valid = (id: string) => ({ id, command: 'pwd', startedAt: 1, durationMs: 1, context: { kind: 'local' as const, cwd: '/repo' } });
+    expect(() => manager.set({ commandHistory: [{ ...valid('bad'), output: 'secret' }] as any })).toThrow('Invalid settings update');
+    expect(() => manager.set({ commandHistory: [valid('x'), valid('x')] })).toThrow('Invalid settings update');
+    expect(() => manager.set({ commandHistory: Array.from({ length: 257 }, (_, i) => valid(String(i))) })).toThrow('Invalid settings update');
+    expect(manager.get().commandHistory).toEqual([]);
+    (fsMock.renameSync as any).mockImplementationOnce(() => { throw new Error('disk full'); });
+    expect(() => manager.set({ commandHistory: [valid('kept')] })).toThrow('Could not persist settings');
+    expect(manager.get().commandHistory).toEqual([]);
+  });
+
   it('round-trips a configured semantic rerun shortcut', async () => {
     const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();

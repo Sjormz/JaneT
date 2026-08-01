@@ -7,6 +7,7 @@ import Sidebar, { WorkspaceToolSection } from './components/Sidebar';
 import StatusBar from './components/StatusBar';
 import CommandPalette, { CommandAction } from './components/CommandPalette';
 import SnippetPicker from './components/SnippetPicker';
+import CommandHistoryPicker from './components/CommandHistoryPicker';
 import ShortcutEditor from './components/ShortcutEditor';
 import ThemeSwitcher from './components/ThemeSwitcher';
 import UpdateBanner from './components/UpdateBanner';
@@ -40,6 +41,7 @@ import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../sh
 import { useEditorDocuments } from './useEditorDocuments';
 import { emptyTabDocumentWorkspace, isEditorDocumentDirty, type EditorResource } from './editorDocuments';
 import { snippetTextForPaste, type Snippet } from '../shared/snippets';
+import { MAX_COMMAND_HISTORY_ENTRIES, type CommandHistoryEntry } from '../shared/commandHistory';
 import {
   acknowledgeAgentAwareness,
   aggregateAgentStatus,
@@ -203,6 +205,7 @@ interface InitialAppState {
   fontFamily: string;
   sidebarSide: 'left' | 'right';
   snippets: Snippet[];
+  commandHistory: CommandHistoryEntry[];
 }
 
 function createInitialAppState(settings: any): InitialAppState {
@@ -265,6 +268,7 @@ function createInitialAppState(settings: any): InitialAppState {
     fontFamily: normalizeTerminalFontFamily(s.fontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY),
     sidebarSide: s.sidebarSide === 'left' ? 'left' : 'right',
     snippets: Array.isArray(s.snippets) ? s.snippets : [],
+    commandHistory: Array.isArray(s.commandHistory) ? s.commandHistory : [],
   };
 }
 
@@ -367,6 +371,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const restoredSshLeavesStartedRef = useRef(false);
   const [paletteVisible, setPaletteVisible] = useState(false);
   const [snippetsVisible, setSnippetsVisible] = useState(false);
+  const [historyVisible, setHistoryVisible] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(initialState.settingsOpen);
   const [sshConnectionsOpen, setSshConnectionsOpen] = useState(initialState.sshConnectionsOpen);
   const [pendingDestructiveAction, setPendingDestructiveAction] = useState<PendingDestructiveAction | null>(null);
@@ -412,6 +417,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [fontFamily] = useState(initialState.fontFamily);
   const [sidebarSide, setSidebarSide] = useState<'left' | 'right'>(initialState.sidebarSide);
   const [snippets, setSnippets] = useState<Snippet[]>(initialState.snippets);
+  const [commandHistory, setCommandHistory] = useState<CommandHistoryEntry[]>(initialState.commandHistory);
+  const commandHistoryRef = useRef(commandHistory);
+  const historySaveQueueRef = useRef(Promise.resolve());
   const settingsLoadedRef = useRef(true);
 
   const { bindings, matches, on } = useKeybindings();
@@ -697,12 +705,42 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     });
   }, []);
 
-  const handleSemanticCommand = useCallback((tabId: string, termId: string, _event: SemanticCommandEvent) => {
-    const owners = tabsRef.current.filter((tab) => (
-      tab.id === tabId && getAllLeafIds(tab.root).includes(termId)
-    ));
-    if (owners.length !== 1) return;
-  }, []);
+  const handleSemanticCommand = useCallback((tabId: string, termId: string, event: SemanticCommandEvent) => {
+    const owner = tabsRef.current.find((tab) => tab.id === tabId);
+    const leaf = owner && findLeaf(owner.root, termId);
+    if (!owner || !leaf) return;
+    const terminalType = leaf.terminalType ?? owner.type;
+    let context: CommandHistoryEntry['context'];
+    if (terminalType === 'local') {
+      const cwd = cwdByTerminalRef.current[termId] || leaf.cwd || owner.cwd || homeDir;
+      if (!cwd) return;
+      context = { kind: 'local', cwd };
+    } else {
+      const sessionId = leaf.sshSessionId ?? owner.sshSessionId;
+      const profileId = leaf.sshProfileId ?? owner.sshProfileId;
+      const session = sshSessions.find((candidate) => candidate.id === sessionId);
+      const profile = sshProfiles.find((candidate) => candidate.id === profileId);
+      const host = session?.host ?? profile?.host;
+      if (!host) return;
+      const username = session?.username ?? profile?.username;
+      const port = session?.port ?? profile?.port;
+      context = { kind: 'ssh', label: `${username ? `${username}@` : ''}${host}${port ? `:${port}` : ''}` };
+    }
+    const entry: CommandHistoryEntry = {
+      id: crypto.randomUUID(), command: event.command, startedAt: event.startedAt,
+      durationMs: event.durationMs, ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }), context,
+    };
+    historySaveQueueRef.current = historySaveQueueRef.current.then(async () => {
+      const next = [entry, ...commandHistoryRef.current].slice(0, MAX_COMMAND_HISTORY_ENTRIES);
+      try {
+        await window.janet.setSettings({ commandHistory: next });
+        commandHistoryRef.current = next;
+        setCommandHistory(next);
+      } catch (error) {
+        console.error('Failed to save command history:', error);
+      }
+    });
+  }, [homeDir, sshProfiles, sshSessions]);
 
   const transportByTerminal = useMemo(() => Object.fromEntries(
     tabs.flatMap((tab) => collectTerminalOwners(tab).flatMap((owner) => {
@@ -1739,6 +1777,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         shortcut: bindings['snippets-toggle'], handler: () => setSnippetsVisible(true),
       },
       {
+        id: 'command-history', label: 'Open command history', category: 'Terminal',
+        handler: () => setHistoryVisible(true),
+      },
+      {
         id: 'check-updates', label: 'Check for updates', category: 'General',
         handler: () => { window.janet.checkForUpdates().catch(() => {}); },
       },
@@ -1969,6 +2011,18 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         onPaste={(snippet) => {
           const text = snippetTextForPaste(snippet.content);
           if (sidebarTerminalId && text) requestTerminalPaste(sidebarTerminalId, text);
+        }}
+      />
+      <CommandHistoryPicker
+        visible={historyVisible}
+        entries={commandHistory}
+        onClose={() => setHistoryVisible(false)}
+        onSelect={(entry) => {
+          const tab = tabsRef.current.find((candidate) => candidate.id === activeTabIdRef.current);
+          if (!tab) return;
+          const termId = preferredLeafId(tab, focusedTerminalId, maximizedLeafByTab[tab.id]);
+          const command = entry.command.replace(/[\r\n]+$/, '');
+          if (termId && command && findLeaf(tab.root, termId)) requestTerminalPaste(termId, command);
         }}
       />
       <UpdateBanner />
