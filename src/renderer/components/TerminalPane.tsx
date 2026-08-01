@@ -382,6 +382,7 @@ export default function TerminalPane({
     ) {
       const { term, fitAddon, searchAddon } = cached;
       cached.sshNoticeListener = setSshNoticeState;
+      cached.broadcastInputListener = onBroadcastInput;
 
       if (term.element && term.element.parentElement !== container) {
         container.appendChild(term.element);

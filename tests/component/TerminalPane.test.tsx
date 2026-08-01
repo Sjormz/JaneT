@@ -955,6 +955,42 @@ describe('TerminalPane', () => {
     expect(terminalWriteBinary).not.toHaveBeenCalled();
   });
 
+  it('preserves broadcast handling through StrictMode effect replay from a cold cache', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const onBroadcastInput = vi.fn(() => true);
+    const onRemoved = vi.fn();
+    const onReady = vi.fn(() => {
+      if (!onRemoved.mock.calls.length) return;
+      const terminal = MockTerminal.instances.at(-1)!;
+      const markUserInput = (terminal.onKey as any).mock.calls.at(-1)[0] as () => void;
+      markUserInput();
+      terminal.dataHandler?.('x');
+      markUserInput();
+      terminal.binaryHandler?.('\u0000');
+    });
+    render(
+      <React.StrictMode>
+        <KeybindingsProvider>
+          <TerminalPane
+            termId="term-broadcast-strict"
+            tabType="ssh"
+            sshSessionId="ssh-broadcast-strict"
+            onReady={onReady}
+            onRemoved={onRemoved}
+            onBroadcastInput={onBroadcastInput}
+            themeName="tokyo-night"
+          />
+        </KeybindingsProvider>
+      </React.StrictMode>,
+    );
+    await waitFor(() => expect(onRemoved).toHaveBeenCalledOnce());
+    expect(onBroadcastInput).toHaveBeenCalledTimes(2);
+    expect(onBroadcastInput).toHaveBeenNthCalledWith(1, 'term-broadcast-strict', 'x');
+    expect(onBroadcastInput).toHaveBeenLastCalledWith('term-broadcast-strict', '\u0000', true);
+    expect(sshWriteShell).not.toHaveBeenCalled();
+    expect(sshWriteShellBinary).not.toHaveBeenCalled();
+  });
+
   it('routes marked text and binary input to the current callback after a cached remount', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     const callbackA = vi.fn(() => true);
