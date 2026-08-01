@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { connect as connectSocket } from 'net';
 
 class MiniEmitter {
   private listeners = new Map<string, Array<(...args: any[]) => void>>();
@@ -7,6 +8,19 @@ class MiniEmitter {
     const list = this.listeners.get(event) || [];
     list.push(cb);
     this.listeners.set(event, list);
+    return this;
+  }
+
+  once(event: string, cb: (...args: any[]) => void) {
+    const once = (...args: any[]) => {
+      this.off(event, once);
+      cb(...args);
+    };
+    return this.on(event, once);
+  }
+
+  off(event: string, cb: (...args: any[]) => void) {
+    this.listeners.set(event, (this.listeners.get(event) || []).filter((listener) => listener !== cb));
     return this;
   }
 
@@ -27,6 +41,11 @@ class MockShellStream extends MockReadable {
   write = vi.fn();
   setWindow = vi.fn();
   close = vi.fn();
+}
+
+class MockTunnel extends MiniEmitter {
+  destroy = vi.fn();
+  pipe = vi.fn(() => this);
 }
 
 const mocks = {
@@ -305,6 +324,30 @@ describe('SSHManager', () => {
     expect(mocks.clients[0].end).toHaveBeenCalledOnce();
   });
 
+  it('does not resurrect a routed target when forwardOut completes after disconnect', async () => {
+    let forwardCallback: Function | undefined;
+    mocks.connectMock.mockImplementation(function (this: MiniEmitter) {
+      queueMicrotask(() => this.emit('ready'));
+    });
+    mocks.forwardOutMock.mockImplementation((_srcHost, _srcPort, _host, _port, callback) => {
+      forwardCallback = callback;
+    });
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    const connected = manager.connect('routed', {
+      host: 'target.internal', port: 22, auth: 'password',
+      jumpHost: { host: 'bastion.example', port: 22, auth: 'password' },
+    });
+    await vi.waitFor(() => expect(forwardCallback).toBeTypeOf('function'));
+    await manager.disconnect('routed');
+    const tunnel = new MockTunnel();
+    forwardCallback!(undefined, tunnel);
+
+    await expect(connected).rejects.toThrow(/cancelled|closed/i);
+    expect(mocks.clients).toHaveLength(1);
+    expect(tunnel.destroy).toHaveBeenCalledOnce();
+  });
+
   it('starts a loopback local forward and closes it on stop', async () => {
     mocks.connectMock.mockImplementation(function (this: MiniEmitter) {
       queueMicrotask(() => this.emit('ready'));
@@ -322,6 +365,88 @@ describe('SSHManager', () => {
     await manager.stopLocalForward('forwarded', 'database');
     expect(manager.listLocalForwards('forwarded')).toEqual([]);
   });
+
+  it('reserves a local-forward id before asynchronous listen completes', async () => {
+    mocks.connectMock.mockImplementation(function (this: MiniEmitter) { queueMicrotask(() => this.emit('ready')); });
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('forwarded', { host: 'target.internal', port: 22, auth: 'password' });
+    const request = { id: 'same', localPort: 0, destinationHost: '127.0.0.1', destinationPort: 5432 };
+    const results = await Promise.allSettled([
+      manager.startLocalForward('forwarded', request),
+      manager.startLocalForward('forwarded', request),
+    ]);
+
+    expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter(({ status }) => status === 'rejected')).toHaveLength(1);
+    expect(manager.listLocalForwards('forwarded')).toHaveLength(1);
+    await manager.stopLocalForward('forwarded', 'same');
+  });
+
+  it('reserves local-forward capacity before asynchronous listen completes', async () => {
+    mocks.connectMock.mockImplementation(function (this: MiniEmitter) { queueMicrotask(() => this.emit('ready')); });
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('forwarded', { host: 'target.internal', port: 22, auth: 'password' });
+    const results = await Promise.allSettled(Array.from({ length: 33 }, (_, index) => manager.startLocalForward('forwarded', {
+      id: `forward-${index}`, localPort: 0, destinationHost: '127.0.0.1', destinationPort: 5432,
+    })));
+
+    expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(32);
+    expect(manager.listLocalForwards('forwarded')).toHaveLength(32);
+    await Promise.all(manager.listLocalForwards('forwarded').map(({ id }) => manager.stopLocalForward('forwarded', id)));
+  });
+  it.each([
+    ['extra key', { id: 'bad', localPort: 0, destinationHost: '127.0.0.1', destinationPort: 5432, extra: true }],
+    ['symbol key', Object.assign({ id: 'bad', localPort: 0, destinationHost: '127.0.0.1', destinationPort: 5432 }, { [Symbol('extra')]: true })],
+    ['non-plain object', Object.assign(Object.create(null), { id: 'bad', localPort: 0, destinationHost: '127.0.0.1', destinationPort: 5432 })],
+    ['control character in id', { id: 'bad\nforward', localPort: 0, destinationHost: '127.0.0.1', destinationPort: 5432 }],
+    ['accessor property', Object.defineProperty({ localPort: 0, destinationHost: '127.0.0.1', destinationPort: 5432 }, 'id', { enumerable: true, get: () => 'bad' })],
+  ])('rejects a malformed local-forward request before server allocation: %s', async (_label, request) => {
+    mocks.connectMock.mockImplementation(function (this: MiniEmitter) { queueMicrotask(() => this.emit('ready')); });
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('forwarded', { host: 'target.internal', port: 22, auth: 'password' });
+
+    await expect(manager.startLocalForward('forwarded', request as any)).rejects.toThrow(/valid local forward/i);
+    expect((manager as any).connections.get('forwarded').localForwards.size).toBe(0);
+  });
+
+  it('owns post-listen local-forward server errors without an uncaught exception', async () => {
+    mocks.connectMock.mockImplementation(function (this: MiniEmitter) { queueMicrotask(() => this.emit('ready')); });
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('forwarded', { host: 'target.internal', port: 22, auth: 'password' });
+    await manager.startLocalForward('forwarded', {
+      id: 'errored', localPort: 0, destinationHost: '127.0.0.1', destinationPort: 5432,
+    });
+    const forward = (manager as any).connections.get('forwarded').localForwards.get('errored');
+
+    expect(() => forward.server.emit('error', new Error('late server failure'))).not.toThrow();
+    expect(manager.listLocalForwards('forwarded')).toEqual([]);
+  });
+
+  it('destroys a late forwarded stream after the local forward is stopped', async () => {
+    let forwardCallback: Function | undefined;
+    mocks.connectMock.mockImplementation(function (this: MiniEmitter) { queueMicrotask(() => this.emit('ready')); });
+    mocks.forwardOutMock.mockImplementation((_srcHost, _srcPort, _host, _port, callback) => { forwardCallback = callback; });
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('forwarded', { host: 'target.internal', port: 22, auth: 'password' });
+    const status = await manager.startLocalForward('forwarded', {
+      id: 'late', localPort: 0, destinationHost: '127.0.0.1', destinationPort: 5432,
+    });
+    const socket = connectSocket(status.localPort, '127.0.0.1');
+    await vi.waitFor(() => expect(forwardCallback).toBeTypeOf('function'));
+    const stopped = manager.stopLocalForward('forwarded', 'late');
+    const tunnel = new MockTunnel();
+    forwardCallback!(undefined, tunnel);
+
+    await stopped;
+    expect(tunnel.destroy).toHaveBeenCalledOnce();
+    socket.destroy();
+  });
+
   it.each([
     ['empty session id', ' ', { host: 'example.com', port: 22, auth: 'password' }],
     ['empty host', 'invalid-session', { host: ' ', port: 22, auth: 'password' }],

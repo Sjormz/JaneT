@@ -786,7 +786,7 @@ interface SSHConnection {
    * channel for the same termId. */
   shellHandles: Map<string, SSHShellHandle>;
   routeClients: Client[];
-  localForwards: Map<string, { server: Server; status: SSHLocalForwardStatus; sockets: Set<Socket | ClientChannel> }>;
+  localForwards: Map<string, { server: Server; status?: SSHLocalForwardStatus; sockets: Set<Socket | ClientChannel> }>;
 }
 
 interface PendingSSHConnection {
@@ -887,18 +887,30 @@ export class SSHManager {
       if (config.jumpHost.host.trim().toLowerCase() === config.host.trim().toLowerCase()
         && config.jumpHost.port === config.port) throw new Error('SSH target cannot jump through itself');
       const routeSessionId = `route-${randomUUID()}`;
+      const attempt = { identity, promise: undefined as unknown as Promise<void>, routeSessionId };
+      const ownsAttempt = () => this.routeAttempts.get(id) === attempt;
       const promise = this.connect(routeSessionId, config.jumpHost).then(() => new Promise<ClientChannel>((resolve, reject) => {
         const route = this.connections.get(routeSessionId);
         if (!route) return reject(new Error('SSH jump host closed before routing the target'));
         route.client.forwardOut('127.0.0.1', 0, config.host.trim(), config.port, (error, stream) => {
           if (error || !stream) reject(error ?? new Error('Could not open SSH jump route'));
-          else resolve(stream);
+          else if (!ownsAttempt()) {
+            stream.destroy();
+            reject(new Error(`SSH connection ${id} was cancelled`));
+          } else resolve(stream);
         });
-      })).then((sock) => this.connect(id, { ...config, jumpHost: undefined, sock, routeSessionId, routeIdentity: identity })).catch(async (error) => {
+      })).then((sock) => {
+        if (!ownsAttempt()) {
+          sock.destroy();
+          throw new Error(`SSH connection ${id} was cancelled`);
+        }
+        return this.connect(id, { ...config, jumpHost: undefined, sock, routeSessionId, routeIdentity: identity });
+      }).catch(async (error) => {
         await this.disconnect(routeSessionId);
         throw error;
       });
-      this.routeAttempts.set(id, { identity, promise, routeSessionId });
+      attempt.promise = promise;
+      this.routeAttempts.set(id, attempt);
       void promise.finally(() => {
         if (this.routeAttempts.get(id)?.promise === promise) this.routeAttempts.delete(id);
       }).catch(() => {});
@@ -1618,7 +1630,15 @@ export class SSHManager {
   }): Promise<SSHLocalForwardStatus> {
     const connection = this.connections.get(sessionId);
     if (!connection) throw new Error(`SSH session ${sessionId} not found`);
-    if (typeof request?.id !== 'string' || !request.id.trim() || request.id.length > 256) throw new Error('A valid local forward id is required');
+    const requestKeys = ['id', 'localPort', 'destinationHost', 'destinationPort'];
+    if (!request || Object.getPrototypeOf(request) !== Object.prototype
+      || Reflect.ownKeys(request).length !== requestKeys.length
+      || requestKeys.some((key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(request, key);
+        return !descriptor?.enumerable || !('value' in descriptor);
+      })) throw new Error('A valid local forward request is required');
+    if (typeof request.id !== 'string' || !request.id.trim() || request.id.length > 256
+      || /[\u0000-\u001f\u007f-\u009f]/.test(request.id)) throw new Error('A valid local forward id is required');
     if (!Number.isInteger(request.localPort) || request.localPort < 0 || request.localPort > 65_535) throw new Error('A valid local forward port is required');
     if (typeof request.destinationHost !== 'string' || !request.destinationHost.trim() || request.destinationHost.length > 255 || /[\u0000-\u001f\u007f-\u009f]/.test(request.destinationHost)) throw new Error('A valid local forward destination host is required');
     if (!Number.isInteger(request.destinationPort) || request.destinationPort < 1 || request.destinationPort > 65_535) throw new Error('A valid local forward destination port is required');
@@ -1631,11 +1651,25 @@ export class SSHManager {
       socket.once('close', () => sockets.delete(socket));
       connection.client.forwardOut(socket.remoteAddress ?? '127.0.0.1', socket.remotePort ?? 0, request.destinationHost.trim(), request.destinationPort, (error, stream) => {
         if (error || !stream) return socket.destroy(error);
+        if (this.connections.get(sessionId) !== connection
+          || connection.localForwards.get(request.id)?.server !== server
+          || socket.destroyed) {
+          stream.destroy();
+          return;
+        }
         sockets.add(stream);
         stream.once('close', () => sockets.delete(stream));
         socket.pipe(stream).pipe(socket);
       });
     });
+    const forward: { server: Server; status?: SSHLocalForwardStatus; sockets: Set<Socket | ClientChannel> } = { server, sockets };
+    connection.localForwards.set(request.id, forward);
+    const onServerError = () => {
+      if (connection.localForwards.get(request.id) === forward) connection.localForwards.delete(request.id);
+      for (const socket of sockets) socket.destroy();
+      try { server.close(); } catch {}
+    };
+    server.on('error', onServerError);
     const status = await new Promise<SSHLocalForwardStatus>((resolve, reject) => {
       const fail = (error: Error) => reject(error);
       server.once('error', fail);
@@ -1645,19 +1679,26 @@ export class SSHManager {
         if (!address || typeof address === 'string') return reject(new Error('Could not determine local forward port'));
         resolve({ id: request.id, bindHost: '127.0.0.1', localPort: address.port, destinationHost: request.destinationHost.trim(), destinationPort: request.destinationPort, status: 'running' });
       });
-    }).catch((error) => { try { server.close(); } catch {} throw error; });
-    if (this.connections.get(sessionId) !== connection) {
+    }).catch((error) => {
+      if (connection.localForwards.get(request.id) === forward) connection.localForwards.delete(request.id);
+      try { server.close(); } catch {}
+      throw error;
+    });
+    if (this.connections.get(sessionId) !== connection || connection.localForwards.get(request.id) !== forward) {
+      for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       throw new Error(`SSH session ${sessionId} changed while starting the local forward`);
     }
-    connection.localForwards.set(request.id, { server, status, sockets });
+    forward.status = status;
     return { ...status };
   }
 
   listLocalForwards(sessionId: string): SSHLocalForwardStatus[] {
     const connection = this.connections.get(sessionId);
     if (!connection) throw new Error(`SSH session ${sessionId} not found`);
-    return Array.from(connection.localForwards.values(), ({ status }) => ({ ...status }));
+    return Array.from(connection.localForwards.values())
+      .filter((forward): forward is typeof forward & { status: SSHLocalForwardStatus } => Boolean(forward.status))
+      .map(({ status }) => ({ ...status }));
   }
 
   async stopLocalForward(sessionId: string, id: string): Promise<void> {

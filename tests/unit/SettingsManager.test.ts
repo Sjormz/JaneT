@@ -170,6 +170,36 @@ describe('SettingsManager', () => {
     expect(settings.sshProfiles[2]).not.toHaveProperty('jumpHostProfileId');
   });
 
+  it('rejects cyclic runtime jump-host profiles atomically', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const before = manager.get();
+
+    expect(() => manager.set({ sshProfiles: [
+      { id: 'a', host: 'a.example', port: 22, auth: 'password', jumpHostProfileId: 'b' },
+      { id: 'b', host: 'b.example', port: 22, auth: 'password', jumpHostProfileId: 'a' },
+    ] })).toThrow(/invalid settings/i);
+    expect(manager.get()).toEqual(before);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('removes legacy cyclic jump-host links deterministically while preserving valid links', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({ sshProfiles: [
+      { id: 'a', host: 'a.example', port: 22, auth: 'password', jumpHostProfileId: 'b' },
+      { id: 'b', host: 'b.example', port: 22, auth: 'password', jumpHostProfileId: 'a' },
+      { id: 'jump', host: 'jump.example', port: 22, auth: 'password' },
+      { id: 'target', host: 'target.example', port: 22, auth: 'password', jumpHostProfileId: 'jump' },
+    ] }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const profiles = new SettingsManager().get().sshProfiles;
+
+    expect(profiles.find(({ id }) => id === 'a')).not.toHaveProperty('jumpHostProfileId');
+    expect(profiles.find(({ id }) => id === 'b')).not.toHaveProperty('jumpHostProfileId');
+    expect(profiles.find(({ id }) => id === 'target')).toMatchObject({ jumpHostProfileId: 'jump' });
+  });
+
   it('drops malformed and duplicate legacy keyed entries without resetting unrelated settings', async () => {
     const fsMock = await import('fs');
     (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({

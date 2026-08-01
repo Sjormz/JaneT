@@ -466,9 +466,16 @@ function normalizeStoredSshProfiles(value: unknown): StoredSSHProfile[] {
     });
   }
   const validIds = new Set(profiles.map(({ id }) => id));
-  return profiles.map((profile) => profile.jumpHostProfileId === profile.id || !validIds.has(profile.jumpHostProfileId ?? '')
+  const validProfiles = profiles.map((profile) => profile.jumpHostProfileId === profile.id || !validIds.has(profile.jumpHostProfileId ?? '')
     ? (({ jumpHostProfileId: _invalid, ...rest }) => rest)(profile)
     : profile);
+  const cyclicIds = findCyclicJumpHostProfiles(validProfiles);
+  return validProfiles.map((profile) => {
+    if (!cyclicIds.has(profile.id)) return profile;
+    const sanitized: StoredSSHProfile = { ...profile };
+    delete sanitized.jumpHostProfileId;
+    return sanitized;
+  });
 }
 
 function isStoredSecret(value: unknown): value is StoredSecretV1 {
@@ -907,8 +914,30 @@ function isValidSshProfile(value: unknown): value is AppSettings['sshProfiles'][
       || (typeof profile.jumpHostProfileId === 'string' && profile.jumpHostProfileId.length <= 256));
 }
 
+function findCyclicJumpHostProfiles(profiles: ReadonlyArray<{ id: string; jumpHostProfileId?: string }>): Set<string> {
+  const next = new Map(profiles.map(({ id, jumpHostProfileId }) => [id, jumpHostProfileId]));
+  const cyclic = new Set<string>();
+  for (const { id } of profiles) {
+    const path: string[] = [];
+    const seen = new Map<string, number>();
+    let current: string | undefined = id;
+    while (current !== undefined && next.has(current) && !cyclic.has(current)) {
+      const start = seen.get(current);
+      if (start !== undefined) {
+        for (const cycleId of path.slice(start)) cyclic.add(cycleId);
+        break;
+      }
+      seen.set(current, path.length);
+      path.push(current);
+      current = next.get(current);
+    }
+  }
+  return cyclic;
+}
+
 function hasValidJumpHostReferences(profiles: AppSettings['sshProfiles']): boolean {
   const ids = new Set(profiles.map(({ id }) => id));
   return profiles.every(({ id, jumpHostProfileId }) => jumpHostProfileId === undefined
-    || (jumpHostProfileId !== id && ids.has(jumpHostProfileId)));
+    || (jumpHostProfileId !== id && ids.has(jumpHostProfileId)))
+    && findCyclicJumpHostProfiles(profiles).size === 0;
 }
