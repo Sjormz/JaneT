@@ -53,6 +53,8 @@ describe('SettingsManager', () => {
     expect(settings.sidebarSide).toBe('right');
     expect(settings.sshProfiles).toEqual([]);
     expect(settings.workspaceTabs).toEqual([]);
+    expect(settings.notificationsEnabled).toBe(false);
+    expect(settings.notificationThresholdSeconds).toBe(10);
     expect(settings.keybindings).toMatchObject({
       'previous-command': 'Ctrl+Shift+ArrowUp',
       'next-command': 'Ctrl+Shift+ArrowDown',
@@ -96,6 +98,41 @@ describe('SettingsManager', () => {
     (fsMock.renameSync as any).mockImplementationOnce(() => { throw new Error('disk full'); });
     expect(() => manager.set({ commandHistory: [valid('kept')] })).toThrow('Could not persist settings');
     expect(manager.get().commandHistory).toEqual([]);
+  });
+
+  it('round-trips valid notification settings', async () => {
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    expect(manager.set({ notificationsEnabled: true, notificationThresholdSeconds: 86_400 }))
+      .toMatchObject({ notificationsEnabled: true, notificationThresholdSeconds: 86_400 });
+  });
+
+  it.each([undefined, null, 0, 1.5, 86_401, '10'])('normalizes a malformed legacy notification threshold: %s', async (value) => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      theme: 'dracula', notificationThresholdSeconds: value,
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    expect(new SettingsManager().get()).toMatchObject({ theme: 'dracula', notificationThresholdSeconds: 10 });
+  });
+
+  it.each([0, 1.5, 86_401, '10'])('rejects malformed live notification threshold atomically: %s', async (value) => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    expect(() => manager.set({ notificationThresholdSeconds: value } as any)).toThrow(/invalid settings/i);
+    expect(manager.get().notificationThresholdSeconds).toBe(10);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('rolls back both notification settings after persistence failure', async () => {
+    const fsMock = await import('fs');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(fsMock.renameSync).mockImplementationOnce(() => { throw new Error('blocked'); });
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    expect(() => manager.set({ notificationsEnabled: true, notificationThresholdSeconds: 20 })).toThrow();
+    expect(manager.get()).toMatchObject({ notificationsEnabled: false, notificationThresholdSeconds: 10 });
   });
 
   it('round-trips a configured semantic rerun shortcut', async () => {
@@ -185,7 +222,7 @@ describe('SettingsManager', () => {
     expect(keyProfile).not.toHaveProperty('password');
     expect(safeStorage.decryptString).toHaveBeenCalledTimes(2);
 
-    manager.set({ fontSize: 16 });
+    manager.set({ notificationsEnabled: true, notificationThresholdSeconds: 20 });
     const saved = JSON.parse((fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string);
     expect(saved.sshProfiles[0]).toMatchObject({ passwordSecret });
     expect(saved.sshProfiles[0].privateKeySecret).toBeUndefined();

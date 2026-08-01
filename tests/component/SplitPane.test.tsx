@@ -283,8 +283,9 @@ beforeEach(() => {
         },
       },
     }),
-    getSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] }),
+    getSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [], notificationsEnabled: false, notificationThresholdSeconds: 10 }),
     setSettings: vi.fn().mockResolvedValue(undefined),
+    notifyCommandCompleted: vi.fn().mockResolvedValue(true),
     terminalCreate: vi.fn().mockResolvedValue(undefined),
     terminalDestroy: vi.fn().mockResolvedValue(undefined),
     terminalWrite: vi.fn(),
@@ -398,7 +399,6 @@ describe('split panes in the app', () => {
     expect(onSemanticCommand).toHaveBeenLastCalledWith('tab-1', 'term-deep', event);
     expect(onSemanticCommand).toHaveBeenCalledTimes(2);
   });
-
   it('broadcasts only after deliberate confirmation and offers immediate cancel', async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
@@ -607,6 +607,36 @@ describe('split panes in the app', () => {
     } finally {
       window.removeEventListener('janet:terminal-paste-request', pasted);
     }
+  });
+
+  it('maps an owned semantic event to bounded command-free local notification metadata', async () => {
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    const termId = terminal.dataset.terminalId!;
+    const event: SemanticCommandEvent = {
+      command: 'secret command', output: 'secret output', exitCode: 0,
+      startedAt: 10, completedAt: 10_010, durationMs: 10_000,
+    };
+    act(() => rendererMocks.semanticCommandHandlers.get(termId)!(event));
+    await waitFor(() => expect(window.janet.notifyCommandCompleted).toHaveBeenCalledOnce());
+    expect(window.janet.notifyCommandCompleted).toHaveBeenCalledWith({
+      durationMs: 10_000, outcome: 'success', tabLabel: 'Terminal', paneLabel: 'Terminal', context: { kind: 'local' },
+    });
+    expect(JSON.stringify(vi.mocked(window.janet.notifyCommandCompleted).mock.calls)).not.toMatch(/secret command|secret output|command|output/);
+  });
+
+  it('does not notify after exact tab ownership becomes stale', async () => {
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    const termId = terminal.dataset.terminalId!;
+    const staleHandler = rendererMocks.semanticCommandHandlers.get(termId)!;
+    const oldTabId = rendererMocks.verticalTabBarProps.tabs[0].id;
+    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
+    act(() => rendererMocks.verticalTabBarProps.onCloseTab(oldTabId));
+    await confirmPendingAction(/close tab/i);
+    act(() => staleHandler({ command: 'secret', output: 'secret', startedAt: 0, completedAt: 10_000, durationMs: 10_000 }));
+    expect(window.janet.notifyCommandCompleted).not.toHaveBeenCalled();
   });
 
   it('shows an authoritative local terminal exit in its pane and tab', async () => {

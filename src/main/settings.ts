@@ -106,6 +106,8 @@ export interface AppSettings {
   fontSize: number;
   fontFamily: string;
   sidebarSide: 'left' | 'right';
+  notificationsEnabled: boolean;
+  notificationThresholdSeconds: number;
   keybindings: Record<string, string>;
   snippets: Snippet[];
   commandHistory: CommandHistoryEntry[];
@@ -202,6 +204,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   fontSize: 14,
   fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
   sidebarSide: 'right',
+  notificationsEnabled: false,
+  notificationThresholdSeconds: 10,
   keybindings: { ...DEFAULT_KEYBINDINGS },
   snippets: [],
   commandHistory: [],
@@ -239,8 +243,9 @@ export class SettingsManager {
     };
   }
 
-  set(updates: Partial<AppSettings>): AppSettings {
-    if (!isValidSettingsUpdate(updates)) throw new Error('Invalid settings update');
+  set(value: unknown): AppSettings {
+    const updates = parseSettingsUpdate(value);
+    if (!updates || !isValidSettingsUpdate(updates)) throw new Error('Invalid settings update');
     const previous = this.cache;
     this.cache = {
       ...this.cache,
@@ -322,6 +327,10 @@ export class SettingsManager {
       const stored = {
         ...DEFAULT_SETTINGS,
         ...parsed,
+        notificationsEnabled: typeof parsed.notificationsEnabled === 'boolean' ? parsed.notificationsEnabled : false,
+        notificationThresholdSeconds: isValidNotificationThreshold(parsed.notificationThresholdSeconds)
+          ? parsed.notificationThresholdSeconds
+          : 10,
         sshProfiles: normalizeStoredSshProfiles(parsed.sshProfiles),
       } as StoredAppSettings;
       this.captureStoredSecrets(stored.sshProfiles);
@@ -850,22 +859,39 @@ function hasUniqueSnippetIdentities(values: readonly unknown[]): boolean {
   });
 }
 
-function isValidSettingsUpdate(value: unknown): value is Partial<AppSettings> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const allowedKeys = new Set<keyof AppSettings>([
-    'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets', 'commandHistory',
-    'sshProfiles', 'workspaceTabs', 'gitWorktreeBaseDir',
-    'gitWorktreeNameTemplate', 'session',
-  ]);
-  if (Object.keys(value).some((key) => !allowedKeys.has(key as keyof AppSettings))) return false;
-  if (Object.values(value).some((entry) => entry === undefined)) return false;
-  const updates = value as Partial<AppSettings>;
+function parseSettingsUpdate(value: unknown): Partial<AppSettings> | undefined {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const prototype = Reflect.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const allowedKeys = new Set<keyof AppSettings>([
+      'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets',
+      'commandHistory', 'notificationsEnabled', 'notificationThresholdSeconds',
+      'sshProfiles', 'workspaceTabs', 'gitWorktreeBaseDir',
+      'gitWorktreeNameTemplate', 'session',
+    ]);
+    const updates: Record<string, unknown> = Object.create(null);
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string' || !allowedKeys.has(key as keyof AppSettings)) return undefined;
+      const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !('value' in descriptor) || descriptor.value === undefined) return undefined;
+      updates[key] = descriptor.value;
+    }
+    return updates as Partial<AppSettings>;
+  } catch {
+    return undefined;
+  }
+}
+
+function isValidSettingsUpdate(updates: Partial<AppSettings>): boolean {
   return (updates.theme === undefined || ['tokyo-night', 'dracula', 'one-dark', 'solarized-light', 'gruvbox'].includes(updates.theme))
     && (updates.fontSize === undefined
       || (Number.isInteger(updates.fontSize) && updates.fontSize >= 10 && updates.fontSize <= 24))
     && (updates.fontFamily === undefined
       || (typeof updates.fontFamily === 'string' && updates.fontFamily.length <= MAX_WORKSPACE_STRING_LENGTH))
     && (updates.sidebarSide === undefined || updates.sidebarSide === 'left' || updates.sidebarSide === 'right')
+    && (updates.notificationsEnabled === undefined || typeof updates.notificationsEnabled === 'boolean')
+    && (updates.notificationThresholdSeconds === undefined || isValidNotificationThreshold(updates.notificationThresholdSeconds))
     && (updates.keybindings === undefined
       || isBoundedStringRecord(updates.keybindings, MAX_KEYBINDINGS, 256, 256))
     && (updates.snippets === undefined || (Array.isArray(updates.snippets)
@@ -890,6 +916,10 @@ function isValidSettingsUpdate(value: unknown): value is Partial<AppSettings> {
       || (typeof updates.gitWorktreeNameTemplate === 'string'
         && updates.gitWorktreeNameTemplate.length <= MAX_WORKSPACE_STRING_LENGTH))
     && (updates.session === undefined || isValidRuntimeSession(updates.session));
+}
+
+function isValidNotificationThreshold(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 86_400;
 }
 
 function isValidRuntimeSnippet(value: unknown): boolean {

@@ -37,6 +37,7 @@ import { requestTerminalPaste } from './terminalPaste';
 import { formatTerminalPathForPaste } from './terminalPathDrag';
 import type { FileExplorerSource } from './fileExplorerSource';
 import type { SemanticCommandEvent } from './semanticCommands';
+import type { CommandNotificationPayload } from '../shared/commandNotifications';
 import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
 import { useEditorDocuments } from './useEditorDocuments';
 import { emptyTabDocumentWorkspace, isEditorDocumentDirty, type EditorResource } from './editorDocuments';
@@ -227,6 +228,8 @@ interface InitialAppState {
   sidebarSide: 'left' | 'right';
   snippets: Snippet[];
   commandHistory: CommandHistoryEntry[];
+  notificationsEnabled: boolean;
+  notificationThresholdSeconds: number;
 }
 
 function createInitialAppState(settings: any): InitialAppState {
@@ -290,6 +293,8 @@ function createInitialAppState(settings: any): InitialAppState {
     sidebarSide: s.sidebarSide === 'left' ? 'left' : 'right',
     snippets: Array.isArray(s.snippets) ? s.snippets : [],
     commandHistory: Array.isArray(s.commandHistory) ? s.commandHistory : [],
+    notificationsEnabled: s.notificationsEnabled === true,
+    notificationThresholdSeconds: Number.isInteger(s.notificationThresholdSeconds) ? s.notificationThresholdSeconds : 10,
   };
 }
 
@@ -453,6 +458,8 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [commandHistory, setCommandHistory] = useState<CommandHistoryEntry[]>(initialState.commandHistory);
   const commandHistoryRef = useRef(commandHistory);
   const historySaveQueueRef = useRef(Promise.resolve());
+  const [notificationsEnabled, setNotificationsEnabled] = useState(initialState.notificationsEnabled);
+  const [notificationThresholdSeconds, setNotificationThresholdSeconds] = useState(initialState.notificationThresholdSeconds);
   const settingsLoadedRef = useRef(true);
 
   const { bindings, matches, on } = useKeybindings();
@@ -646,6 +653,17 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     try { window.janet.setSettings({ snippets: next }).catch(() => {}); } catch {}
   }, []);
 
+  const persistNotificationsEnabled = useCallback((enabled: boolean) => {
+    setNotificationsEnabled(enabled);
+    window.janet.setSettings({ notificationsEnabled: enabled }).catch(() => {});
+  }, []);
+
+  const persistNotificationThreshold = useCallback((seconds: number) => {
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 86_400) return;
+    setNotificationThresholdSeconds(seconds);
+    window.janet.setSettings({ notificationThresholdSeconds: seconds }).catch(() => {});
+  }, []);
+
   // Persist keybindings when they change
   const handleKeybindingsChange = useCallback((newBindings: Record<KeybindingAction, string>) => {
     try { window.janet.setSettings({ keybindings: newBindings }).catch(() => {}); } catch {}
@@ -732,19 +750,38 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   }, []);
 
   const handleSemanticCommand = useCallback((tabId: string, termId: string, event: SemanticCommandEvent) => {
+    const owners = tabsRef.current.filter((tab) => (
+      tab.id === tabId && getAllLeafIds(tab.root).includes(termId)
+    ));
+    if (owners.length !== 1) return;
+    const owner = owners[0];
+    const leaf = findLeaf(owner.root, termId);
+    if (!leaf) return;
+    const leafType = leaf.terminalType ?? owner.type;
+    const payload: CommandNotificationPayload = {
+      durationMs: event.durationMs,
+      outcome: event.exitCode === undefined ? 'unknown' : event.exitCode === 0 ? 'success' : 'failure',
+      tabLabel: owner.title.trim().slice(0, 256) || 'Terminal',
+      paneLabel: displayPaneTitle(leaf, owner.type).slice(0, 256),
+      context: leafType === 'ssh'
+        ? { kind: 'ssh', hostLabel: (sshProfiles.find((profile) => profile.id === (leaf.sshProfileId ?? owner.sshProfileId))?.host ?? 'SSH').slice(0, 512) }
+        : { kind: 'local' },
+    };
+    window.janet.notifyCommandCompleted(payload).catch(() => {});
+
     historySaveQueueRef.current = historySaveQueueRef.current.then(async () => {
-      const owner = tabsRef.current.find((tab) => tab.id === tabId);
-      const leaf = owner && findLeaf(owner.root, termId);
-      if (!owner || !leaf) return;
-      const terminalType = leaf.terminalType ?? owner.type;
+      const currentOwner = tabsRef.current.find((tab) => tab.id === tabId);
+      const currentLeaf = currentOwner && findLeaf(currentOwner.root, termId);
+      if (!currentOwner || !currentLeaf) return;
+      const terminalType = currentLeaf.terminalType ?? currentOwner.type;
       let context: CommandHistoryEntry['context'];
       if (terminalType === 'local') {
-        const cwd = cwdByTerminalRef.current[termId] || leaf.cwd || owner.cwd || homeDir;
+        const cwd = cwdByTerminalRef.current[termId] || currentLeaf.cwd || currentOwner.cwd || homeDir;
         if (!cwd) return;
         context = { kind: 'local', cwd };
       } else {
-        const sessionId = leaf.sshSessionId ?? owner.sshSessionId;
-        const profileId = leaf.sshProfileId ?? owner.sshProfileId;
+        const sessionId = currentLeaf.sshSessionId ?? currentOwner.sshSessionId;
+        const profileId = currentLeaf.sshProfileId ?? currentOwner.sshProfileId;
         const session = sshSessionsRef.current.find((candidate) => candidate.id === sessionId);
         const profile = sshProfilesRef.current.find((candidate) => candidate.id === profileId);
         const host = session?.host ?? profile?.host;
@@ -767,7 +804,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         console.error('Failed to save command history:', error);
       }
     });
-  }, [homeDir]);
+  }, [homeDir, sshProfiles]);
 
   const transportByTerminal = useMemo(() => Object.fromEntries(
     tabs.flatMap((tab) => collectTerminalOwners(tab).flatMap((owner) => {
@@ -1979,6 +2016,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
               onFontSizeChange={persistFontSize}
               sidebarSide={sidebarSide}
               onSidebarSideChange={persistSidebarSide}
+              notificationsEnabled={notificationsEnabled}
+              notificationThresholdSeconds={notificationThresholdSeconds}
+              onNotificationsEnabledChange={persistNotificationsEnabled}
+              onNotificationThresholdSecondsChange={persistNotificationThreshold}
             />
             <ShortcutEditor />
           </div>
