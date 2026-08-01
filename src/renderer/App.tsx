@@ -288,10 +288,14 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const responsiveTabsCollapsedRef = useRef(false);
   const [sidebarSection, setSidebarSection] = useState<WorkspaceToolSection>(initialState.sidebarSection);
   const [sshSessions, setSshSessions] = useState<SessionInfo[]>([]);
+  const sshSessionsRef = useRef(sshSessions);
+  sshSessionsRef.current = sshSessions;
   const [readySshSessionIds, setReadySshSessionIds] = useState<Set<string>>(new Set());
   const [disconnectedSshSessionIds, setDisconnectedSshSessionIds] = useState<Set<string>>(new Set());
   const [sshConnectionEpochById, setSshConnectionEpochById] = useState<Record<string, number>>({});
   const [sshProfiles, setSshProfiles] = useState<SavedSSHProfile[]>(initialState.sshProfiles);
+  const sshProfilesRef = useRef(sshProfiles);
+  sshProfilesRef.current = sshProfiles;
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>(initialState.workspaceTabs);
   const [maximizedLeafByTab, setMaximizedLeafByTab] = useState<Record<string, string | null>>({});
   const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null);
@@ -706,31 +710,32 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   }, []);
 
   const handleSemanticCommand = useCallback((tabId: string, termId: string, event: SemanticCommandEvent) => {
-    const owner = tabsRef.current.find((tab) => tab.id === tabId);
-    const leaf = owner && findLeaf(owner.root, termId);
-    if (!owner || !leaf) return;
-    const terminalType = leaf.terminalType ?? owner.type;
-    let context: CommandHistoryEntry['context'];
-    if (terminalType === 'local') {
-      const cwd = cwdByTerminalRef.current[termId] || leaf.cwd || owner.cwd || homeDir;
-      if (!cwd) return;
-      context = { kind: 'local', cwd };
-    } else {
-      const sessionId = leaf.sshSessionId ?? owner.sshSessionId;
-      const profileId = leaf.sshProfileId ?? owner.sshProfileId;
-      const session = sshSessions.find((candidate) => candidate.id === sessionId);
-      const profile = sshProfiles.find((candidate) => candidate.id === profileId);
-      const host = session?.host ?? profile?.host;
-      if (!host) return;
-      const username = session?.username ?? profile?.username;
-      const port = session?.port ?? profile?.port;
-      context = { kind: 'ssh', label: `${username ? `${username}@` : ''}${host}${port ? `:${port}` : ''}` };
-    }
-    const entry: CommandHistoryEntry = {
-      id: crypto.randomUUID(), command: event.command, startedAt: event.startedAt,
-      durationMs: event.durationMs, ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }), context,
-    };
     historySaveQueueRef.current = historySaveQueueRef.current.then(async () => {
+      const owner = tabsRef.current.find((tab) => tab.id === tabId);
+      const leaf = owner && findLeaf(owner.root, termId);
+      if (!owner || !leaf) return;
+      const terminalType = leaf.terminalType ?? owner.type;
+      let context: CommandHistoryEntry['context'];
+      if (terminalType === 'local') {
+        const cwd = cwdByTerminalRef.current[termId] || leaf.cwd || owner.cwd || homeDir;
+        if (!cwd) return;
+        context = { kind: 'local', cwd };
+      } else {
+        const sessionId = leaf.sshSessionId ?? owner.sshSessionId;
+        const profileId = leaf.sshProfileId ?? owner.sshProfileId;
+        const session = sshSessionsRef.current.find((candidate) => candidate.id === sessionId);
+        const profile = sshProfilesRef.current.find((candidate) => candidate.id === profileId);
+        const host = session?.host ?? profile?.host;
+        if (!host) return;
+        const username = session?.username ?? profile?.username;
+        const port = session?.port ?? profile?.port;
+        context = { kind: 'ssh', label: `${username ? `${username}@` : ''}${host}${port ? `:${port}` : ''}` };
+      }
+      const entry: CommandHistoryEntry = {
+        id: crypto.randomUUID(), command: event.command, startedAt: event.startedAt,
+        durationMs: event.durationMs,
+        ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }), context,
+      };
       const next = [entry, ...commandHistoryRef.current].slice(0, MAX_COMMAND_HISTORY_ENTRIES);
       try {
         await window.janet.setSettings({ commandHistory: next });
@@ -740,7 +745,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         console.error('Failed to save command history:', error);
       }
     });
-  }, [homeDir, sshProfiles, sshSessions]);
+  }, [homeDir]);
 
   const transportByTerminal = useMemo(() => Object.fromEntries(
     tabs.flatMap((tab) => collectTerminalOwners(tab).flatMap((owner) => {

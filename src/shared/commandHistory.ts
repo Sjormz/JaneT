@@ -21,40 +21,63 @@ const ENTRY_KEYS = new Set(['id', 'command', 'startedAt', 'durationMs', 'exitCod
 const LOCAL_CONTEXT_KEYS = new Set(['kind', 'cwd']);
 const SSH_CONTEXT_KEYS = new Set(['kind', 'label']);
 
-function exactKeys(value: Record<string, unknown>, allowed: Set<string>): boolean {
-  return Object.keys(value).every((key) => allowed.has(key));
+type DataValues = Record<string, unknown>;
+
+function ownDataValues(value: unknown, allowed: Set<string>): DataValues | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return null;
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => typeof key !== 'string' || !allowed.has(key))) return null;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const result: DataValues = Object.create(null);
+    for (const key of keys as string[]) {
+      const descriptor = descriptors[key];
+      if (!descriptor || !('value' in descriptor)) return null;
+      result[key] = descriptor.value;
+    }
+    return result;
+  } catch {
+    return null;
+  }
 }
 
 function isSafeNonnegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
-function isValidContext(value: unknown): value is CommandHistoryContext {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const context = value as Record<string, unknown>;
-  if (context.kind === 'local') {
-    return exactKeys(context, LOCAL_CONTEXT_KEYS)
-      && typeof context.cwd === 'string' && context.cwd.length > 0
-      && context.cwd.length <= MAX_COMMAND_HISTORY_CWD_LENGTH;
+function validatedContext(value: unknown): CommandHistoryContext | null {
+  const values = ownDataValues(value, LOCAL_CONTEXT_KEYS);
+  if (values?.kind === 'local') {
+    return typeof values.cwd === 'string' && values.cwd.length > 0
+      && values.cwd.length <= MAX_COMMAND_HISTORY_CWD_LENGTH
+      ? { kind: 'local', cwd: values.cwd } : null;
   }
-  return context.kind === 'ssh'
-    && exactKeys(context, SSH_CONTEXT_KEYS)
-    && typeof context.label === 'string' && context.label.length > 0
-    && context.label.length <= MAX_COMMAND_HISTORY_SSH_LABEL_LENGTH;
+  const sshValues = ownDataValues(value, SSH_CONTEXT_KEYS);
+  return sshValues?.kind === 'ssh'
+    && typeof sshValues.label === 'string' && sshValues.label.length > 0
+    && sshValues.label.length <= MAX_COMMAND_HISTORY_SSH_LABEL_LENGTH
+    ? { kind: 'ssh', label: sshValues.label } : null;
 }
 
-function isValidEntry(value: unknown): value is CommandHistoryEntry {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const entry = value as Record<string, unknown>;
-  return exactKeys(entry, ENTRY_KEYS)
-    && typeof entry.id === 'string' && entry.id.length > 0
-    && entry.id.length <= MAX_COMMAND_HISTORY_ID_LENGTH
-    && typeof entry.command === 'string' && entry.command.trim().length > 0
-    && entry.command.length <= MAX_COMMAND_HISTORY_COMMAND_LENGTH
-    && isSafeNonnegativeInteger(entry.startedAt)
-    && isSafeNonnegativeInteger(entry.durationMs)
-    && (entry.exitCode === undefined || isSafeNonnegativeInteger(entry.exitCode))
-    && isValidContext(entry.context);
+function validatedEntry(value: unknown): CommandHistoryEntry | null {
+  const entry = ownDataValues(value, ENTRY_KEYS);
+  if (!entry) return null;
+  const context = validatedContext(entry.context);
+  if (typeof entry.id !== 'string' || entry.id.length === 0
+    || entry.id.length > MAX_COMMAND_HISTORY_ID_LENGTH
+    || typeof entry.command !== 'string' || entry.command.trim().length === 0
+    || entry.command.length > MAX_COMMAND_HISTORY_COMMAND_LENGTH
+    || !isSafeNonnegativeInteger(entry.startedAt)
+    || !isSafeNonnegativeInteger(entry.durationMs)
+    || (entry.exitCode !== undefined && !isSafeNonnegativeInteger(entry.exitCode))
+    || !context) return null;
+  return {
+    id: entry.id, command: entry.command, startedAt: entry.startedAt,
+    durationMs: entry.durationMs,
+    ...(entry.exitCode === undefined ? {} : { exitCode: entry.exitCode }), context,
+  };
 }
 
 export function cloneCommandHistoryEntry(entry: CommandHistoryEntry): CommandHistoryEntry {
@@ -78,10 +101,12 @@ export function normalizeCommandHistory(value: unknown): CommandHistoryEntry[] {
   if (!Array.isArray(value)) return [];
   const ids = new Set<string>();
   const entries: CommandHistoryEntry[] = [];
-  for (const candidate of value.slice(0, MAX_COMMAND_HISTORY_ENTRIES)) {
-    if (!isValidEntry(candidate) || ids.has(candidate.id)) continue;
-    ids.add(candidate.id);
-    entries.push(cloneCommandHistoryEntry(candidate));
+  for (const candidate of value) {
+    const entry = validatedEntry(candidate);
+    if (!entry || ids.has(entry.id)) continue;
+    ids.add(entry.id);
+    entries.push(entry);
+    if (entries.length === MAX_COMMAND_HISTORY_ENTRIES) break;
   }
   return entries;
 }
@@ -89,11 +114,12 @@ export function normalizeCommandHistory(value: unknown): CommandHistoryEntry[] {
 export function isValidCommandHistory(value: unknown): value is CommandHistoryEntry[] {
   if (!Array.isArray(value) || value.length > MAX_COMMAND_HISTORY_ENTRIES) return false;
   const ids = new Set<string>();
-  return value.every((entry) => {
-    if (!isValidEntry(entry) || ids.has(entry.id)) return false;
+  for (const candidate of value) {
+    const entry = validatedEntry(candidate);
+    if (!entry || ids.has(entry.id)) return false;
     ids.add(entry.id);
-    return true;
-  });
+  }
+  return true;
 }
 
 export function commandHistoryContextLabel(context: CommandHistoryContext): string {

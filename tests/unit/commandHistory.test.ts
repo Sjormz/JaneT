@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   cloneCommandHistory,
   isValidCommandHistory,
@@ -13,10 +13,45 @@ const entry = (id = 'one'): CommandHistoryEntry => ({
 });
 
 describe('command history boundary', () => {
-  it('normalizes legacy values per entry, preserving first valid duplicate and only the first 256 candidates', () => {
+  it('normalizes up to 256 valid unique legacy entries across all candidates', () => {
     const input: unknown[] = [entry(), { ...entry('bad'), output: 'secret' }, entry('one'), entry('two')];
     input.push(...Array.from({ length: MAX_COMMAND_HISTORY_ENTRIES }, (_, index) => entry(`later-${index}`)));
-    expect(normalizeCommandHistory(input)).toEqual([entry(), entry('two'), ...input.slice(4, 256)]);
+    expect(normalizeCommandHistory(input)).toEqual([entry(), entry('two'), ...input.slice(4, 258)]);
+  });
+
+  it('never invokes entry or nested context accessors', () => {
+    const entryGetter = vi.fn(() => 'secret');
+    const contextGetter = vi.fn(() => '/secret');
+    const withEntryAccessor = { ...entry() } as Record<string, unknown>;
+    Object.defineProperty(withEntryAccessor, 'command', { enumerable: true, get: entryGetter });
+    const withContextAccessor = { ...entry(), context: { kind: 'local' } };
+    Object.defineProperty(withContextAccessor.context, 'cwd', { enumerable: true, get: contextGetter });
+
+    expect(isValidCommandHistory([withEntryAccessor])).toBe(false);
+    expect(normalizeCommandHistory([withContextAccessor])).toEqual([]);
+    expect(entryGetter).not.toHaveBeenCalled();
+    expect(contextGetter).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on throwing proxies and custom prototypes', () => {
+    const throwing = new Proxy(entry(), { ownKeys: () => { throw new Error('trap'); } });
+    const custom = Object.assign(Object.create({ polluted: true }), entry());
+    const nestedCustom = { ...entry(), context: Object.assign(Object.create({ polluted: true }), entry().context) };
+
+    expect(() => isValidCommandHistory([throwing])).not.toThrow();
+    expect(isValidCommandHistory([throwing])).toBe(false);
+    expect(normalizeCommandHistory([custom, nestedCustom])).toEqual([]);
+  });
+
+  it('accepts and clones null-prototype entries and nested contexts with exact keys', () => {
+    const context = Object.assign(Object.create(null), { kind: 'local', cwd: '/repo' });
+    const candidate = Object.assign(Object.create(null), entry(), { context });
+
+    expect(isValidCommandHistory([candidate])).toBe(true);
+    const normalized = normalizeCommandHistory([candidate]);
+    expect(normalized).toEqual([entry()]);
+    expect(Object.getPrototypeOf(normalized[0])).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(normalized[0].context)).toBe(Object.prototype);
   });
 
   it('strictly rejects malformed live collections and extra nested keys', () => {
