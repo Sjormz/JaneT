@@ -35,6 +35,7 @@ import { requestTerminalSearch } from './terminalSearch';
 import { requestTerminalPaste } from './terminalPaste';
 import { formatTerminalPathForPaste } from './terminalPathDrag';
 import type { FileExplorerSource } from './fileExplorerSource';
+import type { SemanticCommandEvent } from './semanticCommands';
 import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
 import { useEditorDocuments } from './useEditorDocuments';
 import { emptyTabDocumentWorkspace, isEditorDocumentDirty, type EditorResource } from './editorDocuments';
@@ -694,6 +695,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       const { [termId]: _removed, ...next } = current;
       return next;
     });
+  }, []);
+
+  const handleSemanticCommand = useCallback((tabId: string, termId: string, _event: SemanticCommandEvent) => {
+    const owners = tabsRef.current.filter((tab) => (
+      tab.id === tabId && getAllLeafIds(tab.root).includes(termId)
+    ));
+    if (owners.length !== 1) return;
   }, []);
 
   const transportByTerminal = useMemo(() => Object.fromEntries(
@@ -1912,6 +1920,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
                 onTerminalReady={handleTerminalReady}
                 onTerminalRemoved={handleTerminalRemoved}
                 onAgentEvent={handleAgentEvent}
+                onSemanticCommand={handleSemanticCommand}
                 awarenessByTerminal={awarenessByTerminal}
                 transportByTerminal={transportByTerminal}
                 onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}

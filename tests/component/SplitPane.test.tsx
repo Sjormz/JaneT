@@ -5,6 +5,7 @@ import App from '../../src/renderer/App';
 import SplitPane from '../../src/renderer/components/SplitPane';
 import type { AgentAwareness } from '../../src/renderer/terminalAwareness';
 import type { AgentLifecycleEvent } from '../../src/renderer/terminalAwareness';
+import type { SemanticCommandEvent } from '../../src/renderer/semanticCommands';
 
 const mountedTermIds: string[] = [];
 const rendererMocks = vi.hoisted(() => ({
@@ -25,6 +26,7 @@ const rendererMocks = vi.hoisted(() => ({
   ) => void | Promise<void>>(),
   cwdChangeHandlers: new Map<string, (termId: string, cwd: string) => void>(),
   agentEventHandlers: new Map<string, (event: AgentLifecycleEvent) => void>(),
+  semanticCommandHandlers: new Map<string, (event: SemanticCommandEvent) => void>(),
 }));
 
 vi.mock('../../src/renderer/components/Titlebar', () => ({
@@ -137,6 +139,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     onFocus,
     onSshRetry,
     onAgentEvent,
+    onSemanticCommand,
   }: {
     termId: string;
     hasSession?: boolean;
@@ -156,10 +159,12 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
       dimensions: { cols: number; rows: number },
     ) => void | Promise<void>;
     onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+    onSemanticCommand?: (termId: string, event: SemanticCommandEvent) => void;
   }) {
     if (onSshRetry) rendererMocks.sshRetryHandlers.set(termId, onSshRetry);
     if (onCwdChange) rendererMocks.cwdChangeHandlers.set(termId, onCwdChange);
     if (onAgentEvent) rendererMocks.agentEventHandlers.set(termId, (event) => onAgentEvent(termId, event));
+    if (onSemanticCommand) rendererMocks.semanticCommandHandlers.set(termId, (event) => onSemanticCommand(termId, event));
     const containerRef = React.useRef<HTMLDivElement>(null);
 
     React.useEffect(() => {
@@ -234,6 +239,7 @@ beforeEach(() => {
   rendererMocks.sshRetryHandlers.clear();
   rendererMocks.cwdChangeHandlers.clear();
   rendererMocks.agentEventHandlers.clear();
+  rendererMocks.semanticCommandHandlers.clear();
   Object.defineProperty(document, 'startViewTransition', {
     configurable: true,
     value: vi.fn((update: () => void) => {
@@ -340,6 +346,34 @@ async function requestWorkspaceClose(
 }
 
 describe('split panes in the app', () => {
+  it('propagates semantic commands from nested and maximized leaves with explicit tab ownership', () => {
+    const onSemanticCommand = vi.fn();
+    const event: SemanticCommandEvent = {
+      command: 'printf ok', output: 'ok', exitCode: 0,
+      startedAt: 10, completedAt: 20, durationMs: 10,
+    };
+    const node = {
+      id: 'root', type: 'split' as const, direction: 'vertical' as const, sizes: [1],
+      children: [{
+        id: 'nested', type: 'split' as const, direction: 'horizontal' as const, sizes: [1],
+        children: [{ id: 'term-deep', type: 'leaf' as const }],
+      }],
+    };
+    const required = {
+      tabId: 'tab-1', tabType: 'local' as const, onTerminalReady: vi.fn(), onTerminalRemoved: vi.fn(),
+      onSplitPane: vi.fn(), onClosePane: vi.fn(), onResizePane: vi.fn(), onMovePane: vi.fn(),
+      onPaneDragStart: vi.fn(), onPaneDragOver: vi.fn(), onPaneDragEnd: vi.fn(), onToggleMaximizePane: vi.fn(),
+      onSemanticCommand,
+    };
+    const view = render(<SplitPane node={node} {...required} />);
+    act(() => rendererMocks.semanticCommandHandlers.get('term-deep')!(event));
+    expect(onSemanticCommand).toHaveBeenLastCalledWith('tab-1', 'term-deep', event);
+
+    view.rerender(<SplitPane node={node} maximizedLeafId="term-deep" {...required} />);
+    act(() => rendererMocks.semanticCommandHandlers.get('term-deep')!(event));
+    expect(onSemanticCommand).toHaveBeenLastCalledWith('tab-1', 'term-deep', event);
+    expect(onSemanticCommand).toHaveBeenCalledTimes(2);
+  });
   it('shows an authoritative local terminal exit in its pane and tab', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
