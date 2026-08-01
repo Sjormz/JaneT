@@ -34,7 +34,7 @@ function ownDataValues(value: unknown, allowed: Set<string>): DataValues | null 
     const result: DataValues = Object.create(null);
     for (const key of keys as string[]) {
       const descriptor = descriptors[key];
-      if (!descriptor || !('value' in descriptor)) return null;
+      if (!descriptor?.enumerable || !('value' in descriptor)) return null;
       result[key] = descriptor.value;
     }
     return result;
@@ -73,6 +73,11 @@ function validatedEntry(value: unknown): CommandHistoryEntry | null {
     || !isSafeNonnegativeInteger(entry.durationMs)
     || (entry.exitCode !== undefined && !isSafeNonnegativeInteger(entry.exitCode))
     || !context) return null;
+  try {
+    structuredClone(value);
+  } catch {
+    return null;
+  }
   return {
     id: entry.id, command: entry.command, startedAt: entry.startedAt,
     durationMs: entry.durationMs,

@@ -43,6 +43,31 @@ describe('command history boundary', () => {
     expect(normalizeCommandHistory([custom, nestedCustom])).toEqual([]);
   });
 
+  it('rejects transparent proxies around entries and nested contexts', () => {
+    const proxiedEntry = new Proxy(entry(), {});
+    const proxiedContext = { ...entry(), context: new Proxy(entry().context, {}) };
+
+    expect(isValidCommandHistory([proxiedEntry])).toBe(false);
+    expect(normalizeCommandHistory([proxiedContext])).toEqual([]);
+  });
+
+  it('rejects non-enumerable required and optional entry fields', () => {
+    for (const key of ['id', 'exitCode'] as const) {
+      const candidate = entry();
+      Object.defineProperty(candidate, key, { value: candidate[key], enumerable: false });
+      expect(isValidCommandHistory([candidate])).toBe(false);
+    }
+  });
+
+  it('rejects non-enumerable required and optional nested context fields', () => {
+    const local = entry();
+    Object.defineProperty(local.context, 'cwd', { value: '/repo', enumerable: false });
+    const ssh = { ...entry(), context: { kind: 'ssh' as const, label: 'host' } };
+    Object.defineProperty(ssh.context, 'label', { value: 'host', enumerable: false });
+
+    expect(normalizeCommandHistory([local, ssh])).toEqual([]);
+  });
+
   it('accepts and clones null-prototype entries and nested contexts with exact keys', () => {
     const context = Object.assign(Object.create(null), { kind: 'local', cwd: '/repo' });
     const candidate = Object.assign(Object.create(null), entry(), { context });
