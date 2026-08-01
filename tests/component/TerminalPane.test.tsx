@@ -118,7 +118,13 @@ class MockTerminal {
       viewportY: 0,
       getLine: (line: number) => this.bufferLines[line] === undefined
         ? undefined
-        : { isWrapped: this.wrappedLines.has(line), translateToString: () => this.bufferLines[line] },
+        : {
+            isWrapped: this.wrappedLines.has(line),
+            translateToString: (trimRight?: boolean, start = 0, end?: number) => {
+              const value = this.bufferLines[line].slice(start, end);
+              return trimRight ? value.trimEnd() : value;
+            },
+          },
     },
   };
   registerMarker = vi.fn(() => ({ line: this.markerLine, isDisposed: false, dispose: vi.fn() }));

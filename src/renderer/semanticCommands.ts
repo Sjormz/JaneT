@@ -51,12 +51,15 @@ export class SemanticCommandTimeline {
       this.phase = 'command';
       this.commandStart = this.position();
       this.commandMarker = this.terminal.registerMarker(0);
-      this.startedAt = this.now();
     } else if (code === 'C' && this.phase === 'command' && arg === undefined && this.commandStart && this.commandMarker) {
       const end = this.position();
       const command = this.read(this.commandStart, end).trim();
-      if (!command) return true;
+      if (!command) {
+        this.resetPending();
+        return true;
+      }
       this.command = command;
+      this.startedAt = this.now();
       this.outputStart = end;
       this.phase = 'output';
     } else if (code === 'D' && this.phase === 'output' && this.outputStart && this.commandMarker) {
@@ -93,6 +96,7 @@ export class SemanticCommandTimeline {
   previous(): boolean {
     const available = this.liveCommands();
     if (!available.length) return false;
+    if (this.navigationIndex !== null) this.navigationIndex = Math.min(this.navigationIndex, available.length - 1);
     if (this.navigationIndex === null) {
       const viewport = this.terminal.buffer.active.viewportY;
       let index = available.length - 1;
@@ -139,8 +143,11 @@ export class SemanticCommandTimeline {
     let length = 0;
     for (let line = start.line; line <= end.line; line += 1) {
       const bufferLine = this.terminal.buffer.active.getLine(line);
-      const value = bufferLine?.translateToString(false) ?? '';
-      const text = value.slice(line === start.line ? start.column : 0, line === end.line ? end.column : undefined);
+      const text = bufferLine?.translateToString(
+        true,
+        line === start.line ? start.column : 0,
+        line === end.line ? end.column : undefined,
+      ) ?? '';
       const separator = line > start.line && !bufferLine?.isWrapped ? '\n' : '';
       length += separator.length + text.length;
       if (length > MAX_TEXT) return '';

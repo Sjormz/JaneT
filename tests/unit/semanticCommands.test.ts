@@ -9,6 +9,7 @@ class Marker {
 
 class FakeTerminal {
   lines: Array<string | undefined> = [''];
+  translate = new Map<number, (trimRight?: boolean, startColumn?: number, endColumn?: number) => string>();
   wrapped = new Set<number>();
   cursorX = 0;
   cursorY = 0;
@@ -37,7 +38,7 @@ let fakeActive: {
   cursorY: number;
   baseY: number;
   viewportY: number;
-  getLine: (line: number) => { isWrapped: boolean; translateToString: () => string } | undefined;
+  getLine: (line: number) => { isWrapped: boolean; translateToString: (trimRight?: boolean, startColumn?: number, endColumn?: number) => string } | undefined;
 } | null = null;
 
 function terminalAt(lines: string[], line: number, column: number) {
@@ -55,7 +56,13 @@ function terminalAt(lines: string[], line: number, column: number) {
       const value = term.lines[index];
       return value === undefined
         ? undefined
-        : { isWrapped: term.wrapped.has(index), translateToString: () => value };
+        : {
+            isWrapped: term.wrapped.has(index),
+            translateToString: term.translate.get(index) ?? ((trimRight, start = 0, end) => {
+              const sliced = value.slice(start, end);
+              return trimRight ? sliced.trimEnd() : sliced;
+            }),
+          };
     },
   };
   return term;
@@ -90,21 +97,45 @@ describe('SemanticCommandTimeline', () => {
     expect(timeline.commands[0]).toMatchObject({ command: 'echo wrapped', output: 'first\nsecond' });
   });
 
-  it('emits one JSON-safe completion event with deterministic nonnegative timing', () => {
-    const term = terminalAt(['$ pwd', '/tmp'], 0, 2);
-    const completed = vi.fn();
-    const times = [1_000, 900];
-    const timeline = new SemanticCommandTimeline(term as never, completed, () => times.shift()!);
+  it('reconstructs cell-column text and trims terminal padding', () => {
+    const term = terminalAt(['$ 你écho   ', 'ok      '], 0, 2);
+    const firstRow = vi.fn((trimRight?: boolean, startColumn = 0, endColumn = 80) => {
+      expect(trimRight).toBe(true);
+      return startColumn === 2 && endColumn === 8 ? '你écho' : '';
+    });
+    const secondRow = vi.fn((trimRight?: boolean, startColumn = 0, endColumn = 80) => {
+      expect(trimRight).toBe(true);
+      return startColumn === 0 && endColumn === 8 ? 'ok' : '';
+    });
+    term.translate.set(0, firstRow);
+    term.translate.set(1, secondRow);
+    const timeline = new SemanticCommandTimeline(term as never);
 
     timeline.handleOsc('A'); timeline.handleOsc('B');
-    term.cursorX = 5; timeline.handleOsc('C');
-    term.cursorY = 1; term.cursorX = 4; timeline.handleOsc('D;7');
+    term.cursorX = 8; timeline.handleOsc('C');
+    term.cursorY = 1; timeline.handleOsc('D;0');
+
+    expect(timeline.commands[0]).toMatchObject({ command: '你écho', output: 'ok' });
+    expect(firstRow).toHaveBeenCalledWith(true, 2, 8);
+    expect(secondRow).toHaveBeenCalledWith(true, 0, 8);
+  });
+
+  it('starts execution timing after command reconstruction at C', () => {
+    const term = terminalAt(['$ pwd', '/tmp'], 0, 2);
+    const completed = vi.fn();
+    let now = 0;
+    const timeline = new SemanticCommandTimeline(term as never, completed, () => now);
+
+    timeline.handleOsc('A');
+    now = 1_000; timeline.handleOsc('B');
+    now = 61_000; term.cursorX = 5; timeline.handleOsc('C');
+    now = 62_000; term.cursorY = 1; term.cursorX = 4; timeline.handleOsc('D;7');
     timeline.handleOsc('D;7');
 
     expect(completed).toHaveBeenCalledOnce();
     expect(completed).toHaveBeenCalledWith({
       command: 'pwd', output: '/tmp', exitCode: 7,
-      startedAt: 1_000, completedAt: 900, durationMs: 0,
+      startedAt: 61_000, completedAt: 62_000, durationMs: 1_000,
     });
     expect(JSON.parse(JSON.stringify(completed.mock.calls[0][0]))).toEqual(completed.mock.calls[0][0]);
     expect(completed.mock.calls[0][0]).not.toHaveProperty('marker');
@@ -126,6 +157,33 @@ describe('SemanticCommandTimeline', () => {
     expect(term.markers[0].isDisposed).toBe(false);
     timeline.handleOsc('A');
     expect(term.markers[0].isDisposed).toBe(true);
+  });
+
+  it('disposes pending state when C reconstructs an empty command', () => {
+    const term = terminalAt(['$   '], 0, 2);
+    const completed = vi.fn();
+    const timeline = new SemanticCommandTimeline(term as never, completed);
+    timeline.handleOsc('A'); timeline.handleOsc('B');
+    term.cursorX = 5; timeline.handleOsc('C');
+
+    expect(term.markers[0].isDisposed).toBe(true);
+    timeline.handleOsc('D;0');
+    expect(completed).not.toHaveBeenCalled();
+    expect(timeline.commands).toEqual([]);
+  });
+
+  it('disposes pending state when C reconstructs an oversized command', () => {
+    const oversized = 'x'.repeat(64 * 1024 + 1);
+    const term = terminalAt([oversized], 0, 0);
+    const completed = vi.fn();
+    const timeline = new SemanticCommandTimeline(term as never, completed);
+    timeline.handleOsc('A'); timeline.handleOsc('B');
+    term.cursorX = oversized.length; timeline.handleOsc('C');
+
+    expect(term.markers[0].isDisposed).toBe(true);
+    timeline.handleOsc('D;0');
+    expect(completed).not.toHaveBeenCalled();
+    expect(timeline.commands).toEqual([]);
   });
 
   it('bounds retained commands and skips commands whose text is unavailable', () => {
@@ -165,6 +223,25 @@ describe('SemanticCommandTimeline', () => {
     expect(term.scrollToLine).toHaveBeenLastCalledWith(1);
     expect(timeline.next()).toBe(true);
     expect(term.scrollToBottom).toHaveBeenCalledOnce();
+  });
+
+  it('rebases navigation when earlier markers are disposed', () => {
+    const term = terminalAt(['$ one', '$ two', '$ tri'], 0, 2);
+    const timeline = new SemanticCommandTimeline(term as never);
+    for (let line = 0; line < 3; line += 1) {
+      term.cursorY = line; term.cursorX = 2;
+      timeline.handleOsc('A'); timeline.handleOsc('B');
+      term.cursorX = 5; timeline.handleOsc('C'); timeline.handleOsc('D;0');
+    }
+    term.viewportY = 3;
+    expect(timeline.previous()).toBe(true);
+    expect(term.scrollToLine).toHaveBeenLastCalledWith(2);
+    term.markers[0].dispose();
+    term.markers[1].dispose();
+
+    expect(() => timeline.previous()).not.toThrow();
+    expect(term.scrollToLine).toHaveBeenLastCalledWith(2);
+    expect(timeline.current()?.marker).toBe(term.markers[2]);
   });
 
   it('marks nonzero exits and releases markers and decorations on dispose', () => {
