@@ -114,6 +114,7 @@ interface CachedTerminalPane {
   sshNoticeState: SshNoticeState;
   sshNoticeListener: ((state: SshNoticeState) => void) | null;
   agentEventListener: ((termId: string, event: AgentLifecycleEvent) => void) | null;
+  broadcastInputListener: TerminalPaneProps['onBroadcastInput'];
   inputSource: { userInput: boolean };
 }
 
@@ -159,8 +160,6 @@ export default function TerminalPane({
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const sshNoticeAttemptRef = useRef(0);
   const pathDropNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const onBroadcastInputRef = useRef(onBroadcastInput);
-  onBroadcastInputRef.current = onBroadcastInput;
 
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -173,7 +172,10 @@ export default function TerminalPane({
   const searchVisibleRef = useRef(false);
   searchVisibleRef.current = searchVisible;
   const cachedForAgentListener = terminalPaneCache.get(termId);
-  if (cachedForAgentListener) cachedForAgentListener.agentEventListener = onAgentEvent ?? null;
+  if (cachedForAgentListener) {
+    cachedForAgentListener.agentEventListener = onAgentEvent ?? null;
+    cachedForAgentListener.broadcastInputListener = onBroadcastInput;
+  }
 
   useEffect(() => {
     componentMountedRef.current = true;
@@ -404,6 +406,9 @@ export default function TerminalPane({
         if (currentCache?.sshNoticeListener === setSshNoticeState) {
           currentCache.sshNoticeListener = null;
         }
+        if (currentCache && currentCache.broadcastInputListener === onBroadcastInput) {
+          currentCache.broadcastInputListener = undefined;
+        }
         termRef.current = null;
         fitAddonRef.current = null;
         searchAddonRef.current = null;
@@ -478,7 +483,7 @@ export default function TerminalPane({
     const disposable = term.onData((data) => {
       const userInput = inputSource.userInput;
       inputSource.userInput = false;
-      if (userInput && onBroadcastInputRef.current?.(termId, data)) return;
+      if (userInput && terminalPaneCache.get(termId)?.broadcastInputListener?.(termId, data)) return;
       if (tabType === 'local') {
         window.janet.terminalWrite({ id: termId, data, userInput });
       } else if (tabType === 'ssh') {
@@ -490,7 +495,7 @@ export default function TerminalPane({
     const binaryDisposable = term.onBinary((data) => {
       const userInput = inputSource.userInput;
       inputSource.userInput = false;
-      if (userInput && onBroadcastInputRef.current?.(termId, data, true)) return;
+      if (userInput && terminalPaneCache.get(termId)?.broadcastInputListener?.(termId, data, true)) return;
       if (tabType === 'local') {
         window.janet.terminalWriteBinary({ id: termId, data, userInput });
       } else {
@@ -592,6 +597,7 @@ export default function TerminalPane({
           : { kind: 'reconnecting' },
       sshNoticeListener: setSshNoticeState,
       agentEventListener: onAgentEvent ?? null,
+      broadcastInputListener: onBroadcastInput,
       inputSource,
     });
 
@@ -602,6 +608,9 @@ export default function TerminalPane({
       const currentCache = terminalPaneCache.get(termId);
       if (currentCache?.sshNoticeListener === setSshNoticeState) {
         currentCache.sshNoticeListener = null;
+      }
+      if (currentCache && currentCache.broadcastInputListener === onBroadcastInput) {
+        currentCache.broadcastInputListener = undefined;
       }
       termRef.current = null;
       fitAddonRef.current = null;

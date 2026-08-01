@@ -290,6 +290,8 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>(initialState.workspaceTabs);
   const [maximizedLeafByTab, setMaximizedLeafByTab] = useState<Record<string, string | null>>({});
   const [broadcastRecipientIds, setBroadcastRecipientIds] = useState<Set<string>>(new Set());
+  const [broadcastArmed, setBroadcastArmed] = useState(false);
+  const [broadcastConfirmationOpen, setBroadcastConfirmationOpen] = useState(false);
   const broadcastRecipientIdsRef = useRef(broadcastRecipientIds);
   broadcastRecipientIdsRef.current = broadcastRecipientIds;
   const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null);
@@ -1088,13 +1090,15 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       const next = new Set(current);
       if (selected) next.add(termId);
       else next.delete(termId);
+      if (!broadcastArmed && next.size >= 2) setBroadcastConfirmationOpen(true);
+      if (next.size < 2) setBroadcastArmed(false);
       return next;
     });
-  }, []);
+  }, [broadcastArmed]);
 
   const handleBroadcastInput = useCallback((sourceTermId: string, data: string, binary = false): boolean => {
     const recipients = [...broadcastRecipientIds];
-    if (recipients.length < 2 || !broadcastRecipientIds.has(sourceTermId)) return false;
+    if (!broadcastArmed || recipients.length < 2 || !broadcastRecipientIds.has(sourceTermId)) return false;
     const activeTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current);
     const owners = activeTab ? collectTerminalOwners(activeTab) : [];
     const selectedOwners = recipients.map((termId) => owners.find((owner) => owner.termId === termId));
@@ -1119,18 +1123,25 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       }
     }
     return true;
-  }, [broadcastRecipientIds, disconnectedSshSessionIds, localTransportByTerminal, readySshSessionIds]);
+  }, [broadcastArmed, broadcastRecipientIds, disconnectedSshSessionIds, localTransportByTerminal, readySshSessionIds]);
 
   useEffect(() => {
-    if (broadcastRecipientIds.size < 2) return undefined;
+    if (broadcastRecipientIds.size >= 2) return;
+    setBroadcastArmed(false);
+    setBroadcastConfirmationOpen(false);
+  }, [broadcastRecipientIds.size]);
+
+  useEffect(() => {
+    if (!broadcastArmed || broadcastRecipientIds.size < 2) return undefined;
     const cancelOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
+      setBroadcastArmed(false);
       setBroadcastRecipientIds(new Set());
     };
     window.addEventListener('keydown', cancelOnEscape, true);
     return () => window.removeEventListener('keydown', cancelOnEscape, true);
-  }, [broadcastRecipientIds.size]);
+  }, [broadcastArmed, broadcastRecipientIds.size]);
 
   const handleClosePane = useCallback(
     (tabId: string, leafId: string) => {
@@ -1952,10 +1963,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           </Tooltip>
         )}
         <div key="terminal" className="terminal-area">
-          {broadcastRecipientIds.size >= 2 && (
+          {broadcastArmed && broadcastRecipientIds.size >= 2 && (
             <div className="broadcast-input-banner" role="status" aria-label="Broadcast input active">
               <strong>Broadcast input active · {broadcastRecipientIds.size} panes</strong>
-              <button type="button" onClick={() => setBroadcastRecipientIds(new Set())}>Cancel broadcast input</button>
+              <button type="button" onClick={() => { setBroadcastArmed(false); setBroadcastRecipientIds(new Set()); }}>Cancel broadcast input</button>
             </div>
           )}
           <WorkspaceContent
@@ -2042,6 +2053,22 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         fallbackFocus={() => terminalFocusTarget(renameTarget?.terminalId ?? null)}
         onCancel={() => setRenameTarget(null)}
         onSave={saveRename}
+      />
+      <ConfirmationDialog
+        open={broadcastConfirmationOpen}
+        title="Start broadcast input?"
+        description={`All typing and paste, including multiline or destructive commands, will go to ${broadcastRecipientIds.size} selected panes.`}
+        confirmLabel="Start broadcast input"
+        destructive={false}
+        onCancel={() => {
+          setBroadcastConfirmationOpen(false);
+          setBroadcastArmed(false);
+          setBroadcastRecipientIds(new Set());
+        }}
+        onConfirm={() => {
+          setBroadcastConfirmationOpen(false);
+          setBroadcastArmed(true);
+        }}
       />
       <ConfirmationDialog
         open={pendingDestructiveAction !== null}

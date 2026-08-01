@@ -955,6 +955,33 @@ describe('TerminalPane', () => {
     expect(terminalWriteBinary).not.toHaveBeenCalled();
   });
 
+  it('routes marked text and binary input to the current callback after a cached remount', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const callbackA = vi.fn(() => true);
+    const callbackB = vi.fn(() => true);
+    const props = {
+      termId: 'term-broadcast-remount', tabType: 'local' as const,
+      onReady: vi.fn(), onRemoved: vi.fn(), themeName: 'tokyo-night',
+    };
+    const first = render(
+      <KeybindingsProvider><TerminalPane {...props} onBroadcastInput={callbackA} /></KeybindingsProvider>,
+    );
+    const terminal = MockTerminal.instances.at(-1)!;
+
+    first.unmount();
+    render(<KeybindingsProvider><TerminalPane {...props} onBroadcastInput={callbackB} /></KeybindingsProvider>);
+
+    const markUserInput = (terminal.onKey as any).mock.calls.at(-1)[0] as () => void;
+    markUserInput();
+    terminal.dataHandler?.('x');
+    markUserInput();
+    terminal.binaryHandler?.('\u0000');
+
+    expect(callbackA).not.toHaveBeenCalled();
+    expect(callbackB).toHaveBeenNthCalledWith(1, 'term-broadcast-remount', 'x');
+    expect(callbackB).toHaveBeenNthCalledWith(2, 'term-broadcast-remount', '\u0000', true);
+  });
+
   it('pastes a compatible local path through xterm and marks it as user input', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     render(

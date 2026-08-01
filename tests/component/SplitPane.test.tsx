@@ -347,7 +347,7 @@ async function requestWorkspaceClose(
 }
 
 describe('split panes in the app', () => {
-  it('broadcasts only to deliberately selected live panes and offers immediate cancel', async () => {
+  it('broadcasts only after deliberate confirmation and offers immediate cancel', async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
     const terminals = await screen.findAllByTestId(/terminal-/);
@@ -359,6 +359,14 @@ describe('split panes in the app', () => {
     expect(rendererMocks.broadcastInputHandlers.get(firstId)!('not active')).toBe(false);
     expect(window.janet.terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: 'not active' }));
     fireEvent.click(recipients[1]);
+
+    const dialog = screen.getByRole('alertdialog', { name: 'Start broadcast input?' });
+    expect(dialog).toHaveTextContent('typing and paste');
+    expect(dialog).toHaveTextContent('multiline or destructive commands');
+    expect(dialog).toHaveTextContent('2 selected panes');
+    expect(rendererMocks.broadcastInputHandlers.get(firstId)!('still not active')).toBe(false);
+    expect(window.janet.terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: 'still not active' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Start broadcast input' }));
 
     expect(screen.getByRole('status', { name: /broadcast input active/i })).toHaveTextContent('Broadcast input active · 2 panes');
     expect(recipients[0].closest('.terminal-leaf')).toHaveClass('broadcast-selected');
@@ -379,17 +387,38 @@ describe('split panes in the app', () => {
     )).toBe(true);
   });
 
+  it('keeps broadcasting off and clears candidates when activation is cancelled', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    const firstId = (await screen.findAllByTestId(/terminal-/))[0].dataset.terminalId!;
+    screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).forEach((checkbox) => fireEvent.click(checkbox));
+
+    const dialog = screen.getByRole('alertdialog', { name: 'Start broadcast input?' });
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+    await waitFor(() => expect(cancel).toHaveFocus());
+    fireEvent.click(cancel);
+
+    expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
+    expect(screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).every(
+      (checkbox) => !(checkbox as HTMLInputElement).checked,
+    )).toBe(true);
+    expect(rendererMocks.broadcastInputHandlers.get(firstId)!('cancelled')).toBe(false);
+    expect(window.janet.terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: 'cancelled' }));
+  });
+
   it('cancels broadcast immediately with Escape and when a recipient exits', async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
     const terminals = await screen.findAllByTestId(/terminal-/);
     const [firstId, secondId] = terminals.map((terminal) => terminal.dataset.terminalId!);
     screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).forEach((checkbox) => fireEvent.click(checkbox));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Start broadcast input' }));
 
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
 
     screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).forEach((checkbox) => fireEvent.click(checkbox));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Start broadcast input' }));
     act(() => rendererMocks.terminalExitHandler!({ id: secondId, exitCode: 0, signal: 0 }));
     expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
     expect(rendererMocks.broadcastInputHandlers.get(firstId)!('must not fan out')).toBe(false);
@@ -400,6 +429,7 @@ describe('split panes in the app', () => {
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
     screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).forEach((checkbox) => fireEvent.click(checkbox));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Start broadcast input' }));
     expect(screen.getByRole('status', { name: /broadcast input active/i })).toBeInTheDocument();
 
     act(() => rendererMocks.verticalTabBarProps.onNewTab());
