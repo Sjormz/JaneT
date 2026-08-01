@@ -22,6 +22,7 @@ import type {
   WriteSSHTextFileRequest,
 } from '../shared/textFiles';
 import type { GitDiffRequest, GitDiffResult } from '../shared/gitDiff';
+import type { SSHLocalForwardStatus } from './ssh';
 
 export interface UpdateProgress {
   percent: number;
@@ -154,6 +155,14 @@ const api = {
     ipcRenderer.invoke('ssh:disconnect', params),
   sshListConnections: () =>
     ipcRenderer.invoke('ssh:listConnections'),
+  sshStartLocalForward: (params: {
+    sessionId: string;
+    request: { id: string; localPort: number; destinationHost: string; destinationPort: number };
+  }): Promise<SSHLocalForwardStatus> => ipcRenderer.invoke('ssh:startLocalForward', params),
+  sshStopLocalForward: (params: { sessionId: string; id: string }): Promise<void> =>
+    ipcRenderer.invoke('ssh:stopLocalForward', params),
+  sshListLocalForwards: (params: { sessionId: string }): Promise<SSHLocalForwardStatus[]> =>
+    ipcRenderer.invoke('ssh:listLocalForwards', params),
   onSSHConnectionClosed: (callback: (event: SSHConnectionClosedEvent) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, data: SSHConnectionClosedEvent) => callback(data);
     ipcRenderer.on('ssh:onConnectionClosed', handler);

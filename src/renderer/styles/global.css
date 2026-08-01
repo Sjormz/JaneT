@@ -890,6 +890,14 @@ html, body, #root {
 .workspace-startup-warning { color: var(--yellow); }
 .workspace-modal .workspace-add-btn { min-height: 40px; justify-content: center; border-style: solid; }
 .workspace-modal .connect-btn { min-height: 42px; margin-top: 2px; }
+.ssh-forward-modal { width: min(560px, 100%); }
+.ssh-forward-form { display: grid; grid-template-columns: 1fr 2fr 1fr auto; gap: 10px; align-items: end; }
+.ssh-forward-form label { display: grid; gap: 5px; color: var(--text-secondary); font-size: 11px; }
+.ssh-forward-form input { min-width: 0; padding: 8px; border: 1px solid var(--glass-border); border-radius: var(--radius-sm); background: var(--control-bg); color: var(--text-primary); }
+.ssh-forward-list { display: grid; gap: 8px; margin-top: 16px; }
+.ssh-forward-list p { color: var(--text-tertiary); font-size: 12px; }
+.ssh-forward-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px; border: 1px solid var(--glass-border); border-radius: var(--radius-sm); font-size: 12px; }
+.ssh-forward-row button { padding: 6px 10px; border: 1px solid var(--glass-border); border-radius: var(--radius-sm); background: transparent; color: var(--red); cursor: pointer; }
 
 .vtab-list {
   flex: 1;

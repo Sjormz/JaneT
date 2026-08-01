@@ -32,6 +32,7 @@ import {
   type WorkspacePrepareForCloseDecision,
 } from './workspaceLifecycle';
 import { NativeTerminalCapacity } from './terminalCapacity';
+import { registerSSHLocalForwardHandlers } from './sshLocalForwardIpc';
 
 let mainWindow: electron.BrowserWindow | null = null;
 let initializeUpdaterForWindow: ((window: electron.BrowserWindow) => void) | null = null;
@@ -505,6 +506,8 @@ function registerIpcHandlers() {
   handle('ssh:listConnections', () => {
     return sshManager.listConnections();
   });
+
+  registerSSHLocalForwardHandlers(handle, sshManager);
 
   // === File System IPC ===
   handle('fs:listDir', async (event, { dirPath, showHidden }) => {
