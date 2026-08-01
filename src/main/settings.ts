@@ -11,6 +11,12 @@ import {
   sanitizeStartupCommands,
 } from '../shared/startupCommands';
 import { normalizeSnippets, type Snippet } from '../shared/snippets';
+import {
+  cloneCommandHistory,
+  isValidCommandHistory,
+  normalizeCommandHistory,
+  type CommandHistoryEntry,
+} from '../shared/commandHistory';
 
 // Mirrors `SavedSession` in src/renderer/sessionRestore.ts. Duplicated as a
 // type-only contract because the main process cannot import the renderer
@@ -102,6 +108,7 @@ export interface AppSettings {
   sidebarSide: 'left' | 'right';
   keybindings: Record<string, string>;
   snippets: Snippet[];
+  commandHistory: CommandHistoryEntry[];
   sshProfiles: Array<{
     id: string;
     host: string;
@@ -197,6 +204,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   sidebarSide: 'right',
   keybindings: { ...DEFAULT_KEYBINDINGS },
   snippets: [],
+  commandHistory: [],
   sshProfiles: [],
   workspaceTabs: [],
   sshHostKeys: {},
@@ -221,6 +229,7 @@ export class SettingsManager {
       ...this.cache,
       keybindings: { ...this.cache.keybindings },
       snippets: this.cache.snippets.map((snippet) => ({ ...snippet })),
+      commandHistory: cloneCommandHistory(this.cache.commandHistory),
       sshProfiles: this.cache.sshProfiles.map((profile) => ({ ...profile })),
       workspaceTabs: this.cache.workspaceTabs
         .map(cloneWorkspaceTabPreset)
@@ -238,6 +247,9 @@ export class SettingsManager {
       ...updates,
       keybindings: updates.keybindings === undefined ? this.cache.keybindings : { ...updates.keybindings },
       snippets: updates.snippets === undefined ? this.cache.snippets : normalizeSnippets(updates.snippets),
+      commandHistory: updates.commandHistory === undefined
+        ? this.cache.commandHistory
+        : cloneCommandHistory(updates.commandHistory),
       sshProfiles: updates.sshProfiles === undefined
         ? this.cache.sshProfiles
         : updates.sshProfiles.map(({ password, privateKey, ...profile }) => profile.auth === 'password'
@@ -379,6 +391,7 @@ export class SettingsManager {
       ...settings,
       fontFamily: normalizeTerminalFontFamily(settings.fontFamily),
       snippets: normalizeSnippets(settings.snippets),
+      commandHistory: normalizeCommandHistory(settings.commandHistory),
       sshHostKeys: isStringRecord(settings.sshHostKeys) ? { ...settings.sshHostKeys } : {},
       sshProfiles: profiles.map((profile) => ({
         id: profile.id,
@@ -840,7 +853,7 @@ function hasUniqueSnippetIdentities(values: readonly unknown[]): boolean {
 function isValidSettingsUpdate(value: unknown): value is Partial<AppSettings> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const allowedKeys = new Set<keyof AppSettings>([
-    'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets',
+    'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets', 'commandHistory',
     'sshProfiles', 'workspaceTabs', 'gitWorktreeBaseDir',
     'gitWorktreeNameTemplate', 'session',
   ]);
@@ -859,6 +872,7 @@ function isValidSettingsUpdate(value: unknown): value is Partial<AppSettings> {
       && updates.snippets.length <= MAX_SETTINGS_COLLECTION_ITEMS
       && updates.snippets.every(isValidRuntimeSnippet)
       && hasUniqueSnippetIdentities(updates.snippets)))
+    && (updates.commandHistory === undefined || isValidCommandHistory(updates.commandHistory))
     && (updates.sshProfiles === undefined || (Array.isArray(updates.sshProfiles)
       && updates.sshProfiles.length <= MAX_SETTINGS_COLLECTION_ITEMS
       && updates.sshProfiles.every(isValidSshProfile)

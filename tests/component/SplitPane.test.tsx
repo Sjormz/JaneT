@@ -325,6 +325,23 @@ beforeEach(() => {
   };
 });
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+const semanticEvent = (command: string, output = 'private output'): SemanticCommandEvent => ({
+  command, output, exitCode: 0, startedAt: 10, completedAt: 20, durationMs: 10,
+});
+
+function historyUpdates() {
+  return vi.mocked(window.janet.setSettings).mock.calls
+    .map(([update]) => update as any)
+    .filter((update) => Array.isArray(update.commandHistory));
+}
+
 async function confirmPendingAction(name: RegExp) {
   const dialog = await screen.findByRole('alertdialog');
   await act(async () => {
@@ -472,6 +489,126 @@ describe('split panes in the app', () => {
     expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
     expect(screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i })).toHaveLength(1);
   });
+
+  it('serializes output-free history writes, publishes only successes, and rolls back a failed write', async () => {
+    const first = deferred();
+    const second = deferred();
+    vi.mocked(window.janet.setSettings).mockImplementation((update: any) => {
+      if (!update.commandHistory) return Promise.resolve();
+      return historyUpdates().length === 1 ? first.promise : second.promise;
+    });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(<App />);
+      const terminal = await screen.findByTestId(/terminal-/);
+      await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+      const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
+      act(() => { emit(semanticEvent('printf first', 'FIRST OUTPUT')); emit(semanticEvent('printf second', 'SECOND OUTPUT')); });
+
+      await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+      expect(JSON.stringify(historyUpdates()[0])).not.toMatch(/output|FIRST OUTPUT|SECOND OUTPUT/i);
+      act(() => rendererMocks.paletteActions.find((action) => action.id === 'command-history')!.handler());
+      expect(screen.getByRole('dialog', { name: 'Command history' })).not.toHaveTextContent('printf first');
+      expect(historyUpdates()).toHaveLength(1);
+
+      await act(async () => first.reject(new Error('disk full')));
+      await waitFor(() => expect(historyUpdates()).toHaveLength(2));
+      expect(historyUpdates()[1].commandHistory.map((item: any) => item.command)).toEqual(['printf second']);
+      expect(screen.getByRole('dialog', { name: 'Command history' })).not.toHaveTextContent('printf second');
+      await act(async () => second.resolve());
+      await waitFor(() => expect(screen.getByRole('dialog', { name: 'Command history' })).toHaveTextContent('printf second'));
+      expect(consoleError).toHaveBeenCalledWith('Failed to save command history:', expect.any(Error));
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('persists overlapping successful completions in callback order without loss', async () => {
+    const first = deferred();
+    vi.mocked(window.janet.setSettings).mockImplementation((update: any) => (
+      update.commandHistory && historyUpdates().length === 1 ? first.promise : Promise.resolve()
+    ));
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
+    act(() => { emit(semanticEvent('first')); emit(semanticEvent('second')); });
+    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+    expect(historyUpdates()[0].commandHistory.map((item: any) => item.command)).toEqual(['first']);
+
+    await act(async () => first.resolve());
+    await waitFor(() => expect(historyUpdates()).toHaveLength(2));
+    expect(historyUpdates()[1].commandHistory.map((item: any) => item.command)).toEqual(['second', 'first']);
+  });
+
+  it('resolves ownership and local context only when a queued completion persists', async () => {
+    const blocker = deferred();
+    vi.mocked(window.janet.setSettings).mockImplementation((update: any) => (
+      update.commandHistory && historyUpdates().length === 1 ? blocker.promise : Promise.resolve()
+    ));
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    const termId = terminal.dataset.terminalId!;
+    const emit = rendererMocks.semanticCommandHandlers.get(termId)!;
+    act(() => { emit(semanticEvent('first')); emit(semanticEvent('second')); });
+    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+
+    act(() => rendererMocks.cwdChangeHandlers.get(termId)!(termId, '/queued/cwd'));
+    await act(async () => blocker.resolve());
+    await waitFor(() => expect(historyUpdates()).toHaveLength(2));
+    expect(historyUpdates()[1].commandHistory[0]).toMatchObject({
+      command: 'second', context: { kind: 'local', cwd: '/queued/cwd' },
+    });
+  });
+
+  it('drops queued completions whose exact tab and terminal ownership was removed', async () => {
+    const blocker = deferred();
+    vi.mocked(window.janet.setSettings).mockImplementation((update: any) => (
+      update.commandHistory && historyUpdates().length === 1 ? blocker.promise : Promise.resolve()
+    ));
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
+    act(() => { emit(semanticEvent('first')); emit(semanticEvent('stale')); });
+    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    await confirmPendingAction(/^close tab$/i);
+    await act(async () => blocker.resolve());
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+    await act(async () => Promise.resolve());
+    expect(historyUpdates()).toHaveLength(1);
+  });
+
+  it('re-resolves the active focused terminal when history selection pastes without Enter', async () => {
+    const pasted = vi.fn();
+    window.addEventListener('janet:terminal-paste-request', pasted);
+    try {
+      render(<App />);
+      fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+      const terminals = await screen.findAllByTestId(/terminal-/);
+      const firstId = terminals[0].dataset.terminalId!;
+      const secondId = terminals[1].dataset.terminalId!;
+      act(() => rendererMocks.semanticCommandHandlers.get(firstId)!(
+        semanticEvent(`printf chosen${String.fromCharCode(13, 10)}`),
+      ));
+      await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+      fireEvent.focus(terminals[0]);
+      act(() => rendererMocks.paletteActions.find((action) => action.id === 'command-history')!.handler());
+      const dialog = await screen.findByRole('dialog', { name: 'Command history' });
+      fireEvent.focus(terminals[1]);
+      fireEvent.click(within(dialog).getByRole('option', { name: /printf chosen/ }));
+
+      expect(pasted).toHaveBeenCalledTimes(1);
+      expect((pasted.mock.calls[0][0] as CustomEvent).detail).toEqual({ termId: secondId, text: 'printf chosen' });
+      expect(window.janet.terminalWrite).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('janet:terminal-paste-request', pasted);
+    }
+  });
+
   it('shows an authoritative local terminal exit in its pane and tab', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
