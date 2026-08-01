@@ -21,7 +21,12 @@ export type KeybindingAction =
   | 'split-down'
   | 'close-pane'
   | 'rename-pane'
-  | 'rename-tab';
+  | 'rename-tab'
+  | 'previous-command'
+  | 'next-command'
+  | 'copy-command'
+  | 'copy-command-output'
+  | 'rerun-command';
 
 export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   'search-toggle': 'Search terminal output',
@@ -37,6 +42,11 @@ export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   'close-pane': 'Close current pane',
   'rename-pane': 'Rename current terminal',
   'rename-tab': 'Rename current tab',
+  'previous-command': 'Previous semantic command',
+  'next-command': 'Next semantic command',
+  'copy-command': 'Copy semantic command',
+  'copy-command-output': 'Copy semantic command output',
+  'rerun-command': 'Paste semantic command for rerun',
 };
 
 export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
@@ -53,6 +63,11 @@ export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'close-pane': 'Ctrl+Shift+W',
   'rename-pane': 'F2',
   'rename-tab': 'Ctrl+F2',
+  'previous-command': 'Ctrl+Shift+ArrowUp',
+  'next-command': 'Ctrl+Shift+ArrowDown',
+  'copy-command': 'Ctrl+Alt+C',
+  'copy-command-output': 'Ctrl+Alt+O',
+  'rerun-command': 'Ctrl+Alt+R',
 };
 
 /** Parse a shortcut string like "Ctrl+Shift+F" into a match object */

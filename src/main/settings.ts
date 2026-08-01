@@ -67,7 +67,12 @@ export type KeybindingAction =
   | 'split-down'
   | 'close-pane'
   | 'rename-pane'
-  | 'rename-tab';
+  | 'rename-tab'
+  | 'previous-command'
+  | 'next-command'
+  | 'copy-command'
+  | 'copy-command-output'
+  | 'rerun-command';
 
 export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'search-toggle': 'Ctrl+F',
@@ -83,6 +88,11 @@ export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'close-pane': 'Ctrl+Shift+W',
   'rename-pane': 'F2',
   'rename-tab': 'Ctrl+F2',
+  'previous-command': 'Ctrl+Shift+ArrowUp',
+  'next-command': 'Ctrl+Shift+ArrowDown',
+  'copy-command': 'Ctrl+Alt+C',
+  'copy-command-output': 'Ctrl+Alt+O',
+  'rerun-command': 'Ctrl+Alt+R',
 };
 
 export interface AppSettings {
