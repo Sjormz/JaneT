@@ -410,6 +410,58 @@ describe('SSHManager', () => {
     expect(manager.listConnections()).toEqual([]);
   });
 
+  it.each(['unexpected close', 'cleanup'] as const)(
+    'owns local-forward close failures during fire-and-forget %s teardown',
+    async (teardown) => {
+      mocks.connectMock.mockImplementation(function (this: MiniEmitter) { queueMicrotask(() => this.emit('ready')); });
+      const { SSHManager } = await loadSSHManager();
+      const manager = new SSHManager();
+      await manager.connect('forwarded', { host: 'target.internal', port: 22, auth: 'password' });
+      const connection = (manager as any).connections.get('forwarded');
+      const socket = { destroy: vi.fn() };
+      const close = vi.fn((callback: (error?: Error) => void) => {
+        queueMicrotask(() => callback(new Error('genuine close failure')));
+      });
+      connection.localForwards.set('failing', {
+        server: { close }, sockets: new Set([socket]), cancelStart: vi.fn(() => false),
+      });
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => unhandled.push(reason);
+      process.on('unhandledRejection', onUnhandled);
+
+      try {
+        if (teardown === 'unexpected close') mocks.lastClient?.emit('close');
+        else manager.cleanup();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        expect(unhandled).toEqual([]);
+        expect(close).toHaveBeenCalledOnce();
+        expect(socket.destroy).toHaveBeenCalledOnce();
+        expect(connection.localForwards.size).toBe(0);
+        expect(manager.listConnections()).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+    },
+  );
+
+  it('still surfaces a genuine local-forward close failure to an awaited stop', async () => {
+    mocks.connectMock.mockImplementation(function (this: MiniEmitter) { queueMicrotask(() => this.emit('ready')); });
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('forwarded', { host: 'target.internal', port: 22, auth: 'password' });
+    const connection = (manager as any).connections.get('forwarded');
+    connection.localForwards.set('failing', {
+      server: { close: (callback: (error?: Error) => void) => callback(new Error('genuine close failure')) },
+      sockets: new Set(),
+      cancelStart: vi.fn(() => false),
+    });
+
+    await expect(manager.stopLocalForward('forwarded', 'failing')).rejects.toThrow('genuine close failure');
+    expect(connection.localForwards.size).toBe(0);
+  });
+
   it('reserves a local-forward id before asynchronous listen completes', async () => {
     mocks.connectMock.mockImplementation(function (this: MiniEmitter) { queueMicrotask(() => this.emit('ready')); });
     const { SSHManager } = await loadSSHManager();

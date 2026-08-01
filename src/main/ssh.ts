@@ -961,7 +961,7 @@ export class SSHManager {
           try { shell.close(); } catch {}
         }
         connection.shells.clear();
-        this.closeLocalForwards(connection);
+        void this.closeLocalForwards(connection).catch(() => {});
         for (const routeClient of connection.routeClients) try { routeClient.end(); } catch {}
         this.connections.delete(id);
         return true;
@@ -1784,13 +1784,13 @@ export class SSHManager {
 
   cleanup(): void {
     for (const id of Array.from(this.routeAttempts.keys())) {
-      void this.disconnect(id);
+      void this.disconnect(id).catch(() => {});
     }
     for (const id of Array.from(this.pendingConnections.keys())) {
-      void this.disconnect(id);
+      void this.disconnect(id).catch(() => {});
     }
     this.connections.forEach((_, id) => {
-      void this.disconnect(id);
+      void this.disconnect(id).catch(() => {});
     });
     this.pendingStartupCommandHandles.clear();
     this.startupCommandLedger.clear();
