@@ -20,6 +20,7 @@ import {
   type AgentLifecycleEvent,
   type TerminalTransportStatus,
 } from '../terminalAwareness';
+import type { SemanticCommandEvent } from '../semanticCommands';
 
 interface SplitPaneProps {
   node: PaneNode;
@@ -29,6 +30,7 @@ interface SplitPaneProps {
   onTerminalReady: (termId: string) => void;
   onTerminalRemoved: (termId: string) => void;
   onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+  onSemanticCommand?: (tabId: string, termId: string, event: SemanticCommandEvent) => void;
   awarenessByTerminal?: Record<string, AgentAwareness>;
   transportByTerminal?: Record<string, TerminalTransportStatus>;
   onSplitPane: (leafId: string, direction: 'horizontal' | 'vertical') => void;
@@ -66,11 +68,13 @@ interface SplitPaneProps {
 /** Wraps a TerminalLeaf with split/close action buttons */
 function TerminalPaneLeaf({
   leaf,
+  tabId,
   tabType,
   sshSessionId,
   onTerminalReady,
   onTerminalRemoved,
   onAgentEvent,
+  onSemanticCommand,
   awareness,
   transport,
   onSplitRight,
@@ -97,11 +101,13 @@ function TerminalPaneLeaf({
   totalPaneCount,
 }: {
   leaf: TerminalLeaf;
+  tabId: string;
   tabType: 'local' | 'ssh';
   sshSessionId?: string;
   onTerminalReady: (id: string) => void;
   onTerminalRemoved: (id: string) => void;
   onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+  onSemanticCommand?: (tabId: string, termId: string, event: SemanticCommandEvent) => void;
   awareness?: AgentAwareness;
   transport?: TerminalTransportStatus;
   onSplitRight: () => void;
@@ -234,6 +240,7 @@ function TerminalPaneLeaf({
           onReady={onTerminalReady}
           onRemoved={onTerminalRemoved}
           onAgentEvent={onAgentEvent}
+          onSemanticCommand={(termId, event) => onSemanticCommand?.(tabId, termId, event)}
           themeName={themeName}
           fontSize={fontSize}
           fontFamily={fontFamily}
@@ -385,6 +392,7 @@ export default function SplitPane(props: SplitPaneProps) {
     onTerminalReady,
     onTerminalRemoved,
     onAgentEvent,
+    onSemanticCommand,
     awarenessByTerminal,
     transportByTerminal,
     onSplitPane,
@@ -415,11 +423,13 @@ export default function SplitPane(props: SplitPaneProps) {
     return (
       <TerminalPaneLeaf
         leaf={node}
+        tabId={tabId}
         tabType={tabType}
         sshSessionId={sshSessionId}
         onTerminalReady={onTerminalReady}
         onTerminalRemoved={onTerminalRemoved}
         onAgentEvent={onAgentEvent}
+        onSemanticCommand={onSemanticCommand}
         awareness={awarenessByTerminal?.[node.id]}
         transport={transportByTerminal?.[node.id]}
         onSplitRight={() => onSplitPane(node.id, 'vertical')}
@@ -463,6 +473,7 @@ export default function SplitPane(props: SplitPaneProps) {
             onTerminalReady={onTerminalReady}
             onTerminalRemoved={onTerminalRemoved}
             onAgentEvent={onAgentEvent}
+            onSemanticCommand={onSemanticCommand}
             awarenessByTerminal={awarenessByTerminal}
             transportByTerminal={transportByTerminal}
             onSplitPane={onSplitPane}
@@ -519,6 +530,7 @@ export default function SplitPane(props: SplitPaneProps) {
               onTerminalReady={onTerminalReady}
               onTerminalRemoved={onTerminalRemoved}
               onAgentEvent={onAgentEvent}
+              onSemanticCommand={onSemanticCommand}
               awarenessByTerminal={awarenessByTerminal}
               transportByTerminal={transportByTerminal}
               onSplitPane={onSplitPane}

@@ -106,6 +106,31 @@ class MockTerminal {
   selection = '';
   hasSelection = vi.fn(() => Boolean(this.selection));
   getSelection = vi.fn(() => this.selection);
+  bufferLines = ['$ one', '$ two'];
+  wrappedLines = new Set<number>();
+  markerLine = 0;
+  buffer = {
+    active: {
+      type: 'normal',
+      baseY: 0,
+      cursorY: 0,
+      cursorX: 0,
+      viewportY: 0,
+      getLine: (line: number) => this.bufferLines[line] === undefined
+        ? undefined
+        : {
+            isWrapped: this.wrappedLines.has(line),
+            translateToString: (trimRight?: boolean, start = 0, end?: number) => {
+              const value = this.bufferLines[line].slice(start, end);
+              return trimRight ? value.trimEnd() : value;
+            },
+          },
+    },
+  };
+  registerMarker = vi.fn(() => ({ line: this.markerLine, isDisposed: false, dispose: vi.fn() }));
+  registerDecoration = vi.fn(() => ({ dispose: vi.fn(), onRender: vi.fn() }));
+  scrollToLine = vi.fn();
+  scrollToBottom = vi.fn();
   rows = 24;
   cols = 80;
 
@@ -545,6 +570,81 @@ describe('TerminalPane SSH reinitialization', () => {
         type: 'keydown', key: 'c', altKey: false, ...modifiers, preventDefault: vi.fn(),
       })).toBe(true);
     }
+  });
+
+  it('handles semantic command navigation and safe copy shortcuts without shell input', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-commands" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+    const term = MockTerminal.instances.at(-1)!;
+    const osc = term.oscHandlers.get(133)!;
+    const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
+    for (const line of [0, 1]) {
+      term.markerLine = line;
+      term.buffer.active.cursorY = line;
+      term.buffer.active.cursorX = 2;
+      await osc('A'); await osc('B');
+      term.buffer.active.cursorX = 5;
+      await osc('C'); await osc('D;0');
+    }
+    term.buffer.active.viewportY = 2;
+
+    const event = (key: string) => ({
+      type: 'keydown', key, ctrlKey: true, shiftKey: true, altKey: false, metaKey: false,
+      preventDefault: vi.fn(),
+    });
+    expect(keyHandler(event('ArrowUp'))).toBe(false);
+    expect(term.scrollToLine).toHaveBeenLastCalledWith(1);
+    const copyEvent = (key: string) => ({
+      type: 'keydown', key, ctrlKey: true, shiftKey: false, altKey: true, metaKey: false,
+      preventDefault: vi.fn(),
+    });
+    expect(keyHandler(copyEvent('c'))).toBe(false);
+    expect(copyTerminalText).toHaveBeenLastCalledWith('two');
+    expect(keyHandler(copyEvent('o'))).toBe(true);
+    expect(terminalWrite).not.toHaveBeenCalled();
+  });
+
+  it('pastes the current semantic command for rerun without submitting it', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-rerun" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+    const term = MockTerminal.instances.at(-1)!;
+    const osc = term.oscHandlers.get(133)!;
+    term.buffer.active.cursorX = 2; await osc('A'); await osc('B');
+    term.buffer.active.cursorX = 5; await osc('C'); await osc('D;0');
+    term.buffer.active.viewportY = 1;
+    const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
+    keyHandler({ type: 'keydown', key: 'ArrowUp', ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, preventDefault: vi.fn() });
+
+    expect(keyHandler({ type: 'keydown', key: 'r', ctrlKey: true, shiftKey: false, altKey: true, metaKey: false, preventDefault: vi.fn() })).toBe(false);
+    expect(term.paste).toHaveBeenCalledOnce();
+    expect(term.paste).toHaveBeenCalledWith('one');
+  });
+
+  it('delivers semantic completions only to the current cached-pane listener', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const firstListener = vi.fn();
+    const secondListener = vi.fn();
+    const props = { termId: 'term-semantic-remount', tabType: 'local' as const, onReady: vi.fn(), onRemoved: vi.fn(), themeName: 'tokyo-night' };
+    const first = render(<KeybindingsProvider><TerminalPane {...props} onSemanticCommand={firstListener} /></KeybindingsProvider>);
+    const term = MockTerminal.instances.at(-1)!;
+    const osc = term.oscHandlers.get(133)!;
+    first.unmount();
+    render(<KeybindingsProvider><TerminalPane {...props} onSemanticCommand={secondListener} /></KeybindingsProvider>);
+
+    term.buffer.active.cursorX = 2; await osc('A'); await osc('B');
+    term.buffer.active.cursorX = 5; await osc('C'); await osc('D;0');
+
+    expect(firstListener).not.toHaveBeenCalled();
+    expect(secondListener).toHaveBeenCalledOnce();
+    expect(secondListener).toHaveBeenCalledWith('term-semantic-remount', expect.objectContaining({ command: 'one' }));
   });
 
   it('pastes a requested snippet into only its target terminal without adding Enter', async () => {

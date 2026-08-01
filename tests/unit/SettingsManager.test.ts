@@ -53,6 +53,21 @@ describe('SettingsManager', () => {
     expect(settings.sidebarSide).toBe('right');
     expect(settings.sshProfiles).toEqual([]);
     expect(settings.workspaceTabs).toEqual([]);
+    expect(settings.keybindings).toMatchObject({
+      'previous-command': 'Ctrl+Shift+ArrowUp',
+      'next-command': 'Ctrl+Shift+ArrowDown',
+      'copy-command': 'Ctrl+Alt+C',
+      'copy-command-output': 'Ctrl+Alt+O',
+      'rerun-command': 'Ctrl+Alt+R',
+    });
+  });
+
+  it('round-trips a configured semantic rerun shortcut', async () => {
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    expect(manager.set({
+      keybindings: { ...manager.get().keybindings, 'rerun-command': 'Alt+R' },
+    }).keybindings['rerun-command']).toBe('Alt+R');
   });
 
   it('updates settings partially', async () => {
