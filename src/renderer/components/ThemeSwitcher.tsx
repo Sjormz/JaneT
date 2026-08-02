@@ -101,11 +101,11 @@ export default function ThemeSwitcher({
         </div>
       </div>
       <div className="theme-section notification-settings">
-        <label>
+        <label className="notification-toggle">
           <input type="checkbox" checked={notificationsEnabled} onChange={(event) => onNotificationsEnabledChange(event.currentTarget.checked)} />
           Notify when long commands finish while JaneT is unfocused
         </label>
-        <label htmlFor="notification-threshold">Notification threshold (seconds)</label>
+        <label className="notification-threshold-label" htmlFor="notification-threshold">Notification threshold (seconds)</label>
         <input id="notification-threshold" type="number" min={1} max={86_400} step={1} value={notificationThresholdSeconds} disabled={!notificationsEnabled} onChange={(event) => onNotificationThresholdSecondsChange(Number(event.currentTarget.value))} />
       </div>
     </div>

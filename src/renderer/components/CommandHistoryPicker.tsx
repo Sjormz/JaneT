@@ -38,13 +38,13 @@ export default function CommandHistoryPicker({ visible, entries, onClose, onSele
   return <div className="snippet-picker-overlay" role="presentation">
     <div ref={panelRef} className="snippet-picker" role="dialog" aria-modal="true" aria-label="Command history">
       <div className="snippet-picker-heading"><h2>Command history</h2></div>
-      <div className="snippet-search-shell">
-        <input ref={searchRef} role="combobox" aria-label="Search command history" aria-controls="command-history-list" aria-expanded="true" aria-activedescendant={filtered[selected] ? `command-history-${filtered[selected].id}` : undefined} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={keyDown} />
-        <label>Context <select value={context} onChange={(e) => setContext(e.target.value)}><option value="all">All</option><option value="local">Local</option><option value="ssh">SSH</option></select></label>
-        <label>Outcome <select value={outcome} onChange={(e) => setOutcome(e.target.value)}><option value="all">All</option><option value="success">Success</option><option value="failure">Failure</option></select></label>
+      <div className="snippet-search-shell command-history-filters">
+        <input className="command-history-search" ref={searchRef} role="combobox" aria-label="Search command history" aria-controls="command-history-list" aria-expanded="true" aria-activedescendant={filtered[selected] ? `command-history-${filtered[selected].id}` : undefined} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={keyDown} />
+        <label className="command-history-filter">Context <select value={context} onChange={(e) => setContext(e.target.value)}><option value="all">All</option><option value="local">Local</option><option value="ssh">SSH</option></select></label>
+        <label className="command-history-filter">Outcome <select value={outcome} onChange={(e) => setOutcome(e.target.value)}><option value="all">All</option><option value="success">Success</option><option value="failure">Failure</option></select></label>
       </div>
-      <div id="command-history-list" role="listbox">
-        {filtered.map((entry, index) => <button id={`command-history-${entry.id}`} role="option" aria-selected={index === selected} key={entry.id} onMouseEnter={() => setSelected(index)} onClick={() => choose(entry)}>
+      <div id="command-history-list" className="command-history-list" role="listbox">
+        {filtered.map((entry, index) => <button className="command-history-item" id={`command-history-${entry.id}`} role="option" aria-selected={index === selected} key={entry.id} onMouseEnter={() => setSelected(index)} onClick={() => choose(entry)}>
           <span>{entry.command}</span><small>{commandHistoryContextLabel(entry.context)}</small>
         </button>)}
       </div>

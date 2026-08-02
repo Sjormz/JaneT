@@ -19,6 +19,10 @@ function promptSegment(output: string, promptIndex: number): string {
   return output.split(OSC_B)[promptIndex] ?? '';
 }
 
+function stripOsc133(output: string): string {
+  return output.replace(/\x1b\]133;[^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
+}
+
 function runPromptSequence(
   executable: string,
   args: string[],
@@ -242,7 +246,7 @@ describe('buildShellInit', () => {
       expect(init).toMatch(/\\033\]7/);
     });
 
-    it.skipIf(process.platform === 'win32')('keeps every array prompt hook before readiness', () => {
+    it.skipIf(!existsSync(bash))('keeps every array prompt hook before readiness', () => {
       const script = [
         'events=()',
         'first_hook() { events+=(first); }',
@@ -255,7 +259,7 @@ describe('buildShellInit', () => {
         'printf %s "${events[*]}"',
       ].join('\n');
 
-      expect(execFileSync('/bin/bash', ['--noprofile', '--norc', '-c', script], { encoding: 'utf8' }))
+      expect(stripOsc133(execFileSync(bash, ['--noprofile', '--norc', '-c', script], { encoding: 'utf8' })))
         .toBe('cwd first second ready');
     });
 
@@ -303,7 +307,7 @@ describe('buildShellInit', () => {
       }
     }, 10_000);
 
-    it.skipIf(process.platform === 'win32')('accepts a scalar prompt hook with a trailing separator', () => {
+    it.skipIf(!existsSync(bash))('accepts a scalar prompt hook with a trailing separator', () => {
       const script = [
         'events=()',
         'first_hook() { events+=(first); }',
@@ -315,7 +319,7 @@ describe('buildShellInit', () => {
         'printf %s "${events[*]}"',
       ].join('\n');
 
-      expect(execFileSync('/bin/bash', ['--noprofile', '--norc', '-c', script], { encoding: 'utf8' }))
+      expect(stripOsc133(execFileSync(bash, ['--noprofile', '--norc', '-c', script], { encoding: 'utf8' })))
         .toBe('cwd first ready');
     });
 

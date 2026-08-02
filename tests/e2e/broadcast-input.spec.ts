@@ -61,6 +61,12 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
     const status = page.getByRole('status', { name: /broadcast input active/i });
     await expect(status).toContainText('Broadcast input active · 2 panes');
     await expect(page.locator('.terminal-leaf.broadcast-selected')).toHaveCount(2);
+    const terminalAreaBox = await page.locator('.terminal-area').boundingBox();
+    const statusBox = await status.boundingBox();
+    expect(terminalAreaBox).not.toBeNull();
+    expect(statusBox).not.toBeNull();
+    expect(Math.abs(statusBox!.width - terminalAreaBox!.width)).toBeLessThanOrEqual(1);
+    expect(statusBox!.height).toBeLessThan(50);
 
     await terminals.nth(0).locator('.xterm-helper-textarea').focus();
     await page.keyboard.type(appendCommand(first));
