@@ -1237,6 +1237,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     const cancelOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
+      event.stopPropagation();
       setBroadcastArmed(false);
       setBroadcastRecipientIds(new Set());
     };

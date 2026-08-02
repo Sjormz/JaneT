@@ -466,8 +466,11 @@ describe('split panes in the app', () => {
     screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).forEach((checkbox) => fireEvent.click(checkbox));
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Start broadcast input' }));
 
-    fireEvent.keyDown(window, { key: 'Escape' });
+    const terminalKeyDown = vi.fn();
+    terminals[0].addEventListener('keydown', terminalKeyDown);
+    fireEvent.keyDown(terminals[0], { key: 'Escape' });
     expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
+    expect(terminalKeyDown).not.toHaveBeenCalled();
 
     screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).forEach((checkbox) => fireEvent.click(checkbox));
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Start broadcast input' }));

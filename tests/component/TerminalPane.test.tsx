@@ -457,6 +457,9 @@ describe('TerminalPane SSH reinitialization', () => {
     };
     const encoded = Buffer.from(JSON.stringify(event)).toString('base64url');
 
+    expect(MockTerminal.instances[0].textarea).not.toHaveAttribute('data-shell-ready');
+    expect(await handler('janet-ready')).toBe(true);
+    expect(MockTerminal.instances[0].textarea).toHaveAttribute('data-shell-ready', 'true');
     expect(await handler(`janet-agent;hermes;${encoded}`)).toBe(true);
     expect(onAgentEvent).toHaveBeenCalledWith('term-agent', {
       provider: 'hermes',

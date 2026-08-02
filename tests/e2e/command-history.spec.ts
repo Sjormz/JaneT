@@ -60,6 +60,7 @@ test('persists real command metadata and history selection pastes without execut
     await page.waitForLoadState('domcontentloaded');
     const terminal = page.locator('.terminal-container');
     await expect(terminal).toBeVisible({ timeout: 15_000 });
+    await expect(terminal.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true', { timeout: 15_000 });
     await terminal.click();
     await page.keyboard.type(command, { delay: 5 });
     await page.keyboard.press('Enter');

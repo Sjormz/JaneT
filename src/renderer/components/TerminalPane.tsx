@@ -516,6 +516,10 @@ export default function TerminalPane({
     const kittyGraphics = tabType === 'local' ? createKittyGraphicsLayer(term) : null;
     if (kittyGraphics) lifetimeCleanup.push(kittyGraphics);
     lifetimeCleanup.push(term.parser.registerOscHandler(777, (data) => {
+      if (data === 'janet-ready') {
+        term.textarea?.setAttribute('data-shell-ready', 'true');
+        return true;
+      }
       const decoded = decodeAgentOsc(data);
       if (!decoded.recognized) return false;
       if (decoded.event) terminalPaneCache.get(termId)?.agentEventListener?.(termId, decoded.event);

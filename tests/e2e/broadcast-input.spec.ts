@@ -46,9 +46,8 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
     await expect(terminals).toHaveCount(1);
     await page.getByRole('button', { name: 'Split pane right' }).click();
     await expect(terminals).toHaveCount(2);
-    await expect.poll(async () => terminals.evaluateAll((elements) => (
-      elements.every((element) => (element.querySelector('.xterm-rows')?.textContent ?? '').length > 0)
-    )), { timeout: 15_000 }).toBe(true);
+    await expect(terminals.locator('.xterm-helper-textarea[data-shell-ready="true"]'))
+      .toHaveCount(2, { timeout: 15_000 });
 
     const recipients = page.locator('.broadcast-recipient');
     await expect(recipients).toHaveCount(2);
