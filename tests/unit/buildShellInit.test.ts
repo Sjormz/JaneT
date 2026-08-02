@@ -226,7 +226,7 @@ describe('buildShellInit', () => {
       expect(init).toContain('trap -p DEBUG');
       expect(init).toContain("printf '\\033]133;C\\033\\\\'");
       expect(init).toContain("printf '\\033]133;D;%s\\033\\\\'");
-      expect(init).toContain("PS1=\"\\[\\033]133;A\\033\\\\\\]${PS1}\\[\\033]133;B\\033\\\\\\]\"");
+      expect(init).toContain("PS1='\\[\\033]133;A\\033\\\\\\]'\"${PS1}\"'\\[\\033]133;B\\033\\\\\\]'");
     });
     it('returns a PROMPT_COMMAND snippet for bash', () => {
       const init = buildShellInit('bash');
@@ -357,6 +357,7 @@ describe('buildShellInit', () => {
         const blank = promptSegment(output, 1);
         const failure = promptSegment(output, 2);
         const success = promptSegment(output, 3);
+        expect(stripOsc133(startup)).not.toContain(']<PROMPT>');
         expect(startup.indexOf(OSC_A)).toBeLessThan(startup.indexOf('<PROMPT>'));
         expect(startup).toContain('<ONE:0>');
         expect(startup).toContain('<TWO:0>');

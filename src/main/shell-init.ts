@@ -142,7 +142,7 @@ export function buildShellInit(shell: string): string {
       "}",
       "unset PROMPT_COMMAND",
       "PROMPT_COMMAND=__jt_prompt_command",
-      "PS1=\"\\[\\033]133;A\\033\\\\\\]${PS1}\\[\\033]133;B\\033\\\\\\]\"",
+      "PS1='\\[\\033]133;A\\033\\\\\\]'\"${PS1}\"'\\[\\033]133;B\\033\\\\\\]'",
       // `type -t` is `file` only when no alias/function shadows the binary.
       "if [ \"$(type -t hermes 2>/dev/null)\" = file ]; then",
       // The `function name` form prevents an existing alias from expanding
