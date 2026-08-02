@@ -457,9 +457,6 @@ describe('TerminalPane SSH reinitialization', () => {
     };
     const encoded = Buffer.from(JSON.stringify(event)).toString('base64url');
 
-    expect(MockTerminal.instances[0].textarea).not.toHaveAttribute('data-shell-ready');
-    expect(await handler('janet-ready')).toBe(true);
-    expect(MockTerminal.instances[0].textarea).toHaveAttribute('data-shell-ready', 'true');
     expect(await handler(`janet-agent;hermes;${encoded}`)).toBe(true);
     expect(onAgentEvent).toHaveBeenCalledWith('term-agent', {
       provider: 'hermes',
@@ -470,6 +467,35 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(onAgentEvent).toHaveBeenCalledOnce();
     expect(await handler('notify;Build finished')).toBe(false);
     expect(onAgentEvent).toHaveBeenCalledOnce();
+  });
+
+  it('marks the shell ready only after startup and prompt markers in either order', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const view = render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-ready" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    let term = MockTerminal.instances[0];
+    expect(await term.oscHandlers.get(777)!('janet-ready')).toBe(true);
+    expect(term.textarea).not.toHaveAttribute('data-shell-ready');
+    expect(await term.oscHandlers.get(133)!('A')).toBe(true);
+    expect(await term.oscHandlers.get(133)!('B')).toBe(true);
+    expect(term.textarea).toHaveAttribute('data-shell-ready', 'true');
+
+    view.unmount();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-ready-reversed" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+    term = MockTerminal.instances.at(-1)!;
+    expect(await term.oscHandlers.get(133)!('A')).toBe(true);
+    expect(await term.oscHandlers.get(133)!('B')).toBe(true);
+    expect(term.textarea).not.toHaveAttribute('data-shell-ready');
+    expect(await term.oscHandlers.get(777)!('janet-ready')).toBe(true);
+    expect(term.textarea).toHaveAttribute('data-shell-ready', 'true');
   });
 
   it('enables result tracking and fully clears terminal search state', async () => {

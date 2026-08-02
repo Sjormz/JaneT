@@ -511,13 +511,25 @@ export default function TerminalPane({
       term,
       (event) => semanticCommandListener.current?.(termId, event),
     );
-    lifetimeCleanup.push(term.parser.registerOscHandler(133, (data) => semanticCommands.handleOsc(data)));
+    let startupMarked = false;
+    let promptMarked = false;
+    const markShellReady = () => {
+      if (startupMarked && promptMarked) term.textarea?.setAttribute('data-shell-ready', 'true');
+    };
+    lifetimeCleanup.push(term.parser.registerOscHandler(133, (data) => {
+      if (data === 'B') {
+        promptMarked = true;
+        markShellReady();
+      }
+      return semanticCommands.handleOsc(data);
+    }));
     lifetimeCleanup.push(semanticCommands);
     const kittyGraphics = tabType === 'local' ? createKittyGraphicsLayer(term) : null;
     if (kittyGraphics) lifetimeCleanup.push(kittyGraphics);
     lifetimeCleanup.push(term.parser.registerOscHandler(777, (data) => {
       if (data === 'janet-ready') {
-        term.textarea?.setAttribute('data-shell-ready', 'true');
+        startupMarked = true;
+        markShellReady();
         return true;
       }
       const decoded = decodeAgentOsc(data);
