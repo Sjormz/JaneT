@@ -22,6 +22,8 @@ import type {
   WriteSSHTextFileRequest,
 } from '../shared/textFiles';
 import type { GitDiffRequest, GitDiffResult } from '../shared/gitDiff';
+import type { SSHLocalForwardStatus } from './ssh';
+import type { CommandNotificationPayload } from '../shared/commandNotifications';
 
 export interface UpdateProgress {
   percent: number;
@@ -125,7 +127,7 @@ const api = {
   },
 
   // SSH
-  sshConnect: (params: { id: string; host: string; port: number; username?: string; auth: string; password?: string; privateKey?: string }) =>
+  sshConnect: (params: { id: string; host: string; port: number; username?: string; auth: string; password?: string; privateKey?: string; jumpHost?: { host: string; port: number; username?: string; auth: string; password?: string; privateKey?: string } }) =>
     ipcRenderer.invoke('ssh:connect', params),
   sshCreateShell: (params: {
     id: string;
@@ -154,6 +156,14 @@ const api = {
     ipcRenderer.invoke('ssh:disconnect', params),
   sshListConnections: () =>
     ipcRenderer.invoke('ssh:listConnections'),
+  sshStartLocalForward: (params: {
+    sessionId: string;
+    request: { id: string; localPort: number; destinationHost: string; destinationPort: number };
+  }): Promise<SSHLocalForwardStatus> => ipcRenderer.invoke('ssh:startLocalForward', params),
+  sshStopLocalForward: (params: { sessionId: string; id: string }): Promise<void> =>
+    ipcRenderer.invoke('ssh:stopLocalForward', params),
+  sshListLocalForwards: (params: { sessionId: string }): Promise<SSHLocalForwardStatus[]> =>
+    ipcRenderer.invoke('ssh:listLocalForwards', params),
   onSSHConnectionClosed: (callback: (event: SSHConnectionClosedEvent) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, data: SSHConnectionClosedEvent) => callback(data);
     ipcRenderer.on('ssh:onConnectionClosed', handler);
@@ -219,6 +229,8 @@ const api = {
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (updates: Record<string, unknown>) => ipcRenderer.invoke('settings:set', updates),
+  notifyCommandCompleted: (payload: CommandNotificationPayload): Promise<boolean> =>
+    ipcRenderer.invoke('notifications:command-completed', payload),
 
   // App
   getPlatform: () => ipcRenderer.invoke('app:getPlatform'),

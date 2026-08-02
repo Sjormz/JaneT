@@ -17,6 +17,10 @@ interface ThemeSwitcherProps {
   onFontSizeChange: (size: number) => void;
   sidebarSide: 'left' | 'right';
   onSidebarSideChange: (side: 'left' | 'right') => void;
+  notificationsEnabled: boolean;
+  notificationThresholdSeconds: number;
+  onNotificationsEnabledChange: (enabled: boolean) => void;
+  onNotificationThresholdSecondsChange: (seconds: number) => void;
 }
 
 export default function ThemeSwitcher({
@@ -26,6 +30,10 @@ export default function ThemeSwitcher({
   onFontSizeChange,
   sidebarSide,
   onSidebarSideChange,
+  notificationsEnabled,
+  notificationThresholdSeconds,
+  onNotificationsEnabledChange,
+  onNotificationThresholdSecondsChange,
 }: ThemeSwitcherProps) {
   return (
     <div className="theme-switcher">
@@ -91,6 +99,14 @@ export default function ThemeSwitcher({
             Right
           </button>
         </div>
+      </div>
+      <div className="theme-section notification-settings">
+        <label className="notification-toggle">
+          <input type="checkbox" checked={notificationsEnabled} onChange={(event) => onNotificationsEnabledChange(event.currentTarget.checked)} />
+          Notify when long commands finish while JaneT is unfocused
+        </label>
+        <label className="notification-threshold-label" htmlFor="notification-threshold">Notification threshold (seconds)</label>
+        <input id="notification-threshold" type="number" min={1} max={86_400} step={1} value={notificationThresholdSeconds} disabled={!notificationsEnabled} onChange={(event) => onNotificationThresholdSecondsChange(Number(event.currentTarget.value))} />
       </div>
     </div>
   );

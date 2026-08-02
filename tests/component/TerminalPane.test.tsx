@@ -77,6 +77,7 @@ class MockTerminal {
   };
   unicode = { activeVersion: '6' };
   dataHandler: ((data: string) => void) | null = null;
+  binaryHandler: ((data: string) => void) | null = null;
   onData = vi.fn((handler: (data: string) => void) => {
     this.dataHandler = handler;
     return {
@@ -85,7 +86,10 @@ class MockTerminal {
       }),
     };
   });
-  onBinary = vi.fn(() => ({ dispose: vi.fn() }));
+  onBinary = vi.fn((handler: (data: string) => void) => {
+    this.binaryHandler = handler;
+    return { dispose: vi.fn(() => { if (this.binaryHandler === handler) this.binaryHandler = null; }) };
+  });
   onKey = vi.fn(() => ({ dispose: vi.fn() }));
   loadAddon = vi.fn((addon: { activate?: (terminal: MockTerminal) => void }) => addon.activate?.(this));
   open = vi.fn();
@@ -106,6 +110,31 @@ class MockTerminal {
   selection = '';
   hasSelection = vi.fn(() => Boolean(this.selection));
   getSelection = vi.fn(() => this.selection);
+  bufferLines = ['$ one', '$ two'];
+  wrappedLines = new Set<number>();
+  markerLine = 0;
+  buffer = {
+    active: {
+      type: 'normal',
+      baseY: 0,
+      cursorY: 0,
+      cursorX: 0,
+      viewportY: 0,
+      getLine: (line: number) => this.bufferLines[line] === undefined
+        ? undefined
+        : {
+            isWrapped: this.wrappedLines.has(line),
+            translateToString: (trimRight?: boolean, start = 0, end?: number) => {
+              const value = this.bufferLines[line].slice(start, end);
+              return trimRight ? value.trimEnd() : value;
+            },
+          },
+    },
+  };
+  registerMarker = vi.fn(() => ({ line: this.markerLine, isDisposed: false, dispose: vi.fn() }));
+  registerDecoration = vi.fn(() => ({ dispose: vi.fn(), onRender: vi.fn() }));
+  scrollToLine = vi.fn();
+  scrollToBottom = vi.fn();
   rows = 24;
   cols = 80;
 
@@ -440,6 +469,35 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(onAgentEvent).toHaveBeenCalledOnce();
   });
 
+  it('marks the shell ready only after startup and prompt markers in either order', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const view = render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-ready" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    let term = MockTerminal.instances[0];
+    expect(await term.oscHandlers.get(777)!('janet-ready')).toBe(true);
+    expect(term.textarea).not.toHaveAttribute('data-shell-ready');
+    expect(await term.oscHandlers.get(133)!('A')).toBe(true);
+    expect(await term.oscHandlers.get(133)!('B')).toBe(true);
+    expect(term.textarea).toHaveAttribute('data-shell-ready', 'true');
+
+    view.unmount();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-ready-reversed" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+    term = MockTerminal.instances.at(-1)!;
+    expect(await term.oscHandlers.get(133)!('A')).toBe(true);
+    expect(await term.oscHandlers.get(133)!('B')).toBe(true);
+    expect(term.textarea).not.toHaveAttribute('data-shell-ready');
+    expect(await term.oscHandlers.get(777)!('janet-ready')).toBe(true);
+    expect(term.textarea).toHaveAttribute('data-shell-ready', 'true');
+  });
+
   it('enables result tracking and fully clears terminal search state', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     render(
@@ -545,6 +603,81 @@ describe('TerminalPane SSH reinitialization', () => {
         type: 'keydown', key: 'c', altKey: false, ...modifiers, preventDefault: vi.fn(),
       })).toBe(true);
     }
+  });
+
+  it('handles semantic command navigation and safe copy shortcuts without shell input', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-commands" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+    const term = MockTerminal.instances.at(-1)!;
+    const osc = term.oscHandlers.get(133)!;
+    const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
+    for (const line of [0, 1]) {
+      term.markerLine = line;
+      term.buffer.active.cursorY = line;
+      term.buffer.active.cursorX = 2;
+      await osc('A'); await osc('B');
+      term.buffer.active.cursorX = 5;
+      await osc('C'); await osc('D;0');
+    }
+    term.buffer.active.viewportY = 2;
+
+    const event = (key: string) => ({
+      type: 'keydown', key, ctrlKey: true, shiftKey: true, altKey: false, metaKey: false,
+      preventDefault: vi.fn(),
+    });
+    expect(keyHandler(event('ArrowUp'))).toBe(false);
+    expect(term.scrollToLine).toHaveBeenLastCalledWith(1);
+    const copyEvent = (key: string) => ({
+      type: 'keydown', key, ctrlKey: true, shiftKey: false, altKey: true, metaKey: false,
+      preventDefault: vi.fn(),
+    });
+    expect(keyHandler(copyEvent('c'))).toBe(false);
+    expect(copyTerminalText).toHaveBeenLastCalledWith('two');
+    expect(keyHandler(copyEvent('o'))).toBe(true);
+    expect(terminalWrite).not.toHaveBeenCalled();
+  });
+
+  it('pastes the current semantic command for rerun without submitting it', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-rerun" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+    const term = MockTerminal.instances.at(-1)!;
+    const osc = term.oscHandlers.get(133)!;
+    term.buffer.active.cursorX = 2; await osc('A'); await osc('B');
+    term.buffer.active.cursorX = 5; await osc('C'); await osc('D;0');
+    term.buffer.active.viewportY = 1;
+    const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
+    keyHandler({ type: 'keydown', key: 'ArrowUp', ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, preventDefault: vi.fn() });
+
+    expect(keyHandler({ type: 'keydown', key: 'r', ctrlKey: true, shiftKey: false, altKey: true, metaKey: false, preventDefault: vi.fn() })).toBe(false);
+    expect(term.paste).toHaveBeenCalledOnce();
+    expect(term.paste).toHaveBeenCalledWith('one');
+  });
+
+  it('delivers semantic completions only to the current cached-pane listener', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const firstListener = vi.fn();
+    const secondListener = vi.fn();
+    const props = { termId: 'term-semantic-remount', tabType: 'local' as const, onReady: vi.fn(), onRemoved: vi.fn(), themeName: 'tokyo-night' };
+    const first = render(<KeybindingsProvider><TerminalPane {...props} onSemanticCommand={firstListener} /></KeybindingsProvider>);
+    const term = MockTerminal.instances.at(-1)!;
+    const osc = term.oscHandlers.get(133)!;
+    first.unmount();
+    render(<KeybindingsProvider><TerminalPane {...props} onSemanticCommand={secondListener} /></KeybindingsProvider>);
+
+    term.buffer.active.cursorX = 2; await osc('A'); await osc('B');
+    term.buffer.active.cursorX = 5; await osc('C'); await osc('D;0');
+
+    expect(firstListener).not.toHaveBeenCalled();
+    expect(secondListener).toHaveBeenCalledOnce();
+    expect(secondListener).toHaveBeenCalledWith('term-semantic-remount', expect.objectContaining({ command: 'one' }));
   });
 
   it('pastes a requested snippet into only its target terminal without adding Enter', async () => {
@@ -893,7 +1026,127 @@ describe('TerminalPane SSH reinitialization', () => {
   });
 });
 
-describe('TerminalPane path drops', () => {
+describe('TerminalPane', () => {
+  it('offers marked user input to broadcast while automatic replies keep the normal path', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const onBroadcastInput = vi.fn(() => true);
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-broadcast"
+          tabType="local"
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          onBroadcastInput={onBroadcastInput}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+    const terminal = MockTerminal.instances.at(-1)!;
+
+    terminal.dataHandler?.('\u001b[0n');
+    expect(onBroadcastInput).not.toHaveBeenCalled();
+    expect(terminalWrite).toHaveBeenCalledWith({ id: 'term-broadcast', data: '\u001b[0n', userInput: false });
+
+    const markUserInput = (terminal.onKey as any).mock.calls[0][0] as () => void;
+    markUserInput();
+    terminal.dataHandler?.('x');
+    expect(onBroadcastInput).toHaveBeenCalledWith('term-broadcast', 'x');
+    expect(terminalWrite).not.toHaveBeenCalledWith({ id: 'term-broadcast', data: 'x', userInput: true });
+  });
+
+  it('offers user paste and binary input to broadcast exactly once', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const onBroadcastInput = vi.fn(() => true);
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-broadcast-binary"
+          tabType="local"
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          onBroadcastInput={onBroadcastInput}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+    const terminal = MockTerminal.instances.at(-1)!;
+
+    MockTerminal.nativePasteData = 'pasted';
+    fireEvent.paste(terminal.textarea);
+    expect(onBroadcastInput).toHaveBeenCalledWith('term-broadcast-binary', 'pasted');
+
+    fireEvent.input(terminal.textarea);
+    terminal.binaryHandler?.('\u0000');
+    expect(onBroadcastInput).toHaveBeenCalledWith('term-broadcast-binary', '\u0000', true);
+    expect(onBroadcastInput).toHaveBeenCalledTimes(2);
+    expect(terminalWrite).not.toHaveBeenCalled();
+    expect(terminalWriteBinary).not.toHaveBeenCalled();
+  });
+
+  it('preserves broadcast handling through StrictMode effect replay from a cold cache', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const onBroadcastInput = vi.fn(() => true);
+    const onRemoved = vi.fn();
+    const onReady = vi.fn(() => {
+      if (!onRemoved.mock.calls.length) return;
+      const terminal = MockTerminal.instances.at(-1)!;
+      const markUserInput = (terminal.onKey as any).mock.calls.at(-1)[0] as () => void;
+      markUserInput();
+      terminal.dataHandler?.('x');
+      markUserInput();
+      terminal.binaryHandler?.('\u0000');
+    });
+    render(
+      <React.StrictMode>
+        <KeybindingsProvider>
+          <TerminalPane
+            termId="term-broadcast-strict"
+            tabType="ssh"
+            sshSessionId="ssh-broadcast-strict"
+            onReady={onReady}
+            onRemoved={onRemoved}
+            onBroadcastInput={onBroadcastInput}
+            themeName="tokyo-night"
+          />
+        </KeybindingsProvider>
+      </React.StrictMode>,
+    );
+    await waitFor(() => expect(onRemoved).toHaveBeenCalledOnce());
+    expect(onBroadcastInput).toHaveBeenCalledTimes(2);
+    expect(onBroadcastInput).toHaveBeenNthCalledWith(1, 'term-broadcast-strict', 'x');
+    expect(onBroadcastInput).toHaveBeenLastCalledWith('term-broadcast-strict', '\u0000', true);
+    expect(sshWriteShell).not.toHaveBeenCalled();
+    expect(sshWriteShellBinary).not.toHaveBeenCalled();
+  });
+
+  it('routes marked text and binary input to the current callback after a cached remount', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const callbackA = vi.fn(() => true);
+    const callbackB = vi.fn(() => true);
+    const props = {
+      termId: 'term-broadcast-remount', tabType: 'local' as const,
+      onReady: vi.fn(), onRemoved: vi.fn(), themeName: 'tokyo-night',
+    };
+    const first = render(
+      <KeybindingsProvider><TerminalPane {...props} onBroadcastInput={callbackA} /></KeybindingsProvider>,
+    );
+    const terminal = MockTerminal.instances.at(-1)!;
+
+    first.unmount();
+    render(<KeybindingsProvider><TerminalPane {...props} onBroadcastInput={callbackB} /></KeybindingsProvider>);
+
+    const markUserInput = (terminal.onKey as any).mock.calls.at(-1)[0] as () => void;
+    markUserInput();
+    terminal.dataHandler?.('x');
+    markUserInput();
+    terminal.binaryHandler?.('\u0000');
+
+    expect(callbackA).not.toHaveBeenCalled();
+    expect(callbackB).toHaveBeenNthCalledWith(1, 'term-broadcast-remount', 'x');
+    expect(callbackB).toHaveBeenNthCalledWith(2, 'term-broadcast-remount', '\u0000', true);
+  });
+
   it('pastes a compatible local path through xterm and marks it as user input', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     render(

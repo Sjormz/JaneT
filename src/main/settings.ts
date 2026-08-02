@@ -11,6 +11,12 @@ import {
   sanitizeStartupCommands,
 } from '../shared/startupCommands';
 import { normalizeSnippets, type Snippet } from '../shared/snippets';
+import {
+  cloneCommandHistory,
+  isValidCommandHistory,
+  normalizeCommandHistory,
+  type CommandHistoryEntry,
+} from '../shared/commandHistory';
 
 // Mirrors `SavedSession` in src/renderer/sessionRestore.ts. Duplicated as a
 // type-only contract because the main process cannot import the renderer
@@ -67,7 +73,12 @@ export type KeybindingAction =
   | 'split-down'
   | 'close-pane'
   | 'rename-pane'
-  | 'rename-tab';
+  | 'rename-tab'
+  | 'previous-command'
+  | 'next-command'
+  | 'copy-command'
+  | 'copy-command-output'
+  | 'rerun-command';
 
 export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'search-toggle': 'Ctrl+F',
@@ -83,6 +94,11 @@ export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'close-pane': 'Ctrl+Shift+W',
   'rename-pane': 'F2',
   'rename-tab': 'Ctrl+F2',
+  'previous-command': 'Ctrl+Shift+ArrowUp',
+  'next-command': 'Ctrl+Shift+ArrowDown',
+  'copy-command': 'Ctrl+Alt+C',
+  'copy-command-output': 'Ctrl+Alt+O',
+  'rerun-command': 'Ctrl+Alt+R',
 };
 
 export interface AppSettings {
@@ -90,8 +106,11 @@ export interface AppSettings {
   fontSize: number;
   fontFamily: string;
   sidebarSide: 'left' | 'right';
+  notificationsEnabled: boolean;
+  notificationThresholdSeconds: number;
   keybindings: Record<string, string>;
   snippets: Snippet[];
+  commandHistory: CommandHistoryEntry[];
   sshProfiles: Array<{
     id: string;
     host: string;
@@ -100,6 +119,7 @@ export interface AppSettings {
     auth: 'password' | 'key';
     password?: string;
     privateKey?: string;
+    jumpHostProfileId?: string;
   }>;
   workspaceTabs: Array<{
     id: string;
@@ -170,7 +190,7 @@ const SAVED_PANE_LEAF_KEYS = new Set([
 ]);
 const SAVED_PANE_SPLIT_KEYS = new Set(['type', 'direction', 'sizes', 'children']);
 const SSH_PROFILE_KEYS = new Set([
-  'id', 'host', 'port', 'username', 'auth', 'password', 'privateKey',
+  'id', 'host', 'port', 'username', 'auth', 'password', 'privateKey', 'jumpHostProfileId',
 ]);
 const SAVED_SESSION_KEYS = new Set([
   'tabs', 'activeTabId', 'sidebarOpen', 'tabsOpen', 'sidebarSection',
@@ -184,8 +204,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   fontSize: 14,
   fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
   sidebarSide: 'right',
+  notificationsEnabled: false,
+  notificationThresholdSeconds: 10,
   keybindings: { ...DEFAULT_KEYBINDINGS },
   snippets: [],
+  commandHistory: [],
   sshProfiles: [],
   workspaceTabs: [],
   sshHostKeys: {},
@@ -210,6 +233,7 @@ export class SettingsManager {
       ...this.cache,
       keybindings: { ...this.cache.keybindings },
       snippets: this.cache.snippets.map((snippet) => ({ ...snippet })),
+      commandHistory: cloneCommandHistory(this.cache.commandHistory),
       sshProfiles: this.cache.sshProfiles.map((profile) => ({ ...profile })),
       workspaceTabs: this.cache.workspaceTabs
         .map(cloneWorkspaceTabPreset)
@@ -219,14 +243,18 @@ export class SettingsManager {
     };
   }
 
-  set(updates: Partial<AppSettings>): AppSettings {
-    if (!isValidSettingsUpdate(updates)) throw new Error('Invalid settings update');
+  set(value: unknown): AppSettings {
+    const updates = parseSettingsUpdate(value);
+    if (!updates || !isValidSettingsUpdate(updates)) throw new Error('Invalid settings update');
     const previous = this.cache;
     this.cache = {
       ...this.cache,
       ...updates,
       keybindings: updates.keybindings === undefined ? this.cache.keybindings : { ...updates.keybindings },
       snippets: updates.snippets === undefined ? this.cache.snippets : normalizeSnippets(updates.snippets),
+      commandHistory: updates.commandHistory === undefined
+        ? this.cache.commandHistory
+        : cloneCommandHistory(updates.commandHistory),
       sshProfiles: updates.sshProfiles === undefined
         ? this.cache.sshProfiles
         : updates.sshProfiles.map(({ password, privateKey, ...profile }) => profile.auth === 'password'
@@ -299,6 +327,10 @@ export class SettingsManager {
       const stored = {
         ...DEFAULT_SETTINGS,
         ...parsed,
+        notificationsEnabled: typeof parsed.notificationsEnabled === 'boolean' ? parsed.notificationsEnabled : false,
+        notificationThresholdSeconds: isValidNotificationThreshold(parsed.notificationThresholdSeconds)
+          ? parsed.notificationThresholdSeconds
+          : 10,
         sshProfiles: normalizeStoredSshProfiles(parsed.sshProfiles),
       } as StoredAppSettings;
       this.captureStoredSecrets(stored.sshProfiles);
@@ -368,6 +400,7 @@ export class SettingsManager {
       ...settings,
       fontFamily: normalizeTerminalFontFamily(settings.fontFamily),
       snippets: normalizeSnippets(settings.snippets),
+      commandHistory: normalizeCommandHistory(settings.commandHistory),
       sshHostKeys: isStringRecord(settings.sshHostKeys) ? { ...settings.sshHostKeys } : {},
       sshProfiles: profiles.map((profile) => ({
         id: profile.id,
@@ -375,6 +408,7 @@ export class SettingsManager {
         port: normalizeStoredSshPort(profile.port),
         username: profile.username,
         auth: profile.auth,
+        ...(profile.jumpHostProfileId ? { jumpHostProfileId: profile.jumpHostProfileId } : {}),
         ...(profile.auth === 'password'
           ? { password: profile.password ?? unprotectSecret(profile.passwordSecret) ?? decryptLegacySecret(profile.passwordEncrypted) }
           : { privateKey: profile.privateKey ?? unprotectSecret(profile.privateKeySecret) ?? decryptLegacySecret(profile.privateKeyEncrypted) }),
@@ -448,6 +482,9 @@ function normalizeStoredSshProfiles(value: unknown): StoredSSHProfile[] {
       ...(typeof profile.username === 'string' && profile.username.length <= 256
         ? { username: profile.username }
         : {}),
+      ...(typeof profile.jumpHostProfileId === 'string' && profile.jumpHostProfileId.length <= 256
+        ? { jumpHostProfileId: profile.jumpHostProfileId }
+        : {}),
       ...(typeof profile.password === 'string' && profile.password.length <= MAX_SSH_SECRET_LENGTH
         ? { password: profile.password }
         : {}),
@@ -460,7 +497,17 @@ function normalizeStoredSshProfiles(value: unknown): StoredSSHProfile[] {
       ...(isBoundedCiphertext(profile.privateKeyEncrypted) ? { privateKeyEncrypted: profile.privateKeyEncrypted } : {}),
     });
   }
-  return profiles;
+  const validIds = new Set(profiles.map(({ id }) => id));
+  const validProfiles = profiles.map((profile) => profile.jumpHostProfileId === profile.id || !validIds.has(profile.jumpHostProfileId ?? '')
+    ? (({ jumpHostProfileId: _invalid, ...rest }) => rest)(profile)
+    : profile);
+  const cyclicIds = findCyclicJumpHostProfiles(validProfiles);
+  return validProfiles.map((profile) => {
+    if (!cyclicIds.has(profile.id)) return profile;
+    const sanitized: StoredSSHProfile = { ...profile };
+    delete sanitized.jumpHostProfileId;
+    return sanitized;
+  });
 }
 
 function isStoredSecret(value: unknown): value is StoredSecretV1 {
@@ -812,31 +859,50 @@ function hasUniqueSnippetIdentities(values: readonly unknown[]): boolean {
   });
 }
 
-function isValidSettingsUpdate(value: unknown): value is Partial<AppSettings> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const allowedKeys = new Set<keyof AppSettings>([
-    'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets',
-    'sshProfiles', 'workspaceTabs', 'gitWorktreeBaseDir',
-    'gitWorktreeNameTemplate', 'session',
-  ]);
-  if (Object.keys(value).some((key) => !allowedKeys.has(key as keyof AppSettings))) return false;
-  if (Object.values(value).some((entry) => entry === undefined)) return false;
-  const updates = value as Partial<AppSettings>;
+function parseSettingsUpdate(value: unknown): Partial<AppSettings> | undefined {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const prototype = Reflect.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const allowedKeys = new Set<keyof AppSettings>([
+      'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets',
+      'commandHistory', 'notificationsEnabled', 'notificationThresholdSeconds',
+      'sshProfiles', 'workspaceTabs', 'gitWorktreeBaseDir',
+      'gitWorktreeNameTemplate', 'session',
+    ]);
+    const updates: Record<string, unknown> = Object.create(null);
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string' || !allowedKeys.has(key as keyof AppSettings)) return undefined;
+      const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !('value' in descriptor) || descriptor.value === undefined) return undefined;
+      updates[key] = descriptor.value;
+    }
+    return updates as Partial<AppSettings>;
+  } catch {
+    return undefined;
+  }
+}
+
+function isValidSettingsUpdate(updates: Partial<AppSettings>): boolean {
   return (updates.theme === undefined || ['tokyo-night', 'dracula', 'one-dark', 'solarized-light', 'gruvbox'].includes(updates.theme))
     && (updates.fontSize === undefined
       || (Number.isInteger(updates.fontSize) && updates.fontSize >= 10 && updates.fontSize <= 24))
     && (updates.fontFamily === undefined
       || (typeof updates.fontFamily === 'string' && updates.fontFamily.length <= MAX_WORKSPACE_STRING_LENGTH))
     && (updates.sidebarSide === undefined || updates.sidebarSide === 'left' || updates.sidebarSide === 'right')
+    && (updates.notificationsEnabled === undefined || typeof updates.notificationsEnabled === 'boolean')
+    && (updates.notificationThresholdSeconds === undefined || isValidNotificationThreshold(updates.notificationThresholdSeconds))
     && (updates.keybindings === undefined
       || isBoundedStringRecord(updates.keybindings, MAX_KEYBINDINGS, 256, 256))
     && (updates.snippets === undefined || (Array.isArray(updates.snippets)
       && updates.snippets.length <= MAX_SETTINGS_COLLECTION_ITEMS
       && updates.snippets.every(isValidRuntimeSnippet)
       && hasUniqueSnippetIdentities(updates.snippets)))
+    && (updates.commandHistory === undefined || isValidCommandHistory(updates.commandHistory))
     && (updates.sshProfiles === undefined || (Array.isArray(updates.sshProfiles)
       && updates.sshProfiles.length <= MAX_SETTINGS_COLLECTION_ITEMS
       && updates.sshProfiles.every(isValidSshProfile)
+      && hasValidJumpHostReferences(updates.sshProfiles)
       && hasUniqueIds(updates.sshProfiles)))
     && (updates.workspaceTabs === undefined || (Array.isArray(updates.workspaceTabs)
       && updates.workspaceTabs.length <= MAX_SAVED_SESSION_TABS
@@ -850,6 +916,10 @@ function isValidSettingsUpdate(value: unknown): value is Partial<AppSettings> {
       || (typeof updates.gitWorktreeNameTemplate === 'string'
         && updates.gitWorktreeNameTemplate.length <= MAX_WORKSPACE_STRING_LENGTH))
     && (updates.session === undefined || isValidRuntimeSession(updates.session));
+}
+
+function isValidNotificationThreshold(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 86_400;
 }
 
 function isValidRuntimeSnippet(value: unknown): boolean {
@@ -893,5 +963,35 @@ function isValidSshProfile(value: unknown): value is AppSettings['sshProfiles'][
     && (profile.password === undefined
       || (typeof profile.password === 'string' && profile.password.length <= MAX_SSH_SECRET_LENGTH))
     && (profile.privateKey === undefined
-      || (typeof profile.privateKey === 'string' && profile.privateKey.length <= MAX_SSH_SECRET_LENGTH));
+      || (typeof profile.privateKey === 'string' && profile.privateKey.length <= MAX_SSH_SECRET_LENGTH))
+    && (profile.jumpHostProfileId === undefined
+      || (typeof profile.jumpHostProfileId === 'string' && profile.jumpHostProfileId.length <= 256));
+}
+
+function findCyclicJumpHostProfiles(profiles: ReadonlyArray<{ id: string; jumpHostProfileId?: string }>): Set<string> {
+  const next = new Map(profiles.map(({ id, jumpHostProfileId }) => [id, jumpHostProfileId]));
+  const cyclic = new Set<string>();
+  for (const { id } of profiles) {
+    const path: string[] = [];
+    const seen = new Map<string, number>();
+    let current: string | undefined = id;
+    while (current !== undefined && next.has(current) && !cyclic.has(current)) {
+      const start = seen.get(current);
+      if (start !== undefined) {
+        for (const cycleId of path.slice(start)) cyclic.add(cycleId);
+        break;
+      }
+      seen.set(current, path.length);
+      path.push(current);
+      current = next.get(current);
+    }
+  }
+  return cyclic;
+}
+
+function hasValidJumpHostReferences(profiles: AppSettings['sshProfiles']): boolean {
+  const ids = new Set(profiles.map(({ id }) => id));
+  return profiles.every(({ id, jumpHostProfileId }) => jumpHostProfileId === undefined
+    || (jumpHostProfileId !== id && ids.has(jumpHostProfileId)))
+    && findCyclicJumpHostProfiles(profiles).size === 0;
 }

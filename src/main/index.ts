@@ -32,6 +32,8 @@ import {
   type WorkspacePrepareForCloseDecision,
 } from './workspaceLifecycle';
 import { NativeTerminalCapacity } from './terminalCapacity';
+import { registerSSHLocalForwardHandlers } from './sshLocalForwardIpc';
+import { parseCommandNotificationPayload, type CommandNotificationPayload } from '../shared/commandNotifications';
 
 let mainWindow: electron.BrowserWindow | null = null;
 let initializeUpdaterForWindow: ((window: electron.BrowserWindow) => void) | null = null;
@@ -45,6 +47,7 @@ let quittingAfterWorkspaceStop = false;
 const closePreparation = new WorkspaceClosePreparationCoordinator();
 
 electron.protocol.registerSchemesAsPrivileged([RENDERER_SCHEME_REGISTRATION]);
+electron.app.setAppUserModelId('com.sjorm.janet');
 
 const e2eEventsPath = process.env.JANET_E2E_EVENTS_PATH;
 const e2eRemoteDebuggingPort = process.env.JANET_E2E_REMOTE_DEBUGGING_PORT;
@@ -70,10 +73,10 @@ if (!hasSingleInstanceLock) {
   });
 }
 
-function recordE2eEvent(event: Record<string, unknown>): void {
+function recordE2eEvent(event: Record<string, unknown>, timestamp = true): void {
   if (!e2eEventsPath) return;
   try {
-    require('fs').appendFileSync(e2eEventsPath, `${JSON.stringify({ ts: Date.now(), ...event })}\n`, 'utf-8');
+    require('fs').appendFileSync(e2eEventsPath, `${JSON.stringify(timestamp ? { ts: Date.now(), ...event } : event)}\n`, 'utf-8');
   } catch {}
 }
 
@@ -171,6 +174,39 @@ function showOrCreateWindow(): void {
     return;
   }
   createWindow();
+}
+
+function notificationDecision(payload: CommandNotificationPayload): 'disabled' | 'below-threshold' | 'unsupported' | 'focused' | 'would-show' {
+  const settings = settingsManager.get();
+  if (!settings.notificationsEnabled) return 'disabled';
+  if (payload.durationMs < settings.notificationThresholdSeconds * 1000) return 'below-threshold';
+  if (!electron.Notification.isSupported()) return 'unsupported';
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) return 'focused';
+  return 'would-show';
+}
+
+function deliverCommandNotification(value: unknown): boolean {
+  const payload = parseCommandNotificationPayload(value);
+  if (!payload) throw new Error('Invalid notification payload');
+  const decision = notificationDecision(payload);
+  if (e2eEventsPath) {
+    recordE2eEvent({ type: 'notification:decision', decision, durationMs: payload.durationMs, outcome: payload.outcome, contextKind: payload.context.kind }, false);
+    return decision === 'would-show';
+  }
+  if (decision !== 'would-show') return false;
+  try {
+    const seconds = Math.round(payload.durationMs / 1000);
+    const where = payload.context.kind === 'ssh' ? ` on ${payload.context.hostLabel}` : '';
+    const notification = new electron.Notification({
+      title: payload.outcome === 'failure' ? 'Command failed' : payload.outcome === 'success' ? 'Command finished' : 'Command completed',
+      body: `${payload.tabLabel} · ${payload.paneLabel}${where} (${seconds}s)`,
+    });
+    notification.on('click', showOrCreateWindow);
+    notification.show();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function createWindow() {
@@ -441,9 +477,9 @@ function registerIpcHandlers() {
   });
 
   // === SSH IPC ===
-  handle('ssh:connect', async (event, { id, host, port, username, auth, password, privateKey }) => {
+  handle('ssh:connect', async (event, { id, host, port, username, auth, password, privateKey, jumpHost }) => {
     recordE2eEvent({ type: 'ssh:connect:start', id, host, port, username });
-    await sshManager.connect(id, { host, port, username, auth, password, privateKey });
+    await sshManager.connect(id, { host, port, username, auth, password, privateKey, jumpHost });
     recordE2eEvent({ type: 'ssh:connect:done', id });
     return { connected: true };
   });
@@ -505,6 +541,8 @@ function registerIpcHandlers() {
   handle('ssh:listConnections', () => {
     return sshManager.listConnections();
   });
+
+  registerSSHLocalForwardHandlers(handle, sshManager);
 
   // === File System IPC ===
   handle('fs:listDir', async (event, { dirPath, showHidden }) => {
@@ -626,6 +664,8 @@ function registerIpcHandlers() {
   handle('settings:set', (event, updates) => {
     return settingsManager.set(updates);
   });
+
+  handle('notifications:command-completed', (_event, payload: unknown) => deliverCommandNotification(payload));
 
   handle('app:getPlatform', () => {
     return process.platform;

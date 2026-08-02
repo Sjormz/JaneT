@@ -120,6 +120,36 @@ function getFreePort(): Promise<number> {
   });
 }
 
+function tcpRoundTrip(port: number, payload: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let received = 0;
+    const socket = net.connect(port, '127.0.0.1');
+    socket.once('error', reject);
+    socket.on('data', (chunk) => {
+      const bytes = Buffer.from(chunk);
+      chunks.push(bytes);
+      received += bytes.length;
+      if (received >= payload.length) {
+        socket.end();
+        resolve(Buffer.concat(chunks));
+      }
+    });
+    socket.once('connect', () => socket.write(payload));
+    socket.once('end', () => {
+      if (received < payload.length) reject(new Error(`Forward closed after ${received} of ${payload.length} bytes`));
+    });
+  });
+}
+
+function expectTcpRefused(port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, '127.0.0.1');
+    socket.once('connect', () => { socket.destroy(); reject(new Error(`Unexpected connection to stopped forward ${port}`)); });
+    socket.once('error', (error: NodeJS.ErrnoException) => error.code === 'ECONNREFUSED' ? resolve() : reject(error));
+  });
+}
+
 function isAppUrl(url: string): boolean {
   return url.includes('127.0.0.1:5173') || url.includes('localhost:5173') || url.endsWith('index.html');
 }
@@ -256,6 +286,16 @@ async function startLocalSshServer(): Promise<{
     });
 
     client.on('ready', () => {
+      client.on('tcpip', (accept, reject, info) => {
+        const upstream = net.connect(info.destPort, info.destIP);
+        upstream.once('connect', () => {
+          const channel = accept();
+          channel.on('error', ignoreBenignSshFixtureError);
+          upstream.on('error', ignoreBenignSshFixtureError);
+          channel.pipe(upstream).pipe(channel);
+        });
+        upstream.once('error', () => reject());
+      });
       client.on('session', (accept) => {
         const session = accept();
         session.on('error', ignoreBenignSshFixtureError);
@@ -409,7 +449,7 @@ async function closeApp(browser: Browser, electronProcess: ChildProcess, userDat
     await browser.close().catch(() => {});
   } finally {
     await killProcessTree(electronProcess);
-    if (userData) fs.rmSync(userData, { recursive: true, force: true });
+    if (userData) fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
@@ -448,6 +488,41 @@ test('restores the local SSH fixture, browses remote files, and runs ls', async 
   } finally {
     await closeApp(browser, electronProcess, userData);
     await ssh.close();
+  }
+});
+
+test('creates a real SSH local forward, echoes bytes, stops it, and refuses new connections', async () => {
+  const echo = net.createServer((socket) => socket.pipe(socket));
+  await new Promise<void>((resolve, reject) => {
+    echo.once('error', reject);
+    echo.listen(0, '127.0.0.1', resolve);
+  });
+  const echoAddress = echo.address();
+  if (!echoAddress || typeof echoAddress === 'string') throw new Error('Echo fixture did not bind');
+  const ssh = await startLocalSshServer();
+  const { browser, electronProcess, page, eventsPath, userData } = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
+  try {
+    await waitForShellCreateCount(eventsPath, 1);
+    await page.getByRole('button', { name: /local ssh ssh/i }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Manage local forwards' }).click();
+    await page.getByRole('spinbutton', { name: 'Local port' }).fill('0');
+    await page.getByRole('textbox', { name: 'Destination host' }).fill('127.0.0.1');
+    await page.getByRole('spinbutton', { name: 'Destination port' }).fill(String(echoAddress.port));
+    await page.getByRole('button', { name: 'Create forward' }).click();
+
+    const stop = page.getByRole('button', { name: /^Stop forward 127\.0\.0\.1:\d+$/ });
+    await expect(stop).toBeVisible({ timeout: 20_000 });
+    const localPort = Number((await stop.getAttribute('aria-label'))!.split(':').at(-1));
+    const payload = Buffer.from([0, 1, 2, 3, 0x7f, 0x80, 0xfe, 0xff, ...Buffer.from('JaneT SSH forward')]);
+    expect(await tcpRoundTrip(localPort, payload)).toEqual(payload);
+
+    await stop.click();
+    await expect(stop).toHaveCount(0);
+    await expectTcpRefused(localPort);
+  } finally {
+    await closeApp(browser, electronProcess, userData);
+    await ssh.close();
+    await new Promise<void>((resolve) => echo.close(() => resolve()));
   }
 });
 

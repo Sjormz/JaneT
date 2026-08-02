@@ -5,6 +5,7 @@ import App from '../../src/renderer/App';
 import SplitPane from '../../src/renderer/components/SplitPane';
 import type { AgentAwareness } from '../../src/renderer/terminalAwareness';
 import type { AgentLifecycleEvent } from '../../src/renderer/terminalAwareness';
+import type { SemanticCommandEvent } from '../../src/renderer/semanticCommands';
 
 const mountedTermIds: string[] = [];
 const rendererMocks = vi.hoisted(() => ({
@@ -25,6 +26,8 @@ const rendererMocks = vi.hoisted(() => ({
   ) => void | Promise<void>>(),
   cwdChangeHandlers: new Map<string, (termId: string, cwd: string) => void>(),
   agentEventHandlers: new Map<string, (event: AgentLifecycleEvent) => void>(),
+  semanticCommandHandlers: new Map<string, (event: SemanticCommandEvent) => void>(),
+  broadcastInputHandlers: new Map<string, (data: string, binary?: boolean) => boolean>(),
 }));
 
 vi.mock('../../src/renderer/components/Titlebar', () => ({
@@ -137,6 +140,8 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     onFocus,
     onSshRetry,
     onAgentEvent,
+    onSemanticCommand,
+    onBroadcastInput,
   }: {
     termId: string;
     hasSession?: boolean;
@@ -156,10 +161,14 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
       dimensions: { cols: number; rows: number },
     ) => void | Promise<void>;
     onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+    onSemanticCommand?: (termId: string, event: SemanticCommandEvent) => void;
+    onBroadcastInput?: (termId: string, data: string, binary?: boolean) => boolean;
   }) {
     if (onSshRetry) rendererMocks.sshRetryHandlers.set(termId, onSshRetry);
     if (onCwdChange) rendererMocks.cwdChangeHandlers.set(termId, onCwdChange);
     if (onAgentEvent) rendererMocks.agentEventHandlers.set(termId, (event) => onAgentEvent(termId, event));
+    if (onSemanticCommand) rendererMocks.semanticCommandHandlers.set(termId, (event) => onSemanticCommand(termId, event));
+    if (onBroadcastInput) rendererMocks.broadcastInputHandlers.set(termId, (data, binary) => onBroadcastInput(termId, data, binary));
     const containerRef = React.useRef<HTMLDivElement>(null);
 
     React.useEffect(() => {
@@ -234,6 +243,8 @@ beforeEach(() => {
   rendererMocks.sshRetryHandlers.clear();
   rendererMocks.cwdChangeHandlers.clear();
   rendererMocks.agentEventHandlers.clear();
+  rendererMocks.semanticCommandHandlers.clear();
+  rendererMocks.broadcastInputHandlers.clear();
   Object.defineProperty(document, 'startViewTransition', {
     configurable: true,
     value: vi.fn((update: () => void) => {
@@ -272,11 +283,13 @@ beforeEach(() => {
         },
       },
     }),
-    getSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] }),
+    getSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [], notificationsEnabled: false, notificationThresholdSeconds: 10 }),
     setSettings: vi.fn().mockResolvedValue(undefined),
+    notifyCommandCompleted: vi.fn().mockResolvedValue(true),
     terminalCreate: vi.fn().mockResolvedValue(undefined),
     terminalDestroy: vi.fn().mockResolvedValue(undefined),
     terminalWrite: vi.fn(),
+    terminalWriteBinary: vi.fn(),
     terminalResize: vi.fn(),
     onTerminalData: vi.fn(() => ({ dispose: vi.fn() })),
     onTerminalExit: vi.fn((callback: (event: { id: string; exitCode: number; signal: number }) => void) => {
@@ -288,6 +301,7 @@ beforeEach(() => {
     sshConnect: vi.fn().mockResolvedValue({ connected: true }),
     sshCreateShell: vi.fn().mockResolvedValue(undefined),
     sshWriteShell: vi.fn(),
+    sshWriteShellBinary: vi.fn(),
     sshResizeShell: vi.fn(),
     sshDestroyShell: vi.fn().mockResolvedValue(true),
     sshDisconnect: vi.fn().mockResolvedValue(undefined),
@@ -311,6 +325,23 @@ beforeEach(() => {
     checkForUpdates: vi.fn().mockResolvedValue(undefined),
   };
 });
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+const semanticEvent = (command: string, output = 'private output'): SemanticCommandEvent => ({
+  command, output, exitCode: 0, startedAt: 10, completedAt: 20, durationMs: 10,
+});
+
+function historyUpdates() {
+  return vi.mocked(window.janet.setSettings).mock.calls
+    .map(([update]) => update as any)
+    .filter((update) => Array.isArray(update.commandHistory));
+}
 
 async function confirmPendingAction(name: RegExp) {
   const dialog = await screen.findByRole('alertdialog');
@@ -340,6 +371,277 @@ async function requestWorkspaceClose(
 }
 
 describe('split panes in the app', () => {
+  it('propagates semantic commands from nested and maximized leaves with explicit tab ownership', () => {
+    const onSemanticCommand = vi.fn();
+    const event: SemanticCommandEvent = {
+      command: 'printf ok', output: 'ok', exitCode: 0,
+      startedAt: 10, completedAt: 20, durationMs: 10,
+    };
+    const node = {
+      id: 'root', type: 'split' as const, direction: 'vertical' as const, sizes: [1],
+      children: [{
+        id: 'nested', type: 'split' as const, direction: 'horizontal' as const, sizes: [1],
+        children: [{ id: 'term-deep', type: 'leaf' as const }],
+      }],
+    };
+    const required = {
+      tabId: 'tab-1', tabType: 'local' as const, onTerminalReady: vi.fn(), onTerminalRemoved: vi.fn(),
+      onSplitPane: vi.fn(), onClosePane: vi.fn(), onResizePane: vi.fn(), onMovePane: vi.fn(),
+      onPaneDragStart: vi.fn(), onPaneDragOver: vi.fn(), onPaneDragEnd: vi.fn(), onToggleMaximizePane: vi.fn(),
+      onSemanticCommand,
+    };
+    const view = render(<SplitPane node={node} {...required} />);
+    act(() => rendererMocks.semanticCommandHandlers.get('term-deep')!(event));
+    expect(onSemanticCommand).toHaveBeenLastCalledWith('tab-1', 'term-deep', event);
+
+    view.rerender(<SplitPane node={node} maximizedLeafId="term-deep" {...required} />);
+    act(() => rendererMocks.semanticCommandHandlers.get('term-deep')!(event));
+    expect(onSemanticCommand).toHaveBeenLastCalledWith('tab-1', 'term-deep', event);
+    expect(onSemanticCommand).toHaveBeenCalledTimes(2);
+  });
+  it('broadcasts only after deliberate confirmation and offers immediate cancel', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    const terminals = await screen.findAllByTestId(/terminal-/);
+    const [firstId, secondId] = terminals.map((terminal) => terminal.dataset.terminalId!);
+
+    const recipients = screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i });
+    fireEvent.click(recipients[0]);
+    expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
+    expect(rendererMocks.broadcastInputHandlers.get(firstId)!('not active')).toBe(false);
+    expect(window.janet.terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: 'not active' }));
+    fireEvent.click(recipients[1]);
+
+    const dialog = screen.getByRole('alertdialog', { name: 'Start broadcast input?' });
+    expect(dialog).toHaveTextContent('typing and paste');
+    expect(dialog).toHaveTextContent('multiline or destructive commands');
+    expect(dialog).toHaveTextContent('2 selected panes');
+    expect(rendererMocks.broadcastInputHandlers.get(firstId)!('still not active')).toBe(false);
+    expect(window.janet.terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: 'still not active' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Start broadcast input' }));
+
+    expect(screen.getByRole('status', { name: /broadcast input active/i })).toHaveTextContent('Broadcast input active · 2 panes');
+    expect(recipients[0].closest('.terminal-leaf')).toHaveClass('broadcast-selected');
+    expect(recipients[1].closest('.terminal-leaf')).toHaveClass('broadcast-selected');
+    expect(rendererMocks.broadcastInputHandlers.get(firstId)!('echo safe')).toBe(true);
+    expect(window.janet.terminalWrite).toHaveBeenCalledWith({ id: firstId, data: 'echo safe', userInput: true });
+    expect(window.janet.terminalWrite).toHaveBeenCalledWith({ id: secondId, data: 'echo safe', userInput: true });
+    expect(window.janet.terminalWrite).toHaveBeenCalledTimes(2);
+    expect(rendererMocks.broadcastInputHandlers.get(secondId)!('\u0000', true)).toBe(true);
+    expect(window.janet.terminalWriteBinary).toHaveBeenCalledTimes(2);
+    expect(window.janet.terminalWriteBinary).toHaveBeenCalledWith({ id: firstId, data: '\u0000', userInput: true });
+    expect(window.janet.terminalWriteBinary).toHaveBeenCalledWith({ id: secondId, data: '\u0000', userInput: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel broadcast input' }));
+    expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
+    expect(screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).every(
+      (checkbox) => !(checkbox as HTMLInputElement).checked,
+    )).toBe(true);
+  });
+
+  it('keeps broadcasting off and clears candidates when activation is cancelled', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    const firstId = (await screen.findAllByTestId(/terminal-/))[0].dataset.terminalId!;
+    screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).forEach((checkbox) => fireEvent.click(checkbox));
+
+    const dialog = screen.getByRole('alertdialog', { name: 'Start broadcast input?' });
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+    await waitFor(() => expect(cancel).toHaveFocus());
+    fireEvent.click(cancel);
+
+    expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
+    expect(screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).every(
+      (checkbox) => !(checkbox as HTMLInputElement).checked,
+    )).toBe(true);
+    expect(rendererMocks.broadcastInputHandlers.get(firstId)!('cancelled')).toBe(false);
+    expect(window.janet.terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: 'cancelled' }));
+  });
+
+  it('cancels broadcast immediately with Escape and when a recipient exits', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    const terminals = await screen.findAllByTestId(/terminal-/);
+    const [firstId, secondId] = terminals.map((terminal) => terminal.dataset.terminalId!);
+    screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).forEach((checkbox) => fireEvent.click(checkbox));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Start broadcast input' }));
+
+    const terminalKeyDown = vi.fn();
+    terminals[0].addEventListener('keydown', terminalKeyDown);
+    fireEvent.keyDown(terminals[0], { key: 'Escape' });
+    expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
+    expect(terminalKeyDown).not.toHaveBeenCalled();
+
+    screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).forEach((checkbox) => fireEvent.click(checkbox));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Start broadcast input' }));
+    act(() => rendererMocks.terminalExitHandler!({ id: secondId, exitCode: 0, signal: 0 }));
+    expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
+    expect(rendererMocks.broadcastInputHandlers.get(firstId)!('must not fan out')).toBe(false);
+    expect(window.janet.terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: 'must not fan out' }));
+  });
+
+  it('keeps recipients scoped to the visible tab', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).forEach((checkbox) => fireEvent.click(checkbox));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Start broadcast input' }));
+    expect(screen.getByRole('status', { name: /broadcast input active/i })).toBeInTheDocument();
+
+    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
+    expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
+    expect(screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i })).toHaveLength(1);
+  });
+
+  it('serializes output-free history writes, publishes only successes, and rolls back a failed write', async () => {
+    const first = deferred();
+    const second = deferred();
+    vi.mocked(window.janet.setSettings).mockImplementation((update: any) => {
+      if (!update.commandHistory) return Promise.resolve();
+      return historyUpdates().length === 1 ? first.promise : second.promise;
+    });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(<App />);
+      const terminal = await screen.findByTestId(/terminal-/);
+      await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+      const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
+      act(() => { emit(semanticEvent('printf first', 'FIRST OUTPUT')); emit(semanticEvent('printf second', 'SECOND OUTPUT')); });
+
+      await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+      expect(JSON.stringify(historyUpdates()[0])).not.toMatch(/output|FIRST OUTPUT|SECOND OUTPUT/i);
+      act(() => rendererMocks.paletteActions.find((action) => action.id === 'command-history')!.handler());
+      expect(screen.getByRole('dialog', { name: 'Command history' })).not.toHaveTextContent('printf first');
+      expect(historyUpdates()).toHaveLength(1);
+
+      await act(async () => first.reject(new Error('disk full')));
+      await waitFor(() => expect(historyUpdates()).toHaveLength(2));
+      expect(historyUpdates()[1].commandHistory.map((item: any) => item.command)).toEqual(['printf second']);
+      expect(screen.getByRole('dialog', { name: 'Command history' })).not.toHaveTextContent('printf second');
+      await act(async () => second.resolve());
+      await waitFor(() => expect(screen.getByRole('dialog', { name: 'Command history' })).toHaveTextContent('printf second'));
+      expect(consoleError).toHaveBeenCalledWith('Failed to save command history:', expect.any(Error));
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('persists overlapping successful completions in callback order without loss', async () => {
+    const first = deferred();
+    vi.mocked(window.janet.setSettings).mockImplementation((update: any) => (
+      update.commandHistory && historyUpdates().length === 1 ? first.promise : Promise.resolve()
+    ));
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
+    act(() => { emit(semanticEvent('first')); emit(semanticEvent('second')); });
+    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+    expect(historyUpdates()[0].commandHistory.map((item: any) => item.command)).toEqual(['first']);
+
+    await act(async () => first.resolve());
+    await waitFor(() => expect(historyUpdates()).toHaveLength(2));
+    expect(historyUpdates()[1].commandHistory.map((item: any) => item.command)).toEqual(['second', 'first']);
+  });
+
+  it('resolves ownership and local context only when a queued completion persists', async () => {
+    const blocker = deferred();
+    vi.mocked(window.janet.setSettings).mockImplementation((update: any) => (
+      update.commandHistory && historyUpdates().length === 1 ? blocker.promise : Promise.resolve()
+    ));
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    const termId = terminal.dataset.terminalId!;
+    const emit = rendererMocks.semanticCommandHandlers.get(termId)!;
+    act(() => { emit(semanticEvent('first')); emit(semanticEvent('second')); });
+    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+
+    act(() => rendererMocks.cwdChangeHandlers.get(termId)!(termId, '/queued/cwd'));
+    await act(async () => blocker.resolve());
+    await waitFor(() => expect(historyUpdates()).toHaveLength(2));
+    expect(historyUpdates()[1].commandHistory[0]).toMatchObject({
+      command: 'second', context: { kind: 'local', cwd: '/queued/cwd' },
+    });
+  });
+
+  it('drops queued completions whose exact tab and terminal ownership was removed', async () => {
+    const blocker = deferred();
+    vi.mocked(window.janet.setSettings).mockImplementation((update: any) => (
+      update.commandHistory && historyUpdates().length === 1 ? blocker.promise : Promise.resolve()
+    ));
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
+    act(() => { emit(semanticEvent('first')); emit(semanticEvent('stale')); });
+    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    await confirmPendingAction(/^close tab$/i);
+    await act(async () => blocker.resolve());
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+    await act(async () => Promise.resolve());
+    expect(historyUpdates()).toHaveLength(1);
+  });
+
+  it('re-resolves the active focused terminal when history selection pastes without Enter', async () => {
+    const pasted = vi.fn();
+    window.addEventListener('janet:terminal-paste-request', pasted);
+    try {
+      render(<App />);
+      fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+      const terminals = await screen.findAllByTestId(/terminal-/);
+      const firstId = terminals[0].dataset.terminalId!;
+      const secondId = terminals[1].dataset.terminalId!;
+      act(() => rendererMocks.semanticCommandHandlers.get(firstId)!(
+        semanticEvent(`printf chosen${String.fromCharCode(13, 10)}`),
+      ));
+      await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+      fireEvent.focus(terminals[0]);
+      act(() => rendererMocks.paletteActions.find((action) => action.id === 'command-history')!.handler());
+      const dialog = await screen.findByRole('dialog', { name: 'Command history' });
+      fireEvent.focus(terminals[1]);
+      fireEvent.click(within(dialog).getByRole('option', { name: /printf chosen/ }));
+
+      expect(pasted).toHaveBeenCalledTimes(1);
+      expect((pasted.mock.calls[0][0] as CustomEvent).detail).toEqual({ termId: secondId, text: 'printf chosen' });
+      expect(window.janet.terminalWrite).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('janet:terminal-paste-request', pasted);
+    }
+  });
+
+  it('maps an owned semantic event to bounded command-free local notification metadata', async () => {
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    const termId = terminal.dataset.terminalId!;
+    const event: SemanticCommandEvent = {
+      command: 'secret command', output: 'secret output', exitCode: 0,
+      startedAt: 10, completedAt: 10_010, durationMs: 10_000,
+    };
+    act(() => rendererMocks.semanticCommandHandlers.get(termId)!(event));
+    await waitFor(() => expect(window.janet.notifyCommandCompleted).toHaveBeenCalledOnce());
+    expect(window.janet.notifyCommandCompleted).toHaveBeenCalledWith({
+      durationMs: 10_000, outcome: 'success', tabLabel: 'Terminal', paneLabel: 'Terminal', context: { kind: 'local' },
+    });
+    expect(JSON.stringify(vi.mocked(window.janet.notifyCommandCompleted).mock.calls)).not.toMatch(/secret command|secret output|command|output/);
+  });
+
+  it('does not notify after exact tab ownership becomes stale', async () => {
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    const termId = terminal.dataset.terminalId!;
+    const staleHandler = rendererMocks.semanticCommandHandlers.get(termId)!;
+    const oldTabId = rendererMocks.verticalTabBarProps.tabs[0].id;
+    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
+    act(() => rendererMocks.verticalTabBarProps.onCloseTab(oldTabId));
+    await confirmPendingAction(/close tab/i);
+    act(() => staleHandler({ command: 'secret', output: 'secret', startedAt: 0, completedAt: 10_000, durationMs: 10_000 }));
+    expect(window.janet.notifyCommandCompleted).not.toHaveBeenCalled();
+  });
+
   it('shows an authoritative local terminal exit in its pane and tab', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);

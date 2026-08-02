@@ -33,9 +33,73 @@ JaneT is for work that starts in a shell and quickly spreads across more shells,
 - **Files and editing:** Browse the focused terminal's local directory or a remote machine over SFTP, then open supported text files in the built-in Monaco editor.
 - **Everyday Git tools:** Stage, unstage, commit, fetch, pull, push, switch branches, manage worktrees, and safely discard tracked unstaged changes.
 - **Durable sessions:** Keep active terminal and SSH work running when the window closes, or stop it before quitting.
+- **Semantic command tools:** Jump between completed commands, copy a command or its output, and paste a command back without running it automatically.
+- **Safe broadcast input:** Explicitly select panes, confirm the recipient set, then send the same keyboard, paste, or binary input to every selected terminal.
+- **Contextual command history:** Search bounded local history by command, directory or host, and outcome without storing terminal output.
+- **Focus-away notifications:** Optionally receive a native notification when a long command finishes while JaneT is unfocused.
+- **Secure SSH routing:** Reach a saved host through one saved jump host and manage session-owned local forwards from the SSH tab.
 - **AI agent awareness:** See when a supported terminal agent is running, ready, waiting for input, or finished without reading its transcript.
 - **Fast navigation:** Search terminal output, launch actions from the command palette, save command snippets, and rebind every shortcut.
 - **A workspace that feels like yours:** Choose from Tokyo Night, Dracula, One Dark, Solarized Light, and Gruvbox, then tune terminal typography and sidebar placement.
+
+## Navigate completed commands
+
+![JaneT terminal showing completed commands and a failed-command marker](assets/screenshots/semantic-commands.png)
+
+JaneT understands the command lifecycle reported by supported shells. After a command finishes, you can move between completed commands without searching the whole terminal buffer:
+
+| Action | Default shortcut |
+| --- | --- |
+| Select the previous completed command | `Ctrl+Shift+ArrowUp` |
+| Select the next completed command | `Ctrl+Shift+ArrowDown` |
+| Copy the selected command | `Ctrl+Alt+C` |
+| Copy the selected command's output | `Ctrl+Alt+O` |
+| Paste the selected command for editing | `Ctrl+Alt+R` |
+
+Paste for rerun is deliberately safe: it inserts the command through JaneT's normal paste path but never adds Enter. Review or edit it, then press Enter yourself when it is ready.
+
+JaneT automatically adds semantic markers to new local Bash, zsh, fish, Windows PowerShell, and PowerShell 7 sessions while preserving existing prompt hooks. Unsupported local shells continue to work as ordinary terminals. JaneT does not modify a remote shell's startup files; SSH command tracking is available only when that remote shell already emits compatible OSC 133 markers.
+
+## Find a command in contextual history
+
+![JaneT command history with search, context, and outcome controls](assets/screenshots/command-history.png)
+
+Completed semantic commands are also available from **Search commands** (`Ctrl+K`) → **Open command history**.
+
+1. Search by command text, local directory, or SSH label.
+2. Narrow the list to **Local** or **SSH** context.
+3. Filter for successful or failed commands.
+4. Select an entry to paste it into the currently focused terminal.
+5. Press Enter yourself if you want to run it.
+
+History is intentionally local and bounded to the newest 256 entries. JaneT stores command text, timing, outcome, and directory or host context; it never stores terminal output or imports your shell-history files.
+
+## Broadcast input only to panes you choose
+
+![JaneT broadcast input active for two selected terminal panes](assets/screenshots/broadcast-input.png)
+
+Broadcast input is useful for running the same interactive step in several local or SSH panes, but it stays off until you deliberately arm it:
+
+1. Split the current tab until every destination pane is visible.
+2. Use the checkbox in each pane header to select every recipient, including the pane you will type in.
+3. Select at least two panes and confirm the warning.
+4. Type or paste in any selected pane. JaneT sends that user input exactly once to every selected recipient.
+5. Press `Escape` or choose **Cancel broadcast input** in the banner to stop immediately.
+
+Selected panes remain visibly highlighted while broadcast is active. JaneT cancels the recipient set when its tab, pane, terminal, or SSH session becomes stale, and terminal protocol responses are never rebroadcast.
+
+## Get notified after a long command
+
+![JaneT settings for focus-away command notifications](assets/screenshots/notification-settings.png)
+
+Focus-away notifications are disabled by default. To enable them:
+
+1. Open the gear menu in the title bar.
+2. Enable **Notify when long commands finish while JaneT is unfocused**.
+3. Set the minimum command duration in seconds. The default is 10 seconds.
+4. Move to another window while a tracked command runs.
+
+JaneT checks the current focus state again immediately before showing a native notification. The notification contains only bounded outcome, duration, tab, pane, and local-or-SSH context metadata—never the command text or terminal output. Notification availability and presentation still depend on the operating system's notification support and settings.
 
 ## Know when your agent needs you
 
@@ -87,6 +151,31 @@ Save an SSH connection once and reopen it from the tab rail or a preset. JaneT p
 
 A preset can combine local and SSH panes, so a project shell, log stream, and remote deployment session can share one saved layout.
 
+### Reach a host through a jump host
+
+![JaneT SSH connection editor selecting a saved jump host](assets/screenshots/ssh-jump-host.png)
+
+JaneT supports one optional saved jump host per SSH profile:
+
+1. Open **SSH** in the tab rail and save the bastion or jump host as a normal connection first.
+2. Create or edit the destination connection.
+3. Choose the saved bastion under **Jump host**.
+4. Select **Save and connect** or **Update and connect**.
+
+The jump and destination authenticate separately and each host key is verified independently. JaneT supports one hop only; nested or cyclic jump routes are rejected.
+
+### Open a local tunnel through a live SSH session
+
+![JaneT SSH local-forward dialog showing an active loopback tunnel](assets/screenshots/ssh-local-forward.png)
+
+1. Connect an SSH tab and wait until its shell is ready.
+2. Right-click that tab and choose **Manage local forwards**.
+3. Enter a local port, destination host, and destination port. Use local port `0` to let the operating system choose a free port.
+4. Choose **Create forward** and use the displayed `127.0.0.1` port from a local application.
+5. Choose **Stop** when the tunnel is no longer needed.
+
+Local forwards bind only to loopback, belong to the live SSH session, and close automatically when that session disconnects. JaneT does not provide public bind addresses, remote forwarding, or a SOCKS proxy.
+
 ## Download
 
 Installers and portable builds are published on the [latest release](https://github.com/Sjormz/JaneT/releases/latest):
@@ -113,6 +202,11 @@ JaneT checks GitHub Releases for updates from inside the app.
 | Open snippets | `Ctrl+Shift+P` |
 | Split pane right | `Ctrl+\` |
 | Split pane below | `Ctrl+Shift+\` |
+| Previous completed command | `Ctrl+Shift+ArrowUp` |
+| Next completed command | `Ctrl+Shift+ArrowDown` |
+| Copy completed command | `Ctrl+Alt+C` |
+| Copy completed command output | `Ctrl+Alt+O` |
+| Paste completed command for rerun | `Ctrl+Alt+R` |
 
 All shortcuts can be changed in Settings.
 

@@ -53,6 +53,94 @@ describe('SettingsManager', () => {
     expect(settings.sidebarSide).toBe('right');
     expect(settings.sshProfiles).toEqual([]);
     expect(settings.workspaceTabs).toEqual([]);
+    expect(settings.notificationsEnabled).toBe(false);
+    expect(settings.notificationThresholdSeconds).toBe(10);
+    expect(settings.keybindings).toMatchObject({
+      'previous-command': 'Ctrl+Shift+ArrowUp',
+      'next-command': 'Ctrl+Shift+ArrowDown',
+      'copy-command': 'Ctrl+Alt+C',
+      'copy-command-output': 'Ctrl+Alt+O',
+      'rerun-command': 'Ctrl+Alt+R',
+    });
+  });
+
+  it('defaults, loads, deep-clones, and round-trips output-free command history', async () => {
+    const fsMock = await import('fs');
+    const valid = {
+      id: 'old', command: 'printf old', startedAt: 1, durationMs: 2, exitCode: 0,
+      context: { kind: 'local' as const, cwd: '/repo' },
+    };
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      theme: 'dracula', commandHistory: [valid, { ...valid, id: 'bad', output: 'secret' }],
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const loaded = manager.get();
+    expect(loaded.commandHistory).toEqual([valid]);
+    (loaded.commandHistory[0].context as any).cwd = '/mutated';
+    expect((manager.get().commandHistory[0].context as any).cwd).toBe('/repo');
+    const next = { ...valid, id: 'new', context: { kind: 'ssh' as const, label: 'prod' } };
+    expect(manager.set({ commandHistory: [next] }).commandHistory).toEqual([next]);
+    const saved = JSON.parse((fsMock.writeFileSync as any).mock.calls.at(-1)[1]);
+    expect(saved.commandHistory).toEqual([next]);
+    expect(JSON.stringify(saved.commandHistory)).not.toContain('output');
+  });
+
+  it('rejects malformed, duplicate, and 257-entry live history atomically and rolls cache back on write failure', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const valid = (id: string) => ({ id, command: 'pwd', startedAt: 1, durationMs: 1, context: { kind: 'local' as const, cwd: '/repo' } });
+    expect(() => manager.set({ commandHistory: [{ ...valid('bad'), output: 'secret' }] as any })).toThrow('Invalid settings update');
+    expect(() => manager.set({ commandHistory: [valid('x'), valid('x')] })).toThrow('Invalid settings update');
+    expect(() => manager.set({ commandHistory: Array.from({ length: 257 }, (_, i) => valid(String(i))) })).toThrow('Invalid settings update');
+    expect(manager.get().commandHistory).toEqual([]);
+    (fsMock.renameSync as any).mockImplementationOnce(() => { throw new Error('disk full'); });
+    expect(() => manager.set({ commandHistory: [valid('kept')] })).toThrow('Could not persist settings');
+    expect(manager.get().commandHistory).toEqual([]);
+  });
+
+  it('round-trips valid notification settings', async () => {
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    expect(manager.set({ notificationsEnabled: true, notificationThresholdSeconds: 86_400 }))
+      .toMatchObject({ notificationsEnabled: true, notificationThresholdSeconds: 86_400 });
+  });
+
+  it.each([undefined, null, 0, 1.5, 86_401, '10'])('normalizes a malformed legacy notification threshold: %s', async (value) => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      theme: 'dracula', notificationThresholdSeconds: value,
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    expect(new SettingsManager().get()).toMatchObject({ theme: 'dracula', notificationThresholdSeconds: 10 });
+  });
+
+  it.each([0, 1.5, 86_401, '10'])('rejects malformed live notification threshold atomically: %s', async (value) => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    expect(() => manager.set({ notificationThresholdSeconds: value } as any)).toThrow(/invalid settings/i);
+    expect(manager.get().notificationThresholdSeconds).toBe(10);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('rolls back both notification settings after persistence failure', async () => {
+    const fsMock = await import('fs');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(fsMock.renameSync).mockImplementationOnce(() => { throw new Error('blocked'); });
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    expect(() => manager.set({ notificationsEnabled: true, notificationThresholdSeconds: 20 })).toThrow();
+    expect(manager.get()).toMatchObject({ notificationsEnabled: false, notificationThresholdSeconds: 10 });
+  });
+
+  it('round-trips a configured semantic rerun shortcut', async () => {
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    expect(manager.set({
+      keybindings: { ...manager.get().keybindings, 'rerun-command': 'Alt+R' },
+    }).keybindings['rerun-command']).toBe('Alt+R');
   });
 
   it('updates settings partially', async () => {
@@ -134,7 +222,7 @@ describe('SettingsManager', () => {
     expect(keyProfile).not.toHaveProperty('password');
     expect(safeStorage.decryptString).toHaveBeenCalledTimes(2);
 
-    manager.set({ fontSize: 16 });
+    manager.set({ notificationsEnabled: true, notificationThresholdSeconds: 20 });
     const saved = JSON.parse((fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string);
     expect(saved.sshProfiles[0]).toMatchObject({ passwordSecret });
     expect(saved.sshProfiles[0].privateKeySecret).toBeUndefined();
@@ -153,6 +241,51 @@ describe('SettingsManager', () => {
 
     const { SettingsManager } = await import('../../src/main/settings');
     expect(new SettingsManager().get().sshProfiles.map((profile) => profile.port)).toEqual([22, 22]);
+  });
+
+  it('retains only a valid jump-host profile reference without copying credentials', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      sshProfiles: [
+        { id: 'jump', host: 'bastion.example', port: 22, auth: 'key' },
+        { id: 'target', host: 'target.internal', port: 22, auth: 'password', jumpHostProfileId: 'jump' },
+        { id: 'bad', host: 'bad.internal', port: 22, auth: 'password', jumpHostProfileId: 42 },
+      ],
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const settings = new SettingsManager().get();
+    expect(settings.sshProfiles[1]).toMatchObject({ id: 'target', jumpHostProfileId: 'jump' });
+    expect(settings.sshProfiles[2]).not.toHaveProperty('jumpHostProfileId');
+  });
+
+  it('rejects cyclic runtime jump-host profiles atomically', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const before = manager.get();
+
+    expect(() => manager.set({ sshProfiles: [
+      { id: 'a', host: 'a.example', port: 22, auth: 'password', jumpHostProfileId: 'b' },
+      { id: 'b', host: 'b.example', port: 22, auth: 'password', jumpHostProfileId: 'a' },
+    ] })).toThrow(/invalid settings/i);
+    expect(manager.get()).toEqual(before);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('removes legacy cyclic jump-host links deterministically while preserving valid links', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({ sshProfiles: [
+      { id: 'a', host: 'a.example', port: 22, auth: 'password', jumpHostProfileId: 'b' },
+      { id: 'b', host: 'b.example', port: 22, auth: 'password', jumpHostProfileId: 'a' },
+      { id: 'jump', host: 'jump.example', port: 22, auth: 'password' },
+      { id: 'target', host: 'target.example', port: 22, auth: 'password', jumpHostProfileId: 'jump' },
+    ] }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const profiles = new SettingsManager().get().sshProfiles;
+
+    expect(profiles.find(({ id }) => id === 'a')).not.toHaveProperty('jumpHostProfileId');
+    expect(profiles.find(({ id }) => id === 'b')).not.toHaveProperty('jumpHostProfileId');
+    expect(profiles.find(({ id }) => id === 'target')).toMatchObject({ jumpHostProfileId: 'jump' });
   });
 
   it('drops malformed and duplicate legacy keyed entries without resetting unrelated settings', async () => {

@@ -28,7 +28,7 @@ import type { AgentLifecycleEvent } from '../terminalAwareness';
 import { createKittyGraphicsLayer } from '../kittyGraphics';
 import { refreshCoordinator } from '../refreshCoordinator';
 import { TERMINAL_SEARCH_REQUEST_EVENT, TerminalSearchRequestDetail } from '../terminalSearch';
-import { TERMINAL_PASTE_REQUEST_EVENT, TerminalPasteRequestDetail } from '../terminalPaste';
+import { requestTerminalPaste, TERMINAL_PASTE_REQUEST_EVENT, TerminalPasteRequestDetail } from '../terminalPaste';
 import {
   canDropTerminalPath,
   endTerminalPathDrag,
@@ -38,6 +38,7 @@ import {
   readTerminalPathDragData,
 } from '../terminalPathDrag';
 import { DEFAULT_TERMINAL_FONT_FAMILY } from '../../shared/typography';
+import { SemanticCommandTimeline, type SemanticCommandEvent } from '../semanticCommands';
 import type { TerminalLeaf } from '../types';
 import '@xterm/xterm/css/xterm.css';
 
@@ -54,6 +55,8 @@ interface TerminalPaneProps {
   onCwdChange?: (termId: string, cwd: string) => void;
   onFocus?: (termId: string) => void;
   onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+  onSemanticCommand?: (termId: string, event: SemanticCommandEvent) => void;
+  onBroadcastInput?: (termId: string, data: string, binary?: boolean) => boolean;
   initialCwd?: string;
   startupCommands?: string[];
   startupShellDialect?: TerminalLeaf['startupShellDialect'];
@@ -113,7 +116,10 @@ interface CachedTerminalPane {
   sshNoticeState: SshNoticeState;
   sshNoticeListener: ((state: SshNoticeState) => void) | null;
   agentEventListener: ((termId: string, event: AgentLifecycleEvent) => void) | null;
+  broadcastInputListener: TerminalPaneProps['onBroadcastInput'];
   inputSource: { userInput: boolean };
+  semanticCommands: SemanticCommandTimeline;
+  semanticCommandListener: { current: TerminalPaneProps['onSemanticCommand'] };
 }
 
 const terminalPaneCache = new Map<string, CachedTerminalPane>();
@@ -141,6 +147,8 @@ export default function TerminalPane({
   onCwdChange,
   onFocus,
   onAgentEvent,
+  onSemanticCommand,
+  onBroadcastInput,
   initialCwd,
   startupCommands,
   startupShellDialect,
@@ -169,7 +177,11 @@ export default function TerminalPane({
   const searchVisibleRef = useRef(false);
   searchVisibleRef.current = searchVisible;
   const cachedForAgentListener = terminalPaneCache.get(termId);
-  if (cachedForAgentListener) cachedForAgentListener.agentEventListener = onAgentEvent ?? null;
+  if (cachedForAgentListener) {
+    cachedForAgentListener.agentEventListener = onAgentEvent ?? null;
+    cachedForAgentListener.semanticCommandListener.current = onSemanticCommand;
+    cachedForAgentListener.broadcastInputListener = onBroadcastInput;
+  }
 
   useEffect(() => {
     componentMountedRef.current = true;
@@ -284,6 +296,7 @@ export default function TerminalPane({
     searchAddon: SearchAddon,
     initialDelay: number,
     inputSource: { userInput: boolean },
+    semanticCommands: SemanticCommandTimeline,
   ) => {
     const mountCleanup: unknown[] = [];
     const cached = terminalPaneCache.get(termId);
@@ -334,6 +347,28 @@ export default function TerminalPane({
         setSearchVisible((visible) => !visible);
         return false;
       }
+      if (e.type === 'keydown') {
+        const action = matchesShortcut(e, currentBindings['previous-command'])
+          ? () => semanticCommands.previous()
+          : matchesShortcut(e, currentBindings['next-command'])
+            ? () => semanticCommands.next()
+            : matchesShortcut(e, currentBindings['copy-command'])
+              ? () => Boolean(semanticCommands.current()?.command && window.janet.copyTerminalText(semanticCommands.current()!.command))
+              : matchesShortcut(e, currentBindings['copy-command-output'])
+                ? () => Boolean(semanticCommands.current()?.output && window.janet.copyTerminalText(semanticCommands.current()!.output))
+                : matchesShortcut(e, currentBindings['rerun-command'])
+                  ? () => {
+                      const command = semanticCommands.current()?.command;
+                      if (!command) return false;
+                      requestTerminalPaste(termId, command);
+                      return true;
+                    }
+                  : null;
+        if (action?.()) {
+          e.preventDefault();
+          return false;
+        }
+      }
       if (e.key === 'Escape' && searchVisibleRef.current) {
         e.preventDefault();
         closeSearch();
@@ -376,6 +411,8 @@ export default function TerminalPane({
     ) {
       const { term, fitAddon, searchAddon } = cached;
       cached.sshNoticeListener = setSshNoticeState;
+      cached.semanticCommandListener.current = onSemanticCommand;
+      cached.broadcastInputListener = onBroadcastInput;
 
       if (term.element && term.element.parentElement !== container) {
         container.appendChild(term.element);
@@ -385,7 +422,7 @@ export default function TerminalPane({
 
       repaintTerminal(term, fitAddon);
       const repaintTimer = setTimeout(() => repaintTerminal(term, fitAddon), 0);
-      const mountCleanup = attachTerminal(container, term, fitAddon, searchAddon, 0, cached.inputSource);
+      const mountCleanup = attachTerminal(container, term, fitAddon, searchAddon, 0, cached.inputSource, cached.semanticCommands);
       mountCleanup.push(() => clearTimeout(repaintTimer));
       if (tabType !== 'ssh') {
         publishSshNoticeState({ kind: 'hidden' });
@@ -399,6 +436,13 @@ export default function TerminalPane({
         const currentCache = terminalPaneCache.get(termId);
         if (currentCache?.sshNoticeListener === setSshNoticeState) {
           currentCache.sshNoticeListener = null;
+        }
+        const currentSemanticListener = currentCache?.semanticCommandListener;
+        if (currentSemanticListener && currentSemanticListener.current === onSemanticCommand) {
+          currentSemanticListener.current = undefined;
+        }
+        if (currentCache && currentCache.broadcastInputListener === onBroadcastInput) {
+          currentCache.broadcastInputListener = undefined;
         }
         termRef.current = null;
         fitAddonRef.current = null;
@@ -462,9 +506,32 @@ export default function TerminalPane({
 
     const lifetimeCleanup: unknown[] = [];
     const inputSource = { userInput: false };
+    const semanticCommandListener = { current: onSemanticCommand };
+    const semanticCommands = new SemanticCommandTimeline(
+      term,
+      (event) => semanticCommandListener.current?.(termId, event),
+    );
+    let startupMarked = false;
+    let promptMarked = false;
+    const markShellReady = () => {
+      if (startupMarked && promptMarked) term.textarea?.setAttribute('data-shell-ready', 'true');
+    };
+    lifetimeCleanup.push(term.parser.registerOscHandler(133, (data) => {
+      if (data === 'B') {
+        promptMarked = true;
+        markShellReady();
+      }
+      return semanticCommands.handleOsc(data);
+    }));
+    lifetimeCleanup.push(semanticCommands);
     const kittyGraphics = tabType === 'local' ? createKittyGraphicsLayer(term) : null;
     if (kittyGraphics) lifetimeCleanup.push(kittyGraphics);
     lifetimeCleanup.push(term.parser.registerOscHandler(777, (data) => {
+      if (data === 'janet-ready') {
+        startupMarked = true;
+        markShellReady();
+        return true;
+      }
       const decoded = decodeAgentOsc(data);
       if (!decoded.recognized) return false;
       if (decoded.event) terminalPaneCache.get(termId)?.agentEventListener?.(termId, decoded.event);
@@ -474,6 +541,7 @@ export default function TerminalPane({
     const disposable = term.onData((data) => {
       const userInput = inputSource.userInput;
       inputSource.userInput = false;
+      if (userInput && terminalPaneCache.get(termId)?.broadcastInputListener?.(termId, data)) return;
       if (tabType === 'local') {
         window.janet.terminalWrite({ id: termId, data, userInput });
       } else if (tabType === 'ssh') {
@@ -485,6 +553,7 @@ export default function TerminalPane({
     const binaryDisposable = term.onBinary((data) => {
       const userInput = inputSource.userInput;
       inputSource.userInput = false;
+      if (userInput && terminalPaneCache.get(termId)?.broadcastInputListener?.(termId, data, true)) return;
       if (tabType === 'local') {
         window.janet.terminalWriteBinary({ id: termId, data, userInput });
       } else {
@@ -545,7 +614,7 @@ export default function TerminalPane({
     }
 
 
-    const mountCleanup = attachTerminal(container, term, fitAddon, searchAddon, 100, inputSource);
+    const mountCleanup = attachTerminal(container, term, fitAddon, searchAddon, 100, inputSource, semanticCommands);
 
     if (tabType === 'local') {
       let lastReportedCwd: string | null = initialCwd || null;
@@ -586,7 +655,10 @@ export default function TerminalPane({
           : { kind: 'reconnecting' },
       sshNoticeListener: setSshNoticeState,
       agentEventListener: onAgentEvent ?? null,
+      broadcastInputListener: onBroadcastInput,
       inputSource,
+      semanticCommands,
+      semanticCommandListener,
     });
 
     return () => {
@@ -596,6 +668,13 @@ export default function TerminalPane({
       const currentCache = terminalPaneCache.get(termId);
       if (currentCache?.sshNoticeListener === setSshNoticeState) {
         currentCache.sshNoticeListener = null;
+      }
+      const currentSemanticListener = currentCache?.semanticCommandListener;
+      if (currentSemanticListener && currentSemanticListener.current === onSemanticCommand) {
+        currentSemanticListener.current = undefined;
+      }
+      if (currentCache && currentCache.broadcastInputListener === onBroadcastInput) {
+        currentCache.broadcastInputListener = undefined;
       }
       termRef.current = null;
       fitAddonRef.current = null;

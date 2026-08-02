@@ -7,6 +7,7 @@ import Sidebar, { WorkspaceToolSection } from './components/Sidebar';
 import StatusBar from './components/StatusBar';
 import CommandPalette, { CommandAction } from './components/CommandPalette';
 import SnippetPicker from './components/SnippetPicker';
+import CommandHistoryPicker from './components/CommandHistoryPicker';
 import ShortcutEditor from './components/ShortcutEditor';
 import ThemeSwitcher from './components/ThemeSwitcher';
 import UpdateBanner from './components/UpdateBanner';
@@ -35,10 +36,13 @@ import { requestTerminalSearch } from './terminalSearch';
 import { requestTerminalPaste } from './terminalPaste';
 import { formatTerminalPathForPaste } from './terminalPathDrag';
 import type { FileExplorerSource } from './fileExplorerSource';
+import type { SemanticCommandEvent } from './semanticCommands';
+import type { CommandNotificationPayload } from '../shared/commandNotifications';
 import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
 import { useEditorDocuments } from './useEditorDocuments';
 import { emptyTabDocumentWorkspace, isEditorDocumentDirty, type EditorResource } from './editorDocuments';
 import { snippetTextForPaste, type Snippet } from '../shared/snippets';
+import { MAX_COMMAND_HISTORY_ENTRIES, type CommandHistoryEntry } from '../shared/commandHistory';
 import {
   acknowledgeAgentAwareness,
   aggregateAgentStatus,
@@ -150,6 +154,27 @@ function sshSessionInfo(sessionId: string, profile: SavedSSHProfile): SessionInf
   };
 }
 
+function sshConnectProfile(profile: SavedSSHProfile, profiles: SavedSSHProfile[]) {
+  const jumpHost = profile.jumpHostProfileId
+    ? profiles.find((candidate) => candidate.id === profile.jumpHostProfileId)
+    : undefined;
+  if (profile.jumpHostProfileId && (!jumpHost || jumpHost.id === profile.id)) {
+    throw new Error('Saved jump host is missing or invalid');
+  }
+  return {
+    host: profile.host, port: profile.port,
+    ...(profile.username ? { username: profile.username } : {}), auth: profile.auth,
+    password: profile.auth === 'password' ? profile.password : undefined,
+    privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+    ...(jumpHost ? { jumpHost: {
+      host: jumpHost.host, port: jumpHost.port,
+      ...(jumpHost.username ? { username: jumpHost.username } : {}), auth: jumpHost.auth,
+      ...(jumpHost.auth === 'password' && jumpHost.password ? { password: jumpHost.password } : {}),
+      ...(jumpHost.auth === 'key' && jumpHost.privateKey ? { privateKey: jumpHost.privateKey } : {}),
+    } } : {}),
+  };
+}
+
 function stripStartupAutomation(leaf: TerminalLeaf): TerminalLeaf {
   const {
     startupCommands: _startupCommands,
@@ -202,6 +227,9 @@ interface InitialAppState {
   fontFamily: string;
   sidebarSide: 'left' | 'right';
   snippets: Snippet[];
+  commandHistory: CommandHistoryEntry[];
+  notificationsEnabled: boolean;
+  notificationThresholdSeconds: number;
 }
 
 function createInitialAppState(settings: any): InitialAppState {
@@ -264,6 +292,9 @@ function createInitialAppState(settings: any): InitialAppState {
     fontFamily: normalizeTerminalFontFamily(s.fontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY),
     sidebarSide: s.sidebarSide === 'left' ? 'left' : 'right',
     snippets: Array.isArray(s.snippets) ? s.snippets : [],
+    commandHistory: Array.isArray(s.commandHistory) ? s.commandHistory : [],
+    notificationsEnabled: s.notificationsEnabled === true,
+    notificationThresholdSeconds: Number.isInteger(s.notificationThresholdSeconds) ? s.notificationThresholdSeconds : 10,
   };
 }
 
@@ -283,12 +314,21 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const responsiveTabsCollapsedRef = useRef(false);
   const [sidebarSection, setSidebarSection] = useState<WorkspaceToolSection>(initialState.sidebarSection);
   const [sshSessions, setSshSessions] = useState<SessionInfo[]>([]);
+  const sshSessionsRef = useRef(sshSessions);
+  sshSessionsRef.current = sshSessions;
   const [readySshSessionIds, setReadySshSessionIds] = useState<Set<string>>(new Set());
   const [disconnectedSshSessionIds, setDisconnectedSshSessionIds] = useState<Set<string>>(new Set());
   const [sshConnectionEpochById, setSshConnectionEpochById] = useState<Record<string, number>>({});
   const [sshProfiles, setSshProfiles] = useState<SavedSSHProfile[]>(initialState.sshProfiles);
+  const sshProfilesRef = useRef(sshProfiles);
+  sshProfilesRef.current = sshProfiles;
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>(initialState.workspaceTabs);
   const [maximizedLeafByTab, setMaximizedLeafByTab] = useState<Record<string, string | null>>({});
+  const [broadcastRecipientIds, setBroadcastRecipientIds] = useState<Set<string>>(new Set());
+  const [broadcastArmed, setBroadcastArmed] = useState(false);
+  const [broadcastConfirmationOpen, setBroadcastConfirmationOpen] = useState(false);
+  const broadcastRecipientIdsRef = useRef(broadcastRecipientIds);
+  broadcastRecipientIdsRef.current = broadcastRecipientIds;
   const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null);
   const [paneDropTarget, setPaneDropTarget] = useState<{ leafId: string; side: PaneDropSide } | null>(null);
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
@@ -347,6 +387,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   useEffect(() => {
     if (!window.janet.onSSHConnectionClosed) return undefined;
     return window.janet.onSSHConnectionClosed(({ id }) => {
+      const disconnectedRecipient = tabsRef.current.flatMap(collectTerminalOwners)
+        .some((owner) => owner.sshSessionId === id && broadcastRecipientIdsRef.current.has(owner.termId));
+      if (disconnectedRecipient) setBroadcastRecipientIds(new Set());
       setSshSessions((current) => current.filter((session) => session.id !== id));
       setReadySshSessionIds((current) => {
         if (!current.has(id)) return current;
@@ -366,6 +409,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const restoredSshLeavesStartedRef = useRef(false);
   const [paletteVisible, setPaletteVisible] = useState(false);
   const [snippetsVisible, setSnippetsVisible] = useState(false);
+  const [historyVisible, setHistoryVisible] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(initialState.settingsOpen);
   const [sshConnectionsOpen, setSshConnectionsOpen] = useState(initialState.sshConnectionsOpen);
   const [pendingDestructiveAction, setPendingDestructiveAction] = useState<PendingDestructiveAction | null>(null);
@@ -411,6 +455,11 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [fontFamily] = useState(initialState.fontFamily);
   const [sidebarSide, setSidebarSide] = useState<'left' | 'right'>(initialState.sidebarSide);
   const [snippets, setSnippets] = useState<Snippet[]>(initialState.snippets);
+  const [commandHistory, setCommandHistory] = useState<CommandHistoryEntry[]>(initialState.commandHistory);
+  const commandHistoryRef = useRef(commandHistory);
+  const historySaveQueueRef = useRef(Promise.resolve());
+  const [notificationsEnabled, setNotificationsEnabled] = useState(initialState.notificationsEnabled);
+  const [notificationThresholdSeconds, setNotificationThresholdSeconds] = useState(initialState.notificationThresholdSeconds);
   const settingsLoadedRef = useRef(true);
 
   const { bindings, matches, on } = useKeybindings();
@@ -451,12 +500,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       connectingSshSessionIdsRef.current.add(sessionId);
       window.janet.sshConnect({
         id: sessionId,
-        host: profile.host,
-        port: profile.port,
-        ...(profile.username ? { username: profile.username } : {}),
-        auth: profile.auth,
-        password: profile.auth === 'password' ? profile.password : undefined,
-        privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+        ...sshConnectProfile(profile, sshProfiles),
       }).then(() => {
         if (
           releasedSshSessionIdsRef.current.has(sessionId) ||
@@ -522,10 +566,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       }
       connectingSshSessionIdsRef.current.add(leaf.sshSessionId);
       window.janet.sshConnect({
-        id: leaf.sshSessionId, host: profile.host, port: profile.port,
-        ...(profile.username ? { username: profile.username } : {}), auth: profile.auth,
-        password: profile.auth === 'password' ? profile.password : undefined,
-        privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+        id: leaf.sshSessionId, ...sshConnectProfile(profile, sshProfiles),
       }).then(() => {
         if (
           releasedSshSessionIdsRef.current.has(leaf.sshSessionId) ||
@@ -612,6 +653,17 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     try { window.janet.setSettings({ snippets: next }).catch(() => {}); } catch {}
   }, []);
 
+  const persistNotificationsEnabled = useCallback((enabled: boolean) => {
+    setNotificationsEnabled(enabled);
+    window.janet.setSettings({ notificationsEnabled: enabled }).catch(() => {});
+  }, []);
+
+  const persistNotificationThreshold = useCallback((seconds: number) => {
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 86_400) return;
+    setNotificationThresholdSeconds(seconds);
+    window.janet.setSettings({ notificationThresholdSeconds: seconds }).catch(() => {});
+  }, []);
+
   // Persist keybindings when they change
   const handleKeybindingsChange = useCallback((newBindings: Record<KeybindingAction, string>) => {
     try { window.janet.setSettings({ keybindings: newBindings }).catch(() => {}); } catch {}
@@ -657,6 +709,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       const owner = tabsRef.current.flatMap(collectTerminalOwners)
         .find((candidate) => candidate.termId === id);
       if (owner?.type !== 'local') return;
+      if (broadcastRecipientIdsRef.current.has(id)) setBroadcastRecipientIds(new Set());
       setLocalTransportByTerminal((current) => (
         current[id] === 'exited' ? current : { ...current, [id]: 'exited' }
       ));
@@ -696,6 +749,63 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     });
   }, []);
 
+  const handleSemanticCommand = useCallback((tabId: string, termId: string, event: SemanticCommandEvent) => {
+    const owners = tabsRef.current.filter((tab) => (
+      tab.id === tabId && getAllLeafIds(tab.root).includes(termId)
+    ));
+    if (owners.length !== 1) return;
+    const owner = owners[0];
+    const leaf = findLeaf(owner.root, termId);
+    if (!leaf) return;
+    const leafType = leaf.terminalType ?? owner.type;
+    const payload: CommandNotificationPayload = {
+      durationMs: event.durationMs,
+      outcome: event.exitCode === undefined ? 'unknown' : event.exitCode === 0 ? 'success' : 'failure',
+      tabLabel: owner.title.trim().slice(0, 256) || 'Terminal',
+      paneLabel: displayPaneTitle(leaf, owner.type).slice(0, 256),
+      context: leafType === 'ssh'
+        ? { kind: 'ssh', hostLabel: (sshProfiles.find((profile) => profile.id === (leaf.sshProfileId ?? owner.sshProfileId))?.host ?? 'SSH').slice(0, 512) }
+        : { kind: 'local' },
+    };
+    window.janet.notifyCommandCompleted(payload).catch(() => {});
+
+    historySaveQueueRef.current = historySaveQueueRef.current.then(async () => {
+      const currentOwner = tabsRef.current.find((tab) => tab.id === tabId);
+      const currentLeaf = currentOwner && findLeaf(currentOwner.root, termId);
+      if (!currentOwner || !currentLeaf) return;
+      const terminalType = currentLeaf.terminalType ?? currentOwner.type;
+      let context: CommandHistoryEntry['context'];
+      if (terminalType === 'local') {
+        const cwd = cwdByTerminalRef.current[termId] || currentLeaf.cwd || currentOwner.cwd || homeDir;
+        if (!cwd) return;
+        context = { kind: 'local', cwd };
+      } else {
+        const sessionId = currentLeaf.sshSessionId ?? currentOwner.sshSessionId;
+        const profileId = currentLeaf.sshProfileId ?? currentOwner.sshProfileId;
+        const session = sshSessionsRef.current.find((candidate) => candidate.id === sessionId);
+        const profile = sshProfilesRef.current.find((candidate) => candidate.id === profileId);
+        const host = session?.host ?? profile?.host;
+        if (!host) return;
+        const username = session?.username ?? profile?.username;
+        const port = session?.port ?? profile?.port;
+        context = { kind: 'ssh', label: `${username ? `${username}@` : ''}${host}${port ? `:${port}` : ''}` };
+      }
+      const entry: CommandHistoryEntry = {
+        id: crypto.randomUUID(), command: event.command, startedAt: event.startedAt,
+        durationMs: event.durationMs,
+        ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }), context,
+      };
+      const next = [entry, ...commandHistoryRef.current].slice(0, MAX_COMMAND_HISTORY_ENTRIES);
+      try {
+        await window.janet.setSettings({ commandHistory: next });
+        commandHistoryRef.current = next;
+        setCommandHistory(next);
+      } catch (error) {
+        console.error('Failed to save command history:', error);
+      }
+    });
+  }, [homeDir, sshProfiles]);
+
   const transportByTerminal = useMemo(() => Object.fromEntries(
     tabs.flatMap((tab) => collectTerminalOwners(tab).flatMap((owner) => {
       const transport = owner.type === 'local'
@@ -719,6 +829,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   ), [awarenessByTerminal, tabs, transportByTerminal]);
 
   const selectTerminalTab = useCallback((tabId: string) => {
+    setBroadcastRecipientIds(new Set());
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
     if (tab) {
       const ownedTerminals = new Set(getAllLeafIds(tab.root));
@@ -748,6 +859,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     if (owners.length === 0) return;
 
     const removedTerminals = new Set(owners.map((owner) => owner.termId));
+    setBroadcastRecipientIds((current) => (
+      [...current].some((termId) => removedTerminals.has(termId)) ? new Set() : current
+    ));
     setLocalTransportByTerminal((current) => {
       const next = Object.fromEntries(
         Object.entries(current).filter(([termId]) => !removedTerminals.has(termId)),
@@ -866,6 +980,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         root: createTabRoot(type),
       };
       const next = [...tabsRef.current, tab];
+      setBroadcastRecipientIds(new Set());
       tabsRef.current = next;
       setTabs(next);
       setActiveTabId(tab.id);
@@ -1063,12 +1178,72 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   );
 
   const handleToggleMaximizePane = useCallback((tabId: string, leafId: string) => {
+    setBroadcastRecipientIds(new Set());
     setFocusedTerminalId(leafId);
     setMaximizedLeafByTab((prev) => ({
       ...prev,
       [tabId]: prev[tabId] === leafId ? null : leafId,
     }));
   }, []);
+
+  const handleBroadcastRecipientChange = useCallback((termId: string, selected: boolean) => {
+    setBroadcastRecipientIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(termId);
+      else next.delete(termId);
+      if (!broadcastArmed && next.size >= 2) setBroadcastConfirmationOpen(true);
+      if (next.size < 2) setBroadcastArmed(false);
+      return next;
+    });
+  }, [broadcastArmed]);
+
+  const handleBroadcastInput = useCallback((sourceTermId: string, data: string, binary = false): boolean => {
+    const recipients = [...broadcastRecipientIds];
+    if (!broadcastArmed || recipients.length < 2 || !broadcastRecipientIds.has(sourceTermId)) return false;
+    const activeTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current);
+    const owners = activeTab ? collectTerminalOwners(activeTab) : [];
+    const selectedOwners = recipients.map((termId) => owners.find((owner) => owner.termId === termId));
+    const allReady = selectedOwners.every((owner) => owner
+      && liveTerminalIdsRef.current.has(owner.termId)
+      && localTransportByTerminal[owner.termId] !== 'exited'
+      && (owner.type === 'local' || (owner.sshSessionId
+        && !disconnectedSshSessionIds.has(owner.sshSessionId)
+        && readySshSessionIds.has(owner.sshSessionId))));
+    if (!allReady) {
+      setBroadcastRecipientIds(new Set());
+      return false;
+    }
+    for (const owner of selectedOwners as TerminalOwner[]) {
+      if (owner.type === 'local') {
+        if (binary) window.janet.terminalWriteBinary({ id: owner.termId, data, userInput: true });
+        else window.janet.terminalWrite({ id: owner.termId, data, userInput: true });
+      } else if (binary) {
+        window.janet.sshWriteShellBinary({ sessionId: owner.sshSessionId, termId: owner.termId, data, userInput: true });
+      } else {
+        window.janet.sshWriteShell({ sessionId: owner.sshSessionId, termId: owner.termId, data, userInput: true });
+      }
+    }
+    return true;
+  }, [broadcastArmed, broadcastRecipientIds, disconnectedSshSessionIds, localTransportByTerminal, readySshSessionIds]);
+
+  useEffect(() => {
+    if (broadcastRecipientIds.size >= 2) return;
+    setBroadcastArmed(false);
+    setBroadcastConfirmationOpen(false);
+  }, [broadcastRecipientIds.size]);
+
+  useEffect(() => {
+    if (!broadcastArmed || broadcastRecipientIds.size < 2) return undefined;
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      setBroadcastArmed(false);
+      setBroadcastRecipientIds(new Set());
+    };
+    window.addEventListener('keydown', cancelOnEscape, true);
+    return () => window.removeEventListener('keydown', cancelOnEscape, true);
+  }, [broadcastArmed, broadcastRecipientIds.size]);
 
   const handleClosePane = useCallback(
     (tabId: string, leafId: string) => {
@@ -1286,12 +1461,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       try {
         await window.janet.sshConnect({
           id: sessionId,
-          host: profile.host,
-          port: profile.port,
-          ...(profile.username ? { username: profile.username } : {}),
-          auth: profile.auth,
-          password: profile.auth === 'password' ? profile.password : undefined,
-          privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+          ...sshConnectProfile(profile, sshProfiles),
         });
         if (
           releasedSshSessionIdsRef.current.has(sessionId) ||
@@ -1422,10 +1592,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       connectingSshSessionIdsRef.current.add(leaf.sshSessionId);
       try {
         await window.janet.sshConnect({
-          id: leaf.sshSessionId, host: profile.host, port: profile.port,
-          ...(profile.username ? { username: profile.username } : {}), auth: profile.auth,
-          password: profile.auth === 'password' ? profile.password : undefined,
-          privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
+          id: leaf.sshSessionId, ...sshConnectProfile(profile, sshProfiles),
         });
         if (
           releasedSshSessionIdsRef.current.has(leaf.sshSessionId) ||
@@ -1731,6 +1898,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         shortcut: bindings['snippets-toggle'], handler: () => setSnippetsVisible(true),
       },
       {
+        id: 'command-history', label: 'Open command history', category: 'Terminal',
+        handler: () => setHistoryVisible(true),
+      },
+      {
         id: 'check-updates', label: 'Check for updates', category: 'General',
         handler: () => { window.janet.checkForUpdates().catch(() => {}); },
       },
@@ -1846,6 +2017,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
               onFontSizeChange={persistFontSize}
               sidebarSide={sidebarSide}
               onSidebarSideChange={persistSidebarSide}
+              notificationsEnabled={notificationsEnabled}
+              notificationThresholdSeconds={notificationThresholdSeconds}
+              onNotificationsEnabledChange={persistNotificationsEnabled}
+              onNotificationThresholdSecondsChange={persistNotificationThreshold}
             />
             <ShortcutEditor />
           </div>
@@ -1890,6 +2065,12 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           </Tooltip>
         )}
         <div key="terminal" className="terminal-area">
+          {broadcastArmed && broadcastRecipientIds.size >= 2 && (
+            <div className="broadcast-input-banner" role="status" aria-label="Broadcast input active">
+              <strong>Broadcast input active · {broadcastRecipientIds.size} panes</strong>
+              <button type="button" onClick={() => { setBroadcastArmed(false); setBroadcastRecipientIds(new Set()); }}>Cancel broadcast input</button>
+            </div>
+          )}
           <WorkspaceContent
             tabId={activeTab.id}
             documents={activeDocuments}
@@ -1912,6 +2093,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
                 onTerminalReady={handleTerminalReady}
                 onTerminalRemoved={handleTerminalRemoved}
                 onAgentEvent={handleAgentEvent}
+                onSemanticCommand={handleSemanticCommand}
+                onBroadcastInput={handleBroadcastInput}
+                broadcastRecipientIds={broadcastRecipientIds}
+                onBroadcastRecipientChange={handleBroadcastRecipientChange}
                 awarenessByTerminal={awarenessByTerminal}
                 transportByTerminal={transportByTerminal}
                 onSplitPane={(leafId, dir) => handleSplitPane(activeTab.id, leafId, dir)}
@@ -1962,6 +2147,18 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           if (sidebarTerminalId && text) requestTerminalPaste(sidebarTerminalId, text);
         }}
       />
+      <CommandHistoryPicker
+        visible={historyVisible}
+        entries={commandHistory}
+        onClose={() => setHistoryVisible(false)}
+        onSelect={(entry) => {
+          const tab = tabsRef.current.find((candidate) => candidate.id === activeTabIdRef.current);
+          if (!tab) return;
+          const termId = preferredLeafId(tab, focusedTerminalId, maximizedLeafByTab[tab.id]);
+          const command = entry.command.replace(/[\r\n]+$/, '');
+          if (termId && command && findLeaf(tab.root, termId)) requestTerminalPaste(termId, command);
+        }}
+      />
       <UpdateBanner />
       <RenameDialog
         open={renameTarget !== null}
@@ -1971,6 +2168,22 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         fallbackFocus={() => terminalFocusTarget(renameTarget?.terminalId ?? null)}
         onCancel={() => setRenameTarget(null)}
         onSave={saveRename}
+      />
+      <ConfirmationDialog
+        open={broadcastConfirmationOpen}
+        title="Start broadcast input?"
+        description={`All typing and paste, including multiline or destructive commands, will go to ${broadcastRecipientIds.size} selected panes.`}
+        confirmLabel="Start broadcast input"
+        destructive={false}
+        onCancel={() => {
+          setBroadcastConfirmationOpen(false);
+          setBroadcastArmed(false);
+          setBroadcastRecipientIds(new Set());
+        }}
+        onConfirm={() => {
+          setBroadcastConfirmationOpen(false);
+          setBroadcastArmed(true);
+        }}
       />
       <ConfirmationDialog
         open={pendingDestructiveAction !== null}

@@ -17,6 +17,7 @@ async function importMainClipboardBridge() {
       on: vi.fn(),
       whenReady: vi.fn(() => Promise.resolve()),
       setPath: vi.fn(),
+      setAppUserModelId: vi.fn(),
     },
     protocol: {
       registerSchemesAsPrivileged: vi.fn(),

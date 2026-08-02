@@ -12,6 +12,10 @@ function renderThemeSwitcher(overrides?: Partial<React.ComponentProps<typeof The
       onFontSizeChange={vi.fn()}
       sidebarSide="left"
       onSidebarSideChange={vi.fn()}
+      notificationsEnabled={false}
+      notificationThresholdSeconds={10}
+      onNotificationsEnabledChange={vi.fn()}
+      onNotificationThresholdSecondsChange={vi.fn()}
       {...overrides}
     />,
   );
@@ -76,5 +80,26 @@ describe('ThemeSwitcher', () => {
     fireEvent.click(screen.getByText('Right'));
     expect(onSidebarSideChange).toHaveBeenCalledWith('right');
     expect(screen.getByRole('button', { name: 'Right' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('renders accessible bounded notification controls and invokes callbacks', () => {
+    const onNotificationsEnabledChange = vi.fn();
+    const onNotificationThresholdSecondsChange = vi.fn();
+    renderThemeSwitcher({ onNotificationsEnabledChange, onNotificationThresholdSecondsChange });
+    const enabled = screen.getByRole('checkbox', { name: 'Notify when long commands finish while JaneT is unfocused' });
+    const threshold = screen.getByRole('spinbutton', { name: 'Notification threshold (seconds)' }) as HTMLInputElement;
+    expect(enabled).not.toBeChecked();
+    expect(threshold).toBeDisabled();
+    expect(threshold).toHaveAttribute('min', '1');
+    expect(threshold).toHaveAttribute('max', '86400');
+    fireEvent.click(enabled);
+    expect(onNotificationsEnabledChange).toHaveBeenCalledWith(true);
+  });
+
+  it('changes the notification threshold while notifications are enabled', () => {
+    const onNotificationThresholdSecondsChange = vi.fn();
+    renderThemeSwitcher({ notificationsEnabled: true, onNotificationThresholdSecondsChange });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Notification threshold (seconds)' }), { target: { value: '42' } });
+    expect(onNotificationThresholdSecondsChange).toHaveBeenCalledWith(42);
   });
 });

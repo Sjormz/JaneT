@@ -20,6 +20,7 @@ import {
   type AgentLifecycleEvent,
   type TerminalTransportStatus,
 } from '../terminalAwareness';
+import type { SemanticCommandEvent } from '../semanticCommands';
 
 interface SplitPaneProps {
   node: PaneNode;
@@ -29,6 +30,10 @@ interface SplitPaneProps {
   onTerminalReady: (termId: string) => void;
   onTerminalRemoved: (termId: string) => void;
   onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+  onSemanticCommand?: (tabId: string, termId: string, event: SemanticCommandEvent) => void;
+  onBroadcastInput?: (termId: string, data: string, binary?: boolean) => boolean;
+  broadcastRecipientIds?: ReadonlySet<string>;
+  onBroadcastRecipientChange?: (termId: string, selected: boolean) => void;
   awarenessByTerminal?: Record<string, AgentAwareness>;
   transportByTerminal?: Record<string, TerminalTransportStatus>;
   onSplitPane: (leafId: string, direction: 'horizontal' | 'vertical') => void;
@@ -66,11 +71,16 @@ interface SplitPaneProps {
 /** Wraps a TerminalLeaf with split/close action buttons */
 function TerminalPaneLeaf({
   leaf,
+  tabId,
   tabType,
   sshSessionId,
   onTerminalReady,
   onTerminalRemoved,
   onAgentEvent,
+  onSemanticCommand,
+  onBroadcastInput,
+  broadcastSelected,
+  onBroadcastRecipientChange,
   awareness,
   transport,
   onSplitRight,
@@ -97,11 +107,16 @@ function TerminalPaneLeaf({
   totalPaneCount,
 }: {
   leaf: TerminalLeaf;
+  tabId: string;
   tabType: 'local' | 'ssh';
   sshSessionId?: string;
   onTerminalReady: (id: string) => void;
   onTerminalRemoved: (id: string) => void;
   onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+  onSemanticCommand?: (tabId: string, termId: string, event: SemanticCommandEvent) => void;
+  onBroadcastInput?: (termId: string, data: string, binary?: boolean) => boolean;
+  broadcastSelected?: boolean;
+  onBroadcastRecipientChange?: (termId: string, selected: boolean) => void;
   awareness?: AgentAwareness;
   transport?: TerminalTransportStatus;
   onSplitRight: () => void;
@@ -166,7 +181,7 @@ function TerminalPaneLeaf({
 
   return (
     <div
-      className={`terminal-leaf ${draggedLeafId === leaf.id ? 'pane-dragging' : ''}`}
+      className={`terminal-leaf ${draggedLeafId === leaf.id ? 'pane-dragging' : ''}${broadcastSelected ? ' broadcast-selected' : ''}`}
       style={{ viewTransitionName: `terminal-pane-${leaf.id.replace(/[^a-zA-Z0-9_-]/g, '_')}` }}
       onDragOver={(event) => {
         if (!draggedLeafId || draggedLeafId === leaf.id) return;
@@ -204,6 +219,15 @@ function TerminalPaneLeaf({
         </Tooltip>
         {status && <span className={`leaf-awareness ${status.kind}`}>{status.label}</span>}
         <div className="leaf-actions">
+          <Tooltip label={`${broadcastSelected ? 'Remove' : 'Include'} ${paneActionContext} ${broadcastSelected ? 'from' : 'in'} broadcast input`} placement="bottom">
+            <input
+              type="checkbox"
+              className="broadcast-recipient"
+              checked={broadcastSelected ?? false}
+              aria-label={`${broadcastSelected ? 'Remove' : 'Include'} ${paneActionContext} ${broadcastSelected ? 'from' : 'in'} broadcast input`}
+              onChange={(event) => onBroadcastRecipientChange?.(leaf.id, event.currentTarget.checked)}
+            />
+          </Tooltip>
           {hasMultiplePanes && (
             <Tooltip label={isMaximized ? 'Restore pane layout' : `Maximize pane — ${paneActionContext}`} placement="bottom">
               <button className="leaf-btn" onClick={toggleMaximize} aria-label={isMaximized ? 'Restore pane layout' : `Maximize pane — ${paneActionContext}`}>
@@ -234,6 +258,8 @@ function TerminalPaneLeaf({
           onReady={onTerminalReady}
           onRemoved={onTerminalRemoved}
           onAgentEvent={onAgentEvent}
+          onSemanticCommand={(termId, event) => onSemanticCommand?.(tabId, termId, event)}
+          onBroadcastInput={onBroadcastInput}
           themeName={themeName}
           fontSize={fontSize}
           fontFamily={fontFamily}
@@ -385,6 +411,10 @@ export default function SplitPane(props: SplitPaneProps) {
     onTerminalReady,
     onTerminalRemoved,
     onAgentEvent,
+    onSemanticCommand,
+    onBroadcastInput,
+    broadcastRecipientIds,
+    onBroadcastRecipientChange,
     awarenessByTerminal,
     transportByTerminal,
     onSplitPane,
@@ -415,11 +445,16 @@ export default function SplitPane(props: SplitPaneProps) {
     return (
       <TerminalPaneLeaf
         leaf={node}
+        tabId={tabId}
         tabType={tabType}
         sshSessionId={sshSessionId}
         onTerminalReady={onTerminalReady}
         onTerminalRemoved={onTerminalRemoved}
         onAgentEvent={onAgentEvent}
+        onSemanticCommand={onSemanticCommand}
+        onBroadcastInput={onBroadcastInput}
+        broadcastSelected={broadcastRecipientIds?.has(node.id)}
+        onBroadcastRecipientChange={onBroadcastRecipientChange}
         awareness={awarenessByTerminal?.[node.id]}
         transport={transportByTerminal?.[node.id]}
         onSplitRight={() => onSplitPane(node.id, 'vertical')}
@@ -463,6 +498,10 @@ export default function SplitPane(props: SplitPaneProps) {
             onTerminalReady={onTerminalReady}
             onTerminalRemoved={onTerminalRemoved}
             onAgentEvent={onAgentEvent}
+            onSemanticCommand={onSemanticCommand}
+            onBroadcastInput={onBroadcastInput}
+            broadcastRecipientIds={broadcastRecipientIds}
+            onBroadcastRecipientChange={onBroadcastRecipientChange}
             awarenessByTerminal={awarenessByTerminal}
             transportByTerminal={transportByTerminal}
             onSplitPane={onSplitPane}
@@ -519,6 +558,10 @@ export default function SplitPane(props: SplitPaneProps) {
               onTerminalReady={onTerminalReady}
               onTerminalRemoved={onTerminalRemoved}
               onAgentEvent={onAgentEvent}
+              onSemanticCommand={onSemanticCommand}
+              onBroadcastInput={onBroadcastInput}
+              broadcastRecipientIds={broadcastRecipientIds}
+              onBroadcastRecipientChange={onBroadcastRecipientChange}
               awarenessByTerminal={awarenessByTerminal}
               transportByTerminal={transportByTerminal}
               onSplitPane={onSplitPane}

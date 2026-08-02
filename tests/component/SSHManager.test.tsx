@@ -145,6 +145,25 @@ describe('SSHManager', () => {
     });
   });
 
+  it('saves a jump-host reference and uses its credentials without duplicating them', async () => {
+    const onProfilesChange = vi.fn();
+    const jump: SavedSSHProfile = { id: 'jump', host: 'bastion.example', port: 22, auth: 'key', privateKey: 'jump-key' };
+    renderSSHManager({ profiles: [jump], onProfilesChange });
+    fireEvent.click(screen.getByRole('button', { name: /new ssh connection/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Host' }), { target: { value: 'target.internal' } });
+    fireEvent.change(screen.getByLabelText('Jump host'), { target: { value: 'jump' } });
+    fireEvent.click(screen.getByRole('button', { name: /save and connect/i }));
+
+    await waitFor(() => expect(sshConnect).toHaveBeenCalledWith(expect.objectContaining({
+      host: 'target.internal', jumpHost: expect.objectContaining({ host: jump.host, privateKey: jump.privateKey }),
+    })));
+    expect(onProfilesChange).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({ host: 'target.internal', jumpHostProfileId: 'jump' }),
+    ]));
+    const target = onProfilesChange.mock.calls[0][0].find((profile: SavedSSHProfile) => profile.host === 'target.internal');
+    expect(target).not.toHaveProperty('jumpHost');
+  });
+
   it('does not allocate an SSH transport when terminal capacity is exhausted', () => {
     const onConnected = vi.fn();
     renderSSHManager({
