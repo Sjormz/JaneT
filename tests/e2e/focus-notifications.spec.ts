@@ -42,6 +42,9 @@ test('records focused and unfocused notification decisions without command or ou
       args: ['.'], cwd: root,
       env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData, JANET_E2E_EVENTS_PATH: eventsPath }),
     });
+    await app.evaluate(({ Notification }) => {
+      Object.defineProperty(Notification, 'isSupported', { value: () => true });
+    });
     const page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
     const terminal = page.locator('[data-terminal-id]').first();

@@ -449,7 +449,7 @@ async function closeApp(browser: Browser, electronProcess: ChildProcess, userDat
     await browser.close().catch(() => {});
   } finally {
     await killProcessTree(electronProcess);
-    if (userData) fs.rmSync(userData, { recursive: true, force: true });
+    if (userData) fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 

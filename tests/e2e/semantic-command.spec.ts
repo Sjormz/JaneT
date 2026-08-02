@@ -68,7 +68,7 @@ test('navigates, copies, and safely inserts a real semantic command', async () =
     const terminal = page.locator('.terminal-container');
     await expect(terminal).toBeVisible({ timeout: 15_000 });
     await terminal.click();
-    await page.keyboard.type(command);
+    await page.keyboard.type(command, { delay: 5 });
     await page.keyboard.press('Enter');
 
     await expect.poll(

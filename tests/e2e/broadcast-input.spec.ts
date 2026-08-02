@@ -69,7 +69,7 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
     expect(statusBox!.height).toBeLessThan(50);
 
     await terminals.nth(0).locator('.xterm-helper-textarea').focus();
-    await page.keyboard.type(appendCommand(first));
+    await page.keyboard.type(appendCommand(first), { delay: 5 });
     await page.keyboard.press('Enter');
     await expect.poll(() => fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf8') : '', {
       timeout: 15_000,
@@ -77,7 +77,7 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
 
     await page.keyboard.press('Escape');
     await expect(status).toBeHidden();
-    await page.keyboard.type(appendCommand(second));
+    await page.keyboard.type(appendCommand(second), { delay: 5 });
     await page.keyboard.press('Enter');
     await expect.poll(() => fs.readFileSync(outputPath, 'utf8'), { timeout: 15_000 })
       .toBe(`${first}\n${first}\n${second}\n`);
