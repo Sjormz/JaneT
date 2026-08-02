@@ -1505,7 +1505,7 @@ html, body, #root {
 .form-input {
   width: 100%;
   padding: 7px 10px;
-  background: var(--control-bg);
+  background-color: var(--control-bg);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
@@ -1516,7 +1516,7 @@ html, body, #root {
 }
 .form-input:focus {
   border-color: var(--text-accent);
-  background: var(--control-hover);
+  background-color: var(--control-hover);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-accent) 15%, transparent);
 }
 .form-input::placeholder { color: var(--text-tertiary); }
@@ -3297,12 +3297,39 @@ button:disabled,
 .form-field .form-input { width: 100%; }
 .form-input {
   border-color: var(--border-subtle);
-  background: var(--control-bg);
+  background-color: var(--control-bg);
   color: var(--text-primary);
 }
 .form-input:hover { border-color: color-mix(in srgb, var(--border-active) 55%, var(--border-subtle)); }
 .form-input:focus { border-color: var(--focus-ring); }
 .form-input::placeholder { color: var(--text-tertiary); font-weight: 400; }
+
+select {
+  appearance: none;
+  background:
+    linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%) calc(100% - 14px) 50% / 5px 5px no-repeat,
+    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%) calc(100% - 10px) 50% / 5px 5px no-repeat;
+  background-color: var(--control-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding-right: 28px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+}
+select:hover:not(:disabled) { border-color: var(--border-active); background-color: var(--control-hover); }
+select:focus-visible { border-color: var(--focus-ring); }
+select:disabled { color: var(--text-disabled); cursor: not-allowed; opacity: 0.6; }
+select option { background: var(--surface-overlay); color: var(--text-primary); }
+
+input[type="checkbox"] {
+  accent-color: var(--text-accent);
+  cursor: pointer;
+  width: 15px;
+  height: 15px;
+}
+input[type="checkbox"]:focus-visible { outline-color: var(--focus-ring); }
+input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
 
 .ssh-empty {
   display: flex;
@@ -3407,7 +3434,7 @@ button:disabled,
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   outline: 0;
-  background: var(--control-bg);
+  background-color: var(--control-bg);
   color: var(--text-primary);
   font: 12px/1 var(--font-ui);
 }
@@ -3740,7 +3767,7 @@ button:disabled,
   cursor: pointer;
 }
 
-.broadcast-recipient { accent-color: #ff8c42; }
+.broadcast-recipient { accent-color: var(--text-accent); }
 
 .terminal-leaf.broadcast-selected {
   outline: 3px solid #ff8c42;

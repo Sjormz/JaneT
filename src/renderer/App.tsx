@@ -15,7 +15,7 @@ import BrandMark from './components/BrandMark';
 import Tooltip from './components/Tooltip';
 import ConfirmationDialog from './components/ConfirmationDialog';
 import RenameDialog from './components/RenameDialog';
-import WorkspaceContent from './components/WorkspaceContent';
+import WorkspaceContent, { surfaceTabFocusTarget } from './components/WorkspaceContent';
 import {
   TabInfo, SessionInfo,
   SavedSSHProfile,
@@ -415,7 +415,15 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [pendingDestructiveAction, setPendingDestructiveAction] = useState<PendingDestructiveAction | null>(null);
   const [pendingDestructiveBusy, setPendingDestructiveBusy] = useState(false);
   const pendingDestructiveBusyRef = useRef(false);
+  const pendingDestructiveFocusRef = useRef<(() => HTMLElement | null) | undefined>(undefined);
   const editorDocuments = useEditorDocuments();
+
+  useEffect(() => {
+    if (pendingDestructiveAction !== null) return;
+    const fallbackFocus = pendingDestructiveFocusRef.current;
+    pendingDestructiveFocusRef.current = undefined;
+    fallbackFocus?.()?.focus();
+  }, [pendingDestructiveAction]);
 
   const setWorkspaceToolsExpanded = useCallback((expanded: boolean) => {
     if (!expanded && document.activeElement instanceof HTMLElement
@@ -1141,9 +1149,14 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   ) => {
     const document = editorDocuments.documents.find((candidate) => candidate.key === key);
     if (!document) return;
+    const closesLastDocument = editorDocuments.documents
+      .filter((candidate) => candidate.ownerTabId === document.ownerTabId).length === 1;
+    const focusAfterClose = () => (
+      closesLastDocument ? firstTerminalFocusTarget() : fallbackFocus() ?? firstTerminalFocusTarget()
+    );
     if (!isEditorDocumentDirty(document)) {
       editorDocuments.closeDocument(key);
-      requestAnimationFrame(() => fallbackFocus()?.focus());
+      requestAnimationFrame(() => focusAfterClose()?.focus());
       return;
     }
     setPendingDestructiveAction({
@@ -1153,7 +1166,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       run: () => editorDocuments.closeDocument(key),
       secondaryLabel: 'Save',
       runSecondary: () => saveEditorDocument(key, () => editorDocuments.closeDocument(key)),
-      fallbackFocus,
+      fallbackFocus: focusAfterClose,
     });
   }, [editorDocuments.closeDocument, editorDocuments.documents, saveEditorDocument]);
 
@@ -1786,6 +1799,41 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   }, [activeTab.id, editorDocuments.openDocument]);
   const activeDocuments = editorDocuments.documentsByTab[activeTab.id] ?? [];
   const activeDocumentWorkspace = editorDocuments.workspaces[activeTab.id] ?? emptyTabDocumentWorkspace();
+  const activeDocumentKey = activeDocuments.some(
+    (document) => document.key === activeDocumentWorkspace.activeSurface,
+  ) ? activeDocumentWorkspace.activeSurface : null;
+  const documentCloseFallbackFocus = useCallback((key: string) => {
+    const index = activeDocuments.findIndex((document) => document.key === key);
+    const surfaceIndex = index < 0 ? 0 : Math.min(index + 1, activeDocuments.length - 1);
+    return () => surfaceTabFocusTarget(activeTab.id, surfaceIndex) ?? firstTerminalFocusTarget();
+  }, [activeDocuments, activeTab.id]);
+
+  const cycleTerminalTab = useCallback((direction: 1 | -1) => {
+    const currentTabs = tabsRef.current;
+    const index = currentTabs.findIndex((tab) => tab.id === activeTabIdRef.current);
+    if (index < 0 || currentTabs.length < 2) return;
+    selectTerminalTab(currentTabs[(index + direction + currentTabs.length) % currentTabs.length].id);
+  }, [selectTerminalTab]);
+
+  const cycleTerminalPane = useCallback((direction: 1 | -1) => {
+    const tab = tabsRef.current.find((candidate) => candidate.id === activeTabIdRef.current);
+    if (!tab) return;
+    const leaves = getAllLeafIds(tab.root);
+    const current = preferredLeafId(tab, focusedTerminalId, maximizedLeafByTab[tab.id]);
+    const index = current ? leaves.indexOf(current) : -1;
+    const target = leaves[(index + direction + leaves.length) % leaves.length];
+    if (!target) return;
+    terminalFocusTargetIdRef.current = target;
+    restoreTerminalFocusRef.current = true;
+    setMaximizedLeafByTab((maximized) => (
+      maximized[tab.id] && maximized[tab.id] !== target
+        ? { ...maximized, [tab.id]: null }
+        : maximized
+    ));
+    setFocusedTerminalId(target);
+    editorDocuments.selectSurface(tab.id, 'terminal');
+    setTerminalFocusRequest((request) => request + 1);
+  }, [editorDocuments.selectSurface, focusedTerminalId, maximizedLeafByTab]);
 
   // === Keyboard shortcuts via keybindings context ===
   // Register global action handlers
@@ -1799,10 +1847,29 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     const unsub5 = on('font-increase', () => persistFontSize(Math.min(24, fontSize + 1)));
     const unsub6 = on('font-decrease', () => persistFontSize(Math.max(10, fontSize - 1)));
     const unsub7 = on('snippets-toggle', () => setSnippetsVisible(true));
+    const unsub8 = on('settings-toggle', () => setSettingsOpen(true));
+    const unsub9 = on('font-reset', () => persistFontSize(14));
+    const unsub10 = on('previous-tab', () => cycleTerminalTab(-1));
+    const unsub11 = on('next-tab', () => cycleTerminalTab(1));
+    const unsub12 = on('history-toggle', () => setHistoryVisible(true));
+    const unsub13 = on('save-document', () => {
+      if (activeDocumentKey) void saveEditorDocument(activeDocumentKey);
+    });
+    const unsub14 = on('close-document', () => {
+      if (activeDocumentKey) requestCloseEditorDocument(
+        activeDocumentKey,
+        documentCloseFallbackFocus(activeDocumentKey),
+      );
+    });
     return () => {
       unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7();
+      unsub8(); unsub9(); unsub10(); unsub11(); unsub12(); unsub13(); unsub14();
     };
-  }, [on, addTab, requestCloseTab, activeTabId, toggleWorkspaceTools, persistFontSize, fontSize]);
+  }, [
+    on, addTab, requestCloseTab, activeTabId, toggleWorkspaceTools, persistFontSize, fontSize,
+    cycleTerminalTab, activeDocumentKey, saveEditorDocument, requestCloseEditorDocument,
+    documentCloseFallbackFocus,
+  ]);
 
   // Pane handlers depend on the active tab and focused terminal.
   useEffect(() => {
@@ -1818,10 +1885,17 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     });
     const unsub4 = on('rename-pane', requestRenamePane);
     const unsub5 = on('rename-tab', requestRenameTab);
-    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
+    const unsub6 = on('maximize-pane', () => {
+      if (sidebarTerminalId) handleToggleMaximizePane(activeTab.id, sidebarTerminalId);
+    });
+    const unsub7 = on('focus-next-pane', () => cycleTerminalPane(1));
+    const unsub8 = on('focus-previous-pane', () => cycleTerminalPane(-1));
+    return () => {
+      unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8();
+    };
   }, [
     on, activeTab, sidebarTerminalId, handleSplitPane, requestClosePane,
-    requestRenamePane, requestRenameTab,
+    requestRenamePane, requestRenameTab, handleToggleMaximizePane, cycleTerminalPane,
   ]);
 
   // === Escape handler for palette ===
@@ -1845,6 +1919,14 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       {
         id: 'close-tab', label: 'Close current tab', category: 'Tabs',
         shortcut: bindings['close-tab'], handler: () => requestCloseTab(activeTabId),
+      },
+      {
+        id: 'previous-tab', label: 'Previous terminal tab', category: 'Tabs',
+        shortcut: bindings['previous-tab'], handler: () => cycleTerminalTab(-1),
+      },
+      {
+        id: 'next-tab', label: 'Next terminal tab', category: 'Tabs',
+        shortcut: bindings['next-tab'], handler: () => cycleTerminalTab(1),
       },
       {
         id: 'rename-tab', label: 'Rename current tab', category: 'Tabs',
@@ -1871,8 +1953,8 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         handler: () => { setWorkspaceToolsExpanded(true); setSidebarSection('git'); },
       },
       {
-        id: 'sidebar-settings', label: 'Open Settings', category: 'View',
-        handler: () => setSettingsOpen(true),
+        id: 'settings-toggle', label: 'Open Settings', category: 'View',
+        shortcut: bindings['settings-toggle'], handler: () => setSettingsOpen(true),
       },
       {
         id: 'font-increase', label: 'Increase terminal text size', category: 'Settings',
@@ -1881,6 +1963,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       {
         id: 'font-decrease', label: 'Decrease terminal text size', category: 'Settings',
         shortcut: bindings['font-decrease'], handler: () => persistFontSize(Math.max(10, fontSize - 1)),
+      },
+      {
+        id: 'font-reset', label: 'Reset terminal text size', category: 'Settings',
+        shortcut: bindings['font-reset'], handler: () => persistFontSize(14),
       },
       {
         id: 'search-toggle', label: 'Search terminal output', category: 'Terminal',
@@ -1898,8 +1984,37 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         shortcut: bindings['snippets-toggle'], handler: () => setSnippetsVisible(true),
       },
       {
-        id: 'command-history', label: 'Open command history', category: 'Terminal',
-        handler: () => setHistoryVisible(true),
+        id: 'history-toggle', label: 'Open command history', category: 'Terminal',
+        shortcut: bindings['history-toggle'], handler: () => setHistoryVisible(true),
+      },
+      {
+        id: 'maximize-pane', label: 'Maximize or restore current pane', category: 'Pane',
+        shortcut: bindings['maximize-pane'], handler: () => {
+          if (sidebarTerminalId) handleToggleMaximizePane(activeTab.id, sidebarTerminalId);
+        },
+      },
+      {
+        id: 'focus-next-pane', label: 'Focus next pane', category: 'Pane',
+        shortcut: bindings['focus-next-pane'], handler: () => cycleTerminalPane(1),
+      },
+      {
+        id: 'focus-previous-pane', label: 'Focus previous pane', category: 'Pane',
+        shortcut: bindings['focus-previous-pane'], handler: () => cycleTerminalPane(-1),
+      },
+      {
+        id: 'save-document', label: 'Save current document', category: 'Editor',
+        shortcut: bindings['save-document'], handler: () => {
+          if (activeDocumentKey) void saveEditorDocument(activeDocumentKey);
+        },
+      },
+      {
+        id: 'close-document', label: 'Close current document', category: 'Editor',
+        shortcut: bindings['close-document'], handler: () => {
+          if (activeDocumentKey) requestCloseEditorDocument(
+            activeDocumentKey,
+            documentCloseFallbackFocus(activeDocumentKey),
+          );
+        },
       },
       {
         id: 'check-updates', label: 'Check for updates', category: 'General',
@@ -1954,8 +2069,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
 
     return actions;
   }, [
-    activeTab, activeTabId, sidebarTerminalId, addTab, requestCloseTab, handleSplitPane, requestClosePane,
-    requestRenamePane, requestRenameTab,
+    activeTab, activeTabId, sidebarTerminalId, activeDocumentKey, addTab, requestCloseTab,
+    handleSplitPane, requestClosePane, handleToggleMaximizePane, cycleTerminalPane, cycleTerminalTab,
+    requestRenamePane, requestRenameTab, saveEditorDocument, requestCloseEditorDocument,
+    documentCloseFallbackFocus,
     fontSize, persistFontSize, persistTheme, setWorkspaceToolsExpanded, toggleWorkspaceTools, bindings,
   ]);
 
@@ -1989,6 +2106,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     try {
       const result = await run();
       if (result !== false) {
+        pendingDestructiveFocusRef.current = action.fallbackFocus;
         setPendingDestructiveAction((current) => current === action ? null : current);
       }
     } finally {

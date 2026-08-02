@@ -48,6 +48,34 @@ describe('KeybindingsProvider terminal editing keys', () => {
     expect(closePane).not.toHaveBeenCalled();
   });
 
+  it('keeps the same collision winner after a handler re-registers', () => {
+    const firstCloseTab = vi.fn();
+    const nextCloseTab = vi.fn();
+    const closePane = vi.fn();
+    const bindings = {
+      'close-tab': 'Ctrl+W',
+      'close-pane': 'Ctrl+W',
+    } as const;
+    const view = render(
+      <KeybindingsProvider initialBindings={bindings}>
+        <RegisteredShortcut action="close-tab" handler={firstCloseTab} />
+        <RegisteredShortcut action="close-pane" handler={closePane} />
+      </KeybindingsProvider>,
+    );
+
+    view.rerender(
+      <KeybindingsProvider initialBindings={bindings}>
+        <RegisteredShortcut action="close-tab" handler={nextCloseTab} />
+        <RegisteredShortcut action="close-pane" handler={closePane} />
+      </KeybindingsProvider>,
+    );
+    fireEvent.keyDown(document, { key: 'w', ctrlKey: true });
+
+    expect(firstCloseTab).not.toHaveBeenCalled();
+    expect(nextCloseTab).toHaveBeenCalledOnce();
+    expect(closePane).not.toHaveBeenCalled();
+  });
+
   it('does not let a removed colliding action block a registered action', () => {
     const closeTab = vi.fn();
     const closePane = vi.fn();

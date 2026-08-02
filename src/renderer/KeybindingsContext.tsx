@@ -1,7 +1,7 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   KeybindingAction,
-  DEFAULT_KEYBINDINGS,
+  defaultKeybindingsForPlatform,
   matchesShortcut,
   formatShortcut,
 } from './keybindings';
@@ -40,8 +40,11 @@ export function KeybindingsProvider({
   initialBindings,
   onSave,
 }: KeybindingsProviderProps) {
+  const platformDefaults = useMemo(() => defaultKeybindingsForPlatform(
+    /Mac|iPhone|iPad/i.test(navigator.platform) ? 'darwin' : '',
+  ), []);
   const [bindings, setBindings] = useState<Record<KeybindingAction, string>>(() => ({
-    ...DEFAULT_KEYBINDINGS,
+    ...platformDefaults,
     ...initialBindings,
   }));
 
@@ -57,8 +60,8 @@ export function KeybindingsProvider({
   }, []);
 
   const resetDefaults = useCallback(() => {
-    setBindings({ ...DEFAULT_KEYBINDINGS });
-  }, []);
+    setBindings({ ...platformDefaults });
+  }, [platformDefaults]);
 
   const matches = useCallback(
     (e: KeyboardEvent, action: KeybindingAction) => {
@@ -129,8 +132,9 @@ export function KeybindingsProvider({
 
       // Fire all registered handlers for matching actions
       const currentBindings = bindingsRef.current;
-      for (const [action, handlerSet] of listenersRef.current.entries()) {
-        if (matchesShortcut(e, currentBindings[action as KeybindingAction])) {
+      for (const action of Object.keys(currentBindings) as KeybindingAction[]) {
+        const handlerSet = listenersRef.current.get(action);
+        if (handlerSet && matchesShortcut(e, currentBindings[action])) {
           e.preventDefault();
           e.stopPropagation();
           for (const fn of handlerSet) {

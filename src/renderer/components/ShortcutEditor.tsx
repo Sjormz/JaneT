@@ -30,6 +30,12 @@ export default function ShortcutEditor() {
     (action: KeybindingAction) => (e: React.KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        setBinding(action, '');
+        setCapturing(null);
+        return;
+      }
+      if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
       const shortcut = formatShortcut(e.nativeEvent);
       if (!shortcut.includes('+') && !/^F(?:[1-9]|1[0-2])$/.test(shortcut)) return;
       setBinding(action, shortcut);
@@ -47,8 +53,10 @@ export default function ShortcutEditor() {
         <span className="section-title">Keyboard Shortcuts</span>
       </div>
       <div className="shortcut-list">
-        {keys.map((action) => (
-          <div key={action} className="shortcut-row">
+        {keys.map((action) => {
+          const shortcut = bindings[action];
+          const displayedShortcut = shortcut ? formatShortcutForDisplay(shortcut, platform) : 'unassigned';
+          return <div key={action} className="shortcut-row">
             <span className="shortcut-label">{KEYBINDING_LABELS[action]}</span>
             {capturing === action ? (
               <div
@@ -64,19 +72,19 @@ export default function ShortcutEditor() {
                 <small>Include a modifier, or press F1–F12</small>
               </div>
             ) : (
-              <Tooltip label={`Change shortcut for ${KEYBINDING_LABELS[action]}`} shortcut={formatShortcutForDisplay(bindings[action], platform)} placement="left">
+              <Tooltip label={`Change shortcut for ${KEYBINDING_LABELS[action]}`} shortcut={displayedShortcut} placement="left">
                 <button
                   className="shortcut-key"
                   onClick={() => handleStartCapture(action)}
-                  aria-label={`Change shortcut for ${KEYBINDING_LABELS[action]} (currently ${bindings[action]})`}
+                  aria-label={`${KEYBINDING_LABELS[action]} (currently ${displayedShortcut})`}
                 >
-                  <span className="shortcut-keys-text">{formatShortcutForDisplay(bindings[action], platform)}</span>
+                  <span className="shortcut-keys-text">{displayedShortcut}</span>
                   <PencilIcon size="xs" className="shortcut-edit-icon" />
                 </button>
               </Tooltip>
             )}
-          </div>
-        ))}
+          </div>;
+        })}
       </div>
       <button className="shortcut-reset-btn" onClick={() => setConfirmingReset(true)}>
         Reset shortcuts to defaults

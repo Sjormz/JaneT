@@ -13,15 +13,25 @@ export type KeybindingAction =
   | 'palette-toggle'
   | 'new-terminal'
   | 'close-tab'
+  | 'settings-toggle'
   | 'toggle-sidebar'
   | 'font-increase'
   | 'font-decrease'
+  | 'font-reset'
+  | 'previous-tab'
+  | 'next-tab'
   | 'snippets-toggle'
+  | 'history-toggle'
   | 'split-right'
   | 'split-down'
   | 'close-pane'
+  | 'maximize-pane'
+  | 'focus-next-pane'
+  | 'focus-previous-pane'
   | 'rename-pane'
   | 'rename-tab'
+  | 'save-document'
+  | 'close-document'
   | 'previous-command'
   | 'next-command'
   | 'copy-command'
@@ -33,15 +43,25 @@ export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   'palette-toggle': 'Open command palette',
   'new-terminal': 'New terminal tab',
   'close-tab': 'Close current tab',
+  'settings-toggle': 'Open settings',
   'toggle-sidebar': 'Show or hide workspace tools',
   'font-increase': 'Increase terminal text size',
   'font-decrease': 'Decrease terminal text size',
+  'font-reset': 'Reset terminal text size',
+  'previous-tab': 'Previous terminal tab',
+  'next-tab': 'Next terminal tab',
   'snippets-toggle': 'Open snippets',
+  'history-toggle': 'Open command history',
   'split-right': 'Split pane right',
   'split-down': 'Split pane below',
   'close-pane': 'Close current pane',
+  'maximize-pane': 'Maximize or restore current pane',
+  'focus-next-pane': 'Focus next pane',
+  'focus-previous-pane': 'Focus previous pane',
   'rename-pane': 'Rename current terminal',
   'rename-tab': 'Rename current tab',
+  'save-document': 'Save current document',
+  'close-document': 'Close current document',
   'previous-command': 'Previous semantic command',
   'next-command': 'Next semantic command',
   'copy-command': 'Copy semantic command',
@@ -51,24 +71,54 @@ export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
 
 export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'search-toggle': 'Ctrl+F',
-  'palette-toggle': 'Ctrl+K',
-  'new-terminal': 'Ctrl+N',
+  'palette-toggle': 'Ctrl+Shift+P',
+  'new-terminal': 'Ctrl+Shift+T',
   'close-tab': 'Ctrl+W',
+  'settings-toggle': 'Ctrl+,',
   'toggle-sidebar': 'Ctrl+B',
   'font-increase': 'Ctrl+Plus',
   'font-decrease': 'Ctrl+-',
-  'snippets-toggle': 'Ctrl+Shift+P',
+  'font-reset': 'Ctrl+0',
+  'previous-tab': 'Ctrl+Shift+Tab',
+  'next-tab': 'Ctrl+Tab',
+  'snippets-toggle': '',
+  'history-toggle': '',
   'split-right': 'Ctrl+\\',
   'split-down': 'Ctrl+Shift+\\',
   'close-pane': 'Ctrl+Shift+W',
+  'maximize-pane': '',
+  'focus-next-pane': '',
+  'focus-previous-pane': '',
   'rename-pane': 'F2',
   'rename-tab': 'Ctrl+F2',
+  'save-document': '',
+  'close-document': '',
   'previous-command': 'Ctrl+Shift+ArrowUp',
   'next-command': 'Ctrl+Shift+ArrowDown',
   'copy-command': 'Ctrl+Alt+C',
   'copy-command-output': 'Ctrl+Alt+O',
   'rerun-command': 'Ctrl+Alt+R',
 };
+
+export function defaultKeybindingsForPlatform(platform: string): Record<KeybindingAction, string> {
+  if (platform !== 'darwin') return { ...DEFAULT_KEYBINDINGS };
+  return {
+    ...DEFAULT_KEYBINDINGS,
+    'search-toggle': 'Meta+F',
+    'palette-toggle': 'Meta+Shift+P',
+    'new-terminal': 'Meta+T',
+    'close-tab': 'Meta+W',
+    'settings-toggle': 'Meta+,',
+    'toggle-sidebar': 'Meta+B',
+    'font-increase': 'Meta+Plus',
+    'font-decrease': 'Meta+-',
+    'font-reset': 'Meta+0',
+    'split-right': 'Meta+\\',
+    'split-down': 'Meta+Shift+\\',
+    'close-pane': 'Meta+Shift+W',
+    'rename-tab': 'Meta+F2',
+  };
+}
 
 /** Parse a shortcut string like "Ctrl+Shift+F" into a match object */
 export function parseShortcut(shortcut: string): ParsedShortcut {
@@ -97,6 +147,7 @@ export function parseShortcut(shortcut: string): ParsedShortcut {
 
 /** Check if a KeyboardEvent matches a shortcut string */
 export function matchesShortcut(e: KeyboardEvent, shortcut: string): boolean {
+  if (!shortcut) return false;
   const parsed = parseShortcut(shortcut);
   const keyMatch = e.key.toLowerCase() === parsed.key.toLowerCase();
   return (

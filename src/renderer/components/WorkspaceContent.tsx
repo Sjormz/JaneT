@@ -111,7 +111,7 @@ export default function WorkspaceContent({
                     aria-label={`Close ${document.title}`}
                     onClick={() => onCloseDocument(
                       document.key,
-                      () => globalThis.document.getElementById(surfaceTabId(tabId, index)) as HTMLElement | null,
+                      () => surfaceTabFocusTarget(tabId, Math.min(index + 1, documents.length - 1)),
                     )}
                   >
                     <XCloseIcon size="xs" />
@@ -184,4 +184,8 @@ export default function WorkspaceContent({
 
 function surfaceTabId(tabId: string, index: number): string {
   return `workspace-surface-tab-${tabId.replace(/[^a-zA-Z0-9_-]/g, '_')}-${index}`;
+}
+
+export function surfaceTabFocusTarget(tabId: string, index: number): HTMLElement | null {
+  return globalThis.document.getElementById(surfaceTabId(tabId, index));
 }

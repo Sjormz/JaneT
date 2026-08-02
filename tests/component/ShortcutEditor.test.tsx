@@ -13,6 +13,29 @@ function renderEditor(onSave: (bindings: typeof DEFAULT_KEYBINDINGS) => void) {
 }
 
 describe('ShortcutEditor', () => {
+  it('lists configurable actions without assigning every action a default', async () => {
+    const onSave = vi.fn();
+    renderEditor(onSave);
+
+    expect(screen.getByRole('button', { name: /open settings \(currently Ctrl\+,\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /maximize or restore current pane \(currently unassigned\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /open command history \(currently unassigned\)/i })).toBeInTheDocument();
+  });
+
+  it('clears an assigned shortcut with Backspace', async () => {
+    const onSave = vi.fn();
+    renderEditor(onSave);
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByRole('button', { name: /close current tab \(currently Alt\+X\)/i }));
+    const capture = screen.getByRole('textbox', { name: /press a shortcut for close current tab/i });
+    fireEvent.keyDown(capture, { key: 'Backspace' });
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+    expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({ 'close-tab': '' }));
+    expect(screen.getByRole('button', { name: /close current tab \(currently unassigned\)/i })).toBeInTheDocument();
+  });
+
   it('captures standalone function keys but rejects unmodified printable keys', async () => {
     const onSave = vi.fn();
     renderEditor(onSave);
@@ -28,6 +51,24 @@ describe('ShortcutEditor', () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
     expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({ 'rename-pane': 'F3' }));
     expect(screen.getByRole('button', { name: /rename current terminal \(currently F3\)/i })).toBeInTheDocument();
+  });
+
+  it('waits for a non-modifier key before saving a chord', async () => {
+    const onSave = vi.fn();
+    renderEditor(onSave);
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByRole('button', { name: /open snippets \(currently unassigned\)/i }));
+    const capture = screen.getByRole('textbox', { name: /press a shortcut for open snippets/i });
+    fireEvent.keyDown(capture, { key: 'Control', ctrlKey: true });
+
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(capture).toBeInTheDocument();
+
+    fireEvent.keyDown(capture, { key: 's', ctrlKey: true, shiftKey: true });
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+    expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({ 'snippets-toggle': 'Ctrl+Shift+S' }));
   });
 
   it('preserves custom shortcuts when reset confirmation is cancelled', async () => {
