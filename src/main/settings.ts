@@ -65,15 +65,25 @@ export type KeybindingAction =
   | 'palette-toggle'
   | 'new-terminal'
   | 'close-tab'
+  | 'settings-toggle'
   | 'toggle-sidebar'
   | 'font-increase'
   | 'font-decrease'
+  | 'font-reset'
+  | 'previous-tab'
+  | 'next-tab'
   | 'snippets-toggle'
+  | 'history-toggle'
   | 'split-right'
   | 'split-down'
   | 'close-pane'
+  | 'maximize-pane'
+  | 'focus-next-pane'
+  | 'focus-previous-pane'
   | 'rename-pane'
   | 'rename-tab'
+  | 'save-document'
+  | 'close-document'
   | 'previous-command'
   | 'next-command'
   | 'copy-command'
@@ -82,24 +92,56 @@ export type KeybindingAction =
 
 export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'search-toggle': 'Ctrl+F',
-  'palette-toggle': 'Ctrl+K',
-  'new-terminal': 'Ctrl+N',
+  'palette-toggle': 'Ctrl+Shift+P',
+  'new-terminal': 'Ctrl+Shift+T',
   'close-tab': 'Ctrl+W',
+  'settings-toggle': 'Ctrl+,',
   'toggle-sidebar': 'Ctrl+B',
   'font-increase': 'Ctrl+Plus',
   'font-decrease': 'Ctrl+-',
-  'snippets-toggle': 'Ctrl+Shift+P',
+  'font-reset': 'Ctrl+0',
+  'previous-tab': 'Ctrl+Shift+Tab',
+  'next-tab': 'Ctrl+Tab',
+  'snippets-toggle': '',
+  'history-toggle': '',
   'split-right': 'Ctrl+\\',
   'split-down': 'Ctrl+Shift+\\',
   'close-pane': 'Ctrl+Shift+W',
+  'maximize-pane': '',
+  'focus-next-pane': '',
+  'focus-previous-pane': '',
   'rename-pane': 'F2',
   'rename-tab': 'Ctrl+F2',
+  'save-document': '',
+  'close-document': '',
   'previous-command': 'Ctrl+Shift+ArrowUp',
   'next-command': 'Ctrl+Shift+ArrowDown',
   'copy-command': 'Ctrl+Alt+C',
   'copy-command-output': 'Ctrl+Alt+O',
   'rerun-command': 'Ctrl+Alt+R',
 };
+
+function defaultKeybindingsForPlatform(platform: string): Record<KeybindingAction, string> {
+  if (platform !== 'darwin') return { ...DEFAULT_KEYBINDINGS };
+  return {
+    ...DEFAULT_KEYBINDINGS,
+    'search-toggle': 'Meta+F',
+    'palette-toggle': 'Meta+Shift+P',
+    'new-terminal': 'Meta+T',
+    'close-tab': 'Meta+W',
+    'settings-toggle': 'Meta+,',
+    'toggle-sidebar': 'Meta+B',
+    'font-increase': 'Meta+Plus',
+    'font-decrease': 'Meta+-',
+    'font-reset': 'Meta+0',
+    'split-right': 'Meta+\\',
+    'split-down': 'Meta+Shift+\\',
+    'close-pane': 'Meta+Shift+W',
+    'rename-tab': 'Meta+F2',
+  };
+}
+
+const PLATFORM_DEFAULT_KEYBINDINGS = defaultKeybindingsForPlatform(process.platform);
 
 export interface AppSettings {
   theme: ThemeName;
@@ -206,7 +248,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   sidebarSide: 'right',
   notificationsEnabled: false,
   notificationThresholdSeconds: 10,
-  keybindings: { ...DEFAULT_KEYBINDINGS },
+  keybindings: { ...PLATFORM_DEFAULT_KEYBINDINGS },
   snippets: [],
   commandHistory: [],
   sshProfiles: [],
@@ -250,7 +292,9 @@ export class SettingsManager {
     this.cache = {
       ...this.cache,
       ...updates,
-      keybindings: updates.keybindings === undefined ? this.cache.keybindings : { ...updates.keybindings },
+      keybindings: updates.keybindings === undefined
+        ? this.cache.keybindings
+        : { ...PLATFORM_DEFAULT_KEYBINDINGS, ...updates.keybindings },
       snippets: updates.snippets === undefined ? this.cache.snippets : normalizeSnippets(updates.snippets),
       commandHistory: updates.commandHistory === undefined
         ? this.cache.commandHistory
@@ -324,9 +368,18 @@ export class SettingsManager {
     try {
       const raw = fs.readFileSync(this.filePath, 'utf-8');
       const parsed = JSON.parse(raw) as Partial<StoredAppSettings>;
+      const mergedKeybindings = {
+        ...PLATFORM_DEFAULT_KEYBINDINGS,
+        ...(isBoundedStringRecord(parsed.keybindings, MAX_KEYBINDINGS, 256, 256)
+          ? parsed.keybindings
+          : {}),
+      };
       const stored = {
         ...DEFAULT_SETTINGS,
         ...parsed,
+        keybindings: isBoundedStringRecord(mergedKeybindings, MAX_KEYBINDINGS, 256, 256)
+          ? mergedKeybindings
+          : { ...PLATFORM_DEFAULT_KEYBINDINGS },
         notificationsEnabled: typeof parsed.notificationsEnabled === 'boolean' ? parsed.notificationsEnabled : false,
         notificationThresholdSeconds: isValidNotificationThreshold(parsed.notificationThresholdSeconds)
           ? parsed.notificationThresholdSeconds
@@ -893,7 +946,13 @@ function isValidSettingsUpdate(updates: Partial<AppSettings>): boolean {
     && (updates.notificationsEnabled === undefined || typeof updates.notificationsEnabled === 'boolean')
     && (updates.notificationThresholdSeconds === undefined || isValidNotificationThreshold(updates.notificationThresholdSeconds))
     && (updates.keybindings === undefined
-      || isBoundedStringRecord(updates.keybindings, MAX_KEYBINDINGS, 256, 256))
+      || (isBoundedStringRecord(updates.keybindings, MAX_KEYBINDINGS, 256, 256)
+        && isBoundedStringRecord(
+          { ...PLATFORM_DEFAULT_KEYBINDINGS, ...updates.keybindings },
+          MAX_KEYBINDINGS,
+          256,
+          256,
+        )))
     && (updates.snippets === undefined || (Array.isArray(updates.snippets)
       && updates.snippets.length <= MAX_SETTINGS_COLLECTION_ITEMS
       && updates.snippets.every(isValidRuntimeSnippet)

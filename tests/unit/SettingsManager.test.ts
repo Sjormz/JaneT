@@ -143,6 +143,55 @@ describe('SettingsManager', () => {
     }).keybindings['rerun-command']).toBe('Alt+R');
   });
 
+  it('adds new shortcut defaults when loading older settings without replacing custom bindings', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      theme: 'dracula',
+      keybindings: { 'close-tab': 'Alt+X' },
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const settings = new SettingsManager().get();
+
+    expect(settings.keybindings).toMatchObject({
+      'close-tab': 'Alt+X',
+      'settings-toggle': 'Ctrl+,',
+      'font-reset': 'Ctrl+0',
+      'history-toggle': '',
+    });
+  });
+
+  it('rejects shortcut updates whose merged map exceeds the entry limit', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const initialKeybindings = manager.get().keybindings;
+    const keybindings = Object.fromEntries(
+      Array.from({ length: 64 }, (_, index) => [`custom-${index}`, `Alt+${index}`]),
+    );
+
+    expect(() => manager.set({ keybindings })).toThrow('Invalid settings update');
+    expect(manager.get().keybindings).toEqual(initialKeybindings);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('ignores stored shortcut overrides whose merged map exceeds the entry limit', async () => {
+    const fsMock = await import('fs');
+    const keybindings = Object.fromEntries(
+      Array.from({ length: 64 }, (_, index) => [`custom-${index}`, `Alt+${index}`]),
+    );
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      theme: 'dracula',
+      keybindings,
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const settings = new SettingsManager().get();
+
+    expect(settings.theme).toBe('dracula');
+    expect(Object.keys(settings.keybindings).length).toBeLessThanOrEqual(64);
+    expect(settings.keybindings).toHaveProperty('settings-toggle', 'Ctrl+,');
+    expect(settings.keybindings).not.toHaveProperty('custom-0');
+  });
+
   it('updates settings partially', async () => {
     const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();

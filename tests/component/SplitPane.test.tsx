@@ -510,7 +510,7 @@ describe('split panes in the app', () => {
 
       await waitFor(() => expect(historyUpdates()).toHaveLength(1));
       expect(JSON.stringify(historyUpdates()[0])).not.toMatch(/output|FIRST OUTPUT|SECOND OUTPUT/i);
-      act(() => rendererMocks.paletteActions.find((action) => action.id === 'command-history')!.handler());
+      act(() => rendererMocks.paletteActions.find((action) => action.id === 'history-toggle')!.handler());
       expect(screen.getByRole('dialog', { name: 'Command history' })).not.toHaveTextContent('printf first');
       expect(historyUpdates()).toHaveLength(1);
 
@@ -599,7 +599,7 @@ describe('split panes in the app', () => {
       ));
       await waitFor(() => expect(historyUpdates()).toHaveLength(1));
       fireEvent.focus(terminals[0]);
-      act(() => rendererMocks.paletteActions.find((action) => action.id === 'command-history')!.handler());
+      act(() => rendererMocks.paletteActions.find((action) => action.id === 'history-toggle')!.handler());
       const dialog = await screen.findByRole('dialog', { name: 'Command history' });
       fireEvent.focus(terminals[1]);
       fireEvent.click(within(dialog).getByRole('option', { name: /printf chosen/ }));
@@ -695,6 +695,10 @@ describe('split panes in the app', () => {
 
   it('opens snippets with the configured shortcut and routes pasted content to the focused terminal', async () => {
     const pasted = vi.fn();
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: { 'palette-toggle': 'Ctrl+K', 'snippets-toggle': 'Ctrl+Shift+P' }, workspaceTabs: [],
+      notificationsEnabled: false, notificationThresholdSeconds: 10,
+    });
     window.addEventListener('janet:terminal-paste-request', pasted);
     try {
       render(<App />);
@@ -901,6 +905,56 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs[0].title).toBe('JaneT - fixes'));
   });
 
+  it('cycles terminal tabs with Ctrl+Tab while the tab rail is collapsed', async () => {
+    render(<App />);
+
+    const firstTerminalTestId = (await screen.findByTestId(/terminal-/)).getAttribute('data-testid')!;
+    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
+    const [firstTab, secondTab] = rendererMocks.verticalTabBarProps.tabs;
+    expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(secondTab.id);
+    const secondTerminalTestId = screen.getByTestId(/terminal-/).getAttribute('data-testid')!;
+    act(() => rendererMocks.verticalTabBarProps.onCollapse());
+
+    fireEvent.keyDown(document, { key: 'Tab', ctrlKey: true });
+    await screen.findByTestId(firstTerminalTestId);
+
+    fireEvent.keyDown(document, { key: 'Tab', ctrlKey: true, shiftKey: true });
+    await screen.findByTestId(secondTerminalTestId);
+  });
+
+  it('opens settings and resets the terminal text size from their shortcuts', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [], fontSize: 18,
+      notificationsEnabled: false, notificationThresholdSeconds: 10,
+    });
+    render(<App />);
+    await screen.findByTestId('titlebar');
+
+    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    await waitFor(() => expect(rendererMocks.titlebarProps.settingsOpen).toBe(true));
+    act(() => rendererMocks.titlebarProps.onSettingsClose());
+
+    fireEvent.keyDown(document, { key: '0', ctrlKey: true });
+    await waitFor(() => expect(window.janet.setSettings).toHaveBeenCalledWith({ fontSize: 14 }));
+  });
+
+  it('exposes unassigned optional actions in the palette', async () => {
+    render(<App />);
+    await screen.findByTestId(/terminal-/);
+
+    await waitFor(() => expect(rendererMocks.paletteActions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'settings-toggle', shortcut: 'Ctrl+,' }),
+      expect.objectContaining({ id: 'font-reset', shortcut: 'Ctrl+0' }),
+      expect.objectContaining({ id: 'history-toggle', shortcut: '' }),
+      expect.objectContaining({ id: 'maximize-pane', shortcut: '' }),
+      expect.objectContaining({ id: 'focus-next-pane', shortcut: '' }),
+      expect.objectContaining({ id: 'focus-previous-pane', shortcut: '' }),
+      expect.objectContaining({ id: 'save-document', shortcut: '' }),
+      expect.objectContaining({ id: 'close-document', shortcut: '' }),
+    ])));
+  });
+
   it('requires confirmation before the close-tab shortcut destroys its terminal', async () => {
     render(<App />);
 
@@ -1077,7 +1131,7 @@ describe('split panes in the app', () => {
     });
 
     act(() => {
-      rendererMocks.paletteActions.find((action) => action.id === 'sidebar-settings')!.handler();
+      rendererMocks.paletteActions.find((action) => action.id === 'settings-toggle')!.handler();
     });
     await waitFor(() => {
       expect(rendererMocks.titlebarProps.settingsOpen).toBe(true);
@@ -2331,6 +2385,131 @@ describe('editor documents in the app', () => {
     });
   });
 
+  it.each(['shortcut', 'palette'] as const)(
+    'focuses the previous document after closing the active document from the %s',
+    async (route) => {
+      if (route === 'shortcut') {
+        window.janet.getSettings = vi.fn().mockResolvedValue({
+          keybindings: { 'close-document': 'Ctrl+Alt+D' },
+          workspaceTabs: [],
+          notificationsEnabled: false,
+          notificationThresholdSeconds: 10,
+        });
+      }
+      render(<App />);
+
+      await openSampleEditor();
+      act(() => rendererMocks.sidebarProps.onOpenFile({ kind: 'local', path: '/home/test/second.ts' }));
+      const secondEditor = await screen.findByRole('textbox', { name: 'Editing second.ts' });
+      secondEditor.focus();
+
+      if (route === 'shortcut') {
+        fireEvent.keyDown(document, { key: 'd', ctrlKey: true, altKey: true });
+      } else {
+        act(() => rendererMocks.paletteActions.find((action) => action.id === 'close-document')!.handler());
+      }
+
+      await waitFor(() => {
+        expect(screen.queryByRole('tab', { name: 'second.ts' })).not.toBeInTheDocument();
+        expect(screen.getByRole('tab', { name: 'sample.ts' })).toHaveFocus();
+      });
+    },
+  );
+
+  it.each(['shortcut', 'palette', 'close button'] as const)(
+    'focuses the next document after closing the first document from the %s',
+    async (route) => {
+      if (route === 'shortcut') {
+        window.janet.getSettings = vi.fn().mockResolvedValue({
+          keybindings: { 'close-document': 'Ctrl+Alt+D' },
+          workspaceTabs: [],
+          notificationsEnabled: false,
+          notificationThresholdSeconds: 10,
+        });
+      }
+      render(<App />);
+
+      await openSampleEditor();
+      act(() => rendererMocks.sidebarProps.onOpenFile({ kind: 'local', path: '/home/test/second.ts' }));
+      await screen.findByRole('textbox', { name: 'Editing second.ts' });
+      fireEvent.click(screen.getByRole('tab', { name: 'sample.ts' }));
+
+      if (route === 'shortcut') {
+        fireEvent.keyDown(document, { key: 'd', ctrlKey: true, altKey: true });
+      } else if (route === 'palette') {
+        act(() => rendererMocks.paletteActions.find((action) => action.id === 'close-document')!.handler());
+      } else {
+        fireEvent.click(screen.getByRole('button', { name: 'Close sample.ts' }));
+      }
+
+      await waitFor(() => {
+        expect(screen.queryByRole('tab', { name: 'sample.ts' })).not.toBeInTheDocument();
+        expect(screen.getByRole('tab', { name: 'second.ts' })).toHaveFocus();
+      });
+    },
+  );
+
+  it.each(['shortcut', 'palette'] as const)(
+    'focuses the terminal after closing the only document from the %s',
+    async (route) => {
+      if (route === 'shortcut') {
+        window.janet.getSettings = vi.fn().mockResolvedValue({
+          keybindings: { 'close-document': 'Ctrl+Alt+D' },
+          workspaceTabs: [],
+          notificationsEnabled: false,
+          notificationThresholdSeconds: 10,
+        });
+      }
+      render(<App />);
+
+      const editor = await openSampleEditor();
+      editor.focus();
+
+      if (route === 'shortcut') {
+        fireEvent.keyDown(document, { key: 'd', ctrlKey: true, altKey: true });
+      } else {
+        act(() => rendererMocks.paletteActions.find((action) => action.id === 'close-document')!.handler());
+      }
+
+      await waitFor(() => {
+        expect(screen.queryByRole('tab', { name: 'sample.ts' })).not.toBeInTheDocument();
+        expect(screen.getByRole('textbox', { name: /^Terminal / })).toHaveFocus();
+      });
+    },
+  );
+
+  it.each(["Don't Save", 'Save'] as const)(
+    'restores focus after Cancel and focuses the terminal after shortcut %s closes the only dirty document',
+    async (closeAction) => {
+      window.janet.getSettings = vi.fn().mockResolvedValue({
+        keybindings: { 'close-document': 'Ctrl+Alt+D' },
+        workspaceTabs: [],
+        notificationsEnabled: false,
+        notificationThresholdSeconds: 10,
+      });
+      render(<App />);
+
+      const editor = await openSampleEditor();
+      fireEvent.change(editor, { target: { value: 'changed\n' } });
+      editor.focus();
+      fireEvent.keyDown(document, { key: 'd', ctrlKey: true, altKey: true });
+
+      let dialog = await screen.findByRole('alertdialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(editor).toHaveFocus());
+
+      fireEvent.keyDown(document, { key: 'd', ctrlKey: true, altKey: true });
+      dialog = await screen.findByRole('alertdialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: closeAction }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole('tab', { name: /sample\.ts/i })).not.toBeInTheDocument();
+        expect(screen.getByRole('textbox', { name: /^Terminal / })).toHaveFocus();
+      });
+      expect(window.janet.fsWriteTextFile).toHaveBeenCalledTimes(closeAction === 'Save' ? 1 : 0);
+    },
+  );
+
   it("keeps a dirty file open on Cancel and closes it on Don't Save", async () => {
     render(<App />);
 
@@ -2350,7 +2529,7 @@ describe('editor documents in the app', () => {
 
     await waitFor(() => {
       expect(screen.queryByRole('tab', { name: /sample\.ts/i })).not.toBeInTheDocument();
-      expect(screen.getByTestId(/terminal-/)).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: /^Terminal / })).toHaveFocus();
     });
     expect(window.janet.fsWriteTextFile).not.toHaveBeenCalled();
   });
@@ -2372,6 +2551,7 @@ describe('editor documents in the app', () => {
         content: 'export const saved = true;\n',
       }));
       expect(screen.queryByRole('tab', { name: /sample\.ts/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: /^Terminal / })).toHaveFocus();
     });
   });
 
