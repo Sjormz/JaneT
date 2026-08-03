@@ -555,6 +555,21 @@ describe('split panes in the app', () => {
     expect(historyUpdates()[1].commandHistory.map((item: any) => item.command)).toEqual(['second', 'first']);
   });
 
+  it('replaces an older duplicate command instead of adding another row', async () => {
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
+
+    act(() => emit({ ...semanticEvent('repeat'), startedAt: 10 }));
+    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+    act(() => emit({ ...semanticEvent('repeat'), startedAt: 30 }));
+    await waitFor(() => expect(historyUpdates()).toHaveLength(2));
+
+    expect(historyUpdates()[1].commandHistory).toHaveLength(1);
+    expect(historyUpdates()[1].commandHistory[0]).toMatchObject({ command: 'repeat', startedAt: 30 });
+  });
+
   it('resolves ownership and local context only when a queued completion persists', async () => {
     const blocker = deferred();
     vi.mocked(window.janet.setSettings).mockImplementation((update: any) => (

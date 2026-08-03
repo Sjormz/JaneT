@@ -805,7 +805,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         durationMs: event.durationMs,
         ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }), context,
       };
-      const next = [entry, ...commandHistoryRef.current].slice(0, MAX_COMMAND_HISTORY_ENTRIES);
+      const next = [
+        entry,
+        ...commandHistoryRef.current.filter((candidate) => candidate.command !== entry.command),
+      ].slice(0, MAX_COMMAND_HISTORY_ENTRIES);
       try {
         await window.janet.setSettings({ commandHistory: next });
         commandHistoryRef.current = next;

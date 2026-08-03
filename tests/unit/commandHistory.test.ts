@@ -14,9 +14,25 @@ const entry = (id = 'one'): CommandHistoryEntry => ({
 
 describe('command history boundary', () => {
   it('normalizes up to 256 valid unique legacy entries across all candidates', () => {
-    const input: unknown[] = [entry(), { ...entry('bad'), output: 'secret' }, entry('one'), entry('two')];
-    input.push(...Array.from({ length: MAX_COMMAND_HISTORY_ENTRIES }, (_, index) => entry(`later-${index}`)));
-    expect(normalizeCommandHistory(input)).toEqual([entry(), entry('two'), ...input.slice(4, 258)]);
+    const input: unknown[] = [entry(), { ...entry('bad'), output: 'secret' }, entry('one'), { ...entry('two'), command: 'pwd' }];
+    input.push(...Array.from({ length: MAX_COMMAND_HISTORY_ENTRIES }, (_, index) => ({
+      ...entry(`later-${index}`), command: `printf ${index}`,
+    })));
+    expect(normalizeCommandHistory(input)).toEqual([
+      entry(), { ...entry('two'), command: 'pwd' }, ...input.slice(4, 258),
+    ]);
+  });
+
+  it('keeps only the newest entry for an exact command', () => {
+    const newest = entry('newest');
+    const older = {
+      ...entry('older'), startedAt: 5,
+      context: { kind: 'ssh' as const, label: 'prod' },
+    };
+    const other = { ...entry('other'), command: 'pwd' };
+
+    expect(normalizeCommandHistory([newest, older, other])).toEqual([newest, other]);
+    expect(isValidCommandHistory([newest, older])).toBe(false);
   });
 
   it('never invokes entry or nested context accessors', () => {
@@ -80,7 +96,7 @@ describe('command history boundary', () => {
   });
 
   it('strictly rejects malformed live collections and extra nested keys', () => {
-    expect(isValidCommandHistory([entry(), entry('two')])).toBe(true);
+    expect(isValidCommandHistory([entry(), { ...entry('two'), command: 'pwd' }])).toBe(true);
     expect(isValidCommandHistory([entry(), entry()])).toBe(false);
     expect(isValidCommandHistory([{ ...entry(), output: 'secret' }])).toBe(false);
     expect(isValidCommandHistory([{ ...entry(), context: { kind: 'local', cwd: '/repo', host: 'bad' } }])).toBe(false);
