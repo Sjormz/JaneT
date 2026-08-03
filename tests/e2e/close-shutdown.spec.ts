@@ -113,8 +113,18 @@ test('closing the window stops managed terminal work and exits without an active
     );
     await expect.poll(() => canConnect(port), { timeout: 5_000 }).toBe(true);
 
+    const hiddenBeforeClose = app.evaluate(({ BrowserWindow }) => new Promise<boolean>((resolve) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      if (!window || !window.isVisible()) {
+        resolve(true);
+        return;
+      }
+      window.once('hide', () => resolve(true));
+      window.once('closed', () => resolve(false));
+    }));
     const closed = app.waitForEvent('close');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close());
+    expect(await hiddenBeforeClose).toBe(true);
     await closed;
     app = undefined;
 

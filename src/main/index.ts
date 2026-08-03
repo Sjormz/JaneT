@@ -131,6 +131,20 @@ async function stopWorkspaceResources(): Promise<void> {
   sshManager.cleanup();
 }
 
+async function stopWorkspaceResourcesAfterHidingWindow(): Promise<void> {
+  const window = mainWindow;
+  if (window && !window.isDestroyed()) window.hide();
+  try {
+    await stopWorkspaceResources();
+  } catch (error) {
+    if (window && !window.isDestroyed()) {
+      window.show();
+      window.focus();
+    }
+    throw error;
+  }
+}
+
 async function requestRendererClosePreparation(
   reason: WorkspaceCloseReason,
 ): Promise<WorkspacePrepareForCloseDecision> {
@@ -345,7 +359,7 @@ electron.app.whenReady().then(() => {
 
   workspaceLifecycle = new WorkspaceLifecycleController({
     requestClosePreparation: requestRendererClosePreparation,
-    stopAll: stopWorkspaceResources,
+    stopAll: stopWorkspaceResourcesAfterHidingWindow,
     quit: () => {
       quittingAfterWorkspaceStop = true;
       electron.app.quit();

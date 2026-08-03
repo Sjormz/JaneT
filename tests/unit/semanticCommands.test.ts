@@ -267,7 +267,7 @@ describe('SemanticCommandTimeline', () => {
     timeline.handleOsc('A'); timeline.handleOsc('B');
     term.cursorX = 7; timeline.handleOsc('C'); timeline.handleOsc('D;7');
 
-    expect(term.registerDecoration).toHaveBeenCalledWith(expect.objectContaining({ marker: term.markers[0] }));
+    expect(term.registerDecoration).toHaveBeenCalledWith({ marker: term.markers[0], x: 0, width: 1 });
     const decoration = timeline.commands[0].decoration!;
     timeline.dispose();
     expect(decoration.dispose).toHaveBeenCalledOnce();
