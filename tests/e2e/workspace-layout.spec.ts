@@ -92,6 +92,34 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     expect(viewport.width - (settingsBounds!.x + settingsBounds!.width)).toBeGreaterThanOrEqual(10);
     await settingsButton.click();
     await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+    await page.getByRole('button', { name: 'Keyboard shortcuts' }).click();
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toBeHidden();
+
+    const shortcutsDialog = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
+    await expect(shortcutsDialog).toBeVisible();
+    const historyShortcut = shortcutsDialog.getByRole('button', {
+      name: /Open command history \(currently unassigned\)/i,
+    });
+    await expect(historyShortcut).toBeVisible();
+    await historyShortcut.click();
+    await shortcutsDialog.getByRole('textbox', {
+      name: 'Press a shortcut for Open command history',
+    }).press('Control+Shift+H');
+    await expect(shortcutsDialog.getByRole('button', {
+      name: /Open command history \(currently Ctrl\+Shift\+H\)/i,
+    })).toBeVisible();
+    const shortcutsBounds = await shortcutsDialog.boundingBox();
+    expect(shortcutsBounds).not.toBeNull();
+    expect(shortcutsBounds!.y).toBeGreaterThanOrEqual(0);
+    expect(shortcutsBounds!.y + shortcutsBounds!.height).toBeLessThanOrEqual(viewport.height);
+    const shortcutsScreenshot = testInfo.outputPath('keyboard-shortcuts-modal.png');
+    await page.screenshot({ path: shortcutsScreenshot });
+    await testInfo.attach('keyboard-shortcuts-modal', { path: shortcutsScreenshot, contentType: 'image/png' });
+
+    await page.keyboard.press('Escape');
+    await expect(shortcutsDialog).toBeHidden();
+    await expect(settingsButton).toBeFocused();
+    await settingsButton.click();
 
     const desktopScreenshot = testInfo.outputPath('workspace-right-settings.png');
     await page.screenshot({ path: desktopScreenshot });
@@ -114,6 +142,17 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     await page.getByRole('button', { name: 'Hide settings' }).click();
     await tabsPanel.getByRole('button', { name: 'SSH connections' }).click();
     await expect(page.locator('#vtab-ssh-connections')).toBeVisible();
+    const newSshButton = page.getByRole('button', { name: 'New SSH connection' });
+    await newSshButton.click();
+    const sshDialog = page.getByRole('dialog', { name: 'New SSH connection' });
+    await expect(sshDialog).toBeVisible();
+    await expect(sshDialog.getByRole('textbox', { name: 'Host' })).toBeFocused();
+    const sshScreenshot = testInfo.outputPath('new-ssh-connection-modal.png');
+    await page.screenshot({ path: sshScreenshot });
+    await testInfo.attach('new-ssh-connection-modal', { path: sshScreenshot, contentType: 'image/png' });
+    await page.keyboard.press('Escape');
+    await expect(sshDialog).toBeHidden();
+    await expect(newSshButton).toBeFocused();
 
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(800, 600));
     await expect.poll(() => page.evaluate(() => innerWidth)).toBeLessThanOrEqual(800);

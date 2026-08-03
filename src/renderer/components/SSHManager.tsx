@@ -1,5 +1,7 @@
 import React, { useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { SavedSSHProfile, SessionInfo } from '../types';
+import { useModalFocus } from '../useModalFocus';
 import { PlusIcon, XCloseIcon, ServerIcon, AlertIcon, PlugIcon, PencilIcon, TrashIcon } from '../icons';
 import ConfirmationDialog from './ConfirmationDialog';
 import Tooltip from './Tooltip';
@@ -63,6 +65,7 @@ export default function SSHManager({
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [profilePendingRemoval, setProfilePendingRemoval] = useState<SavedSSHProfile | null>(null);
   const newConnectionButtonRef = useRef<HTMLButtonElement>(null);
+  const formModalRef = useRef<HTMLDivElement>(null);
 
   const resetForm = () => {
     setHost('');
@@ -206,28 +209,40 @@ export default function SSHManager({
     ? editingProfileId ? 'Cancel editing' : 'Cancel new connection'
     : 'New SSH connection';
 
+  const closeForm = () => {
+    setShowForm(false);
+    resetForm();
+  };
+
   const toggleForm = () => {
     if (showForm) {
-      setShowForm(false);
-      resetForm();
+      closeForm();
       return;
     }
     resetForm();
     setShowForm(true);
   };
 
+  useModalFocus({
+    open: showForm,
+    containerRef: formModalRef,
+    onClose: closeForm,
+    initialFocusSelector: '[data-ssh-host]',
+    fallbackFocus: () => newConnectionButtonRef.current,
+  });
+
   return (
     <div className="ssh-manager">
       <div className="ssh-header">
         <span className="section-title">SSH connections</span>
-        <Tooltip label={formToggleLabel} placement="left">
+        <Tooltip label="New SSH connection" placement="left">
           <button
             ref={newConnectionButtonRef}
             className="icon-btn"
             onClick={toggleForm}
-            aria-label={formToggleLabel}
+            aria-label="New SSH connection"
           >
-            {showForm ? <XCloseIcon size="sm" /> : <PlusIcon size="sm" />}
+            <PlusIcon size="sm" />
           </button>
         </Tooltip>
       </div>
@@ -248,15 +263,39 @@ export default function SSHManager({
         </div>
       )}
 
-      {showForm && (
-        <form className="ssh-form" onSubmit={handleConnect}>
+      {showForm && createPortal(
+        <div
+          className="workspace-modal-overlay"
+          role="presentation"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) closeForm();
+          }}
+        >
+          <div
+            ref={formModalRef}
+            className="workspace-modal ssh-connection-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ssh-connection-modal-title"
+          >
+            <div className="workspace-modal-header">
+              <h2 id="ssh-connection-modal-title">
+                {editingProfileId ? 'Edit SSH connection' : 'New SSH connection'}
+              </h2>
+              <Tooltip label={formToggleLabel} shortcut="Esc" placement="left">
+                <button type="button" onClick={closeForm} aria-label={formToggleLabel}>
+                  <XCloseIcon size="sm" />
+                </button>
+              </Tooltip>
+            </div>
+            <form className="ssh-form" onSubmit={handleConnect}>
           <label className="form-field">
             <span>Host</span>
             <input
               type="text"
               placeholder="server.example.com"
               aria-label="Host"
-              autoFocus
+              data-ssh-host
               required
               value={host}
               onChange={(e) => setHost(e.target.value)}
@@ -333,7 +372,10 @@ export default function SSHManager({
           >
             {formConnecting ? 'Connecting…' : editingProfileId ? 'Update and connect' : 'Save and connect'}
           </button>
-        </form>
+            </form>
+          </div>
+        </div>,
+        document.body,
       )}
 
       <div className="ssh-sessions">
@@ -380,7 +422,7 @@ export default function SSHManager({
           </div>
         )}
 
-        {!hasSavedProfiles && !showForm && (
+        {!hasSavedProfiles && (
           <div className="ssh-empty">
             <ServerIcon size="lg" />
             <strong>Connect to a remote host</strong>

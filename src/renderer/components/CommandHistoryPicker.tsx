@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { XCloseIcon } from '../icons';
 import { useModalFocus } from '../useModalFocus';
 import { commandHistoryContextLabel, type CommandHistoryEntry } from '../../shared/commandHistory';
+import Tooltip from './Tooltip';
 
 interface Props {
   visible: boolean;
@@ -37,7 +39,12 @@ export default function CommandHistoryPicker({ visible, entries, onClose, onSele
   };
   return <div className="snippet-picker-overlay" role="presentation">
     <div ref={panelRef} className="snippet-picker" role="dialog" aria-modal="true" aria-label="Command history">
-      <div className="snippet-picker-heading"><h2>Command history</h2></div>
+      <div className="snippet-picker-heading">
+        <h2>Command history</h2>
+        <Tooltip label="Close command history" shortcut="Esc" placement="left">
+          <button type="button" className="command-history-close" onClick={onClose} aria-label="Close command history"><XCloseIcon size="sm" /></button>
+        </Tooltip>
+      </div>
       <div className="snippet-search-shell command-history-filters">
         <input className="command-history-search" ref={searchRef} role="combobox" aria-label="Search command history" aria-controls="command-history-list" aria-expanded="true" aria-activedescendant={filtered[selected] ? `command-history-${filtered[selected].id}` : undefined} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={keyDown} />
         <label className="command-history-filter">Context <select value={context} onChange={(e) => setContext(e.target.value)}><option value="all">All</option><option value="local">Local</option><option value="ssh">SSH</option></select></label>

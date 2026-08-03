@@ -12,6 +12,7 @@ import {
   XCloseIcon,
   TerminalTabIcon,
   SSHIcon,
+  BroadcastIcon,
 } from '../icons';
 import Tooltip from './Tooltip';
 import {
@@ -201,7 +202,7 @@ function TerminalPaneLeaf({
         className="terminal-leaf-header"
         draggable={!isMaximized}
         onDragStart={(event) => {
-          if ((event.target as HTMLElement).closest('button')) {
+          if ((event.target as HTMLElement).closest('button, .broadcast-toggle')) {
             event.preventDefault();
             return;
           }
@@ -220,13 +221,16 @@ function TerminalPaneLeaf({
         {status && <span className={`leaf-awareness ${status.kind}`}>{status.label}</span>}
         <div className="leaf-actions">
           <Tooltip label={`${broadcastSelected ? 'Remove' : 'Include'} ${paneActionContext} ${broadcastSelected ? 'from' : 'in'} broadcast input`} placement="bottom">
-            <input
-              type="checkbox"
-              className="broadcast-recipient"
-              checked={broadcastSelected ?? false}
-              aria-label={`${broadcastSelected ? 'Remove' : 'Include'} ${paneActionContext} ${broadcastSelected ? 'from' : 'in'} broadcast input`}
-              onChange={(event) => onBroadcastRecipientChange?.(leaf.id, event.currentTarget.checked)}
-            />
+            <label className={`leaf-btn broadcast-toggle${broadcastSelected ? ' is-selected' : ''}`}>
+              <input
+                type="checkbox"
+                className="broadcast-recipient"
+                checked={broadcastSelected ?? false}
+                aria-label={`${broadcastSelected ? 'Remove' : 'Include'} ${paneActionContext} ${broadcastSelected ? 'from' : 'in'} broadcast input`}
+                onChange={(event) => onBroadcastRecipientChange?.(leaf.id, event.currentTarget.checked)}
+              />
+              <BroadcastIcon size="sm" />
+            </label>
           </Tooltip>
           {hasMultiplePanes && (
             <Tooltip label={isMaximized ? 'Restore pane layout' : `Maximize pane — ${paneActionContext}`} placement="bottom">
