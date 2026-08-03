@@ -16,6 +16,7 @@ import Tooltip from './components/Tooltip';
 import ConfirmationDialog from './components/ConfirmationDialog';
 import RenameDialog from './components/RenameDialog';
 import WorkspaceContent, { surfaceTabFocusTarget } from './components/WorkspaceContent';
+import { ArrowRightIcon } from './icons';
 import {
   TabInfo, SessionInfo,
   SavedSSHProfile,
@@ -411,6 +412,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [snippetsVisible, setSnippetsVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(initialState.settingsOpen);
+  const [shortcutsVisible, setShortcutsVisible] = useState(false);
   const [sshConnectionsOpen, setSshConnectionsOpen] = useState(initialState.sshConnectionsOpen);
   const [pendingDestructiveAction, setPendingDestructiveAction] = useState<PendingDestructiveAction | null>(null);
   const [pendingDestructiveBusy, setPendingDestructiveBusy] = useState(false);
@@ -2140,7 +2142,18 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
               onNotificationsEnabledChange={persistNotificationsEnabled}
               onNotificationThresholdSecondsChange={persistNotificationThreshold}
             />
-            <ShortcutEditor />
+            <div className="theme-section shortcut-settings-section">
+              <button
+                type="button"
+                className="shortcut-settings-button"
+                onClick={() => { setSettingsOpen(false); setShortcutsVisible(true); }}
+                aria-label="Keyboard shortcuts"
+                aria-haspopup="dialog"
+              >
+                <span><strong>Keyboard shortcuts</strong><small>Customize app commands and keys</small></span>
+                <ArrowRightIcon size="sm" />
+              </button>
+            </div>
           </div>
         )}
       />
@@ -2275,6 +2288,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           const termId = preferredLeafId(tab, focusedTerminalId, maximizedLeafByTab[tab.id]);
           const command = entry.command.replace(/[\r\n]+$/, '');
           if (termId && command && findLeaf(tab.root, termId)) requestTerminalPaste(termId, command);
+        }}
+      />
+      <ShortcutEditor
+        open={shortcutsVisible}
+        onClose={() => {
+          setShortcutsVisible(false);
+          requestAnimationFrame(() => document.querySelector<HTMLElement>('.titlebar-settings-btn')?.focus());
         }}
       />
       <UpdateBanner />

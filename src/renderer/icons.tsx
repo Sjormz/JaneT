@@ -27,7 +27,7 @@ import {
   // Theme
   Palette, Sun, Moon, Monitor,
   // Misc
-  MoreHorizontal, Loader2, AlertCircle, Check, Save,
+  MoreHorizontal, Loader2, AlertCircle, Check, Save, RadioTower,
   List,
 } from 'lucide-react';
 
@@ -168,6 +168,7 @@ export const SpinnerIcon = make(Loader2);
 export const AlertIcon = make(AlertCircle);
 export const CheckIcon = make(Check);
 export const SaveIcon = make(Save);
+export const BroadcastIcon = make(RadioTower);
 
 /**
  * Map a file extension to a Lucide icon component.

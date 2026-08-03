@@ -1,20 +1,41 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useKeybindings } from '../KeybindingsContext';
+import { useModalFocus } from '../useModalFocus';
 import {
   KeybindingAction,
   KEYBINDING_LABELS,
   formatShortcut,
   formatShortcutForDisplay,
 } from '../keybindings';
-import { PencilIcon } from '../icons';
+import { PencilIcon, XCloseIcon } from '../icons';
 import Tooltip from './Tooltip';
 import ConfirmationDialog from './ConfirmationDialog';
 
-export default function ShortcutEditor() {
+interface ShortcutEditorProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+export default function ShortcutEditor({ open, onClose }: ShortcutEditorProps) {
   const { bindings, setBinding, resetDefaults } = useKeybindings();
   const [capturing, setCapturing] = useState<KeybindingAction | null>(null);
   const [confirmingReset, setConfirmingReset] = useState(false);
   const captureInputRef = useRef<HTMLDivElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  useModalFocus({
+    open,
+    containerRef: modalRef,
+    onClose,
+    initialFocusSelector: '[data-shortcut-close]',
+  });
+
+  useEffect(() => {
+    if (open) return;
+    setCapturing(null);
+    setConfirmingReset(false);
+  }, [open]);
 
   useEffect(() => {
     if (capturing && captureInputRef.current) {
@@ -47,11 +68,32 @@ export default function ShortcutEditor() {
   const keys = Object.keys(KEYBINDING_LABELS) as KeybindingAction[];
   const platform = navigator.platform.toLowerCase().includes('mac') ? 'darwin' : '';
 
-  return (
-    <div className="shortcut-editor">
-      <div className="shortcut-editor-header">
-        <span className="section-title">Keyboard Shortcuts</span>
-      </div>
+  if (!open) return null;
+
+  return createPortal(
+    <div
+      className="workspace-modal-overlay"
+      role="presentation"
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={modalRef}
+        className="workspace-modal shortcut-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shortcut-modal-title"
+      >
+        <div className="workspace-modal-header">
+          <h2 id="shortcut-modal-title">Keyboard shortcuts</h2>
+          <Tooltip label="Close keyboard shortcuts" shortcut="Esc" placement="left">
+            <button type="button" data-shortcut-close onClick={onClose} aria-label="Close keyboard shortcuts">
+              <XCloseIcon size="sm" />
+            </button>
+          </Tooltip>
+        </div>
+        <div className="shortcut-editor">
       <div className="shortcut-list">
         {keys.map((action) => {
           const shortcut = bindings[action];
@@ -100,6 +142,9 @@ export default function ShortcutEditor() {
         }}
         onCancel={() => setConfirmingReset(false)}
       />
-    </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }

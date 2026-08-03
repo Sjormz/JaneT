@@ -4,15 +4,29 @@ import { KeybindingsProvider } from '../../src/renderer/KeybindingsContext';
 import ShortcutEditor from '../../src/renderer/components/ShortcutEditor';
 import { DEFAULT_KEYBINDINGS } from '../../src/renderer/keybindings';
 
-function renderEditor(onSave: (bindings: typeof DEFAULT_KEYBINDINGS) => void) {
+function renderEditor(
+  onSave: (bindings: typeof DEFAULT_KEYBINDINGS) => void,
+  onClose = () => {},
+) {
   return render(
     <KeybindingsProvider initialBindings={{ 'close-tab': 'Alt+X' }} onSave={onSave}>
-      <ShortcutEditor />
+      <ShortcutEditor open onClose={onClose} />
     </KeybindingsProvider>,
   );
 }
 
 describe('ShortcutEditor', () => {
+  it('closes from its visible action, Escape, and backdrop', () => {
+    const onClose = vi.fn();
+    const { container } = renderEditor(vi.fn(), onClose);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close keyboard shortcuts' }));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.pointerDown(container.ownerDocument.querySelector('.workspace-modal-overlay')!);
+
+    expect(onClose).toHaveBeenCalledTimes(3);
+  });
+
   it('lists configurable actions without assigning every action a default', async () => {
     const onSave = vi.fn();
     renderEditor(onSave);

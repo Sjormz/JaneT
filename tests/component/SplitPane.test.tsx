@@ -12,6 +12,7 @@ const rendererMocks = vi.hoisted(() => ({
   disposeCachedTerminal: vi.fn(),
   paletteActions: [] as Array<{ id: string; handler: () => void }>,
   titlebarProps: null as any,
+  shortcutEditorProps: null as any,
   sidebarProps: null as any,
   verticalTabBarProps: null as any,
   prepareForCloseHandler: null as null | ((request: {
@@ -102,7 +103,14 @@ vi.mock('../../src/renderer/components/CommandPalette', () => ({
   },
 }));
 vi.mock('../../src/renderer/components/ShortcutEditor', () => ({
-  default: () => null,
+  default: (props: any) => {
+    rendererMocks.shortcutEditorProps = props;
+    return props.open ? (
+      <div role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+        <button type="button" onClick={props.onClose}>Close keyboard shortcuts</button>
+      </div>
+    ) : null;
+  },
 }));
 vi.mock('../../src/renderer/components/UpdateBanner', () => ({
   default: () => null,
@@ -235,6 +243,7 @@ beforeEach(() => {
   rendererMocks.disposeCachedTerminal.mockReset();
   rendererMocks.paletteActions = [];
   rendererMocks.titlebarProps = null;
+  rendererMocks.shortcutEditorProps = null;
   rendererMocks.sidebarProps = null;
   rendererMocks.verticalTabBarProps = null;
   rendererMocks.prepareForCloseHandler = null;
@@ -406,6 +415,8 @@ describe('split panes in the app', () => {
     const [firstId, secondId] = terminals.map((terminal) => terminal.dataset.terminalId!);
 
     const recipients = screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i });
+    expect(recipients[0].closest('label')).toHaveClass('broadcast-toggle');
+    expect(recipients[0].closest('label')?.querySelector('svg')).not.toBeNull();
     fireEvent.click(recipients[0]);
     expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
     expect(rendererMocks.broadcastInputHandlers.get(firstId)!('not active')).toBe(false);
@@ -937,6 +948,22 @@ describe('split panes in the app', () => {
 
     fireEvent.keyDown(document, { key: '0', ctrlKey: true });
     await waitFor(() => expect(window.janet.setSettings).toHaveBeenCalledWith({ fontSize: 14 }));
+  });
+
+  it('opens keyboard shortcut editing in a modal from Settings', async () => {
+    render(<App />);
+    await screen.findByTestId('titlebar');
+
+    fireEvent.keyDown(document, { key: ',', ctrlKey: true });
+    const openShortcuts = await screen.findByRole('button', { name: 'Keyboard shortcuts' });
+    fireEvent.click(openShortcuts);
+
+    expect(await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
+    expect(rendererMocks.titlebarProps.settingsOpen).toBe(false);
+    expect(screen.queryByRole('button', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close keyboard shortcuts' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument());
   });
 
   it('exposes unassigned optional actions in the palette', async () => {

@@ -30,4 +30,13 @@ describe('CommandHistoryPicker', () => {
     fireEvent.keyDown(search, { key: 'Escape' });
     expect(onClose).toHaveBeenCalled();
   });
+
+  it('provides a visible close action for mouse users', () => {
+    const onClose = vi.fn();
+    render(<CommandHistoryPicker visible entries={entries} onClose={onClose} onSelect={() => {}} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close command history' }));
+
+    expect(onClose).toHaveBeenCalledOnce();
+  });
 });

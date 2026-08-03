@@ -37,6 +37,26 @@ function renderSSHManager(props?: {
 }
 
 describe('SSHManager', () => {
+  it('opens new connection in a modal and dismisses it from every close path', async () => {
+    renderSSHManager();
+    const opener = screen.getByRole('button', { name: 'New SSH connection' });
+
+    act(() => opener.focus());
+    fireEvent.click(opener);
+    expect(screen.getByRole('dialog', { name: 'New SSH connection' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel new connection' }));
+    expect(screen.queryByRole('dialog', { name: 'New SSH connection' })).not.toBeInTheDocument();
+    await waitFor(() => expect(opener).toHaveFocus());
+
+    fireEvent.click(opener);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'New SSH connection' })).not.toBeInTheDocument();
+
+    fireEvent.click(opener);
+    fireEvent.pointerDown(document.querySelector('.workspace-modal-overlay')!);
+    expect(screen.queryByRole('dialog', { name: 'New SSH connection' })).not.toBeInTheDocument();
+  });
+
   it('saves SSH profile details for one-click reconnect after connecting', async () => {
     const onConnected = vi.fn();
     const onProfilesChange = vi.fn();
@@ -257,6 +277,7 @@ describe('SSHManager', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /edit pckpr@box.local:22/i }));
 
+    expect(screen.getByRole('dialog', { name: 'Edit SSH connection' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Host' })).toHaveValue('box.local');
     expect(screen.getByRole('textbox', { name: 'Port' })).toHaveValue('22');
     expect(screen.getByRole('textbox', { name: 'Username' })).toHaveValue('pckpr');
@@ -288,7 +309,7 @@ describe('SSHManager', () => {
     ]));
   });
 
-  it('focuses and requires Host, exposes auth selection, and disables empty submission', () => {
+  it('focuses and requires Host, exposes auth selection, and disables empty submission', async () => {
     renderSSHManager();
 
     fireEvent.click(screen.getByRole('button', { name: /new connection/i }));
@@ -298,7 +319,7 @@ describe('SSHManager', () => {
     const passwordAuth = screen.getByRole('button', { name: 'Password' });
     const keyAuth = screen.getByRole('button', { name: 'Private key' });
 
-    expect(host).toHaveFocus();
+    await waitFor(() => expect(host).toHaveFocus());
     expect(host).toBeRequired();
     expect(screen.getByRole('textbox', { name: 'Port' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Username' })).toBeInTheDocument();

@@ -696,7 +696,7 @@ html, body, #root {
 }
 .vtab-ssh-connections .ssh-manager { height: auto; min-height: 100%; }
 .vtab-ssh-connections .ssh-header { padding: 8px 10px; }
-.vtab-ssh-connections .ssh-form { padding: 10px; }
+
 .vtab-title {
   font-size: 11px;
   font-weight: 600;
@@ -896,6 +896,18 @@ html, body, #root {
 .workspace-modal .workspace-add-btn { min-height: 40px; justify-content: center; border-style: solid; }
 .workspace-modal .connect-btn { min-height: 42px; margin-top: 2px; }
 .ssh-forward-modal { width: min(560px, 100%); }
+.ssh-connection-modal { width: min(560px, 100%); }
+.ssh-connection-modal .ssh-form {
+  min-height: 0;
+  padding: 0;
+  border-bottom: 0;
+  overflow-y: auto;
+}
+.ssh-connection-modal .connect-btn:disabled {
+  opacity: 1;
+  background: color-mix(in srgb, var(--text-accent) 36%, var(--control-bg));
+  color: var(--text-secondary);
+}
 .ssh-forward-form { display: grid; grid-template-columns: 1fr 2fr 1fr auto; gap: 10px; align-items: end; }
 .ssh-forward-form label { display: grid; gap: 5px; color: var(--text-secondary); font-size: 11px; }
 .ssh-forward-form input { min-width: 0; padding: 8px; border: 1px solid var(--glass-border); border-radius: var(--radius-sm); background: var(--control-bg); color: var(--text-primary); }
@@ -2808,7 +2820,8 @@ html, body, #root {
   transition: opacity var(--transition-fast);
 }
 .terminal-leaf:hover .leaf-actions,
-.terminal-leaf:focus-within .leaf-actions { opacity: 1; }
+.terminal-leaf:focus-within .leaf-actions,
+.leaf-actions:has(.broadcast-toggle.is-selected) { opacity: 1; }
 
 .leaf-btn {
   display: inline-flex;
@@ -2857,6 +2870,37 @@ html, body, #root {
 }
 
 /* === Shortcut Editor === */
+.shortcut-settings-section { padding: 8px 10px; }
+.shortcut-settings-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 46px;
+  padding: 8px 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.shortcut-settings-button:hover { border-color: var(--text-accent); color: var(--text-primary); }
+.shortcut-settings-button > span:first-child { display: flex; flex-direction: column; gap: 3px; }
+.shortcut-settings-button strong { font-size: 12px; font-weight: 600; }
+.shortcut-settings-button small { color: var(--text-tertiary); font-size: 10px; }
+.shortcut-modal { width: min(720px, 100%); }
+.shortcut-modal .shortcut-editor {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.shortcut-modal .shortcut-list { min-height: 0; overflow-y: auto; }
+.shortcut-modal .shortcut-reset-btn { flex: none; }
 .shortcut-editor {
   border-top: 1px solid var(--glass-border);
   padding-top: 4px;
@@ -3423,6 +3467,19 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
 .snippet-picker-heading h2,
 .snippet-editor-heading h2 { color: var(--text-primary); font-size: 15px; font-weight: 650; letter-spacing: -0.12px; }
 .snippet-picker-heading p { margin-top: 1px; color: var(--text-tertiary); font-size: 11px; }
+.command-history-close {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.command-history-close:hover { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
 .snippet-search-shell { padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); }
 .command-history-filters { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: end; gap: 10px; }
 .snippet-picker[aria-label="Command history"] { background: var(--surface-overlay); }
@@ -3767,7 +3824,24 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
   cursor: pointer;
 }
 
-.broadcast-recipient { accent-color: var(--text-accent); }
+.broadcast-toggle { position: relative; }
+.broadcast-toggle .broadcast-recipient {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+}
+.broadcast-toggle:has(.broadcast-recipient:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.broadcast-toggle.is-selected {
+  color: #fff;
+  background: color-mix(in srgb, #ff8c42 34%, transparent);
+  box-shadow: inset 0 0 0 1px #ffb86c;
+}
 
 .terminal-leaf.broadcast-selected {
   outline: 3px solid #ff8c42;
