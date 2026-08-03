@@ -69,10 +69,13 @@ test('persists real command metadata and history selection pastes without execut
       () => fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf-8') : '',
       { timeout: 15_000 },
     ).toBe('X');
+    await page.keyboard.type(command, { delay: 5 });
+    await page.keyboard.press('Enter');
+    await expect.poll(() => fs.readFileSync(markerPath, 'utf-8'), { timeout: 15_000 }).toBe('XX');
     await expect.poll(() => {
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-      return settings.commandHistory?.[0]?.command;
-    }, { timeout: 15_000 }).toBe(command);
+      return settings.commandHistory?.length === 1 && settings.commandHistory[0]?.command === command;
+    }, { timeout: 15_000 }).toBe(true);
     const persisted = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
     expect(persisted.commandHistory).toHaveLength(1);
     expect(persisted.commandHistory.length).toBeLessThanOrEqual(256);
@@ -92,15 +95,23 @@ test('persists real command metadata and history selection pastes without execut
     await page.getByRole('option', { name: /Open command history/ }).click();
     const picker = page.getByRole('dialog', { name: 'Command history' });
     await expect(picker).toBeVisible();
-    await picker.getByRole('combobox', { name: 'Search command history' }).fill('history-rerun.txt');
+    const search = picker.getByRole('combobox', { name: 'Search command history' });
+    await expect(search).toBeFocused();
+    await search.fill('history-rerun.txt');
     await picker.getByLabel('Context').selectOption('local');
     const capturedCommand = picker.getByRole('option').filter({ hasText: command });
     await expect(capturedCommand).toHaveCount(1);
-    await capturedCommand.click();
-    expect(fs.readFileSync(markerPath, 'utf-8')).toBe('X');
+    await page.keyboard.press('ArrowDown');
+    await expect(capturedCommand).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(search).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(capturedCommand).toBeFocused();
+    await page.keyboard.press('Enter');
+    expect(fs.readFileSync(markerPath, 'utf-8')).toBe('XX');
 
     await page.keyboard.press('Enter');
-    await expect.poll(() => fs.readFileSync(markerPath, 'utf-8'), { timeout: 15_000 }).toBe('XX');
+    await expect.poll(() => fs.readFileSync(markerPath, 'utf-8'), { timeout: 15_000 }).toBe('XXX');
   } finally {
     await forceClose(app);
     fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

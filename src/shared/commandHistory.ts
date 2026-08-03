@@ -105,11 +105,13 @@ export function cloneCommandHistory(entries: readonly CommandHistoryEntry[]): Co
 export function normalizeCommandHistory(value: unknown): CommandHistoryEntry[] {
   if (!Array.isArray(value)) return [];
   const ids = new Set<string>();
+  const commands = new Set<string>();
   const entries: CommandHistoryEntry[] = [];
   for (const candidate of value) {
     const entry = validatedEntry(candidate);
-    if (!entry || ids.has(entry.id)) continue;
+    if (!entry || ids.has(entry.id) || commands.has(entry.command)) continue;
     ids.add(entry.id);
+    commands.add(entry.command);
     entries.push(entry);
     if (entries.length === MAX_COMMAND_HISTORY_ENTRIES) break;
   }
@@ -119,10 +121,12 @@ export function normalizeCommandHistory(value: unknown): CommandHistoryEntry[] {
 export function isValidCommandHistory(value: unknown): value is CommandHistoryEntry[] {
   if (!Array.isArray(value) || value.length > MAX_COMMAND_HISTORY_ENTRIES) return false;
   const ids = new Set<string>();
+  const commands = new Set<string>();
   for (const candidate of value) {
     const entry = validatedEntry(candidate);
-    if (!entry || ids.has(entry.id)) return false;
+    if (!entry || ids.has(entry.id) || commands.has(entry.command)) return false;
     ids.add(entry.id);
+    commands.add(entry.command);
   }
   return true;
 }
