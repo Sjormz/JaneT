@@ -90,8 +90,9 @@
 }
 
 .terminal-command-failed {
-  background: var(--red);
-  border-radius: 50%;
+  border-left: 2px solid var(--red);
+  transform: translateX(-6px);
+  pointer-events: none;
 }
 
 * {

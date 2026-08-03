@@ -93,6 +93,26 @@ test('navigates, copies, and safely inserts a real semantic command', async () =
 
     await page.keyboard.press('Enter');
     await expect.poll(() => fs.readFileSync(markerPath, 'utf-8'), { timeout: 15_000 }).toBe('XX');
+
+    const failingCommand = process.platform === 'win32' ? 'test' : 'false';
+    await page.keyboard.type(failingCommand, { delay: 5 });
+    await page.keyboard.press('Enter');
+    const failureMarker = terminal.locator('.terminal-command-failed').last();
+    await expect(failureMarker).toBeVisible({ timeout: 15_000 });
+    const markerStyle = await failureMarker.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        backgroundColor: style.backgroundColor,
+        borderLeftWidth: style.borderLeftWidth,
+        markerLeft: element.getBoundingClientRect().left,
+        textLeft: element.closest('.xterm-screen')!.querySelector('.xterm-rows')!.getBoundingClientRect().left,
+      };
+    });
+    expect(markerStyle).toMatchObject({
+      backgroundColor: 'rgba(0, 0, 0, 0)',
+      borderLeftWidth: '2px',
+    });
+    expect(markerStyle.markerLeft).toBeLessThan(markerStyle.textLeft);
   } finally {
     await forceClose(app);
     fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

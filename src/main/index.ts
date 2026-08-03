@@ -43,6 +43,7 @@ let fsManager: FileSystemManager;
 let gitManager: GitManager;
 let settingsManager: SettingsManager;
 let workspaceLifecycle: WorkspaceLifecycleController;
+let workspaceShutdownInProgress = false;
 let quittingAfterWorkspaceStop = false;
 const closePreparation = new WorkspaceClosePreparationCoordinator();
 
@@ -131,6 +132,22 @@ async function stopWorkspaceResources(): Promise<void> {
   sshManager.cleanup();
 }
 
+async function stopWorkspaceResourcesAfterHidingWindow(): Promise<void> {
+  const window = mainWindow;
+  workspaceShutdownInProgress = true;
+  if (window && !window.isDestroyed()) window.hide();
+  try {
+    await stopWorkspaceResources();
+  } catch (error) {
+    workspaceShutdownInProgress = false;
+    if (window && !window.isDestroyed()) {
+      window.show();
+      window.focus();
+    }
+    throw error;
+  }
+}
+
 async function requestRendererClosePreparation(
   reason: WorkspaceCloseReason,
 ): Promise<WorkspacePrepareForCloseDecision> {
@@ -166,6 +183,7 @@ async function prepareForUpdateInstall(): Promise<boolean> {
 }
 
 function showOrCreateWindow(): void {
+  if (workspaceShutdownInProgress || quittingAfterWorkspaceStop) return;
   const window = mainWindow;
   if (window && !window.isDestroyed()) {
     if (window.isMinimized()) window.restore();
@@ -345,9 +363,10 @@ electron.app.whenReady().then(() => {
 
   workspaceLifecycle = new WorkspaceLifecycleController({
     requestClosePreparation: requestRendererClosePreparation,
-    stopAll: stopWorkspaceResources,
+    stopAll: stopWorkspaceResourcesAfterHidingWindow,
     quit: () => {
       quittingAfterWorkspaceStop = true;
+      workspaceShutdownInProgress = false;
       electron.app.quit();
     },
   });
