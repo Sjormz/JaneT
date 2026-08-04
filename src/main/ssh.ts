@@ -32,6 +32,7 @@ import {
   revisionsMatch,
   textFileRevision,
 } from './textFileCodec';
+import { buildShellInit } from './shell-init';
 import { NativeTerminalCapacity } from './terminalCapacity';
 
 // Host verification may pause on a native Trust/Cancel dialog while the user
@@ -53,6 +54,70 @@ const SFTP_OPERATION_TIMEOUT_MS = 30_000;
 const MAX_REMOTE_PATH_LENGTH = 8_192;
 const SFTP_IO_CHUNK_BYTES = 64 * 1024;
 const MAX_LOCAL_FORWARDS = 32;
+const REMOTE_SHELL_PROBE_TIMEOUT_MS = 2_000;
+const MAX_REMOTE_SHELL_PROBE_BYTES = 256;
+export const REMOTE_BASH_PROBE = '"$SHELL" --rcfile /dev/fd/3 -i 3<<\'__JANET_BASH_PROBE__\'\nprintf \'%s\\n\' "$BASH"\nexit 0\n__JANET_BASH_PROBE__';
+
+function quotePosix(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function detectRemoteBash(client: Client): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let outputBytes = 0;
+    let probe: ClientChannel | null = null;
+    let settled = false;
+    const finish = (shell: string | null = null, closeProbe = false) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (closeProbe) try { probe?.close(); } catch {}
+      resolve(shell);
+    };
+    const timer = setTimeout(() => {
+      const error = new Error('Remote shell probe timed out');
+      if (probe) {
+        finish(null, true);
+      } else {
+        settled = true;
+        try { client.end(); } catch {}
+        reject(error);
+      }
+    }, REMOTE_SHELL_PROBE_TIMEOUT_MS);
+    timer.unref?.();
+    try {
+      client.exec(REMOTE_BASH_PROBE, (error, stream) => {
+        if (error || !stream) return finish();
+        if (settled) {
+          try { stream.close(); } catch {}
+          return;
+        }
+        probe = stream;
+        stream.on('data', (data: Buffer) => {
+          outputBytes += data.byteLength;
+          if (outputBytes > MAX_REMOTE_SHELL_PROBE_BYTES) return finish(null, true);
+          chunks.push(data);
+        });
+        stream.stderr?.on('data', () => {});
+        stream.on('error', () => finish(null, true));
+        stream.stderr?.on('error', () => finish(null, true));
+        stream.on('close', () => {
+          const shell = Buffer.concat(chunks).toString('utf8').trim();
+          finish(!/[\u0000-\u001f\u007f-\u009f]/.test(shell)
+            && shell.replace(/\\/g, '/').split('/').pop() === 'bash' ? shell : null);
+        });
+      });
+    } catch {
+      finish();
+    }
+  });
+}
+
+export function remoteBashCommand(shell: string): string {
+  const marker = '__JANET_SHELL_INTEGRATION__';
+  return `exec ${quotePosix(shell)} --rcfile /dev/fd/3 -i 3<<'${marker}'\n[ -f /etc/profile ] && . /etc/profile\nif [ -f ~/.bash_profile ]; then . ~/.bash_profile; elif [ -f ~/.bash_login ]; then . ~/.bash_login; elif [ -f ~/.profile ]; then . ~/.profile; fi\n${buildShellInit('bash')}\n${marker}`;
+}
 
 export interface SSHCredentials {
   host: string;
@@ -787,6 +852,7 @@ interface SSHConnection {
   shellHandles: Map<string, SSHShellHandle>;
   routeClients: Client[];
   localForwards: Map<string, SSHLocalForward>;
+  remoteBash: string | null;
 }
 
 interface SSHLocalForward {
@@ -976,13 +1042,25 @@ export class SSHManager {
       }
     };
 
-    client.on('ready', () => {
+    client.on('ready', async () => {
       const pending = this.pendingConnections.get(id);
       if (pending?.client !== client) {
         client.end();
         return;
       }
 
+      let remoteBash: string | null;
+      try {
+        remoteBash = await detectRemoteBash(client);
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        if (this.pendingConnections.get(id)?.client === client) {
+          this.pendingConnections.delete(id);
+        }
+        rejectPending(failure);
+        return;
+      }
+      if (this.pendingConnections.get(id)?.client !== client) return;
       this.pendingConnections.delete(id);
       this.connections.set(id, {
           client,
@@ -995,6 +1073,7 @@ export class SSHManager {
           shellHandles: new Map(),
           routeClients: [],
           localForwards: new Map(),
+          remoteBash,
       });
       if (config.routeSessionId) {
         const route = this.connections.get(config.routeSessionId);
@@ -1273,11 +1352,7 @@ export class SSHManager {
     }, SSH_SHELL_OPEN_TIMEOUT_MS);
     openTimer.unref?.();
 
-    try { conn.client.shell({
-      cols,
-      rows,
-      term: 'xterm-256color',
-    }, (err, stream) => {
+    const onShell = (err?: Error, stream?: ClientChannel) => {
       if (this.connections.get(sessionId) !== conn || conn.shellHandles.get(termId) !== handle) {
         try { stream?.close(); } catch {}
         handle.cancel(new Error(`SSH shell ${termId} was closed before it was ready`));
@@ -1362,7 +1437,29 @@ export class SSHManager {
 
       readySettled = true;
       resolveReady?.();
-    }); } catch (error) {
+    };
+    const openOrdinaryShell = () => {
+      conn.client.shell({ cols, rows, term: 'xterm-256color' }, onShell);
+    };
+    try {
+      if (conn.remoteBash) {
+        try {
+          conn.client.exec(remoteBashCommand(conn.remoteBash), {
+            pty: { cols, rows, term: 'xterm-256color' },
+          }, (error, stream) => {
+            if (!error && stream) return onShell(undefined, stream);
+            if (this.connections.get(sessionId) !== conn || conn.shellHandles.get(termId) !== handle) return;
+            try { openOrdinaryShell(); } catch (fallbackError) {
+              onShell(fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError)));
+            }
+          });
+        } catch {
+          openOrdinaryShell();
+        }
+      } else {
+        openOrdinaryShell();
+      }
+    } catch (error) {
       conn.shellHandles.delete(termId);
       handle.cancel(error instanceof Error ? error : new Error(String(error)));
       throw error;

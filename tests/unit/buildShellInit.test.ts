@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import pty from 'node-pty';
 import { buildShellInit, STARTUP_READY_MARKER } from '../../src/main/shell-init';
+import { remoteBashCommand } from '../../src/main/ssh';
 
 const OSC_A = '\x1b]133;A\x1b\\';
 const OSC_B = '\x1b]133;B\x1b\\';
@@ -227,6 +228,29 @@ describe('buildShellInit', () => {
       expect(init).toContain("printf '\\033]133;C\\033\\\\'");
       expect(init).toContain("printf '\\033]133;D;%s\\033\\\\'");
       expect(init).toContain("PS1='\\[\\033]133;A\\033\\\\\\]'\"${PS1}\"'\\[\\033]133;B\\033\\\\\\]'");
+    });
+
+    it.skipIf(!existsSync(bash))('emits command start before an outer tmux attach takes over', async () => {
+      const fixture = mkdtempSync(join(tmpdir(), 'janet-tmux-history-'));
+      const fixturePath = process.platform === 'win32'
+        ? fixture.replace(/^([A-Za-z]):/, (_match, drive: string) => `/${drive.toLowerCase()}`).replace(/\\/g, '/')
+        : fixture;
+      const tmux = join(fixture, process.platform === 'win32' ? 'tmux.exe' : 'tmux');
+      writeFileSync(tmux, '#!/bin/sh\nprintf __JANET_FAKE_TMUX__\nexit 1\n');
+      writeFileSync(join(fixture, '.bash_profile'), `export PATH='${fixturePath}':"$PATH"\nPS1='$ '\n`);
+      chmodSync(tmux, 0o755);
+      try {
+        const output = await runPromptSequence(
+          bash,
+          ['-c', remoteBashCommand(bash)],
+          ['tmux attach', 'exit 0'],
+          { ...process.env, HOME: fixturePath },
+        );
+        expect(output.indexOf(OSC_C)).toBeLessThan(output.indexOf('__JANET_FAKE_TMUX__'));
+        expect(output.indexOf('__JANET_FAKE_TMUX__')).toBeLessThan(output.indexOf(oscD(1)));
+      } finally {
+        rmSync(fixture, { recursive: true, force: true });
+      }
     });
     it('returns a PROMPT_COMMAND snippet for bash', () => {
       const init = buildShellInit('bash');
