@@ -15,6 +15,11 @@ export interface SemanticCommandEvent {
   durationMs: number;
 }
 
+export interface SemanticCommandStartedEvent {
+  command: string;
+  startedAt: number;
+}
+
 interface SemanticCommand extends SemanticCommandEvent {
   marker: IMarker;
   decoration?: IDecoration;
@@ -34,6 +39,8 @@ export class SemanticCommandTimeline {
     private readonly terminal: Terminal,
     private readonly onComplete?: (event: SemanticCommandEvent) => void,
     private readonly now: () => number = Date.now,
+    private readonly onStart?: (event: SemanticCommandStartedEvent) => void,
+    private readonly onCancel?: (event: SemanticCommandStartedEvent) => void,
   ) {}
 
   handleOsc(data: string): boolean {
@@ -62,6 +69,7 @@ export class SemanticCommandTimeline {
       this.startedAt = this.now();
       this.outputStart = end;
       this.phase = 'output';
+      this.onStart?.({ command, startedAt: this.startedAt });
     } else if (code === 'D' && this.phase === 'output' && this.outputStart && this.commandMarker) {
       if (arg !== undefined && !/^\d+$/.test(arg)) return true;
       const exitCode = arg === undefined ? undefined : Number(arg);
@@ -87,7 +95,7 @@ export class SemanticCommandTimeline {
       this.commands.push(entry);
       while (this.commands.length > MAX_COMMANDS) this.disposeCommand(this.commands.shift()!);
       this.onComplete?.(event);
-      this.resetPending(false);
+      this.resetPending(false, false);
       this.selectedCommand = null;
     }
     return true;
@@ -161,7 +169,10 @@ export class SemanticCommandTimeline {
     return this.commands.filter((entry) => !entry.marker.isDisposed);
   }
 
-  private resetPending(disposeMarker = true): void {
+  private resetPending(disposeMarker = true, cancelRunning = true): void {
+    if (cancelRunning && this.phase === 'output') {
+      this.onCancel?.({ command: this.command, startedAt: this.startedAt });
+    }
     if (disposeMarker) this.commandMarker?.dispose();
     this.phase = 'idle';
     this.commandStart = null;

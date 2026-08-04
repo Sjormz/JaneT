@@ -21,7 +21,7 @@ import {
   type AgentLifecycleEvent,
   type TerminalTransportStatus,
 } from '../terminalAwareness';
-import type { SemanticCommandEvent } from '../semanticCommands';
+import type { SemanticCommandEvent, SemanticCommandStartedEvent } from '../semanticCommands';
 
 interface SplitPaneProps {
   node: PaneNode;
@@ -31,6 +31,8 @@ interface SplitPaneProps {
   onTerminalReady: (termId: string) => void;
   onTerminalRemoved: (termId: string) => void;
   onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+  onSemanticCommandStarted?: (tabId: string, termId: string, event: SemanticCommandStartedEvent) => void;
+  onSemanticCommandCancelled?: (tabId: string, termId: string, event: SemanticCommandStartedEvent) => void;
   onSemanticCommand?: (tabId: string, termId: string, event: SemanticCommandEvent) => void;
   onBroadcastInput?: (termId: string, data: string, binary?: boolean) => boolean;
   broadcastRecipientIds?: ReadonlySet<string>;
@@ -78,6 +80,8 @@ function TerminalPaneLeaf({
   onTerminalReady,
   onTerminalRemoved,
   onAgentEvent,
+  onSemanticCommandStarted,
+  onSemanticCommandCancelled,
   onSemanticCommand,
   onBroadcastInput,
   broadcastSelected,
@@ -114,6 +118,8 @@ function TerminalPaneLeaf({
   onTerminalReady: (id: string) => void;
   onTerminalRemoved: (id: string) => void;
   onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+  onSemanticCommandStarted?: (tabId: string, termId: string, event: SemanticCommandStartedEvent) => void;
+  onSemanticCommandCancelled?: (tabId: string, termId: string, event: SemanticCommandStartedEvent) => void;
   onSemanticCommand?: (tabId: string, termId: string, event: SemanticCommandEvent) => void;
   onBroadcastInput?: (termId: string, data: string, binary?: boolean) => boolean;
   broadcastSelected?: boolean;
@@ -262,6 +268,8 @@ function TerminalPaneLeaf({
           onReady={onTerminalReady}
           onRemoved={onTerminalRemoved}
           onAgentEvent={onAgentEvent}
+          onSemanticCommandStarted={(termId, event) => onSemanticCommandStarted?.(tabId, termId, event)}
+          onSemanticCommandCancelled={(termId, event) => onSemanticCommandCancelled?.(tabId, termId, event)}
           onSemanticCommand={(termId, event) => onSemanticCommand?.(tabId, termId, event)}
           onBroadcastInput={onBroadcastInput}
           themeName={themeName}
@@ -415,6 +423,8 @@ export default function SplitPane(props: SplitPaneProps) {
     onTerminalReady,
     onTerminalRemoved,
     onAgentEvent,
+    onSemanticCommandStarted,
+    onSemanticCommandCancelled,
     onSemanticCommand,
     onBroadcastInput,
     broadcastRecipientIds,
@@ -455,6 +465,8 @@ export default function SplitPane(props: SplitPaneProps) {
         onTerminalReady={onTerminalReady}
         onTerminalRemoved={onTerminalRemoved}
         onAgentEvent={onAgentEvent}
+        onSemanticCommandStarted={onSemanticCommandStarted}
+        onSemanticCommandCancelled={onSemanticCommandCancelled}
         onSemanticCommand={onSemanticCommand}
         onBroadcastInput={onBroadcastInput}
         broadcastSelected={broadcastRecipientIds?.has(node.id)}
@@ -502,6 +514,8 @@ export default function SplitPane(props: SplitPaneProps) {
             onTerminalReady={onTerminalReady}
             onTerminalRemoved={onTerminalRemoved}
             onAgentEvent={onAgentEvent}
+            onSemanticCommandStarted={onSemanticCommandStarted}
+            onSemanticCommandCancelled={onSemanticCommandCancelled}
             onSemanticCommand={onSemanticCommand}
             onBroadcastInput={onBroadcastInput}
             broadcastRecipientIds={broadcastRecipientIds}
@@ -562,6 +576,8 @@ export default function SplitPane(props: SplitPaneProps) {
               onTerminalReady={onTerminalReady}
               onTerminalRemoved={onTerminalRemoved}
               onAgentEvent={onAgentEvent}
+              onSemanticCommandStarted={onSemanticCommandStarted}
+              onSemanticCommandCancelled={onSemanticCommandCancelled}
               onSemanticCommand={onSemanticCommand}
               onBroadcastInput={onBroadcastInput}
               broadcastRecipientIds={broadcastRecipientIds}
