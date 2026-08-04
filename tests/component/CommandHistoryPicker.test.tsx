@@ -8,14 +8,28 @@ const entries = [
 ];
 
 describe('CommandHistoryPicker', () => {
-  it('searches command and context and filters context and outcome', () => {
+  it('does not display or search local working-directory paths', () => {
+    render(<CommandHistoryPicker visible entries={entries} onClose={() => {}} onSelect={() => {}} />);
+    const dialog = screen.getByRole('dialog', { name: 'Command history' });
+
+    expect(dialog).not.toHaveTextContent('/repo');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search command history' }), { target: { value: '/repo' } });
+    expect(within(screen.getByRole('listbox')).queryAllByRole('option')).toHaveLength(0);
+  });
+
+  it('does not show context or outcome filter dropdowns', () => {
+    render(<CommandHistoryPicker visible entries={entries} onClose={() => {}} onSelect={() => {}} />);
+
+    expect(screen.queryByLabelText('Context')).toBeNull();
+    expect(screen.queryByLabelText('Outcome')).toBeNull();
+  });
+
+  it('searches command text and SSH labels', () => {
     render(<CommandHistoryPicker visible entries={entries} onClose={() => {}} onSelect={() => {}} />);
     expect(screen.getByRole('dialog', { name: 'Command history' })).toBeTruthy();
     fireEvent.change(screen.getByRole('combobox', { name: 'Search command history' }), { target: { value: 'prod' } });
     expect(screen.getByRole('option', { name: /deploy/ })).toBeTruthy();
     expect(screen.queryByRole('option', { name: /npm test/ })).toBeNull();
-    fireEvent.change(screen.getByLabelText('Context'), { target: { value: 'local' } });
-    expect(screen.queryByRole('option', { name: /deploy|npm test/ })).toBeNull();
   });
 
   it('focuses search first and makes the selected command the list Tab stop', async () => {
@@ -69,23 +83,21 @@ describe('CommandHistoryPicker', () => {
     expect(search).toHaveFocus();
   });
 
-  it('keeps filters and Close in the modal Tab order after the command list', async () => {
-    render(<CommandHistoryPicker visible entries={entries} onClose={() => {}} onSelect={() => {}} />);
+  it('keeps Remove and Close in the modal Tab order after the command list', async () => {
+    render(<CommandHistoryPicker visible entries={entries} onClose={() => {}} onSelect={() => {}} onRemove={() => {}} />);
     const search = screen.getByRole('combobox', { name: 'Search command history' });
     const firstOption = within(screen.getByRole('listbox')).getAllByRole('option')[0];
-    const context = screen.getByLabelText('Context');
-    const outcome = screen.getByLabelText('Outcome');
+    const remove = screen.getByRole('button', { name: 'Remove npm test from command history' });
     const close = screen.getByRole('button', { name: 'Close command history' });
 
     await waitFor(() => expect(search).toHaveFocus());
     fireEvent.keyDown(search, { key: 'Tab' });
     fireEvent.keyDown(firstOption, { key: 'Tab' });
-    expect(context).toHaveFocus();
-    outcome.focus();
-    fireEvent.keyDown(outcome, { key: 'Tab' });
+    expect(remove).toHaveFocus();
+    fireEvent.keyDown(remove, { key: 'Tab' });
     expect(close).toHaveFocus();
     fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
-    expect(outcome).toHaveFocus();
+    expect(remove).toHaveFocus();
   });
 
   it('navigates by keyboard, selects once unchanged, and closes on Escape', () => {
@@ -108,5 +120,23 @@ describe('CommandHistoryPicker', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close command history' }));
 
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('removes an entry without selecting it or closing the picker', () => {
+    const onClose = vi.fn();
+    const onSelect = vi.fn();
+    const onRemove = vi.fn();
+    render(<CommandHistoryPicker visible entries={entries} onClose={onClose} onSelect={onSelect} onRemove={onRemove} />);
+
+    const option = screen.getByRole('option', { name: 'npm test' });
+    const remove = screen.getByRole('button', { name: 'Remove npm test from command history' });
+    fireEvent.keyDown(option, { key: 'Tab' });
+    expect(remove).toHaveFocus();
+    fireEvent.click(remove);
+
+    expect(onRemove).toHaveBeenCalledWith(entries[0]);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('combobox', { name: 'Search command history' })).toHaveFocus();
   });
 });

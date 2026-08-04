@@ -570,6 +570,23 @@ describe('split panes in the app', () => {
     expect(historyUpdates()[1].commandHistory[0]).toMatchObject({ command: 'repeat', startedAt: 30 });
   });
 
+  it('removes a command-history entry from settings and the picker', async () => {
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
+    act(() => emit(semanticEvent('remove me')));
+    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'history-toggle')!.handler());
+    const dialog = await screen.findByRole('dialog', { name: 'Command history' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove remove me from command history' }));
+
+    await waitFor(() => expect(historyUpdates()).toHaveLength(2));
+    expect(historyUpdates()[1].commandHistory).toEqual([]);
+    expect(within(dialog).queryByRole('option', { name: 'remove me' })).toBeNull();
+  });
+
   it('resolves ownership and local context only when a queued completion persists', async () => {
     const blocker = deferred();
     vi.mocked(window.janet.setSettings).mockImplementation((update: any) => (
