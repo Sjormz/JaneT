@@ -819,6 +819,20 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     });
   }, [homeDir, sshProfiles]);
 
+  const removeCommandHistoryEntry = useCallback((entry: CommandHistoryEntry) => {
+    historySaveQueueRef.current = historySaveQueueRef.current.then(async () => {
+      const next = commandHistoryRef.current.filter((candidate) => candidate.id !== entry.id);
+      if (next.length === commandHistoryRef.current.length) return;
+      try {
+        await window.janet.setSettings({ commandHistory: next });
+        commandHistoryRef.current = next;
+        setCommandHistory(next);
+      } catch (error) {
+        console.error('Failed to remove command history entry:', error);
+      }
+    });
+  }, []);
+
   const transportByTerminal = useMemo(() => Object.fromEntries(
     tabs.flatMap((tab) => collectTerminalOwners(tab).flatMap((owner) => {
       const transport = owner.type === 'local'
@@ -2285,6 +2299,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         visible={historyVisible}
         entries={commandHistory}
         onClose={() => setHistoryVisible(false)}
+        onRemove={removeCommandHistoryEntry}
         onSelect={(entry) => {
           const tab = tabsRef.current.find((candidate) => candidate.id === activeTabIdRef.current);
           if (!tab) return;

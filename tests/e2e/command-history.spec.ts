@@ -97,8 +97,8 @@ test('persists real command metadata and history selection pastes without execut
     await expect(picker).toBeVisible();
     const search = picker.getByRole('combobox', { name: 'Search command history' });
     await expect(search).toBeFocused();
+    await expect(picker).not.toContainText(cwd.replace(/\\/g, '/'));
     await search.fill('history-rerun.txt');
-    await picker.getByLabel('Context').selectOption('local');
     const capturedCommand = picker.getByRole('option').filter({ hasText: command });
     await expect(capturedCommand).toHaveCount(1);
     await page.keyboard.press('ArrowDown');
@@ -112,6 +112,13 @@ test('persists real command metadata and history selection pastes without execut
 
     await page.keyboard.press('Enter');
     await expect.poll(() => fs.readFileSync(markerPath, 'utf-8'), { timeout: 15_000 }).toBe('XXX');
+
+    await page.getByRole('button', { name: /Open command palette/ }).click();
+    await page.getByRole('option', { name: /Open command history/ }).click();
+    const reopenedPicker = page.getByRole('dialog', { name: 'Command history' });
+    await reopenedPicker.getByRole('button', { name: `Remove ${command} from command history` }).click();
+    await expect.poll(() => JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).commandHistory).toEqual([]);
+    await expect(reopenedPicker.getByRole('option', { name: command, exact: true })).toHaveCount(0);
   } finally {
     await forceClose(app);
     fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

@@ -35,7 +35,7 @@ JaneT is for work that starts in a shell and quickly spreads across more shells,
 - **Durable sessions:** Keep active terminal and SSH work running when the window closes, or stop it before quitting.
 - **Semantic command tools:** Jump between completed commands, copy a command or its output, and paste a command back without running it automatically.
 - **Safe broadcast input:** Explicitly select panes, confirm the recipient set, then send the same keyboard, paste, or binary input to every selected terminal.
-- **Contextual command history:** Search bounded local history by command, directory or host, and outcome without storing terminal output.
+- **Contextual command history:** Search bounded local history by command text or SSH host without storing terminal output.
 - **Focus-away notifications:** Optionally receive a native notification when a long command finishes while JaneT is unfocused.
 - **Secure SSH routing:** Reach a saved host through one saved jump host and manage session-owned local forwards from the SSH tab.
 - **AI agent awareness:** See when a supported terminal agent is running, ready, waiting for input, or finished without reading its transcript.
@@ -62,15 +62,11 @@ JaneT automatically adds semantic markers to new local Bash, zsh, fish, Windows 
 
 ## Find a command in contextual history
 
-![JaneT command history with search, context, and outcome controls](assets/screenshots/command-history.png)
-
 Completed semantic commands are also available from **Search commands** (`Ctrl+K`) → **Open command history**.
 
-1. Search by command text, local directory, or SSH label.
-2. Narrow the list to **Local** or **SSH** context.
-3. Filter for successful or failed commands.
-4. Select an entry to paste it into the currently focused terminal.
-5. Press Enter yourself if you want to run it.
+1. Search by command text or SSH label.
+2. Select an entry to paste it into the currently focused terminal.
+3. Press Enter yourself if you want to run it.
 
 History is intentionally local and bounded to the newest 256 entries. JaneT stores command text, timing, outcome, and directory or host context; it never stores terminal output or imports your shell-history files.
 

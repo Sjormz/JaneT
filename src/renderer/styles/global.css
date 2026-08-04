@@ -3482,10 +3482,9 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
 }
 .command-history-close:hover { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
 .snippet-search-shell { padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); }
-.command-history-filters { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: end; gap: 10px; }
 .snippet-picker[aria-label="Command history"] { background: var(--surface-overlay); }
-.command-history-search,
-.command-history-filter select {
+.command-history-search {
+  width: 100%;
   min-width: 0;
   height: 36px;
   padding: 0 10px;
@@ -3496,10 +3495,9 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
   color: var(--text-primary);
   font: 12px/1 var(--font-ui);
 }
-.command-history-search:focus,
-.command-history-filter select:focus { border-color: var(--text-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-accent) 18%, transparent); }
-.command-history-filter { display: grid; gap: 5px; color: var(--text-secondary); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; }
+.command-history-search:focus { border-color: var(--text-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-accent) 18%, transparent); }
 .command-history-list { display: grid; gap: 2px; padding: 6px; overflow-y: auto; }
+.command-history-row { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; gap: 4px; }
 .command-history-item {
   display: grid;
   min-width: 0;
@@ -3516,6 +3514,20 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
 .command-history-item[aria-selected="true"] { border-color: color-mix(in srgb, var(--text-accent) 16%, transparent); background: var(--selection-bg); }
 .command-history-item span { overflow: hidden; font: 12px/1.4 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .command-history-item small { overflow: hidden; color: var(--text-secondary); font: 10px/1.35 var(--font-ui); text-overflow: ellipsis; white-space: nowrap; }
+.command-history-remove {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.command-history-remove:hover,
+.command-history-remove:focus-visible { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
 .snippet-search-field {
   display: flex;
   min-height: 42px;
