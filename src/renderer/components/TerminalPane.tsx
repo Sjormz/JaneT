@@ -38,7 +38,11 @@ import {
   readTerminalPathDragData,
 } from '../terminalPathDrag';
 import { DEFAULT_TERMINAL_FONT_FAMILY } from '../../shared/typography';
-import { SemanticCommandTimeline, type SemanticCommandEvent } from '../semanticCommands';
+import {
+  SemanticCommandTimeline,
+  type SemanticCommandEvent,
+  type SemanticCommandStartedEvent,
+} from '../semanticCommands';
 import type { TerminalLeaf } from '../types';
 import '@xterm/xterm/css/xterm.css';
 
@@ -55,6 +59,8 @@ interface TerminalPaneProps {
   onCwdChange?: (termId: string, cwd: string) => void;
   onFocus?: (termId: string) => void;
   onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+  onSemanticCommandStarted?: (termId: string, event: SemanticCommandStartedEvent) => void;
+  onSemanticCommandCancelled?: (termId: string, event: SemanticCommandStartedEvent) => void;
   onSemanticCommand?: (termId: string, event: SemanticCommandEvent) => void;
   onBroadcastInput?: (termId: string, data: string, binary?: boolean) => boolean;
   initialCwd?: string;
@@ -119,6 +125,8 @@ interface CachedTerminalPane {
   broadcastInputListener: TerminalPaneProps['onBroadcastInput'];
   inputSource: { userInput: boolean };
   semanticCommands: SemanticCommandTimeline;
+  semanticCommandStartedListener: { current: TerminalPaneProps['onSemanticCommandStarted'] };
+  semanticCommandCancelledListener: { current: TerminalPaneProps['onSemanticCommandCancelled'] };
   semanticCommandListener: { current: TerminalPaneProps['onSemanticCommand'] };
 }
 
@@ -147,6 +155,8 @@ export default function TerminalPane({
   onCwdChange,
   onFocus,
   onAgentEvent,
+  onSemanticCommandStarted,
+  onSemanticCommandCancelled,
   onSemanticCommand,
   onBroadcastInput,
   initialCwd,
@@ -179,6 +189,8 @@ export default function TerminalPane({
   const cachedForAgentListener = terminalPaneCache.get(termId);
   if (cachedForAgentListener) {
     cachedForAgentListener.agentEventListener = onAgentEvent ?? null;
+    cachedForAgentListener.semanticCommandStartedListener.current = onSemanticCommandStarted;
+    cachedForAgentListener.semanticCommandCancelledListener.current = onSemanticCommandCancelled;
     cachedForAgentListener.semanticCommandListener.current = onSemanticCommand;
     cachedForAgentListener.broadcastInputListener = onBroadcastInput;
   }
@@ -411,6 +423,8 @@ export default function TerminalPane({
     ) {
       const { term, fitAddon, searchAddon } = cached;
       cached.sshNoticeListener = setSshNoticeState;
+      cached.semanticCommandStartedListener.current = onSemanticCommandStarted;
+      cached.semanticCommandCancelledListener.current = onSemanticCommandCancelled;
       cached.semanticCommandListener.current = onSemanticCommand;
       cached.broadcastInputListener = onBroadcastInput;
 
@@ -436,10 +450,6 @@ export default function TerminalPane({
         const currentCache = terminalPaneCache.get(termId);
         if (currentCache?.sshNoticeListener === setSshNoticeState) {
           currentCache.sshNoticeListener = null;
-        }
-        const currentSemanticListener = currentCache?.semanticCommandListener;
-        if (currentSemanticListener && currentSemanticListener.current === onSemanticCommand) {
-          currentSemanticListener.current = undefined;
         }
         if (currentCache && currentCache.broadcastInputListener === onBroadcastInput) {
           currentCache.broadcastInputListener = undefined;
@@ -506,10 +516,15 @@ export default function TerminalPane({
 
     const lifetimeCleanup: unknown[] = [];
     const inputSource = { userInput: false };
+    const semanticCommandStartedListener = { current: onSemanticCommandStarted };
+    const semanticCommandCancelledListener = { current: onSemanticCommandCancelled };
     const semanticCommandListener = { current: onSemanticCommand };
     const semanticCommands = new SemanticCommandTimeline(
       term,
-      (event) => semanticCommandListener.current?.(termId, event),
+      (event) => terminalPaneCache.get(termId)?.semanticCommandListener.current?.(termId, event),
+      Date.now,
+      (event) => terminalPaneCache.get(termId)?.semanticCommandStartedListener.current?.(termId, event),
+      (event) => terminalPaneCache.get(termId)?.semanticCommandCancelledListener.current?.(termId, event),
     );
     let startupMarked = false;
     let promptMarked = false;
@@ -658,6 +673,8 @@ export default function TerminalPane({
       broadcastInputListener: onBroadcastInput,
       inputSource,
       semanticCommands,
+      semanticCommandStartedListener,
+      semanticCommandCancelledListener,
       semanticCommandListener,
     });
 
@@ -668,10 +685,6 @@ export default function TerminalPane({
       const currentCache = terminalPaneCache.get(termId);
       if (currentCache?.sshNoticeListener === setSshNoticeState) {
         currentCache.sshNoticeListener = null;
-      }
-      const currentSemanticListener = currentCache?.semanticCommandListener;
-      if (currentSemanticListener && currentSemanticListener.current === onSemanticCommand) {
-        currentSemanticListener.current = undefined;
       }
       if (currentCache && currentCache.broadcastInputListener === onBroadcastInput) {
         currentCache.broadcastInputListener = undefined;

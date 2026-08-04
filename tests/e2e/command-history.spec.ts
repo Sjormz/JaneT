@@ -35,6 +35,10 @@ test('persists real command metadata and history selection pastes without execut
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-history-profile-'));
   const settingsPath = path.join(userData, 'settings.json');
   const markerPath = path.join(cwd, 'history-rerun.txt');
+  const releasePath = path.join(cwd, 'history-release.txt');
+  const runningCommand = process.platform === 'win32'
+    ? "while (-not (Test-Path 'history-release.txt')) { Start-Sleep -Milliseconds 50 }; Write-Output 'JANET_HISTORY_RUNNING_DONE'"
+    : "while [ ! -f history-release.txt ]; do sleep 0.05; done; printf 'JANET_HISTORY_RUNNING_DONE\\n'";
   const command = process.platform === 'win32'
     ? "Add-Content -NoNewline -Path 'history-rerun.txt' -Value 'X'; Write-Output ('JANET_HISTORY_' + 'OUTPUT_9F2A')"
     : "printf X >> history-rerun.txt; printf 'JANET_HISTORY_%s\\n' 'OUTPUT_9F2A'";
@@ -62,6 +66,31 @@ test('persists real command metadata and history selection pastes without execut
     await expect(terminal).toBeVisible({ timeout: 15_000 });
     await expect(terminal.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true', { timeout: 15_000 });
     await terminal.click();
+
+    await page.keyboard.type(runningCommand, { delay: 5 });
+    await page.keyboard.press('Enter');
+    await expect.poll(() => {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      return settings.commandHistory?.find((entry: { command: string }) => entry.command === runningCommand);
+    }, { timeout: 15_000 }).toMatchObject({
+      command: runningCommand, durationMs: 0, context: { kind: 'local', cwd: cwd.replace(/\\/g, '/') },
+    });
+    await page.getByRole('button', { name: /Open command palette/ }).click();
+    await page.getByRole('option', { name: /Open command history/ }).click();
+    const runningPicker = page.getByRole('dialog', { name: 'Command history' });
+    await expect(runningPicker.getByRole('option', { name: /JANET_HISTORY_RUNNING_DONE.*Running/ })).toBeVisible();
+
+    fs.writeFileSync(releasePath, 'release', 'utf-8');
+    await expect.poll(() => {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      return settings.commandHistory?.find((entry: { command: string }) => entry.command === runningCommand);
+    }, { timeout: 15_000 }).toMatchObject({ command: runningCommand, exitCode: 0 });
+    await expect(runningPicker.getByRole('option', { name: runningCommand, exact: true })).toBeVisible();
+    await runningPicker.getByRole('button', { name: `Remove ${runningCommand} from command history` }).click();
+    await expect.poll(() => JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).commandHistory).toEqual([]);
+    await runningPicker.getByRole('button', { name: 'Close command history' }).click();
+    await terminal.click();
+
     await page.keyboard.type(command, { delay: 5 });
     await page.keyboard.press('Enter');
 

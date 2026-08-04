@@ -5,7 +5,7 @@ import App from '../../src/renderer/App';
 import SplitPane from '../../src/renderer/components/SplitPane';
 import type { AgentAwareness } from '../../src/renderer/terminalAwareness';
 import type { AgentLifecycleEvent } from '../../src/renderer/terminalAwareness';
-import type { SemanticCommandEvent } from '../../src/renderer/semanticCommands';
+import type { SemanticCommandEvent, SemanticCommandStartedEvent } from '../../src/renderer/semanticCommands';
 
 const mountedTermIds: string[] = [];
 const rendererMocks = vi.hoisted(() => ({
@@ -27,6 +27,8 @@ const rendererMocks = vi.hoisted(() => ({
   ) => void | Promise<void>>(),
   cwdChangeHandlers: new Map<string, (termId: string, cwd: string) => void>(),
   agentEventHandlers: new Map<string, (event: AgentLifecycleEvent) => void>(),
+  semanticCommandStartedHandlers: new Map<string, (event: SemanticCommandStartedEvent) => void>(),
+  semanticCommandCancelledHandlers: new Map<string, (event: SemanticCommandStartedEvent) => void>(),
   semanticCommandHandlers: new Map<string, (event: SemanticCommandEvent) => void>(),
   broadcastInputHandlers: new Map<string, (data: string, binary?: boolean) => boolean>(),
 }));
@@ -148,6 +150,8 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     onFocus,
     onSshRetry,
     onAgentEvent,
+    onSemanticCommandStarted,
+    onSemanticCommandCancelled,
     onSemanticCommand,
     onBroadcastInput,
   }: {
@@ -169,12 +173,16 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
       dimensions: { cols: number; rows: number },
     ) => void | Promise<void>;
     onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
+    onSemanticCommandStarted?: (termId: string, event: SemanticCommandStartedEvent) => void;
+    onSemanticCommandCancelled?: (termId: string, event: SemanticCommandStartedEvent) => void;
     onSemanticCommand?: (termId: string, event: SemanticCommandEvent) => void;
     onBroadcastInput?: (termId: string, data: string, binary?: boolean) => boolean;
   }) {
     if (onSshRetry) rendererMocks.sshRetryHandlers.set(termId, onSshRetry);
     if (onCwdChange) rendererMocks.cwdChangeHandlers.set(termId, onCwdChange);
     if (onAgentEvent) rendererMocks.agentEventHandlers.set(termId, (event) => onAgentEvent(termId, event));
+    if (onSemanticCommandStarted) rendererMocks.semanticCommandStartedHandlers.set(termId, (event) => onSemanticCommandStarted(termId, event));
+    if (onSemanticCommandCancelled) rendererMocks.semanticCommandCancelledHandlers.set(termId, (event) => onSemanticCommandCancelled(termId, event));
     if (onSemanticCommand) rendererMocks.semanticCommandHandlers.set(termId, (event) => onSemanticCommand(termId, event));
     if (onBroadcastInput) rendererMocks.broadcastInputHandlers.set(termId, (data, binary) => onBroadcastInput(termId, data, binary));
     const containerRef = React.useRef<HTMLDivElement>(null);
@@ -252,6 +260,8 @@ beforeEach(() => {
   rendererMocks.sshRetryHandlers.clear();
   rendererMocks.cwdChangeHandlers.clear();
   rendererMocks.agentEventHandlers.clear();
+  rendererMocks.semanticCommandStartedHandlers.clear();
+  rendererMocks.semanticCommandCancelledHandlers.clear();
   rendererMocks.semanticCommandHandlers.clear();
   rendererMocks.broadcastInputHandlers.clear();
   Object.defineProperty(document, 'startViewTransition', {
@@ -537,6 +547,99 @@ describe('split panes in the app', () => {
     }
   });
 
+  it('persists a submitted command immediately and updates it when execution finishes', async () => {
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    const termId = terminal.dataset.terminalId!;
+
+    act(() => rendererMocks.semanticCommandStartedHandlers.get(termId)!({
+      command: 'tmux attach', startedAt: 10,
+    }));
+    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+    const started = historyUpdates()[0].commandHistory[0];
+    expect(started).toMatchObject({ command: 'tmux attach', startedAt: 10, durationMs: 0 });
+    expect(started).not.toHaveProperty('exitCode');
+    expect(started).not.toHaveProperty('output');
+    expect(started).not.toHaveProperty('running');
+
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'history-toggle')!.handler());
+    const dialog = await screen.findByRole('dialog', { name: 'Command history' });
+    expect(within(dialog).getByRole('option', { name: /tmux attach.*running/i })).toBeInTheDocument();
+
+    act(() => rendererMocks.semanticCommandHandlers.get(termId)!({
+      ...semanticEvent('tmux attach'), startedAt: 10, durationMs: 25,
+    }));
+    await waitFor(() => expect(historyUpdates()).toHaveLength(2));
+    const completed = historyUpdates()[1].commandHistory[0];
+    expect(completed).toMatchObject({
+      id: started.id, command: 'tmux attach', startedAt: 10, durationMs: 25, exitCode: 0,
+    });
+    expect(completed).not.toHaveProperty('running');
+    expect(within(dialog).getByRole('option', { name: 'tmux attach' })).toBeInTheDocument();
+  });
+
+  it('keeps an accepted command but clears Running when the lifecycle is cancelled', async () => {
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    const termId = terminal.dataset.terminalId!;
+    const event = { command: 'exit', startedAt: 10 };
+
+    act(() => rendererMocks.semanticCommandStartedHandlers.get(termId)!(event));
+    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'history-toggle')!.handler());
+    const dialog = await screen.findByRole('dialog', { name: 'Command history' });
+    expect(within(dialog).getByRole('option', { name: /exit.*running/i })).toBeInTheDocument();
+
+    act(() => rendererMocks.semanticCommandCancelledHandlers.get(termId)!(event));
+
+    expect(historyUpdates()).toHaveLength(1);
+    expect(within(dialog).getByRole('option', { name: 'exit' })).toBeInTheDocument();
+  });
+
+  it('clears Running when the owning local terminal exits without D', async () => {
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    const termId = terminal.dataset.terminalId!;
+
+    act(() => rendererMocks.semanticCommandStartedHandlers.get(termId)!({ command: 'exit', startedAt: 10 }));
+    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'history-toggle')!.handler());
+    const dialog = await screen.findByRole('dialog', { name: 'Command history' });
+    expect(within(dialog).getByRole('option', { name: /exit.*running/i })).toBeInTheDocument();
+
+    act(() => rendererMocks.terminalExitHandler!({ id: termId, exitCode: 0, signal: 0 }));
+
+    expect(within(dialog).getByRole('option', { name: 'exit' })).toBeInTheDocument();
+  });
+
+  it('keeps the same history ID when completion and terminal exit race a pending start write', async () => {
+    const startSave = deferred();
+    vi.mocked(window.janet.setSettings).mockImplementation((update: any) => (
+      update.commandHistory && historyUpdates().length === 1 ? startSave.promise : Promise.resolve()
+    ));
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    const termId = terminal.dataset.terminalId!;
+
+    act(() => rendererMocks.semanticCommandStartedHandlers.get(termId)!({ command: 'exit', startedAt: 10 }));
+    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+    const started = historyUpdates()[0].commandHistory[0];
+    act(() => rendererMocks.semanticCommandHandlers.get(termId)!({
+      ...semanticEvent('exit'), startedAt: 10,
+    }));
+    act(() => rendererMocks.terminalExitHandler!({ id: termId, exitCode: 0, signal: 0 }));
+
+    await act(async () => startSave.resolve());
+    await waitFor(() => expect(historyUpdates()).toHaveLength(2));
+    expect(historyUpdates()[1].commandHistory[0]).toMatchObject({
+      id: started.id, command: 'exit', durationMs: 10,
+    });
+  });
+
   it('persists overlapping successful completions in callback order without loss', async () => {
     const first = deferred();
     vi.mocked(window.janet.setSettings).mockImplementation((update: any) => (
@@ -570,6 +673,27 @@ describe('split panes in the app', () => {
     expect(historyUpdates()[1].commandHistory[0]).toMatchObject({ command: 'repeat', startedAt: 30 });
   });
 
+  it('does not let an older overlapping run replace a newer duplicate', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    const [firstId, secondId] = (await screen.findAllByTestId(/terminal-/))
+      .map((terminal) => terminal.dataset.terminalId!);
+    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+
+    act(() => rendererMocks.semanticCommandStartedHandlers.get(firstId)!({ command: 'repeat', startedAt: 10 }));
+    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+    act(() => rendererMocks.semanticCommandStartedHandlers.get(secondId)!({ command: 'repeat', startedAt: 20 }));
+    await waitFor(() => expect(historyUpdates()).toHaveLength(2));
+    expect(historyUpdates()[1].commandHistory[0]).toMatchObject({ command: 'repeat', startedAt: 20 });
+
+    act(() => rendererMocks.semanticCommandHandlers.get(firstId)!({
+      ...semanticEvent('repeat'), startedAt: 10,
+    }));
+    await act(async () => Promise.resolve());
+
+    expect(historyUpdates()).toHaveLength(2);
+  });
+
   it('removes a command-history entry from settings and the picker', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
@@ -585,6 +709,37 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(historyUpdates()).toHaveLength(2));
     expect(historyUpdates()[1].commandHistory).toEqual([]);
     expect(within(dialog).queryByRole('option', { name: 'remove me' })).toBeNull();
+  });
+
+  it('keeps a running entry when its removal fails and still completes it', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(<App />);
+      const terminal = await screen.findByTestId(/terminal-/);
+      await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+      const termId = terminal.dataset.terminalId!;
+      act(() => rendererMocks.semanticCommandStartedHandlers.get(termId)!({ command: 'still running', startedAt: 10 }));
+      await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+      const started = historyUpdates()[0].commandHistory[0];
+
+      act(() => rendererMocks.paletteActions.find((action) => action.id === 'history-toggle')!.handler());
+      const dialog = await screen.findByRole('dialog', { name: 'Command history' });
+      vi.mocked(window.janet.setSettings).mockRejectedValueOnce(new Error('disk full'));
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Remove still running from command history' }));
+      await waitFor(() => expect(consoleError).toHaveBeenCalledWith(
+        'Failed to remove command history entry:', expect.any(Error),
+      ));
+      expect(within(dialog).getByRole('option', { name: /still running.*running/i })).toBeInTheDocument();
+
+      act(() => rendererMocks.semanticCommandHandlers.get(termId)!({
+        ...semanticEvent('still running'), startedAt: 10,
+      }));
+      await waitFor(() => expect(historyUpdates()).toHaveLength(3));
+      expect(historyUpdates()[2].commandHistory[0]).toMatchObject({ id: started.id, durationMs: 10 });
+      expect(within(dialog).getByRole('option', { name: 'still running' })).toBeInTheDocument();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it('resolves ownership and local context only when a queued completion persists', async () => {
@@ -2036,6 +2191,14 @@ describe('split panes in the app', () => {
       startupCommands: ['hermes doctor', 'hermes --tui'],
       startupShellDialect: 'posix',
     });
+    act(() => rendererMocks.semanticCommandStartedHandlers.get(shellArgs.termId)!({
+      command: 'tmux attach', startedAt: 10,
+    }));
+    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'history-toggle')!.handler());
+    const historyDialog = await screen.findByRole('dialog', { name: 'Command history' });
+    expect(within(historyDialog).getByRole('option', { name: /tmux attach.*running/i }))
+      .toBeInTheDocument();
     expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
       kind: 'ssh',
       sessionId: connectArgs.id,
@@ -2067,6 +2230,8 @@ describe('split panes in the app', () => {
       'data-ssh-connection-lost',
       'true',
     );
+    expect(within(historyDialog).getByRole('option', { name: /tmux attach/i }))
+      .not.toHaveAccessibleName(/running/i);
     expect(rendererMocks.verticalTabBarProps.awarenessByTab[
       rendererMocks.verticalTabBarProps.activeTabId
     ])

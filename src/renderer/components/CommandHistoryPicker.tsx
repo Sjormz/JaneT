@@ -7,12 +7,13 @@ import Tooltip from './Tooltip';
 interface Props {
   visible: boolean;
   entries: CommandHistoryEntry[];
+  runningIds?: ReadonlySet<string>;
   onClose: () => void;
   onSelect: (entry: CommandHistoryEntry) => void;
   onRemove?: (entry: CommandHistoryEntry) => void;
 }
 
-export default function CommandHistoryPicker({ visible, entries, onClose, onSelect, onRemove }: Props) {
+export default function CommandHistoryPicker({ visible, entries, runningIds, onClose, onSelect, onRemove }: Props) {
   const panelRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -57,7 +58,11 @@ export default function CommandHistoryPicker({ visible, entries, onClose, onSele
       <div id="command-history-list" className="command-history-list" role="listbox">
         {filtered.map((entry, index) => <div className="command-history-row" role="presentation" key={entry.id}>
           <button ref={(element) => { optionRefs.current[index] = element; }} className="command-history-item" id={`command-history-${entry.id}`} role="option" aria-selected={index === selected} tabIndex={index === selected ? 0 : -1} onFocus={() => setSelected(index)} onMouseEnter={() => setSelected(index)} onKeyDown={keyDown} onClick={() => choose(entry)}>
-            <span>{entry.command}</span>{entry.context.kind === 'ssh' && <small>{commandHistoryContextLabel(entry.context)}</small>}
+            <span>{entry.command}</span>
+            {(entry.context.kind === 'ssh' || runningIds?.has(entry.id)) && <small>{[
+              entry.context.kind === 'ssh' ? commandHistoryContextLabel(entry.context) : null,
+              runningIds?.has(entry.id) ? 'Running' : null,
+            ].filter(Boolean).join(' · ')}</small>}
           </button>
           {onRemove && <Tooltip label={`Remove ${entry.command} from command history`} placement="left">
             <button ref={(element) => { removeRefs.current[index] = element; }} type="button" className="command-history-remove" tabIndex={-1} aria-label={`Remove ${entry.command} from command history`} onKeyDown={(event) => {

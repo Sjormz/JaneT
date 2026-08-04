@@ -142,6 +142,33 @@ describe('SemanticCommandTimeline', () => {
     expect(completed.mock.calls[0][0]).not.toHaveProperty('decoration');
   });
 
+  it('reports a submitted command at C before it completes', () => {
+    const term = terminalAt(['$ tmux attach'], 0, 2);
+    const completed = vi.fn();
+    const started = vi.fn();
+    const timeline = new SemanticCommandTimeline(term as never, completed, () => 123, started);
+
+    timeline.handleOsc('A'); timeline.handleOsc('B');
+    term.cursorX = 13; timeline.handleOsc('C');
+
+    expect(started).toHaveBeenCalledOnce();
+    expect(started).toHaveBeenCalledWith({ command: 'tmux attach', startedAt: 123 });
+    expect(completed).not.toHaveBeenCalled();
+  });
+
+  it('cancels a running command when a new prompt arrives without D', () => {
+    const term = terminalAt(['$ exit'], 0, 2);
+    const cancelled = vi.fn();
+    const timeline = new SemanticCommandTimeline(term as never, undefined, () => 123, undefined, cancelled);
+
+    timeline.handleOsc('A'); timeline.handleOsc('B');
+    term.cursorX = 6; timeline.handleOsc('C');
+    timeline.handleOsc('A');
+
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(cancelled).toHaveBeenCalledWith({ command: 'exit', startedAt: 123 });
+  });
+
   it('rejects malformed and out-of-order transitions without retaining partial markers', () => {
     const term = terminalAt(['untrusted'], 0, 9);
     const timeline = new SemanticCommandTimeline(term as never);

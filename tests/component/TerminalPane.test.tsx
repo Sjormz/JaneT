@@ -680,6 +680,38 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(secondListener).toHaveBeenCalledWith('term-semantic-remount', expect.objectContaining({ command: 'one' }));
   });
 
+  it('delivers semantic completion while its cached pane is detached', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const started = vi.fn();
+    const completed = vi.fn();
+    const pane = render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-semantic-detached"
+          tabType="local"
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          onSemanticCommandStarted={started}
+          onSemanticCommand={completed}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+    const term = MockTerminal.instances.at(-1)!;
+    const osc = term.oscHandlers.get(133)!;
+    term.buffer.active.cursorX = 2; await osc('A'); await osc('B');
+    term.buffer.active.cursorX = 5; await osc('C');
+    expect(started).toHaveBeenCalledOnce();
+
+    pane.unmount();
+    await osc('D;0');
+
+    expect(completed).toHaveBeenCalledOnce();
+    expect(completed).toHaveBeenCalledWith(
+      'term-semantic-detached', expect.objectContaining({ command: 'one', exitCode: 0 }),
+    );
+  });
+
   it('pastes a requested snippet into only its target terminal without adding Enter', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     render(

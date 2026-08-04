@@ -37,7 +37,7 @@ import { requestTerminalSearch } from './terminalSearch';
 import { requestTerminalPaste } from './terminalPaste';
 import { formatTerminalPathForPaste } from './terminalPathDrag';
 import type { FileExplorerSource } from './fileExplorerSource';
-import type { SemanticCommandEvent } from './semanticCommands';
+import type { SemanticCommandEvent, SemanticCommandStartedEvent } from './semanticCommands';
 import type { CommandNotificationPayload } from '../shared/commandNotifications';
 import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
 import { useEditorDocuments } from './useEditorDocuments';
@@ -388,8 +388,11 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   useEffect(() => {
     if (!window.janet.onSSHConnectionClosed) return undefined;
     return window.janet.onSSHConnectionClosed(({ id }) => {
-      const disconnectedRecipient = tabsRef.current.flatMap(collectTerminalOwners)
-        .some((owner) => owner.sshSessionId === id && broadcastRecipientIdsRef.current.has(owner.termId));
+      const disconnectedTerminals = tabsRef.current.flatMap(collectTerminalOwners)
+        .filter((owner) => owner.sshSessionId === id);
+      clearPendingCommandHistoryRuns(new Set(disconnectedTerminals.map((owner) => owner.termId)));
+      const disconnectedRecipient = disconnectedTerminals
+        .some((owner) => broadcastRecipientIdsRef.current.has(owner.termId));
       if (disconnectedRecipient) setBroadcastRecipientIds(new Set());
       setSshSessions((current) => current.filter((session) => session.id !== id));
       setReadySshSessionIds((current) => {
@@ -468,9 +471,28 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [commandHistory, setCommandHistory] = useState<CommandHistoryEntry[]>(initialState.commandHistory);
   const commandHistoryRef = useRef(commandHistory);
   const historySaveQueueRef = useRef(Promise.resolve());
+  const pendingCommandHistoryRunsRef = useRef(new Map<string, {
+    id: string;
+    termId: string;
+    removed?: boolean;
+    completing?: boolean;
+  }>());
+  const [runningCommandHistoryIds, setRunningCommandHistoryIds] = useState<Set<string>>(new Set());
   const [notificationsEnabled, setNotificationsEnabled] = useState(initialState.notificationsEnabled);
   const [notificationThresholdSeconds, setNotificationThresholdSeconds] = useState(initialState.notificationThresholdSeconds);
   const settingsLoadedRef = useRef(true);
+
+  const clearPendingCommandHistoryRuns = useCallback((terminalIds: ReadonlySet<string>) => {
+    const clearedIds = new Set<string>();
+    for (const [key, run] of pendingCommandHistoryRunsRef.current) {
+      if (!terminalIds.has(run.termId)) continue;
+      if (!run.completing) pendingCommandHistoryRunsRef.current.delete(key);
+      clearedIds.add(run.id);
+    }
+    if (clearedIds.size) setRunningCommandHistoryIds((current) => (
+      new Set([...current].filter((id) => !clearedIds.has(id)))
+    ));
+  }, []);
 
   const { bindings, matches, on } = useKeybindings();
 
@@ -723,8 +745,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       setLocalTransportByTerminal((current) => (
         current[id] === 'exited' ? current : { ...current, [id]: 'exited' }
       ));
+      clearPendingCommandHistoryRuns(new Set([id]));
     });
-  }, []);
+  }, [clearPendingCommandHistoryRuns]);
 
   // Called by TerminalPane when the shell reports a new cwd (via OSC 7
   // parsed from the PTY stream). Only the focused terminal's cwd drives
@@ -759,6 +782,70 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     });
   }, []);
 
+  const resolveCommandHistoryContext = useCallback((tabId: string, termId: string): CommandHistoryEntry['context'] | null => {
+    const owner = tabsRef.current.find((tab) => tab.id === tabId);
+    const leaf = owner && findLeaf(owner.root, termId);
+    if (!owner || !leaf) return null;
+    if ((leaf.terminalType ?? owner.type) === 'local') {
+      const cwd = cwdByTerminalRef.current[termId] || leaf.cwd || owner.cwd || homeDir;
+      return cwd ? { kind: 'local', cwd } : null;
+    }
+    const session = sshSessionsRef.current.find((candidate) => candidate.id === (leaf.sshSessionId ?? owner.sshSessionId));
+    const profile = sshProfilesRef.current.find((candidate) => candidate.id === (leaf.sshProfileId ?? owner.sshProfileId));
+    const host = session?.host ?? profile?.host;
+    if (!host) return null;
+    const username = session?.username ?? profile?.username;
+    const port = session?.port ?? profile?.port;
+    return { kind: 'ssh', label: `${username ? `${username}@` : ''}${host}${port ? `:${port}` : ''}` };
+  }, [homeDir]);
+
+  const handleSemanticCommandStarted = useCallback((
+    tabId: string, termId: string, event: SemanticCommandStartedEvent,
+  ) => {
+    const key = `${tabId}\u0000${termId}\u0000${event.startedAt}\u0000${event.command}`;
+    if (pendingCommandHistoryRunsRef.current.has(key)) return;
+    const run: { id: string; termId: string; removed?: boolean } = { id: crypto.randomUUID(), termId };
+    pendingCommandHistoryRunsRef.current.set(key, run);
+    historySaveQueueRef.current = historySaveQueueRef.current.then(async () => {
+      const context = resolveCommandHistoryContext(tabId, termId);
+      if (!context || run.removed) {
+        if (pendingCommandHistoryRunsRef.current.get(key) === run) pendingCommandHistoryRunsRef.current.delete(key);
+        return;
+      }
+      const entry: CommandHistoryEntry = {
+        id: run.id, command: event.command, startedAt: event.startedAt, durationMs: 0, context,
+      };
+      const next = [entry, ...commandHistoryRef.current.filter((candidate) => candidate.command !== entry.command)]
+        .slice(0, MAX_COMMAND_HISTORY_ENTRIES);
+      try {
+        await window.janet.setSettings({ commandHistory: next });
+        commandHistoryRef.current = next;
+        setCommandHistory(next);
+        if (pendingCommandHistoryRunsRef.current.get(key) === run) {
+          setRunningCommandHistoryIds((current) => new Set(current).add(run.id));
+        }
+      } catch (error) {
+        if (pendingCommandHistoryRunsRef.current.get(key) === run) pendingCommandHistoryRunsRef.current.delete(key);
+        console.error('Failed to save command history:', error);
+      }
+    });
+  }, [resolveCommandHistoryContext]);
+
+  const handleSemanticCommandCancelled = useCallback((
+    tabId: string, termId: string, event: SemanticCommandStartedEvent,
+  ) => {
+    const key = `${tabId}\u0000${termId}\u0000${event.startedAt}\u0000${event.command}`;
+    const run = pendingCommandHistoryRunsRef.current.get(key);
+    if (!run) return;
+    pendingCommandHistoryRunsRef.current.delete(key);
+    setRunningCommandHistoryIds((current) => {
+      if (!current.has(run.id)) return current;
+      const next = new Set(current);
+      next.delete(run.id);
+      return next;
+    });
+  }, []);
+
   const handleSemanticCommand = useCallback((tabId: string, termId: string, event: SemanticCommandEvent) => {
     const owners = tabsRef.current.filter((tab) => (
       tab.id === tabId && getAllLeafIds(tab.root).includes(termId)
@@ -779,29 +866,33 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     };
     window.janet.notifyCommandCompleted(payload).catch(() => {});
 
+    const key = `${tabId}\u0000${termId}\u0000${event.startedAt}\u0000${event.command}`;
+    const run = pendingCommandHistoryRunsRef.current.get(key);
+    if (run) run.completing = true;
     historySaveQueueRef.current = historySaveQueueRef.current.then(async () => {
-      const currentOwner = tabsRef.current.find((tab) => tab.id === tabId);
-      const currentLeaf = currentOwner && findLeaf(currentOwner.root, termId);
-      if (!currentOwner || !currentLeaf) return;
-      const terminalType = currentLeaf.terminalType ?? currentOwner.type;
-      let context: CommandHistoryEntry['context'];
-      if (terminalType === 'local') {
-        const cwd = cwdByTerminalRef.current[termId] || currentLeaf.cwd || currentOwner.cwd || homeDir;
-        if (!cwd) return;
-        context = { kind: 'local', cwd };
-      } else {
-        const sessionId = currentLeaf.sshSessionId ?? currentOwner.sshSessionId;
-        const profileId = currentLeaf.sshProfileId ?? currentOwner.sshProfileId;
-        const session = sshSessionsRef.current.find((candidate) => candidate.id === sessionId);
-        const profile = sshProfilesRef.current.find((candidate) => candidate.id === profileId);
-        const host = session?.host ?? profile?.host;
-        if (!host) return;
-        const username = session?.username ?? profile?.username;
-        const port = session?.port ?? profile?.port;
-        context = { kind: 'ssh', label: `${username ? `${username}@` : ''}${host}${port ? `:${port}` : ''}` };
+      const context = resolveCommandHistoryContext(tabId, termId);
+      if (run?.removed) {
+        if (pendingCommandHistoryRunsRef.current.get(key) === run) pendingCommandHistoryRunsRef.current.delete(key);
+        return;
+      }
+      if (!context) {
+        if (run && pendingCommandHistoryRunsRef.current.get(key) === run) {
+          pendingCommandHistoryRunsRef.current.delete(key);
+        }
+        return;
+      }
+      const trackedRun = run && pendingCommandHistoryRunsRef.current.get(key) === run ? run : undefined;
+      if (trackedRun && commandHistoryRef.current.find((candidate) => candidate.command === event.command)?.id !== trackedRun.id) {
+        if (pendingCommandHistoryRunsRef.current.get(key) === trackedRun) pendingCommandHistoryRunsRef.current.delete(key);
+        setRunningCommandHistoryIds((current) => {
+          const updated = new Set(current);
+          updated.delete(trackedRun.id);
+          return updated;
+        });
+        return;
       }
       const entry: CommandHistoryEntry = {
-        id: crypto.randomUUID(), command: event.command, startedAt: event.startedAt,
+        id: trackedRun?.id ?? crypto.randomUUID(), command: event.command, startedAt: event.startedAt,
         durationMs: event.durationMs,
         ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }), context,
       };
@@ -813,11 +904,27 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         await window.janet.setSettings({ commandHistory: next });
         commandHistoryRef.current = next;
         setCommandHistory(next);
+        if (trackedRun) {
+          if (pendingCommandHistoryRunsRef.current.get(key) === trackedRun) pendingCommandHistoryRunsRef.current.delete(key);
+          setRunningCommandHistoryIds((current) => {
+            const updated = new Set(current);
+            updated.delete(trackedRun.id);
+            return updated;
+          });
+        }
       } catch (error) {
+        if (trackedRun) {
+          if (pendingCommandHistoryRunsRef.current.get(key) === trackedRun) pendingCommandHistoryRunsRef.current.delete(key);
+          setRunningCommandHistoryIds((current) => {
+            const updated = new Set(current);
+            updated.delete(trackedRun.id);
+            return updated;
+          });
+        }
         console.error('Failed to save command history:', error);
       }
     });
-  }, [homeDir, sshProfiles]);
+  }, [resolveCommandHistoryContext, sshProfiles]);
 
   const removeCommandHistoryEntry = useCallback((entry: CommandHistoryEntry) => {
     historySaveQueueRef.current = historySaveQueueRef.current.then(async () => {
@@ -825,8 +932,17 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       if (next.length === commandHistoryRef.current.length) return;
       try {
         await window.janet.setSettings({ commandHistory: next });
+        for (const run of pendingCommandHistoryRunsRef.current.values()) {
+          if (run.id === entry.id) run.removed = true;
+        }
         commandHistoryRef.current = next;
         setCommandHistory(next);
+        setRunningCommandHistoryIds((current) => {
+          if (!current.has(entry.id)) return current;
+          const updated = new Set(current);
+          updated.delete(entry.id);
+          return updated;
+        });
       } catch (error) {
         console.error('Failed to remove command history entry:', error);
       }
@@ -886,6 +1002,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     if (owners.length === 0) return;
 
     const removedTerminals = new Set(owners.map((owner) => owner.termId));
+    clearPendingCommandHistoryRuns(removedTerminals);
     setBroadcastRecipientIds((current) => (
       [...current].some((termId) => removedTerminals.has(termId)) ? new Set() : current
     ));
@@ -950,7 +1067,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         return next;
       });
     }
-  }, []);
+  }, [clearPendingCommandHistoryRuns]);
 
   // Called when a TerminalPane unmounts
   const handleTerminalRemoved = useCallback(
@@ -2241,6 +2358,8 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
                 onTerminalReady={handleTerminalReady}
                 onTerminalRemoved={handleTerminalRemoved}
                 onAgentEvent={handleAgentEvent}
+                onSemanticCommandStarted={handleSemanticCommandStarted}
+                onSemanticCommandCancelled={handleSemanticCommandCancelled}
                 onSemanticCommand={handleSemanticCommand}
                 onBroadcastInput={handleBroadcastInput}
                 broadcastRecipientIds={broadcastRecipientIds}
@@ -2298,6 +2417,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       <CommandHistoryPicker
         visible={historyVisible}
         entries={commandHistory}
+        runningIds={runningCommandHistoryIds}
         onClose={() => setHistoryVisible(false)}
         onRemove={removeCommandHistoryEntry}
         onSelect={(entry) => {
