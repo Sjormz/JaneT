@@ -50,6 +50,7 @@ class MockTunnel extends MiniEmitter {
 
 const mocks = {
   shellMock: vi.fn(),
+  execMock: vi.fn(),
   connectMock: vi.fn(),
   forwardOutMock: vi.fn(),
   lastClient: null as MiniEmitter | null,
@@ -235,11 +236,14 @@ function createTextFileSftp(initial: Record<string, string | Buffer>) {
   };
 }
 
+const REMOTE_BASH_PROBE = '"$SHELL" --rcfile /dev/fd/3 -i 3<<\'__JANET_BASH_PROBE__\'\nprintf \'%s\\n\' "$BASH"\nexit 0\n__JANET_BASH_PROBE__';
+
 async function loadSSHManager() {
   vi.resetModules();
   vi.doMock('ssh2', () => {
     class MockClient extends MiniEmitter {
       shell = mocks.shellMock;
+      exec = mocks.execMock;
       connect = mocks.connectMock;
       forwardOut = mocks.forwardOutMock;
       sftp = vi.fn();
@@ -260,6 +264,8 @@ async function loadSSHManager() {
 
 beforeEach(() => {
   mocks.shellMock.mockReset();
+  mocks.execMock.mockReset();
+  mocks.execMock.mockImplementation((_command, callback) => callback(new Error('Remote shell probe unavailable')));
   mocks.connectMock.mockReset();
   mocks.forwardOutMock.mockReset();
   mocks.lastClient = null;
@@ -606,6 +612,220 @@ describe('SSHManager', () => {
       host: 'example.com', port: 22, auth: 'password',
     })).toThrow(/SSH connection limit of 64/i);
     expect(mocks.connectMock).toHaveBeenCalledTimes(64);
+  });
+
+  it('launches detected remote Bash with session-only semantic integration', async () => {
+    const stream = new MockShellStream();
+    mocks.execMock.mockImplementation((command, optionsOrCallback, maybeCallback) => {
+      const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
+      if (command === REMOTE_BASH_PROBE) {
+        const probe = new MockShellStream();
+        callback(undefined, probe);
+        queueMicrotask(() => {
+          probe.emit('data', Buffer.from('/bin/bash\n'));
+          probe.emit('close');
+        });
+        return;
+      }
+      callback(undefined, stream);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('bash-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell('bash-session', 'bash-term', { cols: 80, rows: 24 }).ready;
+
+    expect(mocks.execMock).toHaveBeenCalledTimes(2);
+    expect(mocks.shellMock).not.toHaveBeenCalled();
+    expect(mocks.execMock.mock.calls[1][0]).toContain("exec '/bin/bash' --rcfile");
+    expect(mocks.execMock.mock.calls[1][0]).toContain(']133;C');
+    expect(mocks.execMock.mock.calls[1][1]).toEqual({
+      pty: { cols: 80, rows: 24, term: 'xterm-256color' },
+    });
+    expect(stream.write).not.toHaveBeenCalled();
+  });
+
+  it('closes a remote shell probe that times out', async () => {
+    vi.useFakeTimers();
+    const probe = new MockShellStream();
+    mocks.execMock.mockImplementation((_command, callback) => callback(undefined, probe));
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    try {
+      const { SSHManager } = await loadSSHManager();
+      const manager = new SSHManager();
+      const connected = manager.connect('probe-timeout', {
+        host: 'example.com', port: 22, username: 'alice', auth: 'password',
+      });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await connected;
+
+      expect(probe.close).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects the connection and closes a remote shell probe delivered after its timeout', async () => {
+    vi.useFakeTimers();
+    const probe = new MockShellStream();
+    let openProbe: ((error?: Error, stream?: MockShellStream) => void) | undefined;
+    mocks.execMock.mockImplementation((_command, callback) => { openProbe = callback; });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    try {
+      const { SSHManager } = await loadSSHManager();
+      const manager = new SSHManager();
+      const connected = manager.connect('late-probe', {
+        host: 'example.com', port: 22, username: 'alice', auth: 'password',
+      });
+      const rejection = expect(connected).rejects.toThrow(/probe timed out/i);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await rejection;
+      openProbe?.(undefined, probe);
+
+      expect(mocks.clients[0].end).toHaveBeenCalledOnce();
+      expect(probe.close).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let an old probe timeout delete a replacement connection', async () => {
+    vi.useFakeTimers();
+    const probeCallbacks: Array<(error?: Error, stream?: MockShellStream) => void> = [];
+    mocks.execMock.mockImplementation((_command, callback) => { probeCallbacks.push(callback); });
+    mocks.connectMock.mockImplementation(function (this: MiniEmitter) {
+      queueMicrotask(() => this.emit('ready'));
+    });
+
+    try {
+      const { SSHManager } = await loadSSHManager();
+      const manager = new SSHManager();
+      const first = manager.connect('reused-probe', {
+        host: 'example.com', port: 22, username: 'alice', auth: 'password',
+      });
+      const firstRejection = expect(first).rejects.toThrow(/cancelled/i);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(probeCallbacks).toHaveLength(1);
+      await manager.disconnect('reused-probe');
+      await firstRejection;
+
+      const replacement = manager.connect('reused-probe', {
+        host: 'example.com', port: 22, username: 'alice', auth: 'password',
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(probeCallbacks).toHaveLength(2);
+      expect((manager as any).pendingConnections.get('reused-probe')?.client)
+        .toBe(mocks.clients[1]);
+
+      const probe = new MockShellStream();
+      probeCallbacks[1](undefined, probe);
+      probe.emit('data', Buffer.from('/bin/bash\n'));
+      probe.emit('close');
+      await replacement;
+      expect(manager.listConnections()).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('closes a remote shell probe whose output exceeds its bound', async () => {
+    const probe = new MockShellStream();
+    mocks.execMock.mockImplementation((_command, callback) => {
+      callback(undefined, probe);
+      queueMicrotask(() => probe.emit('data', Buffer.alloc(8_192, 0x61)));
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('probe-overflow', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+
+    expect(probe.close).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a remote Bash path containing control characters', async () => {
+    const stream = new MockShellStream();
+    mocks.execMock.mockImplementation((command, optionsOrCallback, maybeCallback) => {
+      const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
+      if (command === REMOTE_BASH_PROBE) {
+        const probe = new MockShellStream();
+        callback(undefined, probe);
+        queueMicrotask(() => {
+          probe.emit('data', Buffer.from('/tmp/evil\n/bash\n'));
+          probe.emit('close');
+        });
+        return;
+      }
+      callback(undefined, stream);
+    });
+    mocks.shellMock.mockImplementation((_options, callback) => callback(undefined, stream));
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('malformed-probe', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell('malformed-probe', 'malformed-term', { cols: 80, rows: 24 }).ready;
+
+    expect(mocks.execMock).toHaveBeenCalledOnce();
+    expect(mocks.shellMock).toHaveBeenCalledOnce();
+  });
+
+  it('falls back to an ordinary SSH shell when Bash integration is rejected', async () => {
+    const stream = new MockShellStream();
+    mocks.execMock.mockImplementation((command, optionsOrCallback, maybeCallback) => {
+      const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
+      if (command === REMOTE_BASH_PROBE) {
+        const probe = new MockShellStream();
+        callback(undefined, probe);
+        queueMicrotask(() => {
+          probe.emit('data', Buffer.from('/bin/bash\n'));
+          probe.emit('close');
+        });
+        return;
+      }
+      callback(new Error('Integrated shell rejected'));
+    });
+    mocks.shellMock.mockImplementation((_options, callback) => callback(undefined, stream));
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('bash-fallback', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell('bash-fallback', 'bash-fallback-term', { cols: 80, rows: 24 }).ready;
+
+    expect(mocks.shellMock).toHaveBeenCalledOnce();
+  });
+
+  it('falls back when the reported Bash cannot run the integration launcher', async () => {
+    const stream = new MockShellStream();
+    mocks.execMock.mockImplementation((_command, callback) => {
+      const probe = new MockShellStream();
+      callback(undefined, probe);
+      queueMicrotask(() => probe.emit('close'));
+    });
+    mocks.shellMock.mockImplementation((_options, callback) => callback(undefined, stream));
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('incompatible-bash', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    await manager.createShell('incompatible-bash', 'incompatible-term', { cols: 80, rows: 24 }).ready;
+
+    expect(mocks.execMock).toHaveBeenCalledOnce();
+    expect(mocks.shellMock).toHaveBeenCalledOnce();
   });
 
   it('dispatches one compiled startup expression after the SSH shell is ready', async () => {

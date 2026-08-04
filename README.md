@@ -58,7 +58,7 @@ JaneT understands the command lifecycle reported by supported shells. After a co
 
 Paste for rerun is deliberately safe: it inserts the command through JaneT's normal paste path but never adds Enter. Review or edit it, then press Enter yourself when it is ready.
 
-JaneT automatically adds semantic markers to new local Bash, zsh, fish, Windows PowerShell, and PowerShell 7 sessions while preserving existing prompt hooks. Unsupported local shells continue to work as ordinary terminals. JaneT does not modify a remote shell's startup files; SSH command tracking is available only when that remote shell already emits compatible OSC 133 markers.
+JaneT automatically adds semantic markers to new local Bash, zsh, fish, Windows PowerShell, and PowerShell 7 sessions while preserving existing prompt hooks. New remote Bash sessions receive the same session-only integration without modifying remote startup files. Unsupported shells continue to work as ordinary terminals.
 
 ## Find a command in contextual history
 
