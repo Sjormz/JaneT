@@ -252,19 +252,23 @@ describe('GitManager working tree actions', { timeout: 30_000 }, () => {
     const outside = path.join(temporaryDirectory('janet-git-outside-'), 'secret.txt');
     fs.writeFileSync(tracked, 'working\n');
     fs.writeFileSync(outside, 'outside secret\n');
+    const canonicalTracked = fs.realpathSync(tracked);
     const open = fs.promises.open;
-    const lstat = fs.promises.lstat;
     const realpath = fs.promises.realpath;
-    let redirected = false;
     const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (target: any, flags: any) => {
-      if (path.resolve(String(target)) === path.resolve(tracked)) redirected = true;
-      return open.call(fs.promises, redirected ? outside : target, flags);
+      return open.call(
+        fs.promises,
+        path.resolve(String(target)) === canonicalTracked ? outside : target,
+        flags,
+      );
     }) as any);
-    const lstatSpy = vi.spyOn(fs.promises, 'lstat').mockImplementation((async (target: any, options?: any) => (
-      lstat.call(fs.promises, redirected ? outside : target, options)
-    )) as any);
+    let trackedRealpaths = 0;
     const realpathSpy = vi.spyOn(fs.promises, 'realpath').mockImplementation((async (target: any, options?: any) => (
-      realpath.call(fs.promises, redirected && path.resolve(String(target)) === path.resolve(tracked) ? outside : target, options)
+      realpath.call(
+        fs.promises,
+        path.resolve(String(target)) === canonicalTracked && trackedRealpaths++ > 0 ? outside : target,
+        options,
+      )
     )) as any);
 
     try {
@@ -274,7 +278,6 @@ describe('GitManager working tree actions', { timeout: 30_000 }, () => {
       });
     } finally {
       openSpy.mockRestore();
-      lstatSpy.mockRestore();
       realpathSpy.mockRestore();
     }
   });
