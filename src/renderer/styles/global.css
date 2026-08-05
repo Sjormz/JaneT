@@ -1806,8 +1806,9 @@ html, body, #root {
   display: flex;
   align-items: stretch;
   gap: 4px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--glass-border);
+  margin-top: 2px;
+  padding: 8px 10px 6px;
+  border-top: 1px solid var(--glass-border);
 }
 .git-commit-input {
   min-width: 0;

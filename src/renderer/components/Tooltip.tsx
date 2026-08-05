@@ -37,6 +37,7 @@ export default function Tooltip({
   const tooltipRef = useRef<HTMLSpanElement>(null);
   const hoveredRef = useRef(false);
   const focusedRef = useRef(false);
+  const pointerDownRef = useRef(false);
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const [visible, setVisible] = useState(false);
   const [position, setPosition] = useState<React.CSSProperties | null>(null);
@@ -81,10 +82,12 @@ export default function Tooltip({
 
   useEffect(() => {
     const dismiss = () => hide();
+    document.addEventListener('pointerdown', dismiss);
     window.addEventListener('resize', dismiss);
     window.addEventListener('scroll', dismiss, true);
     return () => {
       clearShowTimer();
+      document.removeEventListener('pointerdown', dismiss);
       window.removeEventListener('resize', dismiss);
       window.removeEventListener('scroll', dismiss, true);
     };
@@ -122,8 +125,23 @@ export default function Tooltip({
         hoveredRef.current = false;
         if (!focusedRef.current) hide();
       },
+      onPointerDown: (event: React.PointerEvent<HTMLElement>) => {
+        childProps.onPointerDown?.(event);
+        pointerDownRef.current = true;
+        focusedRef.current = false;
+        hide();
+      },
+      onPointerUp: (event: React.PointerEvent<HTMLElement>) => {
+        childProps.onPointerUp?.(event);
+        pointerDownRef.current = false;
+      },
+      onPointerCancel: (event: React.PointerEvent<HTMLElement>) => {
+        childProps.onPointerCancel?.(event);
+        pointerDownRef.current = false;
+      },
       onFocus: (event: React.FocusEvent<HTMLElement>) => {
         childProps.onFocus?.(event);
+        if (pointerDownRef.current) return;
         focusedRef.current = true;
         if (!event.defaultPrevented && !visible) show(event.currentTarget, 120);
       },

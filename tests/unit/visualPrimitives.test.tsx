@@ -131,6 +131,46 @@ describe('Tooltip', () => {
     }
   });
 
+  it('does not let a pointer click pin hover help after the pointer leaves', () => {
+    vi.useFakeTimers();
+    try {
+      render(<Tooltip label="Refresh files"><button type="button">Refresh</button></Tooltip>);
+      const button = screen.getByRole('button', { name: 'Refresh files' });
+
+      fireEvent.pointerEnter(button);
+      act(() => vi.advanceTimersByTime(360));
+      expect(screen.getByRole('tooltip')).toBeInTheDocument();
+
+      fireEvent.pointerDown(button);
+      fireEvent.focus(button);
+      fireEvent.pointerUp(button);
+      fireEvent.pointerLeave(button);
+      act(() => vi.advanceTimersByTime(120));
+      expect(screen.queryByRole('tooltip')).toBeNull();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('dismisses hover help when the pointer is pressed elsewhere', () => {
+    vi.useFakeTimers();
+    try {
+      render(<Tooltip label="Refresh files"><button type="button">Refresh</button></Tooltip>);
+      const button = screen.getByRole('button', { name: 'Refresh files' });
+
+      fireEvent.pointerEnter(button);
+      act(() => vi.advanceTimersByTime(360));
+      expect(screen.getByRole('tooltip')).toBeInTheDocument();
+
+      fireEvent.pointerDown(document.body);
+      expect(screen.queryByRole('tooltip')).toBeNull();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it('flips and clamps help inside the viewport', () => {
     const nearTop = { top: 2, right: 130, bottom: 22, left: 100, width: 30, height: 20 };
     expect(calculateTooltipPosition(nearTop, 'top', 120, 28, 300, 200)).toEqual({ left: 55, top: 30 });
