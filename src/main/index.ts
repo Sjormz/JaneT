@@ -639,6 +639,10 @@ function registerIpcHandlers() {
     return await gitManager.discard(repoPath, paths);
   });
 
+  handle('git:deleteUntracked', async (event, { repoPath, path }) => {
+    return await gitManager.deleteUntracked(repoPath, path);
+  });
+
   handle('git:diff', async (event, { repoPath, filePath, side, originalPath }) => {
     return await gitManager.diff(repoPath, filePath, side, originalPath);
   });

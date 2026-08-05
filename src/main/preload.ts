@@ -207,6 +207,8 @@ const api = {
     ipcRenderer.invoke('git:unstage', params),
   gitDiscard: (params: { repoPath: string; paths: string[] }) =>
     ipcRenderer.invoke('git:discard', params),
+  gitDeleteUntracked: (params: { repoPath: string; path: string }) =>
+    ipcRenderer.invoke('git:deleteUntracked', params),
   gitDiff: (params: GitDiffRequest): Promise<GitDiffResult> =>
     ipcRenderer.invoke('git:diff', params),
   gitCommit: (params: { repoPath: string; message: string }) =>

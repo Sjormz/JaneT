@@ -389,6 +389,7 @@ test('stages and commits changes from Source Control', async ({}, testInfo) => {
     execFileSync('git', ['commit', '-m', 'base'], { cwd: repoPath });
     fs.writeFileSync(path.join(repoPath, 'base.txt'), 'discard me\n', 'utf-8');
     fs.writeFileSync(path.join(repoPath, 'change.txt'), 'from JaneT\n', 'utf-8');
+    fs.writeFileSync(path.join(repoPath, 'delete-me.txt'), 'untracked\n', 'utf-8');
 
     app = await launchApp({
       theme: 'tokyo-night',
@@ -474,6 +475,13 @@ test('stages and commits changes from Source Control', async ({}, testInfo) => {
     await app.page.getByRole('button', { name: 'Revert', exact: true }).click();
     await expect.poll(() => fs.readFileSync(path.join(repoPath, 'base.txt'), 'utf-8').trim()).toBe('base');
     expect(fs.readFileSync(path.join(repoPath, 'change.txt'), 'utf-8').trim()).toBe('from JaneT');
+
+    const untrackedChange = sourceControl.getByRole('button', { name: 'Open working-tree diff for delete-me.txt' });
+    await untrackedChange.click({ button: 'right' });
+    await app.page.getByRole('menuitem', { name: 'Delete untracked item' }).click();
+    await expect(app.page.getByRole('dialog', { name: 'Delete delete-me.txt?' })).toBeVisible();
+    await app.page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect.poll(() => fs.existsSync(path.join(repoPath, 'delete-me.txt'))).toBe(false);
 
     await sourceControl.getByRole('button', { name: 'Stage change.txt' }).click();
     await expect(sourceControl.getByRole('button', { name: 'Unstage change.txt' })).toBeVisible({ timeout: 8_000 });
