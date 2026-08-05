@@ -1157,7 +1157,9 @@ describe('split panes in the app', () => {
 
   it('opens keyboard shortcut editing in a modal from Settings', async () => {
     render(<App />);
-    await screen.findByTestId('titlebar');
+    await waitFor(() => expect(window.janet.setSettings).toHaveBeenCalledWith({
+      keybindings: expect.objectContaining({ 'settings-toggle': 'Ctrl+,' }),
+    }));
 
     fireEvent.keyDown(document, { key: ',', ctrlKey: true });
     const openShortcuts = await screen.findByRole('button', { name: 'Keyboard shortcuts' });
