@@ -441,20 +441,34 @@ test('stages and commits changes from Source Control', async ({}, testInfo) => {
     await expect(sourceControl.getByText('Create branch…')).toHaveCount(0);
     await sourceControl.screenshot({ path: testInfo.outputPath('source-control.png') });
 
+    const refreshSourceControl = sourceControl.getByRole('button', { name: 'Refresh Source Control' });
+    await refreshSourceControl.hover();
+    await expect(app.page.getByRole('tooltip')).toContainText('Refresh Source Control');
+    await app.page.locator('.terminal-area').hover({ position: { x: 40, y: 40 } });
+    await expect(app.page.getByRole('tooltip')).toHaveCount(0);
+    await refreshSourceControl.hover();
+    await expect(app.page.getByRole('tooltip')).toContainText('Refresh Source Control');
+    await refreshSourceControl.click();
+    await app.page.locator('.terminal-area').hover({ position: { x: 40, y: 40 } });
+    await expect(app.page.getByRole('tooltip')).toHaveCount(0);
+
     await sourceControl.getByRole('button', { name: 'Open working-tree diff for base.txt' }).click();
     await expect(app.page.getByRole('tab', { name: 'base.txt (Working)' })).toBeVisible();
     await expect(app.page.locator('.monaco-diff-editor')).toBeVisible({ timeout: 10_000 });
 
-    await expect(sourceControl.getByRole('button', { name: 'Discard changes in base.txt' })).toBeVisible();
-    await expect(sourceControl.getByRole('button', { name: 'Discard changes in change.txt' })).toHaveCount(0);
-    await sourceControl.getByRole('button', { name: 'Discard changes in base.txt' }).click();
-    await expect(app.page.getByRole('dialog', { name: 'Discard changes in base.txt?' })).toBeVisible();
-    await app.page.getByRole('button', { name: 'Discard', exact: true }).click();
+    await expect(sourceControl.getByRole('button', { name: 'Revert changes in base.txt' })).toBeVisible();
+    await expect(sourceControl.getByRole('button', { name: 'Revert changes in change.txt' })).toHaveCount(0);
+    await sourceControl.getByRole('button', { name: 'Revert changes in base.txt' }).click();
+    await expect(app.page.getByRole('dialog', { name: 'Revert changes in base.txt?' })).toBeVisible();
+    await app.page.getByRole('button', { name: 'Revert', exact: true }).click();
     await expect.poll(() => fs.readFileSync(path.join(repoPath, 'base.txt'), 'utf-8').trim()).toBe('base');
     expect(fs.readFileSync(path.join(repoPath, 'change.txt'), 'utf-8').trim()).toBe('from JaneT');
 
     await sourceControl.getByRole('button', { name: 'Stage change.txt' }).click();
     await expect(sourceControl.getByRole('button', { name: 'Unstage change.txt' })).toBeVisible({ timeout: 8_000 });
+    const stagedSection = sourceControl.getByRole('button', { name: /Staged Changes/ }).locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " git-section ")][1]');
+    await expect(stagedSection.getByLabel('Commit message')).toBeVisible();
+    await stagedSection.screenshot({ path: testInfo.outputPath('source-control-staged.png') });
     await sourceControl.getByRole('button', { name: 'Open staged diff for change.txt' }).click();
     await expect(app.page.getByRole('tab', { name: 'change.txt (Staged)' })).toBeVisible();
     await expect(app.page.locator('.monaco-diff-editor')).toBeVisible({ timeout: 10_000 });

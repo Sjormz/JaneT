@@ -356,17 +356,17 @@ export default function GitTree({
     const file = paths[0];
     setDialog({
       repoPath,
-      title: all ? 'Discard all unstaged changes?' : `Discard changes in ${file}?`,
+      title: all ? 'Discard all unstaged changes?' : `Revert changes in ${file}?`,
       description: all
         ? `Restore ${paths.length} tracked working-tree ${paths.length === 1 ? 'change' : 'changes'} from Git. Staged content and untracked files are preserved; anything not staged returns to the last commit. This cannot be undone.`
         : 'Restore this tracked file from Git. Staged content is preserved; otherwise it returns to the last commit. This cannot be undone.',
-      confirmLabel: 'Discard',
+      confirmLabel: all ? 'Discard' : 'Revert',
       destructive: true,
       fields: [],
       onSubmit: () => {
         runGitAction(
           () => window.janet.gitDiscard({ repoPath, paths }),
-          all ? 'Discarded all unstaged changes' : `Discarded changes in ${file}`,
+          all ? 'Discarded all unstaged changes' : `Reverted changes in ${file}`,
         );
       },
     });
@@ -477,23 +477,6 @@ export default function GitTree({
       </Tooltip>
       {message && <div className="git-message" role="status" aria-live="polite">{message}</div>}
 
-      <form className="git-commit-form" onSubmit={handleCommit}>
-        <input
-          className="git-commit-input"
-          aria-label="Commit message"
-          placeholder="Message (Ctrl+Enter to commit)"
-          value={commitMessage}
-          onChange={(event) => setCommitMessage(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.ctrlKey && event.key === 'Enter') event.currentTarget.form?.requestSubmit();
-          }}
-          disabled={busy}
-        />
-        <Tooltip label="Commit staged changes" placement="left">
-          <button className="git-commit-button" type="submit" aria-label="Commit staged changes" disabled={busy || stagedFiles.length === 0 || !commitMessage.trim()}><CheckIcon size="sm" /></button>
-        </Tooltip>
-      </form>
-
       {status && stagedFiles.length > 0 && (
         <GitSection title="Staged Changes" count={stagedFiles.length} expanded={expanded.staged} onToggle={() => toggle('staged')}
           extra={
@@ -519,6 +502,22 @@ export default function GitTree({
               index={file.index}
             />
           ))}
+          <form className="git-commit-form" onSubmit={handleCommit}>
+            <input
+              className="git-commit-input"
+              aria-label="Commit message"
+              placeholder="Message (Ctrl+Enter to commit)"
+              value={commitMessage}
+              onChange={(event) => setCommitMessage(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.ctrlKey && event.key === 'Enter') event.currentTarget.form?.requestSubmit();
+              }}
+              disabled={busy}
+            />
+            <Tooltip label="Commit staged changes" placement="left">
+              <button className="git-commit-button" type="submit" aria-label="Commit staged changes" disabled={busy || !commitMessage.trim()}><CheckIcon size="sm" /></button>
+            </Tooltip>
+          </form>
         </GitSection>
       )}
 
@@ -906,11 +905,11 @@ function GitFile({ repoPath, path, originalPath, kind, wd, index, depth, onCopyT
         </Tooltip>
       )}
       {onDiscard && (
-        <Tooltip label={`Discard changes in ${path}`} placement="left">
+        <Tooltip label={`Revert changes in ${path}`} placement="left">
           <button
             type="button"
             className="git-file-discard"
-            aria-label={`Discard changes in ${path}`}
+            aria-label={`Revert changes in ${path}`}
             onClick={onDiscard}
             disabled={busy}
           >
