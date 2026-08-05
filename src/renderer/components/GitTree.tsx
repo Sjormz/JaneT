@@ -371,6 +371,24 @@ export default function GitTree({
     });
   };
 
+  const handleDeleteUntracked = (file: string) => {
+    if (!repoPath) return;
+    setDialog({
+      repoPath,
+      title: `Delete ${file}?`,
+      description: 'Permanently delete this untracked file or folder from disk. Git has no saved version to restore. This cannot be undone.',
+      confirmLabel: 'Delete',
+      destructive: true,
+      fields: [],
+      onSubmit: () => {
+        runGitAction(
+          () => window.janet.gitDeleteUntracked({ repoPath, path: file }),
+          `Deleted ${file}`,
+        );
+      },
+    });
+  };
+
   const toggle = (section: Section) => setExpanded((prev) => ({ ...prev, [section]: !prev[section] }));
 
   if (searching) return shell('Searching for Git repositories…');
@@ -384,6 +402,9 @@ export default function GitTree({
     .filter((file) => !conflictedPaths.has(file.path) && file.index !== '?' && file.working_dir !== '?')
     .map((file) => file.path);
   const discardablePathSet = new Set(discardablePaths);
+  const untrackedPathSet = new Set(changedFiles
+    .filter((file) => file.index === '?' && file.working_dir === '?')
+    .map((file) => file.path));
 
   return (
     <div className="git-tree">
@@ -555,6 +576,7 @@ export default function GitTree({
               onOpenFile={onOpenFile}
               onStage={(path) => runGitAction(() => window.janet.gitStage({ repoPath, paths: [path] }), `Staged ${path}`)}
               onDiscard={(path) => handleDiscard([path])}
+              onDeleteUntracked={handleDeleteUntracked}
             />
           ) : (
             changedFiles.map((file) => (
@@ -569,6 +591,7 @@ export default function GitTree({
                 busy={busy}
                 onAction={() => runGitAction(() => window.janet.gitStage({ repoPath, paths: [file.path] }), `Staged ${file.path}`)}
                 onDiscard={discardablePathSet.has(file.path) ? () => handleDiscard([file.path]) : undefined}
+                onDeleteUntracked={untrackedPathSet.has(file.path) ? () => handleDeleteUntracked(file.path) : undefined}
                 kind={status.conflicted.includes(file.path)
                   ? 'conflicted'
                   : file.staged
@@ -747,6 +770,7 @@ function renderTreeNode(
   onOpenFile?: (resource: EditorResource) => void,
   onStage?: (path: string) => void,
   onDiscard?: (path: string) => void,
+  onDeleteUntracked?: (path: string) => void,
 ): React.ReactNode {
   const entries = Array.from(node.children.values()).sort((a: any, b: any) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
@@ -756,7 +780,7 @@ function renderTreeNode(
     if (child.isDir) {
       return (
         <GitTreeDir key={child.path} name={child.name} depth={depth}>
-          {renderTreeNode(child, depth + 1, busy, repoPath, onCopyTerminalPath, onOpenFile, onStage, onDiscard)}
+          {renderTreeNode(child, depth + 1, busy, repoPath, onCopyTerminalPath, onOpenFile, onStage, onDiscard, onDeleteUntracked)}
         </GitTreeDir>
       );
     }
@@ -780,12 +804,15 @@ function renderTreeNode(
         onDiscard={onDiscard && !f.conflicted && f.index !== '?' && f.working_dir !== '?'
           ? () => onDiscard(child.file.path)
           : undefined}
+        onDeleteUntracked={onDeleteUntracked && f.index === '?' && f.working_dir === '?'
+          ? () => onDeleteUntracked(child.file.path)
+          : undefined}
       />
     );
   });
 }
 
-function GitFileTree({ repoPath, files, conflicted, busy, onCopyTerminalPath, onOpenFile, onStage, onDiscard }: {
+function GitFileTree({ repoPath, files, conflicted, busy, onCopyTerminalPath, onOpenFile, onStage, onDiscard, onDeleteUntracked }: {
   repoPath: string;
   files: Array<{ path: string; working_dir: string; index: string; staged: boolean; unstaged: boolean }>;
   conflicted: string[];
@@ -794,9 +821,10 @@ function GitFileTree({ repoPath, files, conflicted, busy, onCopyTerminalPath, on
   onOpenFile?: (resource: EditorResource) => void;
   onStage?: (path: string) => void;
   onDiscard?: (path: string) => void;
+  onDeleteUntracked?: (path: string) => void;
 }) {
   const tree = buildFileTree(files, conflicted);
-  return <>{renderTreeNode(tree, 0, Boolean(busy), repoPath, onCopyTerminalPath, onOpenFile, onStage, onDiscard)}</>;
+  return <>{renderTreeNode(tree, 0, Boolean(busy), repoPath, onCopyTerminalPath, onOpenFile, onStage, onDiscard, onDeleteUntracked)}</>;
 }
 
 function GitTreeDir({ name, depth, children }: { name: string; depth: number; children: React.ReactNode }) {
@@ -820,7 +848,7 @@ function GitTreeDir({ name, depth, children }: { name: string; depth: number; ch
   );
 }
 
-function GitFile({ repoPath, path, originalPath, kind, wd, index, depth, onCopyTerminalPath, onOpenFile, diffSide, action, onAction, onDiscard, busy }: {
+function GitFile({ repoPath, path, originalPath, kind, wd, index, depth, onCopyTerminalPath, onOpenFile, diffSide, action, onAction, onDiscard, onDeleteUntracked, busy }: {
   repoPath: string;
   path: string;
   originalPath?: string;
@@ -834,6 +862,7 @@ function GitFile({ repoPath, path, originalPath, kind, wd, index, depth, onCopyT
   action?: 'stage' | 'unstage';
   onAction?: () => void;
   onDiscard?: () => void;
+  onDeleteUntracked?: () => void;
   busy?: boolean;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -847,7 +876,7 @@ function GitFile({ repoPath, path, originalPath, kind, wd, index, depth, onCopyT
   const indent = depth !== undefined ? { paddingLeft: 14 + depth * 14 } : undefined;
   const absolutePath = resolveRepositoryPath(repoPath, path);
   const canCopy = Boolean(onCopyTerminalPath && formatTerminalPathForPaste(absolutePath));
-  const hasContextActions = Boolean(onDiscard || canCopy);
+  const hasContextActions = Boolean(onDiscard || onDeleteUntracked || canCopy);
   const canPreview = kind !== 'conflicted';
   const previewLabel = diffSide === 'staged' ? 'staged' : 'working-tree';
   const title = kind === 'mixed'
@@ -1014,6 +1043,21 @@ function GitFile({ repoPath, path, originalPath, kind, wd, index, depth, onCopyT
               }}
             >
               Revert changes
+            </button>
+          )}
+          {onDeleteUntracked && (
+            <button
+              type="button"
+              role="menuitem"
+              className="danger"
+              disabled={busy}
+              onClick={() => {
+                fileRef.current?.focus();
+                setMenu(null);
+                onDeleteUntracked();
+              }}
+            >
+              Delete untracked item
             </button>
           )}
           <span className="sr-only" role="status" aria-live="polite">

@@ -9,6 +9,7 @@ const gitDetails = vi.fn();
 const gitStage = vi.fn();
 const gitUnstage = vi.fn();
 const gitDiscard = vi.fn();
+const gitDeleteUntracked = vi.fn();
 const gitCommit = vi.fn();
 const gitFetch = vi.fn();
 const gitPull = vi.fn();
@@ -62,6 +63,7 @@ beforeEach(() => {
   gitStage.mockReset().mockResolvedValue(true);
   gitUnstage.mockReset().mockResolvedValue(true);
   gitDiscard.mockReset().mockResolvedValue(true);
+  gitDeleteUntracked.mockReset().mockResolvedValue(true);
   gitCommit.mockReset().mockResolvedValue(true);
   gitFetch.mockReset().mockResolvedValue(true);
   gitPull.mockReset().mockResolvedValue(true);
@@ -77,6 +79,7 @@ beforeEach(() => {
       gitStage,
       gitUnstage,
       gitDiscard,
+      gitDeleteUntracked,
       gitCommit,
       gitFetch,
       gitPull,
@@ -280,6 +283,30 @@ describe('GitTree live refresh', () => {
     openDialog();
     fireEvent.click(screen.getByRole('button', { name: 'Revert' }));
     await waitFor(() => expect(gitDiscard).toHaveBeenCalledWith({ repoPath: '/repo', paths: ['working.ts'] }));
+  });
+
+  it('deletes one selected untracked file from the Changes menu after confirmation', async () => {
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'notes.txt', working_dir: '?', index: '?', staged: false, unstaged: true }],
+      created: ['notes.txt'],
+    };
+    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+
+    const row = screen.getByRole('button', { name: 'Open working-tree diff for notes.txt' });
+    fireEvent.contextMenu(row);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete untracked item' }));
+    expect(screen.getByRole('dialog', { name: 'Delete notes.txt?' })).toHaveAccessibleDescription(
+      /permanently delete.*cannot be undone/i,
+    );
+    expect(gitDeleteUntracked).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(gitDeleteUntracked).toHaveBeenCalledWith({
+      repoPath: '/repo',
+      path: 'notes.txt',
+    }));
+    expect(gitDiscard).not.toHaveBeenCalled();
   });
 
   it('keeps Stage inline and puts secondary changed-file actions in a right-click menu', async () => {

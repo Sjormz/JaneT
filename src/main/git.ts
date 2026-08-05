@@ -355,6 +355,30 @@ export class GitManager {
     }
   }
 
+  async deleteUntracked(repoPath: string, filePath: string): Promise<boolean> {
+    if (!simpleGit || typeof repoPath !== 'string' || !path.isAbsolute(repoPath) || !validGitPath(filePath)) {
+      return false;
+    }
+    const repository = await resolveGitRepository(repoPath);
+    if (!repository.ok) return false;
+    const candidate = path.resolve(repository.value, filePath);
+    const relative = path.relative(repository.value, candidate);
+    if (!relative || escapesParent(relative) || path.isAbsolute(relative)) return false;
+    let directory: boolean;
+    try {
+      directory = (await fs.promises.lstat(candidate)).isDirectory();
+    } catch {
+      return false;
+    }
+    try {
+      await simpleGit(repository.value).raw(['--literal-pathspecs', 'clean', '-f', ...(directory ? ['-d'] : []), '--', filePath]);
+      await fs.promises.lstat(candidate);
+      return false;
+    } catch (error: any) {
+      return error?.code === 'ENOENT';
+    }
+  }
+
   async diff(repoPath: string, filePath: string, side: GitDiffSide, originalPath?: string): Promise<GitDiffResult> {
     if (
       !simpleGit

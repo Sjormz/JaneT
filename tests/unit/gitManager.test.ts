@@ -349,6 +349,31 @@ describe('GitManager working tree actions', { timeout: 30_000 }, () => {
     expect(await manager.discard(repository, null as unknown as string[])).toBe(false);
   });
 
+  it('deletes only the selected untracked file or directory', async () => {
+    const repository = initializeRepository();
+    const manager = new GitManager();
+    const selected = path.join(repository, '.hermes', 'plan.md');
+    const sibling = path.join(repository, 'keep.txt');
+    const outside = path.join(temporaryDirectory('janet-git-outside-'), 'outside.txt');
+    fs.mkdirSync(path.dirname(selected));
+    fs.writeFileSync(selected, 'delete me\n');
+    fs.writeFileSync(sibling, 'keep me\n');
+    fs.writeFileSync(outside, 'outside\n');
+
+    expect(await manager.deleteUntracked(repository, '.hermes/plan.md')).toBe(true);
+    expect(fs.existsSync(selected)).toBe(false);
+    expect(fs.readFileSync(sibling, 'utf8')).toBe('keep me\n');
+    const directory = path.join(repository, 'untracked-directory');
+    fs.mkdirSync(directory);
+    fs.writeFileSync(path.join(directory, 'nested.txt'), 'delete me too\n');
+    expect(await manager.deleteUntracked(repository, 'untracked-directory')).toBe(true);
+    expect(fs.existsSync(directory)).toBe(false);
+    expect(await manager.deleteUntracked(repository, 'base.txt')).toBe(false);
+    expect(fs.readFileSync(path.join(repository, 'base.txt'), 'utf8')).toBe('base\n');
+    expect(await manager.deleteUntracked(repository, '../outside.txt')).toBe(false);
+    expect(fs.readFileSync(outside, 'utf8')).toBe('outside\n');
+  });
+
   it('treats unusual filenames as literal Git paths', async () => {
     const repository = initializeRepository();
     const manager = new GitManager();
