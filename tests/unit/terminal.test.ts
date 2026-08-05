@@ -88,7 +88,91 @@ beforeEach(() => {
 });
 
 describe('TerminalManager', () => {
-  it('dispatches startup commands once after the first integrated prompt', async () => {
+  it('runs PowerShell startup commands at launch without writing them into the PTY', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+
+    manager.create(
+      'term-startup-hidden',
+      undefined,
+      'powershell.exe',
+      () => {},
+      ["Write-Output '__JANET_STARTUP_OUTPUT__'"],
+    );
+
+    const args = mocks.spawnMock.mock.calls[0][1] as string[];
+    expect(args.slice(0, 3)).toEqual(['-NoLogo', '-NoExit', '-Command']);
+    expect(args[3]).toMatch(/^Invoke-Expression \(\[IO\.File\]::ReadAllText\('/);
+    const initPath = args[3].match(/ReadAllText\('(.+)'\)/)?.[1];
+    expect(initPath).toBeDefined();
+    expect(fs.readFileSync(initPath!, 'utf8')).toContain(
+      "Write-Output ''__JANET_STARTUP_OUTPUT__''",
+    );
+    expect(pty.write).not.toHaveBeenCalled();
+
+    pty.emit(startupReady);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(pty.write).not.toHaveBeenCalled();
+    manager.cleanup();
+  });
+
+  it('keeps the largest valid PowerShell startup sequence out of the process command line', async () => {
+    const pty = new MockPty();
+    mocks.spawnMock.mockReturnValue(pty);
+    const prefix = 'Write-Output ok # ';
+    const command = prefix + "'".repeat(4_096 - prefix.length);
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    manager.create(
+      'term-startup-max',
+      undefined,
+      'powershell.exe',
+      () => {},
+      Array(4).fill(command),
+    );
+
+    const args = mocks.spawnMock.mock.calls[0][1] as string[];
+    expect(['powershell.exe', ...args].join(' ').length).toBeLessThan(32_767);
+    manager.cleanup();
+  });
+
+  it('keeps launch-time startup commands isolated between local panes', async () => {
+    mocks.spawnMock.mockImplementation(() => new MockPty());
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    manager.create('term-startup-one', undefined, '/bin/zsh', () => {}, ['echo first']);
+    manager.create('term-startup-two', undefined, '/bin/zsh', () => {}, ['echo second']);
+
+    const firstEnv = mocks.spawnMock.mock.calls[0][2].env as NodeJS.ProcessEnv;
+    const secondEnv = mocks.spawnMock.mock.calls[1][2].env as NodeJS.ProcessEnv;
+    expect(firstEnv.ZDOTDIR).not.toBe(secondEnv.ZDOTDIR);
+    expect(fs.readFileSync(path.join(firstEnv.ZDOTDIR!, '.zshrc'), 'utf8')).toContain("eval 'echo first'");
+    expect(fs.readFileSync(path.join(secondEnv.ZDOTDIR!, '.zshrc'), 'utf8')).toContain("eval 'echo second'");
+
+    manager.cleanup();
+  });
+
+  it('clears the temporary ZDOTDIR before running Zsh startup commands', async () => {
+    mocks.spawnMock.mockReturnValue(new MockPty());
+
+    const { TerminalManager } = await loadTerminalManager();
+    const manager = new TerminalManager();
+    manager.create('term-startup-nested-zsh', undefined, '/bin/zsh', () => {}, ['echo once']);
+
+    const env = mocks.spawnMock.mock.calls[0][2].env as NodeJS.ProcessEnv;
+    const zshrc = fs.readFileSync(path.join(env.ZDOTDIR!, '.zshrc'), 'utf8');
+    expect(zshrc).toMatch(/^unset ZDOTDIR\n\[ -f ~\/\.zshrc \]/);
+    expect(zshrc.indexOf('unset ZDOTDIR')).toBeLessThan(zshrc.indexOf("eval 'echo once'"));
+
+    manager.cleanup();
+  });
+
+  it('runs integrated startup commands from shell init instead of PTY input', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
 
@@ -99,6 +183,10 @@ describe('TerminalManager', () => {
     manager.create('term-startup', undefined, '/bin/zsh', () => {}, commands);
     manager.create('term-startup', undefined, '/bin/zsh', () => {}, commands);
 
+    expect(mocks.spawnMock).toHaveBeenCalledOnce();
+    const zdotdir = mocks.spawnMock.mock.calls[0][2].env.ZDOTDIR as string;
+    expect(fs.readFileSync(path.join(zdotdir, '.zshrc'), 'utf8'))
+      .toContain("eval 'hermes doctor' && eval 'hermes --tui'");
     expect(pty.write).not.toHaveBeenCalled();
     pty.emit(prompt);
     pty.emit(prompt);
@@ -107,10 +195,8 @@ describe('TerminalManager', () => {
     pty.emit(startupReady);
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    expect(pty.write).toHaveBeenCalledTimes(1);
-    expect(pty.write).toHaveBeenCalledWith(
-      "eval 'hermes doctor' && eval 'hermes --tui'\r",
-    );
+    expect(pty.write).not.toHaveBeenCalled();
+    manager.cleanup();
   });
 
   it('skips startup and forwards input when a prompt hook needs an early answer', async () => {
@@ -119,7 +205,7 @@ describe('TerminalManager', () => {
 
     const { TerminalManager } = await loadTerminalManager();
     const manager = new TerminalManager();
-    manager.create('term-startup-input', undefined, '/bin/zsh', () => {}, ['git pull']);
+    manager.create('term-startup-input', undefined, '/bin/sh', () => {}, ['git pull']);
 
     manager.write('term-startup-input', 'echo after startup\r');
     manager.writeBinary('term-startup-input', 'x');
@@ -142,7 +228,7 @@ describe('TerminalManager', () => {
 
     const { TerminalManager } = await loadTerminalManager();
     const manager = new TerminalManager();
-    manager.create('term-startup-cpr', undefined, '/bin/zsh', () => {}, ['git pull']);
+    manager.create('term-startup-cpr', undefined, '/bin/sh', () => {}, ['git pull']);
 
     manager.write('term-startup-cpr', '\x1b[1;1R', false);
     expect(pty.write).toHaveBeenCalledWith('\x1b[1;1R');
@@ -160,7 +246,7 @@ describe('TerminalManager', () => {
     mocks.spawnMock.mockReturnValue(pty);
     const { TerminalManager } = await loadTerminalManager();
     const manager = new TerminalManager();
-    manager.create('term-startup-failed-input', undefined, '/bin/zsh', () => {}, ['git pull']);
+    manager.create('term-startup-failed-input', undefined, '/bin/sh', () => {}, ['git pull']);
 
     manager.write('term-startup-failed-input', '');
     pty.write.mockImplementationOnce(() => {
@@ -179,7 +265,7 @@ describe('TerminalManager', () => {
 
     const { TerminalManager } = await loadTerminalManager();
     const manager = new TerminalManager();
-    manager.create('term-startup-partial', undefined, '/bin/zsh', () => {}, ['git pull']);
+    manager.create('term-startup-partial', undefined, '/bin/sh', () => {}, ['git pull']);
 
     manager.write('term-startup-partial', 'ls');
     pty.emit(startupReady);
@@ -217,16 +303,16 @@ describe('TerminalManager', () => {
     const { TerminalManager } = await loadTerminalManager();
     const manager = new TerminalManager();
 
-    const first = manager.create('term-startup-recreate', undefined, '/bin/zsh', () => {}, ['first']);
-    (first as unknown as MockPty).emit(startupReady);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    manager.create('term-startup-recreate', undefined, '/bin/zsh', () => {}, ['first']);
+    const firstZdotdir = mocks.spawnMock.mock.calls[0][2].env.ZDOTDIR as string;
     manager.destroy('term-startup-recreate');
-    const second = manager.create('term-startup-recreate', undefined, '/bin/zsh', () => {}, ['second']);
-    (second as unknown as MockPty).emit(startupReady);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    manager.create('term-startup-recreate', undefined, '/bin/zsh', () => {}, ['second']);
+    const secondZdotdir = mocks.spawnMock.mock.calls[1][2].env.ZDOTDIR as string;
 
-    expect((first as unknown as MockPty).write).toHaveBeenCalledWith("eval 'first'\r");
-    expect((second as unknown as MockPty).write).toHaveBeenCalledWith("eval 'second'\r");
+    expect(fs.readFileSync(path.join(firstZdotdir, '.zshrc'), 'utf8')).toContain("eval 'first'");
+    expect(fs.readFileSync(path.join(secondZdotdir, '.zshrc'), 'utf8')).toContain("eval 'second'");
+    expect(ptys.every((pty) => pty.write.mock.calls.length === 0)).toBe(true);
+    manager.cleanup();
   });
 
   it('does not replay startup commands when a PTY exits without explicit pane destruction', async () => {
@@ -237,15 +323,15 @@ describe('TerminalManager', () => {
     const manager = new TerminalManager();
 
     const first = manager.create('term-startup-exit', undefined, '/bin/zsh', () => {}, ['first']);
-    (first as unknown as MockPty).emit(startupReady);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    const firstZdotdir = mocks.spawnMock.mock.calls[0][2].env.ZDOTDIR as string;
     (first as unknown as MockPty).emitExit();
-    const second = manager.create('term-startup-exit', undefined, '/bin/zsh', () => {}, ['second']);
-    (second as unknown as MockPty).emit(startupReady);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    manager.create('term-startup-exit', undefined, '/bin/zsh', () => {}, ['second']);
+    const secondZdotdir = mocks.spawnMock.mock.calls[1][2].env.ZDOTDIR as string;
 
-    expect((first as unknown as MockPty).write).toHaveBeenCalledWith("eval 'first'\r");
-    expect((second as unknown as MockPty).write).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(firstZdotdir, '.zshrc'), 'utf8')).toContain("eval 'first'");
+    expect(fs.readFileSync(path.join(secondZdotdir, '.zshrc'), 'utf8')).not.toContain("eval 'second'");
+    expect(ptys.every((pty) => pty.write.mock.calls.length === 0)).toBe(true);
+    manager.cleanup();
   });
 
   it('spawns exactly one pty when create() is called twice for the same id (StrictMode double-mount)', async () => {

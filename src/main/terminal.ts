@@ -120,7 +120,17 @@ function shellLaunch(shell: string, init: string, initFile: ShellInitFile): { ar
 
   const base = path.basename(shell).toLowerCase();
   if (base === 'powershell' || base === 'powershell.exe' || base === 'pwsh' || base === 'pwsh.exe') {
-    return { args: ['-NoLogo', '-NoExit', '-Command', init], env: {} };
+    const initPath = initFile('profile.ps1', init)
+      .replace(/['\u2018\u2019]/g, (quote) => `${quote}${quote}`);
+    return {
+      args: [
+        '-NoLogo',
+        '-NoExit',
+        '-Command',
+        `Invoke-Expression ([IO.File]::ReadAllText('${initPath}'))`,
+      ],
+      env: {},
+    };
   }
 
   if (base === 'bash' || base === 'bash.exe') {
@@ -129,7 +139,7 @@ function shellLaunch(shell: string, init: string, initFile: ShellInitFile): { ar
   }
 
   if (base === 'zsh' || base === 'zsh.exe') {
-    const zshrc = initFile('.zshrc', `[ -f ~/.zshrc ] && . ~/.zshrc\n${init}\n`);
+    const zshrc = initFile('.zshrc', `unset ZDOTDIR\n[ -f ~/.zshrc ] && . ~/.zshrc\n${init}\n`);
     const zdotdir = path.dirname(zshrc);
     return { args: ['-i'], env: { ZDOTDIR: zdotdir } };
   }
@@ -145,7 +155,7 @@ export class TerminalManager {
   private terminals: Map<string, TerminalInstance> = new Map();
   private pendingStopProcesses: Map<string, ProcessInfo> = new Map();
   private startupCommandLedger = new Set<string>();
-  private shellInitDir: string | null = null;
+  private shellInitDirs = new Set<string>();
   private readonly processInspector: ProcessInspector;
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly terminateGraceMs: number;
@@ -220,8 +230,15 @@ export class TerminalManager {
       : '';
 
     const init = buildShellInit(defaultShell);
-
-    const launch = shellLaunch(defaultShell, init, (name, contents) => this.ensureShellInitFile(name, contents));
+    const startupAtLaunch = Boolean(
+      init && startupExpression && !this.startupCommandLedger.has(id),
+    );
+    const launchInit = startupAtLaunch ? `${init}\n${startupExpression}` : init;
+    const launch = shellLaunch(
+      defaultShell,
+      launchInit,
+      (name, contents) => this.ensureShellInitFile(name, contents),
+    );
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -261,6 +278,7 @@ export class TerminalManager {
       this.capacity.release(id);
       throw error;
     }
+    if (startupAtLaunch) this.startupCommandLedger.add(id);
 
     const terminal: TerminalInstance = {
       pty,
@@ -273,7 +291,9 @@ export class TerminalManager {
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
       promptMarkerTail: '',
-      ...(startupExpression && !this.startupCommandLedger.has(id) ? { startupExpression } : {}),
+      ...(!startupAtLaunch && startupExpression && !this.startupCommandLedger.has(id)
+        ? { startupExpression }
+        : {}),
     };
     this.terminals.set(id, terminal);
     pty.onExit((event) => {
@@ -524,10 +544,10 @@ export class TerminalManager {
       this.destroy(id);
     }
     this.startupCommandLedger.clear();
-    if (this.shellInitDir) {
-      try { fs.rmSync(this.shellInitDir, { recursive: true, force: true }); } catch {}
-      this.shellInitDir = null;
+    for (const initDir of this.shellInitDirs) {
+      try { fs.rmSync(initDir, { recursive: true, force: true }); } catch {}
     }
+    this.shellInitDirs.clear();
   }
 
   private destroyPty(pty: IPty): void {
@@ -590,15 +610,11 @@ export class TerminalManager {
 
 
   private ensureShellInitFile(name: string, contents: string): string {
-    if (!this.shellInitDir || !fs.existsSync(this.shellInitDir)) {
-      this.shellInitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-shell-init-'));
-      if (process.platform !== 'win32') fs.chmodSync(this.shellInitDir, 0o700);
-    }
-
-    const filePath = path.join(this.shellInitDir, name);
-    if (!fs.existsSync(filePath)) {
-      fs.writeFileSync(filePath, contents, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    }
+    const initDir = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-shell-init-'));
+    if (process.platform !== 'win32') fs.chmodSync(initDir, 0o700);
+    this.shellInitDirs.add(initDir);
+    const filePath = path.join(initDir, name);
+    fs.writeFileSync(filePath, contents, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     return filePath;
   }
 }
