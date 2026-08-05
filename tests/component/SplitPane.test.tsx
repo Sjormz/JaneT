@@ -100,8 +100,20 @@ vi.mock('../../src/renderer/components/StatusBar', () => ({
 }));
 vi.mock('../../src/renderer/components/CommandPalette', () => ({
   default: ({ actions }: { actions: Array<{ id: string; handler: () => void }> }) => {
-    rendererMocks.paletteActions = actions;
-    return null;
+    React.useLayoutEffect(() => {
+      rendererMocks.paletteActions = actions;
+    }, [actions]);
+    return (
+      <div data-testid="command-palette-actions">
+        {actions.map((action) => (
+          <div
+            key={action.id}
+            data-testid={`command-palette-action-${action.id}`}
+            onClick={action.handler}
+          />
+        ))}
+      </div>
+    );
   },
 }));
 vi.mock('../../src/renderer/components/ShortcutEditor', () => ({
@@ -1127,7 +1139,13 @@ describe('split panes in the app', () => {
       notificationsEnabled: false, notificationThresholdSeconds: 10,
     });
     render(<App />);
-    await screen.findByTestId('titlebar');
+    await waitFor(() => expect(window.janet.setSettings).toHaveBeenCalledWith({
+      keybindings: expect.objectContaining({
+        'settings-toggle': 'Ctrl+,',
+        'font-reset': 'Ctrl+0',
+      }),
+    }));
+    vi.mocked(window.janet.setSettings).mockClear();
 
     fireEvent.keyDown(document, { key: ',', ctrlKey: true });
     await waitFor(() => expect(rendererMocks.titlebarProps.settingsOpen).toBe(true));
@@ -1289,12 +1307,11 @@ describe('split panes in the app', () => {
       const focusedTerminal = screen.getAllByTestId(/terminal-/)[1];
       fireEvent.focus(focusedTerminal);
       await waitFor(() => {
-        expect(rendererMocks.paletteActions.find((action) => action.id === 'search-toggle')).toBeTruthy();
+        expect(rendererMocks.sidebarProps.explorerSource.key)
+          .toBe(`local:${focusedTerminal.textContent}`);
       });
 
-      act(() => {
-        rendererMocks.paletteActions.find((action) => action.id === 'search-toggle')!.handler();
-      });
+      fireEvent.click(screen.getByTestId('command-palette-action-search-toggle'));
 
       expect(searchRequest).toHaveBeenCalledTimes(1);
       expect((searchRequest.mock.calls[0][0] as CustomEvent).detail).toEqual({
@@ -2870,7 +2887,7 @@ describe('unsaved editor shutdown handshake', () => {
   it('persists a tab rename reported in the same batch as close preparation', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    const terminalInput = within(terminal).getByRole('textbox');
+    const terminalInput = await within(terminal).findByRole('textbox');
     act(() => terminalInput.focus());
     fireEvent.keyDown(terminalInput, { key: 'F2', ctrlKey: true });
     const dialog = await screen.findByRole('dialog', { name: 'Rename tab' });
