@@ -1796,8 +1796,7 @@ html, body, #root {
 .git-section-action:disabled { opacity: 0.35; cursor: default; }
 .git-section-action:focus-visible,
 .git-commit-button:focus-visible,
-.git-file-action:focus-visible,
-.git-file-discard:focus-visible {
+.git-file-action:focus-visible {
   outline: 2px solid var(--text-accent);
   outline-offset: 1px;
 }
@@ -2163,7 +2162,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   width: 100%;
-  padding: 3px 70px 3px 28px;
+  padding: 3px 40px 3px 28px;
   gap: 8px;
   font-size: 12px;
   border: 0;
@@ -2174,12 +2173,10 @@ html, body, #root {
   cursor: pointer;
 }
 .git-file-item[aria-disabled="true"] { cursor: not-allowed; }
-.git-file-row.has-discard .git-file-item { padding-right: 96px; }
-.git-file-discard,
 .git-file-action {
   position: absolute;
   top: 50%;
-  right: 34px;
+  right: 8px;
   z-index: 1;
   width: 24px;
   height: 24px;
@@ -2195,17 +2192,20 @@ html, body, #root {
   opacity: 0;
   transform: translateY(-50%);
 }
-.git-file-discard { right: 60px; }
 .git-file-row:hover .git-file-action,
-.git-file-row:hover .git-file-discard,
 .git-file-row:focus-within .git-file-action,
-.git-file-row:focus-within .git-file-discard,
-.git-file-action:focus-visible,
-.git-file-discard:focus-visible { opacity: 1; }
+.git-file-action:focus-visible { opacity: 1; }
 .git-file-action:hover { background: var(--control-hover); color: var(--text-accent); }
-.git-file-discard:hover { background: color-mix(in srgb, var(--red) 15%, var(--surface-overlay)); color: var(--red); }
 .git-file-action:disabled { cursor: default; opacity: 0.35; }
-.git-file-discard:disabled { cursor: default; opacity: 0.35; }
+.git-file-context-menu button:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, var(--text-accent) 16%, transparent);
+}
+.git-file-context-menu button.danger { color: var(--red); }
+.git-file-context-menu button.danger:hover,
+.git-file-context-menu button.danger:focus-visible {
+  background: color-mix(in srgb, var(--red) 15%, transparent);
+}
 .terminal-path-copy-button {
   position: absolute;
   top: 50%;
@@ -3415,6 +3415,7 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
 .confirmation-dialog,
 .git-dialog,
 .vtab-context-menu,
+.git-file-context-menu,
 .git-kebab-dropdown {
   background: var(--surface-overlay);
   backdrop-filter: none;

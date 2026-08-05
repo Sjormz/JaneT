@@ -264,7 +264,11 @@ describe('GitTree live refresh', () => {
     };
     render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
 
-    const openDialog = () => fireEvent.click(screen.getByRole('button', { name: 'Revert changes in working.ts' }));
+    const row = screen.getByRole('button', { name: 'Open working-tree diff for working.ts' });
+    const openDialog = () => {
+      fireEvent.contextMenu(row, { clientX: 40, clientY: 60 });
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Revert changes' }));
+    };
     openDialog();
     expect(screen.getByRole('dialog', { name: 'Revert changes in working.ts?' })).toHaveAccessibleDescription(
       /last commit.*cannot be undone/i,
@@ -278,6 +282,179 @@ describe('GitTree live refresh', () => {
     await waitFor(() => expect(gitDiscard).toHaveBeenCalledWith({ repoPath: '/repo', paths: ['working.ts'] }));
   });
 
+  it('keeps Stage inline and puts secondary changed-file actions in a right-click menu', async () => {
+    gitDetails.mockResolvedValue(details('main'));
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'src/working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
+      modified: ['src/working.ts'],
+    };
+    const onCopyTerminalPath = vi.fn().mockResolvedValue(undefined);
+    render(
+      <GitTree
+        cwdReady
+        isRemote={false}
+        repoPath="/repo"
+        status={status}
+        searching={false}
+        onCopyTerminalPath={onCopyTerminalPath}
+      />,
+    );
+
+    const row = screen.getByRole('button', { name: 'Open working-tree diff for src/working.ts' });
+    expect(screen.getByRole('button', { name: 'Stage src/working.ts' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Copy path for src/working.ts' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Revert changes in src/working.ts' })).not.toBeInTheDocument();
+
+    fireEvent.contextMenu(row, { clientX: 40, clientY: 60 });
+    expect(screen.getByRole('menu', { name: 'Actions for src/working.ts' })).toHaveStyle({ left: '40px', top: '60px' });
+    expect(screen.getByRole('menuitem', { name: 'Revert changes' })).toHaveClass('danger');
+    const copyPath = screen.getByRole('menuitem', { name: 'Copy path' });
+    expect(copyPath).toHaveFocus();
+    fireEvent.click(copyPath);
+
+    await waitFor(() => expect(onCopyTerminalPath).toHaveBeenCalledWith('/repo/src/working.ts'));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(row).toHaveFocus();
+
+    act(() => row.focus());
+    fireEvent.keyDown(row, { key: 'F10', shiftKey: true });
+    expect(screen.getByRole('menuitem', { name: 'Copy path' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'ArrowDown' });
+    expect(screen.getByRole('menuitem', { name: 'Revert changes' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'ArrowUp' });
+    expect(screen.getByRole('menuitem', { name: 'Copy path' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    expect(row).toHaveFocus();
+  });
+
+  it('returns focus to the file after canceling a keyboard-opened Revert dialog', async () => {
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
+      modified: ['working.ts'],
+    };
+    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+
+    const row = screen.getByRole('button', { name: 'Open working-tree diff for working.ts' });
+    const openDialog = () => {
+      act(() => row.focus());
+      fireEvent.keyDown(row, { key: 'F10', shiftKey: true });
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Revert changes' }));
+    };
+
+    openDialog();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(row).toHaveFocus());
+
+    openDialog();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(row).toHaveFocus());
+  });
+
+  it('keeps the menu open and announces copy failures', async () => {
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
+      modified: ['working.ts'],
+    };
+    render(
+      <GitTree
+        cwdReady
+        isRemote={false}
+        repoPath="/repo"
+        status={status}
+        searching={false}
+        onCopyTerminalPath={vi.fn().mockRejectedValue(new Error('copy failed'))}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open working-tree diff for working.ts' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy path' }));
+
+    expect(await screen.findByRole('menuitem', { name: 'Couldn’t copy path' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent("Couldn't copy path for working.ts");
+  });
+
+  it.each(['resolve', 'reject'] as const)('ignores a stale copy %s after the file changes', async (result) => {
+    let resolveCopy!: () => void;
+    let rejectCopy!: (error: Error) => void;
+    const pendingCopy = new Promise<void>((resolve, reject) => {
+      resolveCopy = resolve;
+      rejectCopy = reject;
+    });
+    const onCopyTerminalPath = vi.fn().mockReturnValueOnce(pendingCopy);
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
+      modified: ['working.ts'],
+    };
+    const view = render(
+      <GitTree
+        cwdReady
+        isRemote={false}
+        repoPath="/repo"
+        status={status}
+        searching={false}
+        onCopyTerminalPath={onCopyTerminalPath}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open working-tree diff for working.ts' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy path' }));
+    view.rerender(
+      <GitTree
+        cwdReady
+        isRemote={false}
+        repoPath="/other-repo"
+        status={status}
+        searching={false}
+        onCopyTerminalPath={onCopyTerminalPath}
+      />,
+    );
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open working-tree diff for working.ts' }));
+
+    await act(async () => {
+      if (result === 'resolve') resolveCopy();
+      else rejectCopy(new Error('stale copy failed'));
+      await pendingCopy.catch(() => undefined);
+    });
+
+    expect(screen.getByRole('menu', { name: 'Actions for working.ts' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Copy path' })).toBeInTheDocument();
+  });
+
+  it('keeps the file menu inside the viewport', async () => {
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const width = this.classList.contains('git-file-context-menu') ? 160 : 0;
+      const height = this.classList.contains('git-file-context-menu') ? 80 : 0;
+      return { x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height, toJSON: () => ({}) };
+    });
+    const previousWidth = window.innerWidth;
+    const previousHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 320 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 200 });
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
+      modified: ['working.ts'],
+    };
+
+    try {
+      render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+      fireEvent.contextMenu(screen.getByRole('button', { name: 'Open working-tree diff for working.ts' }), {
+        clientX: 310,
+        clientY: 190,
+      });
+
+      await waitFor(() => expect(screen.getByRole('menu')).toHaveStyle({ left: '160px', top: '120px' }));
+    } finally {
+      rect.mockRestore();
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: previousWidth });
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: previousHeight });
+    }
+  });
+
   it('closes a discard confirmation when the selected repository changes', async () => {
     gitDetails.mockResolvedValue(details('main'));
     const status: GitStatusResult = {
@@ -287,7 +464,8 @@ describe('GitTree live refresh', () => {
     };
     const view = render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Revert changes in working.ts' }));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open working-tree diff for working.ts' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Revert changes' }));
     expect(screen.getByRole('dialog', { name: 'Revert changes in working.ts?' })).toBeInTheDocument();
 
     await act(async () => {
@@ -314,10 +492,16 @@ describe('GitTree live refresh', () => {
     };
     render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
 
-    expect(screen.getByRole('button', { name: 'Revert changes in tracked.ts' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Revert changes in mixed.ts' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Revert changes in new.ts' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Revert changes in conflict.ts' })).not.toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open working-tree diff for tracked.ts' }));
+    expect(screen.getByRole('menuitem', { name: 'Revert changes' })).toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open working-tree diff for mixed.ts' }));
+    expect(screen.getAllByRole('menu')).toHaveLength(1);
+    expect(screen.getByRole('menuitem', { name: 'Revert changes' })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open working-tree diff for new.ts' }));
+    expect(screen.queryByRole('menuitem', { name: 'Revert changes' })).not.toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'conflict.ts: Merge conflict' }));
+    expect(screen.queryByRole('menuitem', { name: 'Revert changes' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Discard all unstaged changes' }));
     expect(screen.getByRole('dialog', { name: 'Discard all unstaged changes?' })).toHaveAccessibleDescription(
@@ -746,7 +930,8 @@ describe('GitTree live refresh', () => {
       filesystem: { kind: 'local' },
     });
     expect(row).toHaveAttribute('aria-label', 'Open working-tree diff for src/mixed.ts');
-    const copyButton = changedRow.querySelector('.terminal-path-copy-button')!;
+    fireEvent.contextMenu(row);
+    const copyButton = screen.getByRole('menuitem', { name: 'Copy path' });
     expect(copyButton).not.toHaveAttribute('draggable', 'true');
     fireEvent.click(copyButton);
     expect(onCopyTerminalPath).toHaveBeenCalledWith('/repo/src/mixed.ts');
@@ -795,7 +980,8 @@ describe('GitTree live refresh', () => {
     expect(screen.getByRole('button', { name: 'Show changes as a flat list' })).not.toHaveAttribute('draggable');
     expect(await screen.findByRole('button', { name: 'Current branch main' })).not.toHaveAttribute('draggable');
     expect(await screen.findByRole('button', { name: 'Open worktree repo in a terminal' })).not.toHaveAttribute('draggable');
-    fireEvent.click(screen.getByRole('button', { name: 'Copy path for src/nested/app.ts' }));
+    fireEvent.contextMenu(row);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy path' }));
     expect(onCopyTerminalPath).toHaveBeenCalledWith('C:/repo/src/nested/app.ts');
 
     fireEvent.dragEnd(row, { dataTransfer });
