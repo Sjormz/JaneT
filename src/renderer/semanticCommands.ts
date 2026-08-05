@@ -60,7 +60,7 @@ export class SemanticCommandTimeline {
       this.commandMarker = this.terminal.registerMarker(0);
     } else if (code === 'C' && this.phase === 'command' && arg === undefined && this.commandStart && this.commandMarker) {
       const end = this.position();
-      const command = this.read(this.commandStart, end).trim();
+      const command = this.read(this.commandStart, end, false).trim();
       if (!command) {
         this.resetPending();
         return true;
@@ -145,7 +145,7 @@ export class SemanticCommandTimeline {
     return { line: buffer.baseY + buffer.cursorY, column: buffer.cursorX };
   }
 
-  private read(start: Position, end: Position): string {
+  private read(start: Position, end: Position, preserveLineBreaks = true): string {
     if (end.line < start.line || end.line - start.line > 10_000) return '';
     const lines: string[] = [];
     let length = 0;
@@ -157,7 +157,7 @@ export class SemanticCommandTimeline {
         line === start.line ? start.column : 0,
         line === end.line ? end.column : undefined,
       );
-      const separator = line > start.line && !bufferLine.isWrapped ? '\n' : '';
+      const separator = preserveLineBreaks && line > start.line && !bufferLine.isWrapped ? '\n' : '';
       length += separator.length + text.length;
       if (length > MAX_TEXT) return '';
       lines.push(separator, text);

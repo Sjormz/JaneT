@@ -410,6 +410,8 @@ describe('buildShellInit', () => {
   });
 
   describe('Zsh', () => {
+    const zsh = '/bin/zsh';
+
     it('uses native idempotent hooks and wraps the actual prompt', () => {
       const init = buildShellInit('zsh');
       expect(init).toContain('autoload -Uz add-zsh-hook');
@@ -422,6 +424,29 @@ describe('buildShellInit', () => {
       const init = buildShellInit('zsh');
       expect(init).toContain('add-zsh-hook precmd __jt_precmd');
     });
+
+    it.skipIf(!existsSync(zsh))('preserves command status and reports cwd in a real interactive Zsh', async () => {
+      const initDir = mkdtempSync(join(tmpdir(), 'janet-zsh-semantic-'));
+      writeFileSync(join(initDir, '.zshrc'), [
+        "PS1='<PROMPT>'",
+        buildShellInit('zsh'),
+      ].join('\n'));
+
+      try {
+        const output = await runPromptSequence(
+          zsh,
+          ['-d', '-i'],
+          ['false', `cd ${JSON.stringify(tmpdir())}`, 'exit'],
+          { ...process.env, ZDOTDIR: initDir },
+        );
+        expect(output).not.toContain('read-only variable: status');
+        expect(output).toContain(oscD(1));
+        expect(output).toContain(']7;file://');
+        expect(output).toContain(tmpdir());
+      } finally {
+        rmSync(initDir, { recursive: true, force: true });
+      }
+    }, 25_000);
 
     it('does not replace an existing Hermes alias or function', () => {
       const init = buildShellInit('zsh');
