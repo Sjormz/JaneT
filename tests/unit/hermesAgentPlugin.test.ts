@@ -199,7 +199,8 @@ describe('Hermes agent awareness plugin', () => {
     const manifest = readFileSync(resolve(pluginDir, 'plugin.yaml'), 'utf8');
     for (const hook of hookNames) expect(manifest).toContain(`  - ${hook}`);
 
-    const result = spawnSync('python', ['-c', probe, pluginDir], { encoding: 'utf8' });
+    const python = process.platform === 'win32' ? 'python' : 'python3';
+    const result = spawnSync(python, ['-c', probe, pluginDir], { encoding: 'utf8' });
     expect(result.status, result.stderr).toBe(0);
     const observed = JSON.parse(result.stdout);
 

@@ -151,11 +151,12 @@ describe('SettingsManager', () => {
     }));
     const { SettingsManager } = await import('../../src/main/settings');
     const settings = new SettingsManager().get();
+    const primaryModifier = process.platform === 'darwin' ? 'Meta' : 'Ctrl';
 
     expect(settings.keybindings).toMatchObject({
       'close-tab': 'Alt+X',
-      'settings-toggle': 'Ctrl+,',
-      'font-reset': 'Ctrl+0',
+      'settings-toggle': `${primaryModifier}+,`,
+      'font-reset': `${primaryModifier}+0`,
       'history-toggle': '',
     });
   });
@@ -185,10 +186,11 @@ describe('SettingsManager', () => {
     }));
     const { SettingsManager } = await import('../../src/main/settings');
     const settings = new SettingsManager().get();
+    const primaryModifier = process.platform === 'darwin' ? 'Meta' : 'Ctrl';
 
     expect(settings.theme).toBe('dracula');
     expect(Object.keys(settings.keybindings).length).toBeLessThanOrEqual(64);
-    expect(settings.keybindings).toHaveProperty('settings-toggle', 'Ctrl+,');
+    expect(settings.keybindings).toHaveProperty('settings-toggle', `${primaryModifier}+,`);
     expect(settings.keybindings).not.toHaveProperty('custom-0');
   });
 
