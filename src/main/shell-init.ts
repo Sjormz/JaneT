@@ -177,7 +177,7 @@ export function buildShellInit(shell: string): string {
       "autoload -Uz add-zsh-hook",
       "typeset -g __jt_in_command=0",
       "__jt_preexec() { (( __jt_in_command )) || { print -n $'\\e]133;C\\e\\\\'; __jt_in_command=1; } }",
-      "__jt_precmd() { local status=$?; if (( __jt_in_command )); then print -n -- $'\\e]133;D;'${status}$'\\e\\\\'; __jt_in_command=0; fi; __jt_osc7; __jt_ready; return $status }",
+      "__jt_precmd() { local __jt_status=$?; if (( __jt_in_command )); then print -n -- $'\\e]133;D;'${__jt_status}$'\\e\\\\'; __jt_in_command=0; fi; __jt_osc7; __jt_ready; return $__jt_status }",
       "add-zsh-hook -d preexec __jt_preexec 2>/dev/null",
       "add-zsh-hook -d precmd __jt_precmd 2>/dev/null",
       "add-zsh-hook preexec __jt_preexec",

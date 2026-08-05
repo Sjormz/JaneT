@@ -97,6 +97,17 @@ describe('SemanticCommandTimeline', () => {
     expect(timeline.commands[0]).toMatchObject({ command: 'echo wrapped', output: 'first\nsecond' });
   });
 
+  it('joins shell-redrawn command rows while preserving output newlines', () => {
+    const term = terminalAt(['$ printf long-', 'command', 'first', 'second'], 0, 2);
+    const timeline = new SemanticCommandTimeline(term as never);
+
+    timeline.handleOsc('A'); timeline.handleOsc('B');
+    term.cursorY = 1; term.cursorX = 7; timeline.handleOsc('C');
+    term.cursorY = 3; term.cursorX = 6; timeline.handleOsc('D;0');
+
+    expect(timeline.commands[0]).toMatchObject({ command: 'printf long-command', output: 'first\nsecond' });
+  });
+
   it('reconstructs cell-column text and trims terminal padding', () => {
     const term = terminalAt(['$ 你écho   ', 'ok      '], 0, 2);
     const firstRow = vi.fn((trimRight?: boolean, startColumn = 0, endColumn = 80) => {
