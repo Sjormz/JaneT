@@ -452,13 +452,24 @@ test('stages and commits changes from Source Control', async ({}, testInfo) => {
     await app.page.locator('.terminal-area').hover({ position: { x: 40, y: 40 } });
     await expect(app.page.getByRole('tooltip')).toHaveCount(0);
 
-    await sourceControl.getByRole('button', { name: 'Open working-tree diff for base.txt' }).click();
+    const baseChange = sourceControl.getByRole('button', { name: 'Open working-tree diff for base.txt' });
+    await expect(sourceControl.getByRole('button', { name: 'Stage base.txt' })).toBeVisible();
+    await app.page.evaluate(() => navigator.clipboard.writeText(''));
+    await baseChange.click({ button: 'right' });
+    const fileMenu = app.page.getByRole('menu', { name: 'Actions for base.txt' });
+    await expect(fileMenu.getByRole('menuitem', { name: 'Copy path' })).toBeVisible();
+    await expect(fileMenu.getByRole('menuitem', { name: 'Revert changes' })).toBeVisible();
+    await app.page.screenshot({ path: testInfo.outputPath('source-control-file-menu.png') });
+    await fileMenu.getByRole('menuitem', { name: 'Copy path' }).click();
+    await expect.poll(() => app!.page.evaluate(() => navigator.clipboard.readText())).toContain('base.txt');
+
+    await baseChange.click();
     await expect(app.page.getByRole('tab', { name: 'base.txt (Working)' })).toBeVisible();
     await expect(app.page.locator('.monaco-diff-editor')).toBeVisible({ timeout: 10_000 });
 
-    await expect(sourceControl.getByRole('button', { name: 'Revert changes in base.txt' })).toBeVisible();
-    await expect(sourceControl.getByRole('button', { name: 'Revert changes in change.txt' })).toHaveCount(0);
-    await sourceControl.getByRole('button', { name: 'Revert changes in base.txt' }).click();
+    await expect(sourceControl.getByRole('button', { name: 'Revert changes in base.txt' })).toHaveCount(0);
+    await baseChange.click({ button: 'right' });
+    await fileMenu.getByRole('menuitem', { name: 'Revert changes' }).click();
     await expect(app.page.getByRole('dialog', { name: 'Revert changes in base.txt?' })).toBeVisible();
     await app.page.getByRole('button', { name: 'Revert', exact: true }).click();
     await expect.poll(() => fs.readFileSync(path.join(repoPath, 'base.txt'), 'utf-8').trim()).toBe('base');

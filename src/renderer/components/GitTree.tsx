@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useId, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   RefreshIcon, ChevronDownIcon, ChevronRightIcon, PlusIcon,
@@ -12,8 +12,7 @@ import { defaultWorktreePath, GitWorktreeInfo, basename } from '../../shared/git
 import { refreshCoordinator, useRefreshTask } from '../refreshCoordinator';
 import { GitStatusResult } from '../useGitRepository';
 import { useModalFocus } from '../useModalFocus';
-import { beginTerminalPathDrag, endTerminalPathDrag, resolveRepositoryPath } from '../terminalPathDrag';
-import TerminalPathCopyButton from './TerminalPathCopyButton';
+import { beginTerminalPathDrag, endTerminalPathDrag, formatTerminalPathForPaste, resolveRepositoryPath } from '../terminalPathDrag';
 import Tooltip from './Tooltip';
 import type { EditorResource } from '../editorDocuments';
 
@@ -837,11 +836,18 @@ function GitFile({ repoPath, path, originalPath, kind, wd, index, depth, onCopyT
   onDiscard?: () => void;
   busy?: boolean;
 }) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLButtonElement>(null);
+  const copyGeneration = useRef(0);
   const isDeleted = wd === 'D' || index === 'D';
   const Icon = kind === 'conflicted' ? AlertIcon : kind === 'mixed' ? GitMergeIcon : isDeleted ? TrashIcon : wd === 'R' ? GitMergeIcon : GitCommitIcon;
   const FileIcon = kind === 'unstaged' && !isDeleted && wd !== 'R' ? fileIconFor(path, false) : Icon;
   const indent = depth !== undefined ? { paddingLeft: 14 + depth * 14 } : undefined;
   const absolutePath = resolveRepositoryPath(repoPath, path);
+  const canCopy = Boolean(onCopyTerminalPath && formatTerminalPathForPaste(absolutePath));
+  const hasContextActions = Boolean(onDiscard || canCopy);
   const canPreview = kind !== 'conflicted';
   const previewLabel = diffSide === 'staged' ? 'staged' : 'working-tree';
   const title = kind === 'mixed'
@@ -851,12 +857,62 @@ function GitFile({ repoPath, path, originalPath, kind, wd, index, depth, onCopyT
       : kind === 'staged'
         ? 'Staged change'
         : 'Working-tree change';
+  const openMenu = (x: number, y: number) => {
+    if (!hasContextActions) return;
+    document.dispatchEvent(new CustomEvent('janet:git-file-menu-open', { detail: fileRef.current }));
+    copyGeneration.current += 1;
+    setCopyFailed(false);
+    setMenu({ x, y });
+  };
+  useLayoutEffect(() => {
+    if (!menu || !menuRef.current) return;
+    const rect = menuRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(menu.x, window.innerWidth - rect.width));
+    const y = Math.max(0, Math.min(menu.y, window.innerHeight - rect.height));
+    if (x !== menu.x || y !== menu.y) setMenu({ x, y });
+  }, [menu]);
+  useEffect(() => {
+    if (!menu) return;
+    menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus();
+    const closeOnOutsidePointerDown = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenu(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setMenu(null);
+      fileRef.current?.focus();
+    };
+    const closeOnOtherMenu = (event: Event) => {
+      if ((event as CustomEvent).detail !== fileRef.current) setMenu(null);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointerDown, true);
+    document.addEventListener('keydown', closeOnEscape);
+    document.addEventListener('janet:git-file-menu-open', closeOnOtherMenu);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointerDown, true);
+      document.removeEventListener('keydown', closeOnEscape);
+      document.removeEventListener('janet:git-file-menu-open', closeOnOtherMenu);
+    };
+  }, [menu]);
+  useEffect(() => {
+    copyGeneration.current += 1;
+    setMenu(null);
+    return () => { copyGeneration.current += 1; };
+  }, [repoPath, path]);
   return (
-    <div className={`git-file-row ${onDiscard ? 'has-discard' : ''}`}>
+    <div
+      className="git-file-row"
+      onContextMenu={(event) => {
+        if (!hasContextActions) return;
+        event.preventDefault();
+        openMenu(event.clientX, event.clientY);
+      }}
+    >
       <Tooltip label={canPreview
         ? `${path}: ${title} · Open ${previewLabel} diff${isDeleted ? '' : ' or drag into a terminal'}`
         : `${path}: Merge conflicts are not previewed in JaneT`} placement="right">
         <button
+          ref={fileRef}
           type="button"
           className={`git-file-item ${kind}`}
           style={indent}
@@ -870,6 +926,12 @@ function GitFile({ repoPath, path, originalPath, kind, wd, index, depth, onCopyT
               ...(diffSide === 'staged' && originalPath ? { originalPath } : {}),
               side: diffSide,
             });
+          }}
+          onKeyDown={(event) => {
+            if (!hasContextActions || (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10'))) return;
+            event.preventDefault();
+            const rect = event.currentTarget.getBoundingClientRect();
+            openMenu(rect.left + 12, rect.top + 12);
           }}
           draggable={!isDeleted}
           onDragStart={(event) => {
@@ -904,24 +966,62 @@ function GitFile({ repoPath, path, originalPath, kind, wd, index, depth, onCopyT
           </button>
         </Tooltip>
       )}
-      {onDiscard && (
-        <Tooltip label={`Revert changes in ${path}`} placement="left">
-          <button
-            type="button"
-            className="git-file-discard"
-            aria-label={`Revert changes in ${path}`}
-            onClick={onDiscard}
-            disabled={busy}
-          >
-            <UndoIcon size="xs" />
-          </button>
-        </Tooltip>
+      {menu && createPortal(
+        <div
+          ref={menuRef}
+          className="vtab-context-menu git-file-context-menu"
+          role="menu"
+          aria-label={`Actions for ${path}`}
+          style={{ left: menu.x, top: menu.y }}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+            event.preventDefault();
+            const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)'));
+            const current = items.indexOf(document.activeElement as HTMLButtonElement);
+            items[(current + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus();
+          }}
+        >
+          {canCopy && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={async () => {
+                const generation = ++copyGeneration.current;
+                try {
+                  await onCopyTerminalPath!(absolutePath);
+                  if (generation !== copyGeneration.current) return;
+                  fileRef.current?.focus();
+                  setMenu(null);
+                } catch {
+                  if (generation !== copyGeneration.current) return;
+                  setCopyFailed(true);
+                }
+              }}
+            >
+              {copyFailed ? 'Couldn’t copy path' : 'Copy path'}
+            </button>
+          )}
+          {onDiscard && (
+            <button
+              type="button"
+              role="menuitem"
+              className="danger"
+              disabled={busy}
+              onClick={() => {
+                fileRef.current?.focus();
+                setMenu(null);
+                onDiscard();
+              }}
+            >
+              Revert changes
+            </button>
+          )}
+          <span className="sr-only" role="status" aria-live="polite">
+            {copyFailed ? `Couldn't copy path for ${path}` : ''}
+          </span>
+        </div>,
+        document.body,
       )}
-      <TerminalPathCopyButton
-        path={absolutePath}
-        label={path}
-        onCopyPath={onCopyTerminalPath}
-      />
     </div>
   );
 }
