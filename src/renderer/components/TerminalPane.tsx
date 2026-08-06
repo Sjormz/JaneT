@@ -676,8 +676,7 @@ export default function TerminalPane({
         const currentCache = terminalPaneCache.get(termId);
         if (currentCache?.term !== term || currentCache.tabType !== 'local') return;
         currentCache.localSpawnState = { kind: 'ready' };
-        if (!effectActive) return;
-        onReady(termId);
+        currentCache.localSpawnReadyListener?.(termId);
       }).catch((error: unknown) => {
         const currentCache = terminalPaneCache.get(termId);
         if (currentCache?.term !== term || currentCache.tabType !== 'local') return;

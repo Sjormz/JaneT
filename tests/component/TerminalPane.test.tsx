@@ -429,6 +429,40 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(onReady).not.toHaveBeenCalled();
   });
 
+  it('readies a local terminal whose creation resolves after a cached remount', async () => {
+    let resolveCreate!: (value: { pid: number }) => void;
+    terminalCreate.mockReturnValueOnce(new Promise((resolve) => { resolveCreate = resolve; }));
+    const { default: TerminalPane } = await loadTerminalPane();
+    const oldReady = vi.fn();
+    const currentReady = vi.fn();
+    const props = {
+      termId: 'term-remounted-before-create',
+      tabType: 'local' as const,
+      onRemoved: vi.fn(),
+      themeName: 'tokyo-night',
+    };
+
+    const view = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} initialCwd="/repo" onReady={oldReady} />
+      </KeybindingsProvider>,
+    );
+
+    view.rerender(
+      <KeybindingsProvider>
+        <TerminalPane {...props} initialCwd="/resolved-home" onReady={currentReady} />
+      </KeybindingsProvider>,
+    );
+    expect(terminalCreate).toHaveBeenCalledTimes(1);
+    expect(MockTerminal.instances).toHaveLength(1);
+
+    await act(async () => resolveCreate({ pid: 123 }));
+
+    expect(oldReady).not.toHaveBeenCalled();
+    expect(currentReady).toHaveBeenCalledTimes(1);
+    expect(currentReady).toHaveBeenCalledWith(props.termId);
+  });
+
   it('creates a new SSH shell when the pane switches from a local terminal to SSH props', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     const onReady = vi.fn();
