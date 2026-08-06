@@ -1543,7 +1543,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       : undefined;
     const existingSession = sshSessionsRef.current.find((candidate) => candidate.id === sessionId);
 
-    markSshSessionDisconnected(sessionId);
+    const hasSiblingOwner = () => tabsRef.current.flatMap(collectTerminalOwners).some(
+      (owner) => owner.type === 'ssh' && owner.sshSessionId === sessionId && owner.termId !== termId,
+    );
+    if (!hasSiblingOwner()) markSshSessionDisconnected(sessionId);
     try {
       await window.janet.sshCreateShell({
         id: sessionId,
@@ -1576,6 +1579,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       // then re-open the shell. If the profile is missing the user
       // will see the original error and can dismiss the tab.
       if (!profile) {
+        if (ownsSshTerminal(tabsRef.current, termId, sessionId) && !hasSiblingOwner()) {
+          markSshSessionDisconnected(sessionId);
+        }
         console.error('SSH retry failed and no saved profile to reconnect from:', shellErr);
         throw shellErr;
       }
@@ -1619,6 +1625,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           : [...current, session]);
         markSshSessionReady(sessionId);
       } catch (reconnectErr) {
+        if (ownsSshTerminal(tabsRef.current, termId, sessionId) && !hasSiblingOwner()) {
+          markSshSessionDisconnected(sessionId);
+        }
         console.error('SSH retry failed:', reconnectErr);
         throw reconnectErr;
       } finally {
