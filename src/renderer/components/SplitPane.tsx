@@ -65,6 +65,8 @@ interface SplitPaneProps {
   sshShellReady?: boolean;
   /** Reports whether a specific SSH transport closed unexpectedly. */
   isSshSessionDisconnected?: (sessionId?: string) => boolean;
+  onSshShellReady?: (termId: string, sessionId: string) => void;
+  onSshShellFailed?: (termId: string, sessionId: string) => void;
   /** User clicked "Reconnect" on the SSH notice for this term. */
   onSshRetry?: (termId: string, dimensions: { cols: number; rows: number }) => void | Promise<void>;
   /** Total panes in the tab; propagated internally so leaf actions describe their real outcome. */
@@ -108,6 +110,8 @@ function TerminalPaneLeaf({
   hasSessionForLeaf,
   sshShellReady,
   isSshSessionDisconnected,
+  onSshShellReady,
+  onSshShellFailed,
   onSshRetry,
   totalPaneCount,
 }: {
@@ -146,6 +150,8 @@ function TerminalPaneLeaf({
   hasSessionForLeaf?: (leafId: string) => boolean;
   sshShellReady?: boolean;
   isSshSessionDisconnected?: (sessionId?: string) => boolean;
+  onSshShellReady?: (termId: string, sessionId: string) => void;
+  onSshShellFailed?: (termId: string, sessionId: string) => void;
   onSshRetry?: (termId: string, dimensions: { cols: number; rows: number }) => void | Promise<void>;
   totalPaneCount: number;
 }) {
@@ -283,6 +289,8 @@ function TerminalPaneLeaf({
           hasSession={hasSessionForLeaf?.(leaf.id)}
           sshShellReady={leaf.sshShellReady ?? sshShellReady}
           sshConnectionLost={leafType === 'ssh' && isSshSessionDisconnected?.(effectiveSshSessionId)}
+          onSshShellReady={onSshShellReady}
+          onSshShellFailed={onSshShellFailed}
           onSshRetry={onSshRetry}
         />
       </div>
@@ -451,6 +459,8 @@ export default function SplitPane(props: SplitPaneProps) {
     hasSessionForLeaf,
     sshShellReady,
     isSshSessionDisconnected,
+    onSshShellReady,
+    onSshShellFailed,
     onSshRetry,
   } = props;
   const totalPaneCount = props.totalPaneCount ?? getAllLeafIds(node).length;
@@ -493,6 +503,8 @@ export default function SplitPane(props: SplitPaneProps) {
         hasSessionForLeaf={hasSessionForLeaf}
         sshShellReady={sshShellReady}
         isSshSessionDisconnected={isSshSessionDisconnected}
+        onSshShellReady={onSshShellReady}
+        onSshShellFailed={onSshShellFailed}
         onSshRetry={onSshRetry}
         totalPaneCount={totalPaneCount}
       />
@@ -542,6 +554,8 @@ export default function SplitPane(props: SplitPaneProps) {
             hasSessionForLeaf={hasSessionForLeaf}
             sshShellReady={sshShellReady}
             isSshSessionDisconnected={isSshSessionDisconnected}
+            onSshShellReady={onSshShellReady}
+            onSshShellFailed={onSshShellFailed}
             onSshRetry={onSshRetry}
             totalPaneCount={totalPaneCount}
           />
@@ -604,6 +618,8 @@ export default function SplitPane(props: SplitPaneProps) {
               hasSessionForLeaf={hasSessionForLeaf}
               sshShellReady={sshShellReady}
               isSshSessionDisconnected={isSshSessionDisconnected}
+              onSshShellReady={onSshShellReady}
+              onSshShellFailed={onSshShellFailed}
               onSshRetry={onSshRetry}
               totalPaneCount={totalPaneCount}
             />

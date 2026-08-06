@@ -69,6 +69,8 @@ interface TerminalPaneProps {
   hasSession?: boolean;
   sshShellReady?: boolean;
   sshConnectionLost?: boolean;
+  onSshShellReady?: (termId: string, sessionId: string) => void;
+  onSshShellFailed?: (termId: string, sessionId: string) => void;
   onSshRetry?: (termId: string, dimensions: { cols: number; rows: number }) => void | Promise<void>;
 }
 
@@ -165,6 +167,8 @@ export default function TerminalPane({
   hasSession,
   sshShellReady = true,
   sshConnectionLost = false,
+  onSshShellReady,
+  onSshShellFailed,
   onSshRetry,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -223,7 +227,9 @@ export default function TerminalPane({
     if (tabType !== 'ssh') {
       publishSshNoticeState({ kind: 'hidden' });
     } else if (sshConnectionLost) {
-      publishSshNoticeState({ kind: 'closed' });
+      if (terminalPaneCache.get(termId)?.sshNoticeState.kind !== 'error') {
+        publishSshNoticeState({ kind: 'closed' });
+      }
     } else if (!sshShellReady) {
       publishSshNoticeState({ kind: 'reconnecting' });
     }
@@ -603,6 +609,7 @@ export default function TerminalPane({
       });
       openShell.then(() => {
         if (!effectActive) return;
+        onSshShellReady?.(termId, sshSessionId);
         onReady(termId);
         term.focus();
       }).catch((err: any) => {
@@ -612,7 +619,10 @@ export default function TerminalPane({
           publishSshNoticeState(errorState);
           term.write('\r\n\x1b[31mSSH shell failed to open: ' + message + '\x1b[0m\r\n');
         }
-        if (effectActive) onReady(termId);
+        if (effectActive) {
+          onSshShellFailed?.(termId, sshSessionId);
+          onReady(termId);
+        }
       });
     } else if (hasSession) {
       onReady(termId);
@@ -693,7 +703,7 @@ export default function TerminalPane({
       fitAddonRef.current = null;
       searchAddonRef.current = null;
     };
-  }, [termId, tabType, sshSessionId, sshShellReady, initialCwd, onReady, onRemoved, onFocus, onCwdChange]);
+  }, [termId, tabType, sshSessionId, sshShellReady, initialCwd, onReady, onRemoved, onFocus, onCwdChange, onSshShellReady, onSshShellFailed]);
 
   useEffect(() => {
     if (termRef.current && themeName) {

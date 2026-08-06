@@ -1552,6 +1552,50 @@ describe('TerminalPane SSH shell output', () => {
     expect(screen.queryByTestId('ssh-terminal-notice')).toBeNull();
   });
 
+  it('preserves the initial shell error when its session is marked disconnected', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    sshCreateShellImpl = () => Promise.reject(new Error('Remote shell unavailable'));
+    const onReady = vi.fn();
+    const onRemoved = vi.fn();
+    const onSshRetry = vi.fn(() => Promise.resolve());
+    const onShellFailed = vi.fn();
+
+    function Harness() {
+      const [connectionLost, setConnectionLost] = React.useState(false);
+      const handleShellFailed = React.useCallback((termId: string, sessionId: string) => {
+        onShellFailed(termId, sessionId);
+        setConnectionLost(true);
+      }, []);
+      return (
+        <TerminalPane
+          termId="term-ssh-initial-error"
+          tabType="ssh"
+          sshSessionId="ssh-initial-error"
+          sshConnectionLost={connectionLost}
+          onReady={onReady}
+          onRemoved={onRemoved}
+          onSshShellFailed={handleShellFailed}
+          onSshRetry={onSshRetry}
+          themeName="tokyo-night"
+        />
+      );
+    }
+
+    render(
+      <KeybindingsProvider>
+        <Harness />
+      </KeybindingsProvider>,
+    );
+
+    await waitFor(() => expect(onShellFailed).toHaveBeenCalledWith(
+      'term-ssh-initial-error',
+      'ssh-initial-error',
+    ));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Remote shell unavailable');
+    expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'error');
+    expect(screen.getByRole('button', { name: /reconnect/i })).toBeInTheDocument();
+  });
+
   it('preserves a failed SSH notice when a cached terminal is remounted', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     sshCreateShellImpl = () => Promise.reject(new Error('Remote shell unavailable'));

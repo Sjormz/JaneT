@@ -158,6 +158,8 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     startupShellDialect,
     onReady,
     onRemoved,
+    onSshShellReady,
+    onSshShellFailed,
     onCwdChange,
     onFocus,
     onSshRetry,
@@ -178,6 +180,8 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     startupShellDialect?: 'posix' | 'fish' | 'powershell';
     onReady?: (id: string) => void;
     onRemoved?: (id: string) => void;
+    onSshShellReady?: (id: string, sessionId: string) => void;
+    onSshShellFailed?: (id: string, sessionId: string) => void;
     onCwdChange?: (id: string, cwd: string) => void;
     onFocus?: (id: string) => void;
     onSshRetry?: (
@@ -221,7 +225,10 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
               rows: 24,
               ...(startupCommands?.length ? { startupCommands } : {}),
               ...(startupShellDialect ? { startupShellDialect } : {}),
-            });
+            }).then(
+              () => onSshShellReady?.(termId, sshSessionId),
+              () => onSshShellFailed?.(termId, sshSessionId),
+            );
             onReady?.(termId);
           }
         } else if (tabType === 'local') {
@@ -239,7 +246,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
       } else {
         onReady?.(termId);
       }
-    }, [termId, hasSession, initialCwd, tabType, sshSessionId, sshShellReady, startupCommands, startupShellDialect, onReady]);
+    }, [termId, hasSession, initialCwd, tabType, sshSessionId, sshShellReady, startupCommands, startupShellDialect, onReady, onSshShellReady, onSshShellFailed]);
 
     return (
       <div
@@ -2361,6 +2368,162 @@ describe('split panes in the app', () => {
     });
   });
 
+  it('keeps a restored SSH session disconnected when its initial shell fails', async () => {
+    const sshProfileId = 'pckpr@box.local:22:password';
+    window.janet.sshCreateShell = vi.fn().mockRejectedValue(new Error('initial shell unavailable'));
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId,
+        host: 'box.local',
+        port: 22,
+        username: 'pckpr',
+        auth: 'password',
+        password: 'secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'failed-shell',
+          title: 'box',
+          type: 'ssh',
+          sshProfileId,
+          root: {
+            type: 'leaf',
+            startupCommands: ['hermes doctor'],
+            startupShellDialect: 'posix',
+          },
+        }],
+        activeTabId: 'failed-shell',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
+    const shell = (window.janet.sshCreateShell as any).mock.calls[0][0];
+    await waitFor(() => {
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
+        connectionState: 'disconnected',
+        ready: false,
+      }));
+    });
+    expect(shell).toMatchObject({
+      startupCommands: ['hermes doctor'],
+      startupShellDialect: 'posix',
+    });
+    expect(rendererMocks.sshRetryHandlers.get(shell.termId)).toBeTruthy();
+    expect(screen.getByTestId(`terminal-${shell.termId}`)).toHaveAttribute(
+      'data-ssh-connection-lost',
+      'true',
+    );
+  });
+
+  it('does not publish initial SSH readiness after its transport closes', async () => {
+    const sshProfileId = 'late-initial@box.local:22:password';
+    const initialShell = deferred<{ connected: true }>();
+    window.janet.sshCreateShell = vi.fn().mockReturnValue(initialShell.promise);
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId, host: 'box.local', port: 22, username: 'late-initial',
+        auth: 'password', password: 'secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'late-initial-shell', title: 'late initial host', type: 'ssh', sshProfileId,
+          root: { type: 'leaf' },
+        }],
+        activeTabId: 'late-initial-shell', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
+    const shell = (window.janet.sshCreateShell as any).mock.calls[0][0];
+
+    act(() => {
+      rendererMocks.sshConnectionClosedHandler?.({ id: shell.id, reason: 'transport reset' });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
+        connectionState: 'disconnected',
+        ready: false,
+      }));
+    });
+
+    await act(async () => {
+      initialShell.resolve({ connected: true });
+      await initialShell.promise;
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
+        connectionState: 'disconnected',
+        ready: false,
+      }));
+    });
+    expect(screen.getByTestId(`terminal-${shell.termId}`))
+      .toHaveAttribute('data-ssh-connection-lost', 'true');
+  });
+
+  it('withdraws initial SSH readiness when its only healthy sibling closes', async () => {
+    const sshProfileId = 'shared-initial@box.local:22:password';
+    window.janet.sshCreateShell = vi.fn()
+      .mockResolvedValueOnce({ connected: true })
+      .mockRejectedValueOnce(new Error('initial shell unavailable'));
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId, host: 'box.local', port: 22, username: 'shared-initial',
+        auth: 'password', password: 'secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'shared-initial-shell', title: 'shared initial host', type: 'ssh', sshProfileId,
+          root: {
+            type: 'split', direction: 'vertical', sizes: [1, 1],
+            children: [{ type: 'leaf' }, { type: 'leaf' }],
+          },
+        }],
+        activeTabId: 'shared-initial-shell', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
+    });
+    const restored = rendererMocks.verticalTabBarProps.tabs.find(
+      (tab: { title: string }) => tab.title === 'shared initial host',
+    );
+    const healthyLeaf = restored.root.children[0];
+    const failedLeaf = restored.root.children[1];
+    expect(screen.getByTestId(`terminal-${failedLeaf.id}`))
+      .toHaveAttribute('data-ssh-connection-lost', 'false');
+
+    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal tab)/i })[0]);
+    await confirmPendingAction(/^close pane$/i);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+      expect(screen.getByTestId(`terminal-${failedLeaf.id}`))
+        .toHaveAttribute('data-ssh-connection-lost', 'true');
+    });
+    expect(window.janet.sshDestroyShell).toHaveBeenCalledWith({
+      sessionId: restored.sshSessionId,
+      termId: healthyLeaf.id,
+    });
+    expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
+  });
+
   it('preserves a restored SSH tab with a missing profile as unavailable remote state', async () => {
     window.janet.getSettings = vi.fn().mockResolvedValue({
       keybindings: {},
@@ -2775,6 +2938,9 @@ describe('split panes in the app', () => {
 
   it('withdraws SSH status when the healthy sibling closes before the retried pane fails', async () => {
     const sshProfileId = 'late-failure@box.local:22:password';
+    window.janet.sshCreateShell = vi.fn()
+      .mockResolvedValueOnce({ connected: true })
+      .mockRejectedValueOnce(new Error('initial shell unavailable'));
     window.janet.getSettings = vi.fn().mockResolvedValue({
       keybindings: {}, workspaceTabs: [],
       sshProfiles: [{

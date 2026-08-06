@@ -310,6 +310,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
   const connectingSshSessionIdsRef = useRef<Set<string>>(new Set());
   const releasedSshSessionIdsRef = useRef<Set<string>>(new Set());
+  const sshShellStateByTerminalRef = useRef(new Map<string, { sessionId: string; state: 'ready' | 'failed' }>());
 
   useLayoutEffect(() => {
     if (!restoreTerminalFocusRef.current) return;
@@ -351,6 +352,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   }, []);
 
   const markSshSessionDisconnected = useCallback((sessionId: string) => {
+    for (const [termId, shell] of sshShellStateByTerminalRef.current) {
+      if (shell.sessionId === sessionId) sshShellStateByTerminalRef.current.delete(termId);
+    }
     setSshSessions((current) => current.filter((session) => session.id !== sessionId));
     setReadySshSessionIds((current) => {
       if (!current.has(sessionId)) return current;
@@ -361,6 +365,36 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     setDisconnectedSshSessionIds((current) => new Set(current).add(sessionId));
   }, []);
 
+  const markSshSessionUnavailable = useCallback((sessionId: string) => {
+    setReadySshSessionIds((current) => {
+      if (!current.has(sessionId)) return current;
+      const next = new Set(current);
+      next.delete(sessionId);
+      return next;
+    });
+    setDisconnectedSshSessionIds((current) => new Set(current).add(sessionId));
+  }, []);
+
+  const markSshTerminalReady = useCallback((termId: string, sessionId: string) => {
+    if (releasedSshSessionIdsRef.current.has(sessionId)) return;
+    if (!ownsSshTerminal(tabsRef.current, termId, sessionId)) return;
+    sshShellStateByTerminalRef.current.set(termId, { sessionId, state: 'ready' });
+    markSshSessionReady(sessionId);
+  }, [markSshSessionReady]);
+
+  const markSshTerminalFailed = useCallback((termId: string, sessionId: string) => {
+    if (!ownsSshTerminal(tabsRef.current, termId, sessionId)) return;
+    sshShellStateByTerminalRef.current.set(termId, { sessionId, state: 'failed' });
+    const owners = tabsRef.current.flatMap(collectTerminalOwners).filter(
+      (owner) => owner.type === 'ssh' && owner.sshSessionId === sessionId,
+    );
+    if (owners.length > 0 && owners.every((owner) => (
+      sshShellStateByTerminalRef.current.get(owner.termId)?.state === 'failed'
+    ))) {
+      markSshSessionUnavailable(sessionId);
+    }
+  }, [markSshSessionUnavailable]);
+
   const isSshSessionDisconnected = useCallback((sessionId?: string) => (
     Boolean(sessionId && disconnectedSshSessionIds.has(sessionId))
   ), [disconnectedSshSessionIds]);
@@ -368,6 +402,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   useEffect(() => {
     if (!window.janet.onSSHConnectionClosed) return undefined;
     return window.janet.onSSHConnectionClosed(({ id }) => {
+      releasedSshSessionIdsRef.current.add(id);
       const disconnectedTerminals = tabsRef.current.flatMap(collectTerminalOwners)
         .filter((owner) => owner.sshSessionId === id);
       clearPendingCommandHistoryRuns(new Set(disconnectedTerminals.map((owner) => owner.termId)));
@@ -516,7 +551,6 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           sshProfileId: profile.id,
         };
         setSshSessions((prev) => prev.some((s) => s.id === sessionId) ? prev : [...prev, session]);
-        markSshSessionReady(sessionId);
         setTabs((prev) => prev.map((existing) => (
           existing.id === tab.id ? { ...existing, sshShellReady: true } : existing
         )));
@@ -528,7 +562,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         releasedSshSessionIdsRef.current.delete(sessionId);
       });
     }
-  }, [markSshSessionDisconnected, markSshSessionReady, sshProfiles]);
+  }, [markSshSessionDisconnected, sshProfiles]);
 
   // Mixed workspace tabs carry their SSH connection settings on individual leaves.
   useEffect(() => {
@@ -567,7 +601,6 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         setSshSessions((current) => current.some((candidate) => candidate.id === session.id)
           ? current
           : [...current, session]);
-        markSshSessionReady(leaf.sshSessionId);
         setTabs((current) => current.map((tab) => tab.id === leaf.tabId
           ? { ...tab, root: mapLeaves(tab.root, (candidate) => candidate.id === leaf.leafId ? { ...candidate, sshShellReady: true } : candidate) }
           : tab));
@@ -580,7 +613,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           releasedSshSessionIdsRef.current.delete(leaf.sshSessionId);
         });
     }
-  }, [markSshSessionDisconnected, markSshSessionReady, sshProfiles]);
+  }, [markSshSessionDisconnected, sshProfiles]);
 
   const persistSession = useCallback(async (): Promise<boolean> => {
     const session: SavedSession = {
@@ -981,6 +1014,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     const releasedSshSessions = new Set<string>();
 
     for (const owner of owners) {
+      sshShellStateByTerminalRef.current.delete(owner.termId);
       disposeCachedTerminal(owner.termId);
       liveTerminalIdsRef.current.delete(owner.termId);
 
@@ -994,6 +1028,18 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         window.janet.sshDestroyShell({ sessionId: owner.sshSessionId, termId: owner.termId }).catch(() => {});
       } else {
         releasedSshSessions.add(owner.sshSessionId);
+      }
+    }
+
+    for (const sessionId of retainedSshSessions) {
+      if (!owners.some((owner) => owner.sshSessionId === sessionId)) continue;
+      const remainingOwners = remainingTabs.flatMap(collectTerminalOwners).filter(
+        (owner) => owner.type === 'ssh' && owner.sshSessionId === sessionId,
+      );
+      if (remainingOwners.length > 0 && remainingOwners.every((owner) => (
+        sshShellStateByTerminalRef.current.get(owner.termId)?.state === 'failed'
+      ))) {
+        markSshSessionUnavailable(sessionId);
       }
     }
 
@@ -1021,7 +1067,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         return next;
       });
     }
-  }, [clearPendingCommandHistoryRuns]);
+  }, [clearPendingCommandHistoryRuns, markSshSessionUnavailable]);
 
   // Called when a TerminalPane unmounts
   const handleTerminalRemoved = useCallback(
@@ -1511,10 +1557,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       setSshSessions((prev) => (
         prev.some((s) => s.id === session.id) ? prev : [...prev, session]
       ));
-      markSshSessionReady(session.id);
       setSshConnectionsOpen(false);
     },
-    [addTab, markSshSessionReady],
+    [addTab],
   );
 
   // Re-open the SSH shell for a single term. Triggered by the
@@ -1546,6 +1591,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     const hasSiblingOwner = () => tabsRef.current.flatMap(collectTerminalOwners).some(
       (owner) => owner.type === 'ssh' && owner.sshSessionId === sessionId && owner.termId !== termId,
     );
+    sshShellStateByTerminalRef.current.delete(termId);
     if (!hasSiblingOwner()) markSshSessionDisconnected(sessionId);
     try {
       await window.janet.sshCreateShell({
@@ -1572,7 +1618,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           ? current
           : [...current, session]);
       }
-      markSshSessionReady(sessionId);
+      markSshTerminalReady(termId, sessionId);
     } catch (shellErr) {
       if (!ownsSshTerminal(tabsRef.current, termId, sessionId)) {
         if (!ownsSshSession(tabsRef.current, sessionId)) {
@@ -1585,9 +1631,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       // then re-open the shell. If the profile is missing the user
       // will see the original error and can dismiss the tab.
       if (!profile) {
-        if (ownsSshTerminal(tabsRef.current, termId, sessionId) && !hasSiblingOwner()) {
-          markSshSessionDisconnected(sessionId);
-        }
+        markSshTerminalFailed(termId, sessionId);
         console.error('SSH retry failed and no saved profile to reconnect from:', shellErr);
         throw shellErr;
       }
@@ -1629,11 +1673,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         setSshSessions((current) => current.some((candidate) => candidate.id === sessionId)
           ? current
           : [...current, session]);
-        markSshSessionReady(sessionId);
+        markSshTerminalReady(termId, sessionId);
       } catch (reconnectErr) {
-        if (ownsSshTerminal(tabsRef.current, termId, sessionId) && !hasSiblingOwner()) {
-          markSshSessionDisconnected(sessionId);
-        }
+        markSshTerminalFailed(termId, sessionId);
         console.error('SSH retry failed:', reconnectErr);
         throw reconnectErr;
       } finally {
@@ -1641,7 +1683,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         releasedSshSessionIdsRef.current.delete(sessionId);
       }
     }
-  }, [markSshSessionDisconnected, markSshSessionReady, sshProfiles]);
+  }, [markSshSessionDisconnected, markSshTerminalFailed, markSshTerminalReady, sshProfiles]);
 
   const handleSSHProfilesChange = useCallback((profiles: SavedSSHProfile[]) => {
     setSshProfiles(profiles);
@@ -1756,7 +1798,6 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         setSshSessions((current) => current.some((candidate) => candidate.id === session.id)
           ? current
           : [...current, session]);
-        markSshSessionReady(leaf.sshSessionId);
         updateTab(tab.id, (current) => ({ ...current, root: mapLeaves(current.root, (candidate) => candidate.id === leaf.id ? { ...candidate, sshShellReady: true } : candidate) }));
       } catch (error) {
         console.error('Failed to open workspace SSH terminal:', error);
@@ -1766,7 +1807,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         releasedSshSessionIdsRef.current.delete(leaf.sshSessionId);
       }
     }
-  }, [markSshSessionDisconnected, markSshSessionReady, sshProfiles, terminalCount, updateTab]);
+  }, [markSshSessionDisconnected, sshProfiles, terminalCount, updateTab]);
 
 
   const activeTab = getTab(activeTabId);
@@ -2387,6 +2428,8 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
                 initialCwd={activeTab.cwd || homeDir || undefined}
                 hasSessionForLeaf={(leafId) => liveTerminalIdsRef.current.has(leafId)}
                 isSshSessionDisconnected={isSshSessionDisconnected}
+                onSshShellReady={markSshTerminalReady}
+                onSshShellFailed={markSshTerminalFailed}
                 onSshRetry={handleSshRetry}
               />
             )}
@@ -2395,7 +2438,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         {sidebarSide === 'right' && workspaceTools}
       </div>
       <StatusBar
-        sshSessions={sshSessions}
+        sshSessions={sshSessions.filter((session) => readySshSessionIds.has(session.id))}
         cwd={effectiveCwd}
         gitStatus={gitStatus}
         isRemote={sidebarIsRemote}
