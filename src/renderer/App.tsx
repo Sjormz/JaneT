@@ -1546,6 +1546,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         ...(leaf?.startupCommands?.length ? { startupCommands: leaf.startupCommands } : {}),
         ...(leaf?.startupShellDialect ? { startupShellDialect: leaf.startupShellDialect } : {}),
       });
+      if (
+        releasedSshSessionIdsRef.current.has(sessionId) ||
+        !ownsSshSession(tabsRef.current, sessionId)
+      ) {
+        window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
+        return;
+      }
       const session = existingSession ?? (profile ? sshSessionInfo(sessionId, profile) : undefined);
       if (session) {
         setSshSessions((current) => current.some((candidate) => candidate.id === sessionId)
@@ -1583,6 +1590,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           ...(leaf?.startupCommands?.length ? { startupCommands: leaf.startupCommands } : {}),
           ...(leaf?.startupShellDialect ? { startupShellDialect: leaf.startupShellDialect } : {}),
         });
+        if (
+          releasedSshSessionIdsRef.current.has(sessionId) ||
+          !ownsSshSession(tabsRef.current, sessionId)
+        ) {
+          window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
+          return;
+        }
         const session = sshSessionInfo(sessionId, profile);
         setSshSessions((current) => current.some((candidate) => candidate.id === sessionId)
           ? current

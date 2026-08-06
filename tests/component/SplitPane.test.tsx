@@ -2472,6 +2472,112 @@ describe('split panes in the app', () => {
     }
   });
 
+  it('does not restore SSH status when a direct retry finishes after its owner closes', async () => {
+    const sshProfileId = 'late@box.local:22:password';
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId, host: 'box.local', port: 22, username: 'late',
+        auth: 'password', password: 'secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'late-ssh', title: 'late host', type: 'ssh', sshProfileId,
+          root: { type: 'leaf', terminalType: 'ssh', sshProfileId },
+        }],
+        activeTabId: 'late-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
+    });
+    const restored = rendererMocks.verticalTabBarProps.tabs.find(
+      (tab: { title: string }) => tab.title === 'late host',
+    );
+    const retry = rendererMocks.sshRetryHandlers.get(restored.root.id)!;
+    let resolveRetryShell!: (value: { connected: true }) => void;
+    (window.janet.sshCreateShell as any).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRetryShell = resolve;
+    }));
+
+    let retryPromise!: Promise<void>;
+    await act(async () => {
+      retryPromise = Promise.resolve(retry(restored.root.id, { cols: 120, rows: 40 }));
+      await Promise.resolve();
+    });
+    expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    await confirmPendingAction(/^close tab$/i);
+    await waitFor(() => {
+      expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: restored.sshSessionId });
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+    });
+
+    await act(async () => {
+      resolveRetryShell({ connected: true });
+      await retryPromise;
+    });
+    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+  });
+
+  it('does not restore SSH status when a replacement shell finishes after its owner closes', async () => {
+    const sshProfileId = 'late-replacement@box.local:22:password';
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId, host: 'box.local', port: 22, username: 'late-replacement',
+        auth: 'password', password: 'secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'late-replacement-ssh', title: 'late replacement host', type: 'ssh', sshProfileId,
+          root: { type: 'leaf', terminalType: 'ssh', sshProfileId },
+        }],
+        activeTabId: 'late-replacement-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
+    });
+    const restored = rendererMocks.verticalTabBarProps.tabs.find(
+      (tab: { title: string }) => tab.title === 'late replacement host',
+    );
+    const retry = rendererMocks.sshRetryHandlers.get(restored.root.id)!;
+    let resolveReplacementShell!: (value: { connected: true }) => void;
+    (window.janet.sshCreateShell as any)
+      .mockRejectedValueOnce(new Error('stale shell'))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveReplacementShell = resolve;
+      }));
+
+    let retryPromise!: Promise<void>;
+    await act(async () => {
+      retryPromise = Promise.resolve(retry(restored.root.id, { cols: 120, rows: 40 }));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(3));
+
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    await confirmPendingAction(/^close tab$/i);
+    await waitFor(() => {
+      expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: restored.sshSessionId });
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+    });
+
+    await act(async () => {
+      resolveReplacementShell({ connected: true });
+      await retryPromise;
+    });
+    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+  });
+
   it('preserves only a restored workspace SSH leaf whose profile is missing', async () => {
     window.janet.getSettings = vi.fn().mockResolvedValue({
       keybindings: {},
