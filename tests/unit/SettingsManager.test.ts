@@ -22,6 +22,9 @@ vi.mock('fs', () => ({
     }),
     writeFileSync: vi.fn(),
     renameSync: vi.fn(),
+    openSync: vi.fn(() => 17),
+    fsyncSync: vi.fn(),
+    closeSync: vi.fn(),
     rmSync: vi.fn(),
     existsSync: vi.fn(() => true),
     mkdirSync: vi.fn(),
@@ -31,6 +34,9 @@ vi.mock('fs', () => ({
   }),
   writeFileSync: vi.fn(),
   renameSync: vi.fn(),
+  openSync: vi.fn(() => 17),
+  fsyncSync: vi.fn(),
+  closeSync: vi.fn(),
   rmSync: vi.fn(),
   existsSync: vi.fn(() => true),
   mkdirSync: vi.fn(),
@@ -422,13 +428,67 @@ describe('SettingsManager', () => {
     const fsMock = await import('fs');
     expect(fsMock.writeFileSync).toHaveBeenCalledWith(
       expect.stringMatching(/settings\.json\.tmp$/),
-      expect.stringContaining('"fontSize": 20'),
-      'utf-8',
+      expect.any(Buffer),
+      { flush: true },
     );
+    expect((fsMock.writeFileSync as any).mock.calls.at(-1)[1].toString('utf8'))
+      .toContain('"fontSize": 20');
     expect(fsMock.renameSync).toHaveBeenCalledWith(
       expect.stringMatching(/settings\.json\.tmp$/),
       expect.stringMatching(/settings\.json$/),
     );
+  });
+
+  it('syncs the containing directory after replacement where supported', async () => {
+    const fsMock = await import('fs');
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+    try {
+      const { SettingsManager } = await import('../../src/main/settings');
+      new SettingsManager().set({ fontSize: 20 });
+
+      expect(fsMock.openSync).toHaveBeenCalledWith(expect.stringMatching(/user-data$/), 'r');
+      expect(fsMock.fsyncSync).toHaveBeenCalledWith(17);
+      expect(fsMock.closeSync).toHaveBeenCalledWith(17);
+      expect(vi.mocked(fsMock.renameSync).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(fsMock.openSync).mock.invocationCallOrder[0]);
+    } finally {
+      Object.defineProperty(process, 'platform', platform!);
+    }
+  });
+
+  it('keeps the committed cache when directory sync cannot confirm durability', async () => {
+    const fsMock = await import('fs');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+    vi.mocked(fsMock.fsyncSync).mockImplementationOnce(() => { throw new Error('sync unavailable'); });
+    try {
+      const { SettingsManager } = await import('../../src/main/settings');
+      const manager = new SettingsManager();
+
+      expect(manager.set({ fontSize: 20 }).fontSize).toBe(20);
+      expect(manager.get().fontSize).toBe(20);
+      expect(error).toHaveBeenCalledWith(
+        'Settings were saved, but crash durability could not be confirmed:', expect.any(Error),
+      );
+    } finally {
+      Object.defineProperty(process, 'platform', platform!);
+    }
+  });
+
+  it('skips unsupported directory syncing on Windows', async () => {
+    const fsMock = await import('fs');
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+    try {
+      const { SettingsManager } = await import('../../src/main/settings');
+      expect(new SettingsManager().set({ fontSize: 20 }).fontSize).toBe(20);
+      expect(fsMock.openSync).not.toHaveBeenCalled();
+      expect(fsMock.fsyncSync).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, 'platform', platform!);
+    }
   });
 
   it.each([
@@ -621,7 +681,7 @@ describe('SettingsManager', () => {
     expect(() => manager.set({ fontSize: 20 })).toThrow(/persist settings/i);
 
     expect(fsMock.writeFileSync).toHaveBeenCalledWith(
-      expect.stringMatching(/settings\.json\.tmp$/), expect.any(String), 'utf-8',
+      expect.stringMatching(/settings\.json\.tmp$/), expect.any(Buffer), { flush: true },
     );
     expect(fsMock.writeFileSync).not.toHaveBeenCalledWith(
       expect.stringMatching(/settings\.json$/), expect.anything(), expect.anything(),
@@ -688,7 +748,7 @@ describe('SettingsManager', () => {
       }],
     });
 
-    const savedJson = (fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string;
+    const savedJson = (fsMock.writeFileSync as any).mock.calls.at(-1)[1].toString('utf8');
     expect(savedJson).not.toContain('"password": "secret"');
     expect(savedJson).toContain('"passwordSecret"');
     expect(savedJson).toContain('"version": 1');

@@ -401,9 +401,18 @@ export class SettingsManager {
         fs.mkdirSync(dir, { recursive: true });
       }
       const serialized = this.serialize(this.cache, previousSshProfiles);
-      fs.writeFileSync(tempPath, JSON.stringify(serialized, null, 2), 'utf-8');
+      fs.writeFileSync(tempPath, Buffer.from(JSON.stringify(serialized, null, 2), 'utf8'), { flush: true });
       fs.renameSync(tempPath, this.filePath);
       this.captureStoredSecrets(serialized.sshProfiles);
+      // ponytail: Node cannot fsync directories on Windows; add it if Node exposes a supported primitive.
+      if (process.platform !== 'win32') {
+        try {
+          const directory = fs.openSync(dir, 'r');
+          try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+        } catch (err) {
+          console.error('Settings were saved, but crash durability could not be confirmed:', err);
+        }
+      }
       return true;
     } catch (err) {
       try { fs.rmSync(tempPath, { force: true }); } catch {}
