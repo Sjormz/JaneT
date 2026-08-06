@@ -48,6 +48,7 @@ import {
   acknowledgeAgentAwareness,
   aggregateAgentStatus,
   applyAgentEvent,
+  terminalStatus,
   type AgentAwareness,
   type AgentLifecycleEvent,
   type TerminalTransportStatus,
@@ -312,6 +313,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const releasedSshSessionIdsRef = useRef<Set<string>>(new Set());
   const invalidatedInitialSshShellsRef = useRef(new Map<string, string>());
   const sshShellStateByTerminalRef = useRef(new Map<string, { sessionId: string; state: 'ready' | 'failed' }>());
+  const terminalStatusAnnouncementEligibleIdsRef = useRef(new Set<string>());
 
   useLayoutEffect(() => {
     if (!restoreTerminalFocusRef.current) return;
@@ -387,6 +389,10 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const markSshTerminalFailed = useCallback((termId: string, sessionId: string, explicitRetry = false) => {
     if (!explicitRetry && invalidatedInitialSshShellsRef.current.get(termId) === sessionId) return;
     if (!ownsSshTerminal(tabsRef.current, termId, sessionId)) return;
+    if (explicitRetry) {
+      announcedTerminalStatusByIdRef.current.delete(termId);
+      terminalStatusAnnouncementEligibleIdsRef.current.add(termId);
+    }
     sshShellStateByTerminalRef.current.set(termId, { sessionId, state: 'failed' });
     const owners = tabsRef.current.flatMap(collectTerminalOwners).filter(
       (owner) => owner.type === 'ssh' && owner.sshSessionId === sessionId,
@@ -408,6 +414,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       releasedSshSessionIdsRef.current.add(id);
       const disconnectedTerminals = tabsRef.current.flatMap(collectTerminalOwners)
         .filter((owner) => owner.sshSessionId === id);
+      disconnectedTerminals.forEach((owner) => {
+        terminalStatusAnnouncementEligibleIdsRef.current.add(owner.termId);
+      });
       for (const owner of disconnectedTerminals) {
         invalidatedInitialSshShellsRef.current.set(owner.termId, id);
       }
@@ -469,6 +478,8 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [focusedTerminalId, setFocusedTerminalId] = useState<string | null>(null);
   const [awarenessByTerminal, setAwarenessByTerminal] = useState<Record<string, AgentAwareness>>({});
   const [localTransportByTerminal, setLocalTransportByTerminal] = useState<Record<string, TerminalTransportStatus>>({});
+  const [terminalStatusAnnouncement, setTerminalStatusAnnouncement] = useState({ sequence: 0, text: '' });
+  const announcedTerminalStatusByIdRef = useRef(new Map<string, string>());
   // Cached home directory — used as the fallback cwd before any OSC 7
   // has arrived or for SSH tabs.
   const [homeDir, setHomeDir] = useState<string>('');
@@ -734,6 +745,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       const owner = tabsRef.current.flatMap(collectTerminalOwners)
         .find((candidate) => candidate.termId === id);
       if (owner?.type !== 'local') return;
+      terminalStatusAnnouncementEligibleIdsRef.current.add(id);
       if (broadcastRecipientIdsRef.current.has(id)) setBroadcastRecipientIds(new Set());
       setLocalTransportByTerminal((current) => (
         current[id] === 'exited' ? current : { ...current, [id]: 'exited' }
@@ -768,6 +780,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         current[termId], event, Date.now(), owner.id === activeTabIdRef.current,
       );
       if (nextAwareness === current[termId]) return current;
+      terminalStatusAnnouncementEligibleIdsRef.current.add(termId);
       if (nextAwareness) return { ...current, [termId]: nextAwareness };
       if (!(termId in current)) return current;
       const { [termId]: _removed, ...next } = current;
@@ -963,6 +976,60 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       return status ? [[tab.id, status]] : [];
     }),
   ), [awarenessByTerminal, tabs, transportByTerminal]);
+
+  useEffect(() => {
+    const previous = announcedTerminalStatusByIdRef.current;
+    const next = new Map<string, string>();
+    const announcements: string[] = [];
+    const eligibleIds = terminalStatusAnnouncementEligibleIdsRef.current;
+    let changed = false;
+    for (const tab of tabs) {
+      const owners = collectTerminalOwners(tab);
+      const paneLabels = owners.map((owner) => {
+        const leaf = findLeaf(tab.root, owner.termId);
+        if (!leaf) return '';
+        const paneTitle = displayPaneTitle(leaf, tab.type).slice(0, 256);
+        const paneType = (leaf.terminalType ?? tab.type) === 'ssh' ? 'SSH' : 'Local terminal';
+        return `${paneTitle} — ${paneType} pane`;
+      });
+      for (const [ownerIndex, owner] of owners.entries()) {
+        const awareness = awarenessByTerminal[owner.termId];
+        const status = terminalStatus(awareness, transportByTerminal[owner.termId]);
+        if (!status) {
+          if (previous.has(owner.termId)) changed = true;
+          continue;
+        }
+        const occurrence = ['finished', 'failed', 'interrupted'].includes(status.kind)
+          ? `${status.kind}:${awareness?.turnId ?? awareness?.lastTurn?.endedAt ?? ''}`
+          : status.kind;
+        next.set(owner.termId, occurrence);
+        if (previous.get(owner.termId) === occurrence) continue;
+        changed = true;
+        if (!eligibleIds.has(owner.termId)
+          || status.kind === 'ready' || status.kind === 'running') continue;
+        const tabLabel = tab.title.trim().slice(0, 256) || 'Terminal';
+        const paneLabel = paneLabels[ownerIndex];
+        if (!paneLabel) continue;
+        const paneIdentity = paneLabels.indexOf(paneLabel) === paneLabels.lastIndexOf(paneLabel)
+          ? paneLabel
+          : `${paneLabel} ${ownerIndex + 1}`;
+        announcements.push(`${tabLabel} · ${paneIdentity} · ${status.label}`);
+      }
+    }
+    if ([...previous.keys()].some((termId) => !next.has(termId))) changed = true;
+    announcedTerminalStatusByIdRef.current = next;
+    eligibleIds.clear();
+    if (announcements.length) {
+      setTerminalStatusAnnouncement((current) => ({
+        sequence: current.sequence + 1,
+        text: announcements.join('. '),
+      }));
+    } else if (changed) {
+      setTerminalStatusAnnouncement((current) => (
+        current.text ? { ...current, text: '' } : current
+      ));
+    }
+  }, [awarenessByTerminal, tabs, transportByTerminal]);
 
   const selectTerminalTab = useCallback((tabId: string) => {
     setBroadcastRecipientIds(new Set());
@@ -2385,6 +2452,17 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           </Tooltip>
         )}
         <div key="terminal" className="terminal-area">
+          <div
+            className="sr-only"
+            role="status"
+            aria-label="Terminal status announcements"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {terminalStatusAnnouncement.text && (
+              <span key={terminalStatusAnnouncement.sequence}>{terminalStatusAnnouncement.text}</span>
+            )}
+          </div>
           {broadcastArmed && broadcastRecipientIds.size >= 2 && (
             <div className="broadcast-input-banner" role="status" aria-label="Broadcast input active">
               <strong>Broadcast input active · {broadcastRecipientIds.size} panes</strong>

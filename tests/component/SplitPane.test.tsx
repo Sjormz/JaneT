@@ -883,6 +883,7 @@ describe('split panes in the app', () => {
     const terminal = await screen.findByTestId(/terminal-/);
     const termId = terminal.dataset.terminalId!;
     const tabId = rendererMocks.verticalTabBarProps.tabs[0].id;
+    const channel = screen.getByRole('status', { name: 'Terminal status announcements' });
     await waitFor(() => expect(rendererMocks.terminalExitHandler).toBeTypeOf('function'));
 
     act(() => rendererMocks.agentEventHandlers.get(termId)!({
@@ -897,6 +898,111 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[tabId])
       .toEqual({ kind: 'exited', label: 'Exited' }));
     expect(screen.getByText('Exited')).toHaveClass('leaf-awareness', 'exited');
+    expect(channel).toHaveTextContent('Terminal · Terminal — Local terminal pane · Exited');
+  });
+
+  it('announces an actionable terminal status once through one polite channel', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      session: {
+        tabs: [{
+          id: 'project-tab', title: 'Project', type: 'local',
+          root: { type: 'leaf', title: 'Tests' },
+        }],
+        activeTabId: 'project-tab',
+      },
+    });
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    const emit = rendererMocks.agentEventHandlers.get(terminal.dataset.terminalId!)!;
+    const tabId = rendererMocks.verticalTabBarProps.tabs[0].id;
+    const channel = screen.getByRole('status', { name: 'Terminal status announcements' });
+
+    expect(channel).toHaveAttribute('aria-live', 'polite');
+    expect(channel).toHaveAttribute('aria-atomic', 'true');
+    expect(channel).toHaveClass('sr-only');
+    expect(channel).toBeEmptyDOMElement();
+    expect(screen.getAllByRole('status', { name: 'Terminal status announcements' })).toHaveLength(1);
+
+    act(() => emit({
+      version: 1, provider: 'hermes', event: 'session.start', sessionId: 'session-1',
+    }));
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[tabId])
+      .toEqual({ kind: 'ready', label: 'Hermes · Ready' }));
+    expect(channel).toBeEmptyDOMElement();
+
+    act(() => emit({
+      version: 1, provider: 'hermes', event: 'turn.start',
+      sessionId: 'session-1', turnId: 'turn-1',
+    }));
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[tabId])
+      .toEqual({ kind: 'running', label: 'Hermes · Running' }));
+    expect(channel).toBeEmptyDOMElement();
+
+    act(() => emit({
+      version: 1, provider: 'hermes', event: 'attention.request',
+      sessionId: 'session-1', turnId: 'turn-1',
+    }));
+    await waitFor(() => expect(channel).toHaveTextContent(
+      'Project · Tests — Local terminal pane · Hermes · Needs input',
+    ));
+
+    const mutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => mutations.push(...records));
+    observer.observe(channel, { childList: true, characterData: true, subtree: true });
+    act(() => emit({
+      version: 1, provider: 'hermes', event: 'attention.request',
+      sessionId: 'session-1', turnId: 'turn-1',
+    }));
+    await act(() => Promise.resolve());
+    expect(mutations).toHaveLength(0);
+
+    act(() => emit({
+      version: 1, provider: 'hermes', event: 'attention.resolve',
+      sessionId: 'session-1', turnId: 'turn-1',
+    }));
+    await waitFor(() => expect(channel).toBeEmptyDOMElement());
+    mutations.length = 0;
+    act(() => emit({
+      version: 1, provider: 'hermes', event: 'attention.request',
+      sessionId: 'session-1', turnId: 'turn-1',
+    }));
+    await waitFor(() => expect(mutations.length).toBeGreaterThan(0));
+    expect(channel).toHaveTextContent('Hermes · Needs input');
+    observer.disconnect();
+  });
+
+  it('disambiguates duplicate pane labels without exposing terminal IDs', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      session: {
+        tabs: [{
+          id: 'project-tab', title: 'Project', type: 'local',
+          root: {
+            type: 'split', direction: 'vertical', sizes: [1, 1],
+            children: [
+              { type: 'leaf', title: 'terminal' },
+              { type: 'leaf', title: 'terminal' },
+            ],
+          },
+        }],
+        activeTabId: 'project-tab',
+      },
+    });
+    render(<App />);
+    const terminals = await screen.findAllByTestId(/terminal-/);
+    const secondTerminalId = terminals[1].dataset.terminalId!;
+    const channel = screen.getByRole('status', { name: 'Terminal status announcements' });
+
+    act(() => rendererMocks.agentEventHandlers.get(secondTerminalId)!({
+      version: 1, provider: 'hermes', event: 'attention.request',
+      sessionId: 'session-1', turnId: 'turn-1',
+    }));
+
+    await waitFor(() => expect(channel).toHaveTextContent(
+      'Project · Terminal — Local terminal pane 2 · Hermes · Needs input',
+    ));
+    expect(channel).not.toHaveTextContent(secondTerminalId);
   });
 
   it('marks a background turn outcome unseen and acknowledges it when its tab is selected', async () => {
@@ -904,6 +1010,7 @@ describe('split panes in the app', () => {
     const firstTerminal = await screen.findByTestId(/terminal-/);
     const firstTerminalId = firstTerminal.dataset.terminalId!;
     const firstTabId = rendererMocks.verticalTabBarProps.tabs[0].id;
+    const channel = screen.getByRole('status', { name: 'Terminal status announcements' });
 
     act(() => rendererMocks.verticalTabBarProps.onNewTab());
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
@@ -922,11 +1029,74 @@ describe('split panes in the app', () => {
 
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[firstTabId])
       .toEqual({ kind: 'finished', label: 'Hermes · Turn finished' }));
+    expect(channel).toHaveTextContent('Hermes · Turn finished');
+
+    act(() => {
+      emit({
+        version: 1, provider: 'hermes', event: 'turn.start',
+        sessionId: 'session-1', turnId: 'turn-2',
+      });
+      emit({
+        version: 1, provider: 'hermes', event: 'turn.end',
+        sessionId: 'session-1', turnId: 'turn-2', outcome: 'failed',
+      });
+    });
+    await waitFor(() => expect(channel).toHaveTextContent('Hermes · Turn failed'));
+
+    const failedMutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => failedMutations.push(...records));
+    observer.observe(channel, { childList: true, characterData: true, subtree: true });
+    act(() => {
+      emit({
+        version: 1, provider: 'hermes', event: 'turn.start',
+        sessionId: 'session-1', turnId: 'turn-3',
+      });
+      emit({
+        version: 1, provider: 'hermes', event: 'turn.end',
+        sessionId: 'session-1', turnId: 'turn-3', outcome: 'failed',
+      });
+    });
+    await waitFor(() => expect(failedMutations.length).toBeGreaterThan(0));
+    expect(channel).toHaveTextContent('Hermes · Turn failed');
+    observer.disconnect();
+
+    act(() => {
+      emit({
+        version: 1, provider: 'hermes', event: 'turn.start',
+        sessionId: 'session-1', turnId: 'turn-4',
+      });
+      emit({
+        version: 1, provider: 'hermes', event: 'turn.end',
+        sessionId: 'session-1', turnId: 'turn-4', outcome: 'interrupted',
+      });
+    });
+    await waitFor(() => expect(channel).toHaveTextContent('Hermes · Interrupted'));
 
     act(() => rendererMocks.verticalTabBarProps.onSelectTab(firstTabId));
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[firstTabId])
       .toEqual({ kind: 'ready', label: 'Hermes · Ready' }));
     expect(screen.getByText('Hermes · Ready')).toHaveClass('leaf-awareness', 'ready');
+    expect(channel).toBeEmptyDOMElement();
+  });
+
+  it('ignores an actionable status from a removed terminal owner', async () => {
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    const staleEmit = rendererMocks.agentEventHandlers.get(terminal.dataset.terminalId!)!;
+    const oldTabId = rendererMocks.verticalTabBarProps.tabs[0].id;
+    const channel = screen.getByRole('status', { name: 'Terminal status announcements' });
+
+    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
+    act(() => rendererMocks.verticalTabBarProps.onCloseTab(oldTabId));
+    await confirmPendingAction(/close tab/i);
+
+    act(() => staleEmit({
+      version: 1, provider: 'hermes', event: 'attention.request',
+      sessionId: 'removed-session', turnId: 'removed-turn',
+    }));
+    await act(() => Promise.resolve());
+    expect(channel).toBeEmptyDOMElement();
   });
 
   it('opens snippets with the configured shortcut and routes pasted content to the focused terminal', async () => {
@@ -2373,6 +2543,8 @@ describe('split panes in the app', () => {
     ])
       .toEqual({ kind: 'disconnected', label: 'SSH disconnected' });
     expect(screen.getByText('SSH disconnected')).toHaveClass('leaf-awareness', 'disconnected');
+    expect(screen.getByRole('status', { name: 'Terminal status announcements' }))
+      .toHaveTextContent('SSH disconnected');
     expect(window.janet.sshConnect).toHaveBeenCalledTimes(1);
 
     const retry = rendererMocks.sshRetryHandlers.get(shellArgs.termId);
@@ -2506,7 +2678,8 @@ describe('split panes in the app', () => {
 
   it('keeps a restored SSH session disconnected when its initial shell fails', async () => {
     const sshProfileId = 'pckpr@box.local:22:password';
-    window.janet.sshCreateShell = vi.fn().mockRejectedValue(new Error('initial shell unavailable'));
+    const initialShell = deferred<{ connected: true }>();
+    window.janet.sshCreateShell = vi.fn().mockReturnValue(initialShell.promise);
     window.janet.getSettings = vi.fn().mockResolvedValue({
       keybindings: {},
       workspaceTabs: [],
@@ -2541,6 +2714,27 @@ describe('split panes in the app', () => {
 
     await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
     const shell = (window.janet.sshCreateShell as any).mock.calls[0][0];
+    const emitAgentEvent = rendererMocks.agentEventHandlers.get(shell.termId)!;
+    act(() => {
+      emitAgentEvent({
+        version: 1, provider: 'hermes', event: 'session.start', sessionId: 'current-session',
+      });
+    });
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[
+      rendererMocks.verticalTabBarProps.activeTabId
+    ]).toEqual({ kind: 'ready', label: 'Hermes · Ready' }));
+    act(() => {
+      emitAgentEvent({
+        version: 1, provider: 'hermes', event: 'attention.request',
+        sessionId: 'stale-session', turnId: 'stale-turn',
+      });
+    });
+    expect(screen.getByRole('status', { name: 'Terminal status announcements' }))
+      .toBeEmptyDOMElement();
+    await act(async () => {
+      initialShell.reject(new Error('initial shell unavailable'));
+      await initialShell.promise.catch(() => {});
+    });
     await waitFor(() => {
       expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
       expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
@@ -2557,6 +2751,8 @@ describe('split panes in the app', () => {
       'data-ssh-connection-lost',
       'true',
     );
+    expect(screen.getByRole('status', { name: 'Terminal status announcements' }))
+      .toBeEmptyDOMElement();
   });
 
   it('does not publish initial SSH readiness after its transport closes', async () => {
@@ -2824,6 +3020,8 @@ describe('split panes in the app', () => {
       (tab: { title: string }) => tab.title === 'removed host',
     );
     expect(rendererMocks.sshRetryHandlers.get(restored.root.id)).toBeTypeOf('function');
+    expect(screen.getByRole('status', { name: 'Terminal status announcements' }))
+      .toBeEmptyDOMElement();
   });
 
   it('keeps an established SSH tab disconnected when replacement shell creation fails', async () => {
@@ -2859,14 +3057,26 @@ describe('split panes in the app', () => {
     const restoredSessionId = restored.sshSessionId;
     expect(restoredSessionId).toBeTruthy();
     const retry = rendererMocks.sshRetryHandlers.get(restored.root.id)!;
+    const retryShell = deferred<{ connected: true }>();
     (window.janet.sshCreateShell as any)
-      .mockRejectedValueOnce(new Error('stale shell'))
+      .mockImplementationOnce(() => retryShell.promise)
       .mockRejectedValueOnce(new Error('replacement shell unavailable'));
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     try {
+      let retryPromise!: Promise<void>;
       await act(async () => {
-        await expect(retry(restored.root.id, { cols: 120, rows: 40 }))
+        retryPromise = Promise.resolve(retry(restored.root.id, { cols: 120, rows: 40 }));
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(screen.getByTestId(`terminal-${restored.root.id}`))
+        .toHaveAttribute('data-ssh-connection-lost', 'true'));
+      expect(screen.getByRole('status', { name: 'Terminal status announcements' }))
+        .toBeEmptyDOMElement();
+
+      await act(async () => {
+        retryShell.reject(new Error('stale shell'));
+        await expect(retryPromise)
           .rejects.toThrow('replacement shell unavailable');
       });
       expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
@@ -2883,6 +3093,8 @@ describe('split panes in the app', () => {
         },
       });
       expect(rendererMocks.sshRetryHandlers.get(restored.root.id)).toBe(retry);
+      expect(screen.getByRole('status', { name: 'Terminal status announcements' }))
+        .toHaveTextContent('retry host · SSH — SSH pane · SSH disconnected');
     } finally {
       consoleError.mockRestore();
     }
