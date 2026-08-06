@@ -8,8 +8,10 @@ import type { AgentLifecycleEvent } from '../../src/renderer/terminalAwareness';
 import type { SemanticCommandEvent, SemanticCommandStartedEvent } from '../../src/renderer/semanticCommands';
 
 const mountedTermIds: string[] = [];
+const readyTermIds: string[] = [];
 const rendererMocks = vi.hoisted(() => ({
   disposeCachedTerminal: vi.fn(),
+  awaitLocalCreate: false,
   paletteActions: [] as Array<{ id: string; handler: () => void }>,
   titlebarProps: null as any,
   shortcutEditorProps: null as any,
@@ -194,6 +196,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     onSemanticCommand?: (termId: string, event: SemanticCommandEvent) => void;
     onBroadcastInput?: (termId: string, data: string, binary?: boolean) => boolean;
   }) {
+    let effectActive = true;
     if (onSshRetry) rendererMocks.sshRetryHandlers.set(termId, onSshRetry);
     if (onCwdChange) rendererMocks.cwdChangeHandlers.set(termId, onCwdChange);
     if (onAgentEvent) rendererMocks.agentEventHandlers.set(termId, (event) => onAgentEvent(termId, event));
@@ -232,13 +235,23 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
             onReady?.(termId);
           }
         } else if (tabType === 'local') {
-          window.janet.terminalCreate({
+          const create = window.janet.terminalCreate({
             id: termId,
             cwd: initialCwd,
             ...(startupCommands?.length ? { startupCommands } : {}),
             ...(startupShellDialect ? { startupShellDialect } : {}),
           });
-          onReady?.(termId);
+          const publishReady = () => {
+            readyTermIds.push(termId);
+            onReady?.(termId);
+          };
+          if (rendererMocks.awaitLocalCreate) {
+            create.then(() => {
+              if (effectActive) publishReady();
+            });
+          } else {
+            publishReady();
+          }
         } else {
           onReady?.(termId);
           return;
@@ -246,6 +259,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
       } else {
         onReady?.(termId);
       }
+      return () => { effectActive = false; };
     }, [termId, hasSession, initialCwd, tabType, sshSessionId, sshShellReady, startupCommands, startupShellDialect, onReady, onSshShellReady, onSshShellFailed]);
 
     return (
@@ -267,7 +281,9 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
 
 beforeEach(() => {
   mountedTermIds.length = 0;
+  readyTermIds.length = 0;
   rendererMocks.disposeCachedTerminal.mockReset();
+  rendererMocks.awaitLocalCreate = false;
   rendererMocks.paletteActions = [];
   rendererMocks.titlebarProps = null;
   rendererMocks.shortcutEditorProps = null;
@@ -976,6 +992,43 @@ describe('split panes in the app', () => {
     });
 
     expect(new Set(mountedTermIds).size).toBe(3);
+  });
+
+  it('releases a pane closed before local creation completes and reuses its capacity', async () => {
+    rendererMocks.awaitLocalCreate = true;
+    rendererMocks.disposeCachedTerminal
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+    render(<App />);
+
+    await waitFor(() => expect(readyTermIds).toHaveLength(1));
+    const pendingCreate = deferred<void>();
+    vi.mocked(window.janet.terminalCreate).mockReturnValueOnce(pendingCreate.promise);
+    fireEvent.click(screen.getByRole('button', { name: /split pane right/i }));
+
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    const pendingId = screen.getAllByTestId(/terminal-/)[1].dataset.terminalId!;
+    expect(readyTermIds).not.toContain(pendingId);
+
+    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal tab)/i })[1]);
+    await confirmPendingAction(/^close pane$/i);
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+    expect(window.janet.terminalDestroy).toHaveBeenCalledTimes(1);
+    expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: pendingId });
+
+    await act(async () => pendingCreate.resolve());
+    expect(readyTermIds).not.toContain(pendingId);
+    expect(window.janet.terminalDestroy).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /split pane right/i }));
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2);
+      expect(readyTermIds).toHaveLength(2);
+    });
+    expect(window.janet.terminalCreate).toHaveBeenCalledTimes(3);
+    expect(window.janet.terminalDestroy).toHaveBeenCalledTimes(1);
   });
 
   it('moves an existing pane without creating or destroying a terminal', async () => {
