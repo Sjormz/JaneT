@@ -422,10 +422,10 @@ export class SettingsManager {
 
   private load(): AppSettings {
     try {
-      const raw = fs.readFileSync(this.filePath, 'utf-8');
-      const loaded = this.parse(raw);
+      const raw = fs.readFileSync(this.filePath);
+      const loaded = this.parse(raw.toString('utf8'));
       this.captureStoredSecrets(loaded.sshProfiles);
-      this.lastValidBytes = Buffer.from(raw, 'utf8');
+      this.lastValidBytes = raw;
       return loaded.settings;
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {

@@ -45,6 +45,22 @@ describe('SettingsManager recovery', () => {
     expect(fs.readFileSync(settingsPath, 'utf8')).toBe(corruptBytes);
   });
 
+  it('rotates the exact validated current bytes when UTF-8 decoding replaces a byte', async () => {
+    const settingsPath = path.join(electronState.userData, 'settings.json');
+    const originalBytes = Buffer.concat([
+      Buffer.from('{"theme":"dracula","fontFamily":"'),
+      Buffer.from([0x80]),
+      Buffer.from('"}'),
+    ]);
+    fs.writeFileSync(settingsPath, originalBytes);
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+
+    manager.set({ fontSize: 16 });
+
+    expect(fs.readFileSync(`${settingsPath}.previous`)).toEqual(originalBytes);
+  });
+
   it('restores the validated prior generation over corrupt settings', async () => {
     const settingsPath = path.join(electronState.userData, 'settings.json');
     fs.writeFileSync(settingsPath, JSON.stringify({ theme: 'dracula', fontSize: 16 }), 'utf8');
