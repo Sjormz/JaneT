@@ -345,6 +345,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   }, []);
 
   const markSshSessionDisconnected = useCallback((sessionId: string) => {
+    setSshSessions((current) => current.filter((session) => session.id !== sessionId));
     setReadySshSessionIds((current) => {
       if (!current.has(sessionId)) return current;
       const next = new Set(current);
@@ -367,7 +368,6 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       const disconnectedRecipient = disconnectedTerminals
         .some((owner) => broadcastRecipientIdsRef.current.has(owner.termId));
       if (disconnectedRecipient) setBroadcastRecipientIds(new Set());
-      setSshSessions((current) => current.filter((session) => session.id !== id));
       markSshSessionDisconnected(id);
       setSshConnectionEpochById((current) => ({
         ...current,
@@ -1532,7 +1532,12 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       cols: Math.max(dimensions?.cols || 80, 120),
       rows: Math.max(dimensions?.rows || 24, 40),
     };
+    const profile = profileId
+      ? sshProfiles.find((candidate) => candidate.id === profileId)
+      : undefined;
+    const existingSession = sshSessionsRef.current.find((candidate) => candidate.id === sessionId);
 
+    markSshSessionDisconnected(sessionId);
     try {
       await window.janet.sshCreateShell({
         id: sessionId,
@@ -1541,14 +1546,18 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         ...(leaf?.startupCommands?.length ? { startupCommands: leaf.startupCommands } : {}),
         ...(leaf?.startupShellDialect ? { startupShellDialect: leaf.startupShellDialect } : {}),
       });
+      const session = existingSession ?? (profile ? sshSessionInfo(sessionId, profile) : undefined);
+      if (session) {
+        setSshSessions((current) => current.some((candidate) => candidate.id === sessionId)
+          ? current
+          : [...current, session]);
+      }
+      markSshSessionReady(sessionId);
     } catch (shellErr) {
       // Shell open failed — the session itself may be dead. Try
       // re-establishing the SSH connection from the saved profile,
       // then re-open the shell. If the profile is missing the user
       // will see the original error and can dismiss the tab.
-      const profile = profileId
-        ? sshProfiles.find((candidate) => candidate.id === profileId)
-        : undefined;
       if (!profile) {
         console.error('SSH retry failed and no saved profile to reconnect from:', shellErr);
         throw shellErr;
@@ -1567,11 +1576,6 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
           return;
         }
-        const session = sshSessionInfo(sessionId, profile);
-        setSshSessions((current) => current.some((candidate) => candidate.id === sessionId)
-          ? current
-          : [...current, session]);
-        markSshSessionReady(sessionId);
         await window.janet.sshCreateShell({
           id: sessionId,
           termId,
@@ -1579,6 +1583,11 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           ...(leaf?.startupCommands?.length ? { startupCommands: leaf.startupCommands } : {}),
           ...(leaf?.startupShellDialect ? { startupShellDialect: leaf.startupShellDialect } : {}),
         });
+        const session = sshSessionInfo(sessionId, profile);
+        setSshSessions((current) => current.some((candidate) => candidate.id === sessionId)
+          ? current
+          : [...current, session]);
+        markSshSessionReady(sessionId);
       } catch (reconnectErr) {
         console.error('SSH retry failed:', reconnectErr);
         throw reconnectErr;
@@ -1587,7 +1596,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         releasedSshSessionIdsRef.current.delete(sessionId);
       }
     }
-  }, [markSshSessionReady, sshProfiles]);
+  }, [markSshSessionDisconnected, markSshSessionReady, sshProfiles]);
 
   const handleSSHProfilesChange = useCallback((profiles: SavedSSHProfile[]) => {
     setSshProfiles(profiles);

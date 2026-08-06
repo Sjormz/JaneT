@@ -2318,13 +2318,41 @@ describe('split panes in the app', () => {
       ready: false,
     }));
 
+    (window.janet.sshCreateShell as any)
+      .mockRejectedValueOnce(new Error('session not found'))
+      .mockRejectedValueOnce(new Error('replacement shell unavailable'));
+    await act(async () => {
+      await expect(retry!(shellArgs.termId, { cols: 120, rows: 40 }))
+        .rejects.toThrow('replacement shell unavailable');
+    });
+    expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
+      connectionState: 'disconnected',
+      ready: false,
+    }));
+    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+    expect(screen.getByTestId(`terminal-${shellArgs.termId}`))
+      .toHaveAttribute('data-ssh-connection-lost', 'true');
+    expect(rendererMocks.verticalTabBarProps.awarenessByTab[
+      rendererMocks.verticalTabBarProps.activeTabId
+    ]).toEqual({ kind: 'disconnected', label: 'SSH disconnected' });
+    expect(rendererMocks.verticalTabBarProps.tabs[0]).toMatchObject({
+      type: 'ssh',
+      sshProfileId,
+      root: {
+        startupCommands: ['hermes doctor', 'hermes --tui'],
+        startupShellDialect: 'posix',
+      },
+    });
+    expect(rendererMocks.verticalTabBarProps.tabs[0].root.terminalType).not.toBe('local');
+    expect(rendererMocks.sshRetryHandlers.get(shellArgs.termId)).toBe(retry);
+
     (window.janet.sshCreateShell as any).mockRejectedValueOnce(new Error('session not found'));
     await act(async () => {
       await retry?.(shellArgs.termId, { cols: 120, rows: 40 });
     });
     await waitFor(() => {
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(4);
-      expect(window.janet.sshConnect).toHaveBeenCalledTimes(3);
+      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(6);
+      expect(window.janet.sshConnect).toHaveBeenCalledTimes(4);
       expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
         connectionState: 'ready',
         ready: true,
@@ -2380,6 +2408,68 @@ describe('split panes in the app', () => {
       (tab: { title: string }) => tab.title === 'removed host',
     );
     expect(rendererMocks.sshRetryHandlers.get(restored.root.id)).toBeTypeOf('function');
+  });
+
+  it('keeps an established SSH tab disconnected when replacement shell creation fails', async () => {
+    const sshProfileId = 'retry@box.local:22:password';
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId, host: 'box.local', port: 22, username: 'retry',
+        auth: 'password', password: 'secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'retry-ssh', title: 'retry host', type: 'ssh', sshProfileId,
+          root: {
+            type: 'leaf', terminalType: 'ssh', sshProfileId,
+            startupCommands: ['remote-only-command'], startupShellDialect: 'posix',
+          },
+        }],
+        activeTabId: 'retry-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1);
+      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
+        connectionState: 'ready', ready: true,
+      }));
+    });
+    const restored = rendererMocks.verticalTabBarProps.tabs.find(
+      (tab: { title: string }) => tab.title === 'retry host',
+    );
+    const restoredSessionId = restored.sshSessionId;
+    expect(restoredSessionId).toBeTruthy();
+    const retry = rendererMocks.sshRetryHandlers.get(restored.root.id)!;
+    (window.janet.sshCreateShell as any)
+      .mockRejectedValueOnce(new Error('stale shell'))
+      .mockRejectedValueOnce(new Error('replacement shell unavailable'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await act(async () => {
+        await expect(retry(restored.root.id, { cols: 120, rows: 40 }))
+          .rejects.toThrow('replacement shell unavailable');
+      });
+      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
+        connectionState: 'disconnected', ready: false,
+      }));
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+      expect(screen.getByTestId(`terminal-${restored.root.id}`))
+        .toHaveAttribute('data-ssh-connection-lost', 'true');
+      expect(rendererMocks.verticalTabBarProps.tabs[0]).toMatchObject({
+        type: 'ssh', sshProfileId, sshSessionId: restoredSessionId,
+        root: {
+          terminalType: 'ssh', sshProfileId,
+          startupCommands: ['remote-only-command'], startupShellDialect: 'posix',
+        },
+      });
+      expect(rendererMocks.sshRetryHandlers.get(restored.root.id)).toBe(retry);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it('preserves only a restored workspace SSH leaf whose profile is missing', async () => {
