@@ -230,6 +230,10 @@ const api = {
 
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
+  getSettingsRecoveryState: (): Promise<{ previousAvailable: boolean }> =>
+    ipcRenderer.invoke('settings:recovery-state'),
+  restorePreviousSettings: () => ipcRenderer.invoke('settings:restore-previous'),
+  resetSettings: () => ipcRenderer.invoke('settings:reset'),
   setSettings: (updates: Record<string, unknown>) => ipcRenderer.invoke('settings:set', updates),
   notifyCommandCompleted: (payload: CommandNotificationPayload): Promise<boolean> =>
     ipcRenderer.invoke('notifications:command-completed', payload),

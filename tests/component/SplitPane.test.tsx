@@ -315,6 +315,9 @@ beforeEach(() => {
       },
     }),
     getSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [], notificationsEnabled: false, notificationThresholdSeconds: 10 }),
+    getSettingsRecoveryState: vi.fn().mockResolvedValue({ previousAvailable: false }),
+    restorePreviousSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] }),
+    resetSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] }),
     setSettings: vi.fn().mockResolvedValue(undefined),
     notifyCommandCompleted: vi.fn().mockResolvedValue(true),
     terminalCreate: vi.fn().mockResolvedValue(undefined),
@@ -1443,6 +1446,9 @@ describe('split panes in the app', () => {
 
   it('shows a recoverable startup state when settings cannot be loaded', async () => {
     window.janet.getSettings = vi.fn().mockRejectedValue(new Error('settings unavailable'));
+    window.janet.resetSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [], notificationsEnabled: false, notificationThresholdSeconds: 10,
+    });
 
     render(<App />);
 
@@ -1457,8 +1463,26 @@ describe('split panes in the app', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Use defaults' }));
     await confirmPendingAction(/^use defaults$/i);
+    expect(window.janet.resetSettings).toHaveBeenCalledOnce();
     expect(await screen.findByTestId('titlebar')).toBeInTheDocument();
     await waitFor(() => expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus());
+  });
+
+  it('restores a validated previous settings generation from startup recovery', async () => {
+    window.janet.getSettings = vi.fn().mockRejectedValue(new Error('settings unavailable'));
+    window.janet.getSettingsRecoveryState = vi.fn().mockResolvedValue({ previousAvailable: true });
+    window.janet.restorePreviousSettings = vi.fn().mockResolvedValue({
+      theme: 'dracula', keybindings: {}, workspaceTabs: [], notificationsEnabled: false,
+      notificationThresholdSeconds: 10,
+    });
+
+    render(<App />);
+
+    const restore = await screen.findByRole('button', { name: 'Restore previous' });
+    fireEvent.click(restore);
+
+    await waitFor(() => expect(window.janet.restorePreviousSettings).toHaveBeenCalledOnce());
+    expect(await screen.findByTestId('titlebar')).toBeInTheDocument();
   });
 
   it('maximizes a single pane within the terminal area and restores it to the split layout', async () => {

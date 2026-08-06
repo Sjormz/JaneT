@@ -2487,18 +2487,55 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
 export default function App() {
   const [settings, setSettings] = useState<any | null>(null);
   const [settingsError, setSettingsError] = useState(false);
+  const [previousSettingsAvailable, setPreviousSettingsAvailable] = useState(false);
   const [confirmDefaults, setConfirmDefaults] = useState(false);
 
-  const loadSettings = useCallback(() => {
-    setSettingsError(false);
+  const showSettingsError = useCallback(() => {
     try {
-      window.janet.getSettings().then((s: any) => {
-        setSettings(s || {});
-      }).catch(() => setSettingsError(true));
+      window.janet.getSettingsRecoveryState()
+        .then(({ previousAvailable }) => setPreviousSettingsAvailable(previousAvailable))
+        .catch(() => setPreviousSettingsAvailable(false))
+        .finally(() => setSettingsError(true));
     } catch {
+      setPreviousSettingsAvailable(false);
       setSettingsError(true);
     }
   }, []);
+
+  const loadSettings = useCallback(() => {
+    setSettingsError(false);
+    setPreviousSettingsAvailable(false);
+    try {
+      window.janet.getSettings().then((s: any) => {
+        setSettings(s || {});
+      }).catch(showSettingsError);
+    } catch {
+      showSettingsError();
+    }
+  }, [showSettingsError]);
+
+  const restorePreviousSettings = useCallback(() => {
+    setSettingsError(false);
+    try {
+      window.janet.restorePreviousSettings()
+        .then((s: any) => setSettings(s || {}))
+        .catch(showSettingsError);
+    } catch {
+      showSettingsError();
+    }
+  }, [showSettingsError]);
+
+  const resetSettings = useCallback(() => {
+    setConfirmDefaults(false);
+    setSettingsError(false);
+    try {
+      window.janet.resetSettings()
+        .then((s: any) => setSettings(s || {}))
+        .catch(showSettingsError);
+    } catch {
+      showSettingsError();
+    }
+  }, [showSettingsError]);
 
   // Load one coherent settings snapshot before rendering the workspace.
   useEffect(() => {
@@ -2521,6 +2558,9 @@ export default function App() {
               <p>JaneT could not load your workspace settings.</p>
               <div className="app-startup-actions">
                 <button type="button" onClick={loadSettings}>Try again</button>
+                {previousSettingsAvailable && (
+                  <button type="button" onClick={restorePreviousSettings}>Restore previous</button>
+                )}
                 <button type="button" onClick={() => setConfirmDefaults(true)}>Use defaults</button>
               </div>
             </>
@@ -2531,14 +2571,11 @@ export default function App() {
         <ConfirmationDialog
           open={confirmDefaults}
           title="Use default settings?"
-          description="Start a new default workspace? JaneT will replace saved tabs and custom shortcuts as the default workspace starts and saves."
+          description="JaneT will permanently replace the unreadable settings file, including saved tabs and custom shortcuts."
           confirmLabel="Use defaults"
           fallbackFocus={firstTerminalFocusTarget}
           onCancel={() => setConfirmDefaults(false)}
-          onConfirm={() => {
-            setConfirmDefaults(false);
-            setSettings({});
-          }}
+          onConfirm={resetSettings}
         />
       </>
     );

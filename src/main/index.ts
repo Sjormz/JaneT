@@ -688,6 +688,10 @@ function registerIpcHandlers() {
     return settingsManager.set(updates);
   });
 
+  handle('settings:recovery-state', () => settingsManager.getRecoveryState());
+  handle('settings:restore-previous', () => settingsManager.restorePrevious());
+  handle('settings:reset', () => settingsManager.reset());
+
   handle('notifications:command-completed', (_event, payload: unknown) => deliverCommandNotification(payload));
 
   handle('app:getPlatform', () => {

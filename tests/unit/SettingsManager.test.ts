@@ -18,7 +18,7 @@ vi.mock('electron', () => ({
 vi.mock('fs', () => ({
   default: {
     readFileSync: vi.fn(() => {
-      throw new Error('File not found');
+      throw Object.assign(new Error('File not found'), { code: 'ENOENT' });
     }),
     writeFileSync: vi.fn(),
     renameSync: vi.fn(),
@@ -30,7 +30,7 @@ vi.mock('fs', () => ({
     mkdirSync: vi.fn(),
   },
   readFileSync: vi.fn(() => {
-    throw new Error('File not found');
+    throw Object.assign(new Error('File not found'), { code: 'ENOENT' });
   }),
   writeFileSync: vi.fn(),
   renameSync: vi.fn(),

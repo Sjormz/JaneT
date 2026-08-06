@@ -263,6 +263,9 @@ export class SettingsManager {
   private filePath: string;
   private cache: AppSettings;
   private storedSshSecrets = new Map<string, StoredSSHSecrets>();
+  private lastValidBytes: Buffer | undefined;
+  private recoveryRequired = false;
+  private previousAvailable = false;
 
   constructor() {
     const userDataPath = app.getPath('userData');
@@ -271,6 +274,7 @@ export class SettingsManager {
   }
 
   get(): AppSettings {
+    if (this.recoveryRequired) throw new Error('Could not load settings');
     return {
       ...this.cache,
       keybindings: { ...this.cache.keybindings },
@@ -283,6 +287,58 @@ export class SettingsManager {
       sshHostKeys: { ...this.cache.sshHostKeys },
       session: cloneSavedSession(this.cache.session),
     };
+  }
+
+  getRecoveryState(): { previousAvailable: boolean } {
+    return { previousAvailable: this.previousAvailable };
+  }
+
+  restorePrevious(): AppSettings {
+    if (!this.recoveryRequired || !this.previousAvailable) {
+      throw new Error('No previous settings are available');
+    }
+    const previousPath = `${this.filePath}.previous`;
+    const tempPath = `${this.filePath}.tmp`;
+    try {
+      const raw = fs.readFileSync(previousPath, 'utf8');
+      const loaded = this.parse(raw);
+      const bytes = Buffer.from(raw, 'utf8');
+      fs.writeFileSync(tempPath, bytes, { flush: true });
+      fs.renameSync(tempPath, this.filePath);
+      this.cache = loaded.settings;
+      this.captureStoredSecrets(loaded.sshProfiles);
+      this.lastValidBytes = bytes;
+      this.recoveryRequired = false;
+      this.previousAvailable = false;
+      this.syncDirectory();
+      return this.get();
+    } catch (err) {
+      try { fs.rmSync(tempPath, { force: true }); } catch {}
+      throw new Error('Could not restore previous settings', { cause: err });
+    }
+  }
+
+  reset(): AppSettings {
+    if (!this.recoveryRequired) throw new Error('Settings recovery is not required');
+    const raw = JSON.stringify(DEFAULT_SETTINGS, null, 2);
+    const loaded = this.parse(raw);
+    const bytes = Buffer.from(raw, 'utf8');
+    const tempPath = `${this.filePath}.tmp`;
+    try {
+      fs.writeFileSync(tempPath, bytes, { flush: true });
+      fs.renameSync(tempPath, this.filePath);
+      this.cache = loaded.settings;
+      this.captureStoredSecrets(loaded.sshProfiles);
+      this.lastValidBytes = bytes;
+      this.recoveryRequired = false;
+      this.previousAvailable = false;
+      try { fs.rmSync(`${this.filePath}.previous`, { force: true }); } catch {}
+      this.syncDirectory();
+      return this.get();
+    } catch (err) {
+      try { fs.rmSync(tempPath, { force: true }); } catch {}
+      throw new Error('Could not reset settings', { cause: err });
+    }
   }
 
   set(value: unknown): AppSettings {
@@ -367,55 +423,91 @@ export class SettingsManager {
   private load(): AppSettings {
     try {
       const raw = fs.readFileSync(this.filePath, 'utf-8');
-      const parsed = JSON.parse(raw) as Partial<StoredAppSettings>;
-      const mergedKeybindings = {
-        ...PLATFORM_DEFAULT_KEYBINDINGS,
-        ...(isBoundedStringRecord(parsed.keybindings, MAX_KEYBINDINGS, 256, 256)
-          ? parsed.keybindings
-          : {}),
-      };
-      const stored = {
-        ...DEFAULT_SETTINGS,
-        ...parsed,
-        keybindings: isBoundedStringRecord(mergedKeybindings, MAX_KEYBINDINGS, 256, 256)
-          ? mergedKeybindings
-          : { ...PLATFORM_DEFAULT_KEYBINDINGS },
-        notificationsEnabled: typeof parsed.notificationsEnabled === 'boolean' ? parsed.notificationsEnabled : false,
-        notificationThresholdSeconds: isValidNotificationThreshold(parsed.notificationThresholdSeconds)
-          ? parsed.notificationThresholdSeconds
-          : 10,
-        sshProfiles: normalizeStoredSshProfiles(parsed.sshProfiles),
-      } as StoredAppSettings;
-      this.captureStoredSecrets(stored.sshProfiles);
-      return this.deserialize(stored);
-    } catch {
+      const loaded = this.parse(raw);
+      this.captureStoredSecrets(loaded.sshProfiles);
+      this.lastValidBytes = Buffer.from(raw, 'utf8');
+      return loaded.settings;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        this.recoveryRequired = true;
+        this.previousAvailable = this.hasValidPrevious();
+      }
       return { ...DEFAULT_SETTINGS, session: { ...EMPTY_SESSION } };
     }
   }
 
+  private parse(raw: string): { settings: AppSettings; sshProfiles: StoredSSHProfile[] } {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Invalid settings');
+    }
+    const storedSettings = parsed as Partial<StoredAppSettings>;
+    const mergedKeybindings = {
+      ...PLATFORM_DEFAULT_KEYBINDINGS,
+      ...(isBoundedStringRecord(storedSettings.keybindings, MAX_KEYBINDINGS, 256, 256)
+        ? storedSettings.keybindings
+        : {}),
+    };
+    const stored = {
+      ...DEFAULT_SETTINGS,
+      ...storedSettings,
+      keybindings: isBoundedStringRecord(mergedKeybindings, MAX_KEYBINDINGS, 256, 256)
+        ? mergedKeybindings
+        : { ...PLATFORM_DEFAULT_KEYBINDINGS },
+      notificationsEnabled: typeof storedSettings.notificationsEnabled === 'boolean' ? storedSettings.notificationsEnabled : false,
+      notificationThresholdSeconds: isValidNotificationThreshold(storedSettings.notificationThresholdSeconds)
+        ? storedSettings.notificationThresholdSeconds
+        : 10,
+      sshProfiles: normalizeStoredSshProfiles(storedSettings.sshProfiles),
+    } as StoredAppSettings;
+    return { settings: this.deserialize(stored), sshProfiles: stored.sshProfiles };
+  }
+
+  private hasValidPrevious(): boolean {
+    try {
+      this.parse(fs.readFileSync(`${this.filePath}.previous`, 'utf8'));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private syncDirectory(): void {
+    if (process.platform === 'win32') return;
+    try {
+      const directory = fs.openSync(path.dirname(this.filePath), 'r');
+      try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+    } catch (err) {
+      console.error('Settings were saved, but crash durability could not be confirmed:', err);
+    }
+  }
+
   private save(previousSshProfiles = this.cache.sshProfiles): boolean {
+    if (this.recoveryRequired) return false;
     const tempPath = `${this.filePath}.tmp`;
+    const previousPath = `${this.filePath}.previous`;
+    const previousTempPath = `${previousPath}.tmp`;
     try {
       const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
       const serialized = this.serialize(this.cache, previousSshProfiles);
-      fs.writeFileSync(tempPath, Buffer.from(JSON.stringify(serialized, null, 2), 'utf8'), { flush: true });
+      const bytes = Buffer.from(JSON.stringify(serialized, null, 2), 'utf8');
+      if (this.lastValidBytes) {
+        fs.writeFileSync(previousTempPath, this.lastValidBytes, { flush: true });
+        fs.renameSync(previousTempPath, previousPath);
+      }
+      fs.writeFileSync(tempPath, bytes, { flush: true });
       fs.renameSync(tempPath, this.filePath);
+      this.lastValidBytes = bytes;
       this.captureStoredSecrets(serialized.sshProfiles);
       // ponytail: Node cannot fsync directories on Windows; add it if Node exposes a supported primitive.
-      if (process.platform !== 'win32') {
-        try {
-          const directory = fs.openSync(dir, 'r');
-          try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-        } catch (err) {
-          console.error('Settings were saved, but crash durability could not be confirmed:', err);
-        }
-      }
+      this.syncDirectory();
       return true;
     } catch (err) {
       try { fs.rmSync(tempPath, { force: true }); } catch {}
+      try { fs.rmSync(previousTempPath, { force: true }); } catch {}
       console.error('Failed to save settings:', err);
       return false;
     }

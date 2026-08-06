@@ -45,7 +45,9 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
     ...(await original<typeof import('fs')>()),
     appendFileSync: vi.fn(),
     existsSync: vi.fn(() => true),
-    readFileSync: vi.fn(() => { throw new Error('File not found'); }),
+    readFileSync: vi.fn(() => {
+      throw Object.assign(new Error('File not found'), { code: 'ENOENT' });
+    }),
     renameSync: vi.fn(),
     rmSync: vi.fn(),
     writeFileSync,
@@ -58,13 +60,22 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
   }));
   const settings = await import('../../src/main/settings');
   const settingsGetSpy = vi.spyOn(settings.SettingsManager.prototype, 'get').mockReturnValue({ notificationsEnabled: options.enabled ?? true, notificationThresholdSeconds: options.threshold ?? 10 } as any);
+  const settingsRecoveryStateSpy = vi.spyOn(settings.SettingsManager.prototype, 'getRecoveryState').mockReturnValue({ previousAvailable: true });
+  const restorePreviousSpy = vi.spyOn(settings.SettingsManager.prototype, 'restorePrevious').mockReturnValue({ theme: 'dracula' } as any);
+  const resetSettingsSpy = vi.spyOn(settings.SettingsManager.prototype, 'reset').mockReturnValue({ theme: 'tokyo-night' } as any);
   await import('../../src/main/index');
   await vi.waitFor(() => expect(handlers.has('notifications:command-completed')).toBe(true));
   const invoke = (payload: unknown, sender: unknown = webContents, senderFrame: unknown = webContents.mainFrame) =>
     Promise.resolve().then(() => handlers.get('notifications:command-completed')!({ sender, senderFrame }, payload));
   const setSettings = (updates: unknown) =>
     Promise.resolve().then(() => handlers.get('settings:set')!({ sender: webContents, senderFrame: webContents.mainFrame }, updates));
-  return { invoke, setSettings, writeFileSync, settingsGetSpy, Notification, notificationOn, notificationShow, restore, show, focus, setAppUserModelId, webContents };
+  const invokeChannel = (channel: string, payload?: unknown, sender: unknown = webContents, senderFrame: unknown = webContents.mainFrame) =>
+    Promise.resolve().then(() => handlers.get(channel)!({ sender, senderFrame }, payload));
+  return {
+    invoke, invokeChannel, setSettings, writeFileSync, settingsGetSpy, settingsRecoveryStateSpy,
+    restorePreviousSpy, resetSettingsSpy, Notification, notificationOn, notificationShow,
+    restore, show, focus, setAppUserModelId, webContents,
+  };
 }
 
 describe('main notification bridge', () => {
@@ -193,6 +204,22 @@ describe('main notification bridge', () => {
     await expect(bridge.invoke(validPayload, bridge.webContents, {})).rejects.toThrow(/untrusted/i);
     expect(bridge.setAppUserModelId).toHaveBeenCalledWith('com.sjorm.janet');
   });
+
+  it('guards zero-payload settings recovery operations with the trusted sender boundary', async () => {
+    const bridge = await loadMain();
+
+    await expect(bridge.invokeChannel('settings:recovery-state', { ignored: true }))
+      .resolves.toEqual({ previousAvailable: true });
+    await expect(bridge.invokeChannel('settings:restore-previous', { ignored: true }))
+      .resolves.toMatchObject({ theme: 'dracula' });
+    await expect(bridge.invokeChannel('settings:reset', { ignored: true }))
+      .resolves.toMatchObject({ theme: 'tokyo-night' });
+    expect(bridge.settingsRecoveryStateSpy).toHaveBeenCalledWith();
+    expect(bridge.restorePreviousSpy).toHaveBeenCalledWith();
+    expect(bridge.resetSettingsSpy).toHaveBeenCalledWith();
+    await expect(bridge.invokeChannel('settings:reset', undefined, bridge.webContents, {}))
+      .rejects.toThrow(/untrusted/i);
+  });
 });
 
 describe('preload notification bridge', () => {
@@ -204,5 +231,21 @@ describe('preload notification bridge', () => {
     const api = exposeInMainWorld.mock.calls[0][1];
     await expect(api.notifyCommandCompleted(validPayload)).resolves.toBe(true);
     expect(invoke).toHaveBeenCalledWith('notifications:command-completed', validPayload);
+  });
+
+  it('exposes zero-payload settings recovery operations', async () => {
+    const invoke = vi.fn().mockResolvedValue({ previousAvailable: true });
+    const exposeInMainWorld = vi.fn();
+    vi.doMock('electron', () => ({ contextBridge: { exposeInMainWorld }, ipcRenderer: { invoke, sendSync: vi.fn(), send: vi.fn(), on: vi.fn(), removeListener: vi.fn() } }));
+    await import('../../src/main/preload');
+    const api = exposeInMainWorld.mock.calls[0][1];
+
+    await api.getSettingsRecoveryState();
+    await api.restorePreviousSettings();
+    await api.resetSettings();
+
+    expect(invoke).toHaveBeenNthCalledWith(1, 'settings:recovery-state');
+    expect(invoke).toHaveBeenNthCalledWith(2, 'settings:restore-previous');
+    expect(invoke).toHaveBeenNthCalledWith(3, 'settings:reset');
   });
 });
