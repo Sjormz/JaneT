@@ -310,6 +310,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
   const connectingSshSessionIdsRef = useRef<Set<string>>(new Set());
   const releasedSshSessionIdsRef = useRef<Set<string>>(new Set());
+  const invalidatedInitialSshShellsRef = useRef(new Map<string, string>());
   const sshShellStateByTerminalRef = useRef(new Map<string, { sessionId: string; state: 'ready' | 'failed' }>());
 
   useLayoutEffect(() => {
@@ -375,14 +376,16 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     setDisconnectedSshSessionIds((current) => new Set(current).add(sessionId));
   }, []);
 
-  const markSshTerminalReady = useCallback((termId: string, sessionId: string) => {
+  const markSshTerminalReady = useCallback((termId: string, sessionId: string, explicitRetry = false) => {
+    if (!explicitRetry && invalidatedInitialSshShellsRef.current.get(termId) === sessionId) return;
     if (releasedSshSessionIdsRef.current.has(sessionId)) return;
     if (!ownsSshTerminal(tabsRef.current, termId, sessionId)) return;
     sshShellStateByTerminalRef.current.set(termId, { sessionId, state: 'ready' });
     markSshSessionReady(sessionId);
   }, [markSshSessionReady]);
 
-  const markSshTerminalFailed = useCallback((termId: string, sessionId: string) => {
+  const markSshTerminalFailed = useCallback((termId: string, sessionId: string, explicitRetry = false) => {
+    if (!explicitRetry && invalidatedInitialSshShellsRef.current.get(termId) === sessionId) return;
     if (!ownsSshTerminal(tabsRef.current, termId, sessionId)) return;
     sshShellStateByTerminalRef.current.set(termId, { sessionId, state: 'failed' });
     const owners = tabsRef.current.flatMap(collectTerminalOwners).filter(
@@ -405,6 +408,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       releasedSshSessionIdsRef.current.add(id);
       const disconnectedTerminals = tabsRef.current.flatMap(collectTerminalOwners)
         .filter((owner) => owner.sshSessionId === id);
+      for (const owner of disconnectedTerminals) {
+        invalidatedInitialSshShellsRef.current.set(owner.termId, id);
+      }
       clearPendingCommandHistoryRuns(new Set(disconnectedTerminals.map((owner) => owner.termId)));
       const disconnectedRecipient = disconnectedTerminals
         .some((owner) => broadcastRecipientIdsRef.current.has(owner.termId));
@@ -1014,6 +1020,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     const releasedSshSessions = new Set<string>();
 
     for (const owner of owners) {
+      invalidatedInitialSshShellsRef.current.delete(owner.termId);
       sshShellStateByTerminalRef.current.delete(owner.termId);
       disposeCachedTerminal(owner.termId);
       liveTerminalIdsRef.current.delete(owner.termId);
@@ -1618,7 +1625,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           ? current
           : [...current, session]);
       }
-      markSshTerminalReady(termId, sessionId);
+      markSshTerminalReady(termId, sessionId, true);
     } catch (shellErr) {
       if (!ownsSshTerminal(tabsRef.current, termId, sessionId)) {
         if (!ownsSshSession(tabsRef.current, sessionId)) {
@@ -1631,7 +1638,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       // then re-open the shell. If the profile is missing the user
       // will see the original error and can dismiss the tab.
       if (!profile) {
-        markSshTerminalFailed(termId, sessionId);
+        markSshTerminalFailed(termId, sessionId, true);
         console.error('SSH retry failed and no saved profile to reconnect from:', shellErr);
         throw shellErr;
       }
@@ -1673,9 +1680,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         setSshSessions((current) => current.some((candidate) => candidate.id === sessionId)
           ? current
           : [...current, session]);
-        markSshTerminalReady(termId, sessionId);
+        markSshTerminalReady(termId, sessionId, true);
       } catch (reconnectErr) {
-        markSshTerminalFailed(termId, sessionId);
+        markSshTerminalFailed(termId, sessionId, true);
         console.error('SSH retry failed:', reconnectErr);
         throw reconnectErr;
       } finally {

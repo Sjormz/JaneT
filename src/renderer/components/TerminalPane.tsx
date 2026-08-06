@@ -123,6 +123,8 @@ interface CachedTerminalPane {
   sshShellReady: boolean;
   sshNoticeState: SshNoticeState;
   sshNoticeListener: ((state: SshNoticeState) => void) | null;
+  sshShellReadyListener: TerminalPaneProps['onSshShellReady'];
+  sshShellFailedListener: TerminalPaneProps['onSshShellFailed'];
   agentEventListener: ((termId: string, event: AgentLifecycleEvent) => void) | null;
   broadcastInputListener: TerminalPaneProps['onBroadcastInput'];
   inputSource: { userInput: boolean };
@@ -192,6 +194,8 @@ export default function TerminalPane({
   searchVisibleRef.current = searchVisible;
   const cachedForAgentListener = terminalPaneCache.get(termId);
   if (cachedForAgentListener) {
+    cachedForAgentListener.sshShellReadyListener = onSshShellReady;
+    cachedForAgentListener.sshShellFailedListener = onSshShellFailed;
     cachedForAgentListener.agentEventListener = onAgentEvent ?? null;
     cachedForAgentListener.semanticCommandStartedListener.current = onSemanticCommandStarted;
     cachedForAgentListener.semanticCommandCancelledListener.current = onSemanticCommandCancelled;
@@ -608,21 +612,23 @@ export default function TerminalPane({
         ...(startupShellDialect ? { startupShellDialect } : {}),
       });
       openShell.then(() => {
+        const currentCache = terminalPaneCache.get(termId);
+        if (currentCache?.term !== term || currentCache.sshSessionId !== sshSessionId) return;
+        currentCache.sshShellReadyListener?.(termId, sshSessionId);
         if (!effectActive) return;
-        onSshShellReady?.(termId, sshSessionId);
         onReady(termId);
         term.focus();
       }).catch((err: any) => {
+        const currentCache = terminalPaneCache.get(termId);
+        if (currentCache?.term !== term || currentCache.sshSessionId !== sshSessionId) return;
         const message = err?.message || 'connection may have dropped';
         if (sshNoticeAttemptRef.current === noticeAttempt) {
           const errorState: SshNoticeState = { kind: 'error', message };
           publishSshNoticeState(errorState);
-          term.write('\r\n\x1b[31mSSH shell failed to open: ' + message + '\x1b[0m\r\n');
+          term.write('\x0d\x0a\x1b[31mSSH shell failed to open: ' + message + '\x1b[0m\x0d\x0a');
         }
-        if (effectActive) {
-          onSshShellFailed?.(termId, sshSessionId);
-          onReady(termId);
-        }
+        currentCache.sshShellFailedListener?.(termId, sshSessionId);
+        if (effectActive) onReady(termId);
       });
     } else if (hasSession) {
       onReady(termId);
@@ -679,6 +685,8 @@ export default function TerminalPane({
           ? { kind: 'waiting' }
           : { kind: 'reconnecting' },
       sshNoticeListener: setSshNoticeState,
+      sshShellReadyListener: onSshShellReady,
+      sshShellFailedListener: onSshShellFailed,
       agentEventListener: onAgentEvent ?? null,
       broadcastInputListener: onBroadcastInput,
       inputSource,

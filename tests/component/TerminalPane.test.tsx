@@ -1628,6 +1628,172 @@ describe('TerminalPane SSH shell output', () => {
     expect(sshCreateShell).toHaveBeenCalledTimes(1);
   });
 
+  it('publishes initial SSH shell readiness while its cached pane is detached', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    let resolveShell: (value: unknown) => void = () => {};
+    sshCreateShellImpl = () => new Promise((resolve) => { resolveShell = resolve; });
+    const onSshShellReady = vi.fn();
+    const props = {
+      termId: 'term-ssh-detached-ready',
+      tabType: 'ssh' as const,
+      sshSessionId: 'ssh-detached-ready',
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      onSshShellReady,
+      themeName: 'tokyo-night',
+    };
+
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    await act(async () => resolveShell({ connected: true }));
+    expect(onSshShellReady).toHaveBeenCalledTimes(1);
+    expect(onSshShellReady).toHaveBeenCalledWith(props.termId, props.sshSessionId);
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    expect(sshCreateShell).toHaveBeenCalledTimes(1);
+    expect(onSshShellReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores initial SSH shell readiness after its cached pane is replaced', async () => {
+    const { default: TerminalPane, disposeCachedTerminal } = await loadTerminalPane();
+    let resolveInitial: (value: unknown) => void = () => {};
+    let resolveReplacement: (value: unknown) => void = () => {};
+    let shellCount = 0;
+    sshCreateShellImpl = () => new Promise((resolve) => {
+      shellCount += 1;
+      if (shellCount === 1) resolveInitial = resolve;
+      else resolveReplacement = resolve;
+    });
+    const onSshShellReady = vi.fn();
+    const props = {
+      termId: 'term-ssh-replaced-ready',
+      tabType: 'ssh' as const,
+      sshSessionId: 'ssh-replaced-ready',
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      onSshShellReady,
+      themeName: 'tokyo-night',
+    };
+
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(1));
+    first.unmount();
+    disposeCachedTerminal(props.termId);
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} hasSession />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(2));
+
+    await act(async () => resolveInitial({ connected: true }));
+    expect(onSshShellReady).not.toHaveBeenCalled();
+
+    await act(async () => resolveReplacement({ connected: true }));
+    expect(onSshShellReady).toHaveBeenCalledTimes(1);
+    expect(onSshShellReady).toHaveBeenCalledWith(props.termId, props.sshSessionId);
+  });
+
+  it('publishes initial SSH shell failure while its cached pane is detached', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    let rejectShell: (error: Error) => void = () => {};
+    sshCreateShellImpl = () => new Promise((_resolve, reject) => { rejectShell = reject; });
+    const onSshShellFailed = vi.fn();
+    const props = {
+      termId: 'term-ssh-detached-failed',
+      tabType: 'ssh' as const,
+      sshSessionId: 'ssh-detached-failed',
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      onSshShellFailed,
+      onSshRetry: vi.fn(() => Promise.resolve()),
+      themeName: 'tokyo-night',
+    };
+
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    await act(async () => rejectShell(new Error('Detached shell failed')));
+    expect(onSshShellFailed).toHaveBeenCalledTimes(1);
+    expect(onSshShellFailed).toHaveBeenCalledWith(props.termId, props.sshSessionId);
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent('Detached shell failed');
+    expect(sshCreateShell).toHaveBeenCalledTimes(1);
+    expect(onSshShellFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores initial SSH shell failure after its cached pane is replaced', async () => {
+    const { default: TerminalPane, disposeCachedTerminal } = await loadTerminalPane();
+    let rejectInitial: (error: Error) => void = () => {};
+    let resolveReplacement: (value: unknown) => void = () => {};
+    let shellCount = 0;
+    sshCreateShellImpl = () => new Promise((resolve, reject) => {
+      shellCount += 1;
+      if (shellCount === 1) rejectInitial = reject;
+      else resolveReplacement = resolve;
+    });
+    const onSshShellReady = vi.fn();
+    const onSshShellFailed = vi.fn();
+    const props = {
+      termId: 'term-ssh-replaced-failed',
+      tabType: 'ssh' as const,
+      sshSessionId: 'ssh-replaced-failed',
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      onSshShellReady,
+      onSshShellFailed,
+      themeName: 'tokyo-night',
+    };
+
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(1));
+    first.unmount();
+    disposeCachedTerminal(props.termId);
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} hasSession />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(2));
+    await act(async () => resolveReplacement({ connected: true }));
+    expect(onSshShellReady).toHaveBeenCalledTimes(1);
+
+    await act(async () => rejectInitial(new Error('Obsolete shell failed')));
+    expect(onSshShellFailed).not.toHaveBeenCalled();
+    expect(onSshShellReady).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('Obsolete shell failed')).not.toBeInTheDocument();
+  });
+
   it('does not restore a stale waiting notice after cached output arrives offscreen', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     sshCreateShellImpl = () => new Promise(() => {});

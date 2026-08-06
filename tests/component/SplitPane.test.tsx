@@ -2472,6 +2472,123 @@ describe('split panes in the app', () => {
       .toHaveAttribute('data-ssh-connection-lost', 'true');
   });
 
+  it('does not publish stale initial readiness while reconnecting a closed transport', async () => {
+    const sshProfileId = 'stale-initial@box.local:22:password';
+    const initialShell = deferred<{ connected: true }>();
+    const replacementShell = deferred<{ connected: true }>();
+    window.janet.sshCreateShell = vi.fn()
+      .mockReturnValueOnce(initialShell.promise)
+      .mockRejectedValueOnce(new Error('session not found'))
+      .mockReturnValueOnce(replacementShell.promise);
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId, host: 'box.local', port: 22, username: 'stale-initial',
+        auth: 'password', password: 'secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'stale-initial-shell', title: 'stale initial host', type: 'ssh', sshProfileId,
+          root: { type: 'leaf' },
+        }],
+        activeTabId: 'stale-initial-shell', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
+    const shell = (window.janet.sshCreateShell as any).mock.calls[0][0];
+    act(() => {
+      rendererMocks.sshConnectionClosedHandler?.({ id: shell.id, reason: 'transport reset' });
+    });
+    await waitFor(() => expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0'));
+
+    const retry = rendererMocks.sshRetryHandlers.get(shell.termId);
+    expect(retry).toBeTruthy();
+    let retryPromise!: Promise<void>;
+    act(() => {
+      retryPromise = Promise.resolve(retry?.(shell.termId, { cols: 120, rows: 40 }));
+    });
+    await waitFor(() => {
+      expect(window.janet.sshConnect).toHaveBeenCalledTimes(2);
+      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(3);
+    });
+
+    await act(async () => {
+      initialShell.resolve({ connected: true });
+      await initialShell.promise;
+    });
+    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+    expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
+      connectionState: 'disconnected',
+      ready: false,
+    }));
+
+    await act(async () => {
+      replacementShell.resolve({ connected: true });
+      await retryPromise;
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
+      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
+        connectionState: 'ready',
+        ready: true,
+      }));
+    });
+  });
+
+  it('does not withdraw replacement readiness when the stale initial shell fails', async () => {
+    const sshProfileId = 'stale-failure@box.local:22:password';
+    const initialShell = deferred<{ connected: true }>();
+    window.janet.sshCreateShell = vi.fn()
+      .mockReturnValueOnce(initialShell.promise)
+      .mockRejectedValueOnce(new Error('session not found'))
+      .mockResolvedValueOnce({ connected: true });
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId, host: 'box.local', port: 22, username: 'stale-failure',
+        auth: 'password', password: 'secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'stale-initial-failure', title: 'stale failure host', type: 'ssh', sshProfileId,
+          root: { type: 'leaf' },
+        }],
+        activeTabId: 'stale-initial-failure', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
+    const shell = (window.janet.sshCreateShell as any).mock.calls[0][0];
+    act(() => {
+      rendererMocks.sshConnectionClosedHandler?.({ id: shell.id, reason: 'transport reset' });
+    });
+    await waitFor(() => expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0'));
+
+    const retry = rendererMocks.sshRetryHandlers.get(shell.termId);
+    expect(retry).toBeTruthy();
+    await act(async () => {
+      await retry?.(shell.termId, { cols: 120, rows: 40 });
+    });
+    await waitFor(() => {
+      expect(window.janet.sshConnect).toHaveBeenCalledTimes(2);
+      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(3);
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
+    });
+
+    await act(async () => {
+      initialShell.reject(new Error('old transport closed'));
+      await initialShell.promise.catch(() => {});
+    });
+    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
+    expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
+      connectionState: 'ready',
+      ready: true,
+    }));
+  });
+
   it('withdraws initial SSH readiness when its only healthy sibling closes', async () => {
     const sshProfileId = 'shared-initial@box.local:22:password';
     window.janet.sshCreateShell = vi.fn()
