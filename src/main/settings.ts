@@ -300,9 +300,8 @@ export class SettingsManager {
     const previousPath = `${this.filePath}.previous`;
     const tempPath = `${this.filePath}.tmp`;
     try {
-      const raw = fs.readFileSync(previousPath, 'utf8');
-      const loaded = this.parse(raw);
-      const bytes = Buffer.from(raw, 'utf8');
+      const bytes = fs.readFileSync(previousPath);
+      const loaded = this.parse(bytes.toString('utf8'));
       fs.writeFileSync(tempPath, bytes, { flush: true });
       fs.renameSync(tempPath, this.filePath);
       this.cache = loaded.settings;

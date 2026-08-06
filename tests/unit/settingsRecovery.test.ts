@@ -79,6 +79,23 @@ describe('SettingsManager recovery', () => {
     expect(damaged.get()).toMatchObject({ theme: 'dracula', fontSize: 16 });
   });
 
+  it('restores the exact validated prior-generation bytes', async () => {
+    const settingsPath = path.join(electronState.userData, 'settings.json');
+    const previousBytes = Buffer.concat([
+      Buffer.from('{"theme":"dracula","fontFamily":"'),
+      Buffer.from([0x80]),
+      Buffer.from('"}'),
+    ]);
+    fs.writeFileSync(settingsPath, '{"theme":', 'utf8');
+    fs.writeFileSync(`${settingsPath}.previous`, previousBytes);
+    const { SettingsManager } = await import('../../src/main/settings');
+    const damaged = new SettingsManager();
+
+    damaged.restorePrevious();
+
+    expect(fs.readFileSync(settingsPath)).toEqual(previousBytes);
+  });
+
   it.each([
     ['malformed JSON', '{"fontSize":'],
     ['a JSON scalar', JSON.stringify('not settings')],
