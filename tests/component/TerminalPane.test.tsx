@@ -341,7 +341,7 @@ describe('TerminalPane SSH reinitialization', () => {
 
     render(
       <KeybindingsProvider>
-        <TerminalPane {...props} />
+        <TerminalPane {...props} initialCwd="/resolved-home" />
       </KeybindingsProvider>,
     );
 

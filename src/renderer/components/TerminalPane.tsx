@@ -129,6 +129,7 @@ interface CachedTerminalPane {
   sshShellReadyListener: TerminalPaneProps['onSshShellReady'];
   sshShellFailedListener: TerminalPaneProps['onSshShellFailed'];
   localSpawnState: LocalSpawnState;
+  localSpawnRequest: Parameters<typeof window.janet.terminalCreate>[0] | null;
   localSpawnListener: ((state: LocalSpawnState) => void) | null;
   localSpawnReadyListener: TerminalPaneProps['onReady'] | null;
   agentEventListener: ((termId: string, event: AgentLifecycleEvent) => void) | null;
@@ -627,6 +628,16 @@ export default function TerminalPane({
     });
     lifetimeCleanup.push(cleanupListener);
 
+    const localSpawnRequest: Parameters<typeof window.janet.terminalCreate>[0] | null =
+      tabType === 'local' && !hasSession
+        ? {
+            id: termId,
+            cwd: initialCwd,
+            ...(startupCommands?.length ? { startupCommands } : {}),
+            ...(startupShellDialect ? { startupShellDialect } : {}),
+          }
+        : null;
+
     if (tabType === 'ssh' && sshSessionId && sshShellReady) {
       const noticeAttempt = ++sshNoticeAttemptRef.current;
       publishSshNoticeState({ kind: 'waiting' });
@@ -660,13 +671,8 @@ export default function TerminalPane({
       });
     } else if (hasSession) {
       onReady(termId);
-    } else if (tabType === 'local') {
-      window.janet.terminalCreate({
-        id: termId,
-        cwd: initialCwd,
-        ...(startupCommands?.length ? { startupCommands } : {}),
-        ...(startupShellDialect ? { startupShellDialect } : {}),
-      }).then(() => {
+    } else if (localSpawnRequest) {
+      window.janet.terminalCreate(localSpawnRequest).then(() => {
         const currentCache = terminalPaneCache.get(termId);
         if (currentCache?.term !== term || currentCache.tabType !== 'local') return;
         currentCache.localSpawnState = { kind: 'ready' };
@@ -726,6 +732,7 @@ export default function TerminalPane({
       sshShellReadyListener: onSshShellReady,
       sshShellFailedListener: onSshShellFailed,
       localSpawnState: tabType === 'local' && !hasSession ? { kind: 'starting' } : { kind: 'ready' },
+      localSpawnRequest: tabType === 'local' && !hasSession ? localSpawnRequest : null,
       localSpawnListener: setLocalSpawnState,
       localSpawnReadyListener: onReady,
       agentEventListener: onAgentEvent ?? null,
@@ -810,20 +817,17 @@ export default function TerminalPane({
   const retryLocalTerminal = () => {
     const term = termRef.current;
     const cached = terminalPaneCache.get(termId);
+    const localSpawnRequest = cached?.localSpawnRequest;
     if (
       !term
       || cached?.term !== term
       || cached.tabType !== 'local'
       || cached.localSpawnState.kind !== 'error'
+      || !localSpawnRequest
     ) return;
 
     publishLocalSpawnState({ kind: 'retrying' });
-    window.janet.terminalCreate({
-      id: termId,
-      cwd: initialCwd,
-      ...(startupCommands?.length ? { startupCommands } : {}),
-      ...(startupShellDialect ? { startupShellDialect } : {}),
-    }).then(() => {
+    window.janet.terminalCreate(localSpawnRequest).then(() => {
       const currentCache = terminalPaneCache.get(termId);
       if (currentCache?.term !== term || currentCache.tabType !== 'local') return;
       publishLocalSpawnState({ kind: 'ready' });
