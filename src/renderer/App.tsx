@@ -116,6 +116,12 @@ function ownsSshSession(tabs: TabInfo[], sessionId: string): boolean {
   ));
 }
 
+function ownsSshTerminal(tabs: TabInfo[], termId: string, sessionId: string): boolean {
+  return tabs.some((tab) => collectTerminalOwners(tab).some(
+    (owner) => owner.termId === termId && owner.type === 'ssh' && owner.sshSessionId === sessionId,
+  ));
+}
+
 function preferredLeafId(tab: TabInfo, focusedTerminalId: string | null, maximizedLeafId?: string | null): string | null {
   const leaves = getAllLeafIds(tab.root);
   if (maximizedLeafId && leaves.includes(maximizedLeafId)) return maximizedLeafId;
@@ -1548,9 +1554,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       });
       if (
         releasedSshSessionIdsRef.current.has(sessionId) ||
-        !ownsSshSession(tabsRef.current, sessionId)
+        !ownsSshTerminal(tabsRef.current, termId, sessionId)
       ) {
-        window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
+        if (ownsSshSession(tabsRef.current, sessionId)) {
+          window.janet.sshDestroyShell({ sessionId, termId }).catch(() => {});
+        } else {
+          window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
+        }
         return;
       }
       const session = existingSession ?? (profile ? sshSessionInfo(sessionId, profile) : undefined);
@@ -1578,9 +1588,11 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         });
         if (
           releasedSshSessionIdsRef.current.has(sessionId) ||
-          !ownsSshSession(tabsRef.current, sessionId)
+          !ownsSshTerminal(tabsRef.current, termId, sessionId)
         ) {
-          window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
+          if (!ownsSshSession(tabsRef.current, sessionId)) {
+            window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
+          }
           return;
         }
         await window.janet.sshCreateShell({
@@ -1592,9 +1604,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         });
         if (
           releasedSshSessionIdsRef.current.has(sessionId) ||
-          !ownsSshSession(tabsRef.current, sessionId)
+          !ownsSshTerminal(tabsRef.current, termId, sessionId)
         ) {
-          window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
+          if (ownsSshSession(tabsRef.current, sessionId)) {
+            window.janet.sshDestroyShell({ sessionId, termId }).catch(() => {});
+          } else {
+            window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
+          }
           return;
         }
         const session = sshSessionInfo(sessionId, profile);
