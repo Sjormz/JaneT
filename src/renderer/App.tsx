@@ -176,43 +176,6 @@ function sshConnectProfile(profile: SavedSSHProfile, profiles: SavedSSHProfile[]
   };
 }
 
-function stripStartupAutomation(leaf: TerminalLeaf): TerminalLeaf {
-  const {
-    startupCommands: _startupCommands,
-    startupShellDialect: _startupShellDialect,
-    ...safeLeaf
-  } = leaf;
-  return safeLeaf;
-}
-
-function localizeTerminalLeaf(leaf: TerminalLeaf): TerminalLeaf {
-  const {
-    sshProfileId: _profile,
-    sshSessionId: _session,
-    sshShellReady: _ready,
-    ...local
-  } = stripStartupAutomation(leaf);
-  return { ...local, terminalType: 'local' };
-}
-
-function demoteSshTab(tab: TabInfo): TabInfo {
-  return {
-    ...tab,
-    type: 'local',
-    sshSessionId: undefined,
-    sshProfileId: undefined,
-    sshShellReady: undefined,
-    root: mapLeaves(tab.root, localizeTerminalLeaf),
-  };
-}
-
-function demoteSshLeaf(tab: TabInfo, leafId: string): TabInfo {
-  return {
-    ...tab,
-    root: mapLeaves(tab.root, (leaf) => leaf.id === leafId ? localizeTerminalLeaf(leaf) : leaf),
-  };
-}
-
 interface InitialAppState {
   tabs: TabInfo[];
   activeTabId: string;
@@ -381,6 +344,16 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     });
   }, []);
 
+  const markSshSessionDisconnected = useCallback((sessionId: string) => {
+    setReadySshSessionIds((current) => {
+      if (!current.has(sessionId)) return current;
+      const next = new Set(current);
+      next.delete(sessionId);
+      return next;
+    });
+    setDisconnectedSshSessionIds((current) => new Set(current).add(sessionId));
+  }, []);
+
   const isSshSessionDisconnected = useCallback((sessionId?: string) => (
     Boolean(sessionId && disconnectedSshSessionIds.has(sessionId))
   ), [disconnectedSshSessionIds]);
@@ -395,19 +368,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         .some((owner) => broadcastRecipientIdsRef.current.has(owner.termId));
       if (disconnectedRecipient) setBroadcastRecipientIds(new Set());
       setSshSessions((current) => current.filter((session) => session.id !== id));
-      setReadySshSessionIds((current) => {
-        if (!current.has(id)) return current;
-        const next = new Set(current);
-        next.delete(id);
-        return next;
-      });
-      setDisconnectedSshSessionIds((current) => new Set(current).add(id));
+      markSshSessionDisconnected(id);
       setSshConnectionEpochById((current) => ({
         ...current,
         [id]: (current[id] ?? 0) + 1,
       }));
     });
-  }, []);
+  }, [markSshSessionDisconnected]);
 
   const restoredSshTabsStartedRef = useRef(false);
   const restoredSshLeavesStartedRef = useRef(false);
@@ -516,13 +483,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     for (const tab of reconnectable) {
       const profile = sshProfiles.find((candidate) => candidate.id === tab.sshProfileId);
       if (!profile) {
-        // Profile was deleted — demote the tab to a plain local tab so
-        // the user isn't stuck staring at a dead "Reconnect" panel.
-        setTabs((prev) => prev.map((existing) =>
-          existing.id === tab.id
-            ? demoteSshTab(existing)
-            : existing,
-        ));
+        markSshSessionDisconnected(tab.sshSessionId!);
         continue;
       }
       const sessionId = tab.sshSessionId!;
@@ -555,22 +516,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         )));
       }).catch((err) => {
         console.error('Failed to reconnect saved SSH tab:', err);
-        // Drop the session id so the TerminalPane's error path (or
-        // user's manual retry) can re-allocate a fresh one if they
-        // choose to recover. Demote to local so the user at least
-        // sees content (a local shell) rather than a permanently
-        // blank pane with a dead SSH banner.
-        setTabs((prev) => prev.map((existing) =>
-          existing.id === tab.id
-            ? demoteSshTab(existing)
-            : existing,
-        ));
+        markSshSessionDisconnected(sessionId);
       }).finally(() => {
         connectingSshSessionIdsRef.current.delete(sessionId);
         releasedSshSessionIdsRef.current.delete(sessionId);
       });
     }
-  }, [markSshSessionReady, sshProfiles]);
+  }, [markSshSessionDisconnected, markSshSessionReady, sshProfiles]);
 
   // Mixed workspace tabs carry their SSH connection settings on individual leaves.
   useEffect(() => {
@@ -588,9 +540,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     for (const leaf of leaves) {
       const profile = sshProfiles.find((candidate) => candidate.id === leaf.sshProfileId);
       if (!profile) {
-        setTabs((current) => current.map((tab) => tab.id === leaf.tabId
-          ? demoteSshLeaf(tab, leaf.leafId)
-          : tab));
+        markSshSessionDisconnected(leaf.sshSessionId);
         continue;
       }
       if (connectingSshSessionIdsRef.current.has(leaf.sshSessionId)) {
@@ -617,16 +567,14 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           : tab));
       }).catch((error) => {
         console.error('Failed to reconnect saved workspace SSH terminal:', error);
-        setTabs((current) => current.map((tab) => tab.id === leaf.tabId
-          ? demoteSshLeaf(tab, leaf.leafId)
-          : tab));
+        markSshSessionDisconnected(leaf.sshSessionId);
       })
         .finally(() => {
           connectingSshSessionIdsRef.current.delete(leaf.sshSessionId);
           releasedSshSessionIdsRef.current.delete(leaf.sshSessionId);
         });
     }
-  }, [markSshSessionReady, sshProfiles]);
+  }, [markSshSessionDisconnected, markSshSessionReady, sshProfiles]);
 
   const persistSession = useCallback(async (): Promise<boolean> => {
     const session: SavedSession = {
@@ -1734,7 +1682,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     for (const leaf of sshLeaves) {
       const profile = sshProfiles.find((candidate) => candidate.id === leaf.sshProfileId);
       if (!profile) {
-        updateTab(tab.id, (current) => demoteSshLeaf(current, leaf.id));
+        markSshSessionDisconnected(leaf.sshSessionId);
         continue;
       }
       releasedSshSessionIdsRef.current.delete(leaf.sshSessionId);
@@ -1758,13 +1706,13 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         updateTab(tab.id, (current) => ({ ...current, root: mapLeaves(current.root, (candidate) => candidate.id === leaf.id ? { ...candidate, sshShellReady: true } : candidate) }));
       } catch (error) {
         console.error('Failed to open workspace SSH terminal:', error);
-        updateTab(tab.id, (current) => demoteSshLeaf(current, leaf.id));
+        markSshSessionDisconnected(leaf.sshSessionId);
       } finally {
         connectingSshSessionIdsRef.current.delete(leaf.sshSessionId);
         releasedSshSessionIdsRef.current.delete(leaf.sshSessionId);
       }
     }
-  }, [markSshSessionReady, sshProfiles, terminalCount, updateTab]);
+  }, [markSshSessionDisconnected, markSshSessionReady, sshProfiles, terminalCount, updateTab]);
 
 
   const activeTab = getTab(activeTabId);

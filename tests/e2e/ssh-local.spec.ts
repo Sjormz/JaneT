@@ -251,19 +251,22 @@ function respondToShellCommand(stream: NodeJS.WritableStream & { exit?: (code: n
   stream.write('$ ');
 }
 
-async function startLocalSshServer(): Promise<{
+interface LocalSshServer {
   port: number;
   fingerprint: string;
   receivedCommands: string[];
   disconnectClients: () => void;
   close: () => Promise<void>;
-}> {
-  const port = await getFreePort();
-  const { privateKey } = generateKeyPairSync('rsa', {
+  restart: () => Promise<LocalSshServer>;
+}
+
+async function startLocalSshServer(options: { port?: number; privateKey?: string } = {}): Promise<LocalSshServer> {
+  const port = options.port ?? await getFreePort();
+  const privateKey = options.privateKey ?? generateKeyPairSync('rsa', {
     modulusLength: 2048,
     privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
     publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
-  });
+  }).privateKey;
   const parsedHostKey = utils.parseKey(privateKey);
   if (parsedHostKey instanceof Error) throw parsedHostKey;
   const fingerprint = `SHA256:${createHash('sha256')
@@ -339,13 +342,14 @@ async function startLocalSshServer(): Promise<{
       for (const client of clients) client.end();
     },
     close: () => new Promise((resolve) => server.close(() => resolve())),
+    restart: () => startLocalSshServer({ port, privateKey }),
   };
 }
 
 async function launchAppWithLocalSsh(
   port: number,
   fingerprint: string,
-  options: { seedSession?: boolean; seedStartupPreset?: boolean } = {},
+  options: { seedSession?: boolean; seedStartupPreset?: boolean; userData?: string } = {},
 ): Promise<{
   browser: Browser;
   electronProcess: ChildProcess;
@@ -354,7 +358,8 @@ async function launchAppWithLocalSsh(
   settingsPath: string;
   userData: string;
 }> {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-local-ssh-'));
+  const ownsUserData = !options.userData;
+  const userData = options.userData ?? fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-local-ssh-'));
   const eventsPath = path.join(userData, 'events.ndjson');
   const settingsPath = path.join(userData, 'settings.json');
   const remoteDebuggingPort = await getFreePort();
@@ -367,7 +372,7 @@ async function launchAppWithLocalSsh(
     auth: 'password' as const,
   };
 
-  fs.writeFileSync(settingsPath, JSON.stringify({
+  if (ownsUserData) fs.writeFileSync(settingsPath, JSON.stringify({
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'left',
@@ -434,7 +439,7 @@ async function launchAppWithLocalSsh(
   } catch (error) {
     await browser?.close().catch(() => {});
     await killProcessTree(electronProcess);
-    fs.rmSync(userData, { recursive: true, force: true });
+    if (ownsUserData) fs.rmSync(userData, { recursive: true, force: true });
     throw error;
   }
 }
@@ -540,6 +545,39 @@ test('restores local SSH terminal after refresh and runs ls again', async () => 
   } finally {
     await closeApp(browser, electronProcess, userData);
     await ssh.close();
+  }
+});
+
+test('preserves SSH identity after a failed second-process restore and reconnects explicitly', async () => {
+  const ssh = await startLocalSshServer();
+  const first = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
+  let second: Awaited<ReturnType<typeof launchAppWithLocalSsh>> | undefined;
+  let restartedSsh: LocalSshServer | undefined;
+  try {
+    await waitForShellCreateCount(first.eventsPath, 1);
+    await closeApp(first.browser, first.electronProcess);
+    ssh.disconnectClients();
+    await ssh.close();
+
+    second = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint, { userData: first.userData });
+    await expect(second.page.getByText('Connection closed')).toBeVisible({ timeout: 20_000 });
+    expect(readSettings(second.settingsPath).session.tabs[0]).toMatchObject({
+      type: 'ssh',
+      sshProfileId: `janet@127.0.0.1:${ssh.port}:password`,
+    });
+
+    restartedSsh = await ssh.restart();
+    await second.page.getByRole('button', { name: 'Reconnect' }).click();
+    await waitForShellCreateCount(second.eventsPath, 2);
+    await runMarkedLs(second.page, 'SECOND_PROCESS_RECONNECT');
+  } finally {
+    if (second) await closeApp(second.browser, second.electronProcess);
+    else await closeApp(first.browser, first.electronProcess);
+    restartedSsh?.disconnectClients();
+    await restartedSsh?.close().catch(() => {});
+    ssh.disconnectClients();
+    await ssh.close().catch(() => {});
+    fs.rmSync(first.userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

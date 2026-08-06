@@ -1864,7 +1864,7 @@ describe('split panes in the app', () => {
       ]));
   });
 
-  it('demotes a fresh preset SSH pane with a missing profile without running its commands locally', async () => {
+  it('preserves a fresh preset SSH pane with a missing profile as unavailable remote state', async () => {
     const preset = {
       id: 'missing-remote-workspace',
       name: 'Missing remote workspace',
@@ -1891,22 +1891,29 @@ describe('split panes in the app', () => {
       await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
     });
 
-    await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalled());
+    await waitFor(() => {
+      const launched = rendererMocks.verticalTabBarProps.tabs.find(
+        (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+      );
+      expect(launched?.root).toMatchObject({
+        terminalType: 'ssh',
+        sshProfileId: 'missing-profile',
+        startupCommands: ['remote-only-command'],
+        startupShellDialect: 'posix',
+      });
+      expect(screen.getByTestId(`terminal-${launched.root.id}`))
+        .toHaveAttribute('data-ssh-connection-lost', 'true');
+    });
     expect(window.janet.sshConnect).not.toHaveBeenCalled();
-    const localCreates = (window.janet.terminalCreate as any).mock.calls.map((call: any[]) => call[0]);
-    expect(new Set(localCreates.map((call: { id: string }) => call.id)).size).toBe(1);
-    for (const call of localCreates) {
-      expect(call).not.toHaveProperty('startupCommands');
-      expect(call).not.toHaveProperty('startupShellDialect');
-    }
+    expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
+    expect(window.janet.terminalCreate).not.toHaveBeenCalled();
     const launched = rendererMocks.verticalTabBarProps.tabs.find(
       (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
     );
-    expect(launched.root).toMatchObject({ terminalType: 'local' });
-    expect(launched.root).not.toHaveProperty('startupCommands');
+    expect(rendererMocks.sshRetryHandlers.get(launched.root.id)).toBeTypeOf('function');
   });
 
-  it('demotes a fresh preset SSH pane when its connection fails', async () => {
+  it('preserves a fresh preset SSH pane when its connection fails', async () => {
     const sshProfileId = 'offline@box.local:22:password';
     const preset = {
       id: 'offline-remote-workspace',
@@ -1943,11 +1950,23 @@ describe('split panes in the app', () => {
         await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
       });
 
-      await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalled());
+      await waitFor(() => {
+        const launched = rendererMocks.verticalTabBarProps.tabs.find(
+          (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+        );
+        expect(launched?.root).toMatchObject({
+          terminalType: 'ssh', sshProfileId,
+          startupCommands: ['remote-only-command'], startupShellDialect: 'posix',
+        });
+        expect(screen.getByTestId(`terminal-${launched.root.id}`))
+          .toHaveAttribute('data-ssh-connection-lost', 'true');
+      });
       expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
-      const localCreates = (window.janet.terminalCreate as any).mock.calls.map((call: any[]) => call[0]);
-      expect(new Set(localCreates.map((call: { id: string }) => call.id)).size).toBe(1);
-      for (const call of localCreates) expect(call).not.toHaveProperty('startupCommands');
+      expect(window.janet.terminalCreate).not.toHaveBeenCalled();
+      const launched = rendererMocks.verticalTabBarProps.tabs.find(
+        (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+      );
+      expect(rendererMocks.sshRetryHandlers.get(launched.root.id)).toBeTypeOf('function');
     } finally {
       consoleError.mockRestore();
     }
@@ -2314,7 +2333,7 @@ describe('split panes in the app', () => {
     });
   });
 
-  it('demotes a restored SSH tab with a missing profile to a working local shell', async () => {
+  it('preserves a restored SSH tab with a missing profile as unavailable remote state', async () => {
     window.janet.getSettings = vi.fn().mockResolvedValue({
       keybindings: {},
       workspaceTabs: [],
@@ -2342,15 +2361,28 @@ describe('split panes in the app', () => {
 
     render(<App />);
 
-    await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1));
-    const localCreate = (window.janet.terminalCreate as any).mock.calls[0][0];
-    expect(localCreate).not.toHaveProperty('startupCommands');
-    expect(localCreate).not.toHaveProperty('startupShellDialect');
+    await waitFor(() => {
+      const restored = rendererMocks.verticalTabBarProps.tabs.find(
+        (tab: { title: string }) => tab.title === 'removed host',
+      );
+      expect(restored).toMatchObject({ type: 'ssh', sshProfileId: 'removed-profile' });
+      expect(restored.root).toMatchObject({
+        terminalType: 'ssh', sshProfileId: 'removed-profile',
+        startupCommands: ['rm -rf remote-build'], startupShellDialect: 'posix',
+      });
+      expect(screen.getByTestId(`terminal-${restored.root.id}`))
+        .toHaveAttribute('data-ssh-connection-lost', 'true');
+    });
+    expect(window.janet.terminalCreate).not.toHaveBeenCalled();
     expect(window.janet.sshConnect).not.toHaveBeenCalled();
     expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
+    const restored = rendererMocks.verticalTabBarProps.tabs.find(
+      (tab: { title: string }) => tab.title === 'removed host',
+    );
+    expect(rendererMocks.sshRetryHandlers.get(restored.root.id)).toBeTypeOf('function');
   });
 
-  it('demotes only a restored workspace SSH leaf whose profile is missing', async () => {
+  it('preserves only a restored workspace SSH leaf whose profile is missing', async () => {
     window.janet.getSettings = vi.fn().mockResolvedValue({
       keybindings: {},
       workspaceTabs: [],
@@ -2381,13 +2413,120 @@ describe('split panes in the app', () => {
 
     await waitFor(() => {
       expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2);
-      const createdIds = (window.janet.terminalCreate as any).mock.calls.map(
-        (call: any[]) => call[0]?.id,
+      const restored = rendererMocks.verticalTabBarProps.tabs.find(
+        (tab: { title: string }) => tab.title === 'mixed',
       );
-      expect(new Set(createdIds).size).toBe(2);
+      const remote = restored.root.children.find(
+        (leaf: { terminalType?: string }) => leaf.terminalType === 'ssh',
+      );
+      expect(remote).toMatchObject({ terminalType: 'ssh', sshProfileId: 'removed-profile' });
+      expect(screen.getByTestId(`terminal-${remote.id}`))
+        .toHaveAttribute('data-ssh-connection-lost', 'true');
     });
+    expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1);
     expect(window.janet.sshConnect).not.toHaveBeenCalled();
     expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
+    const restored = rendererMocks.verticalTabBarProps.tabs.find(
+      (tab: { title: string }) => tab.title === 'mixed',
+    );
+    const remote = restored.root.children.find(
+      (leaf: { terminalType?: string }) => leaf.terminalType === 'ssh',
+    );
+    expect(rendererMocks.sshRetryHandlers.get(remote.id)).toBeTypeOf('function');
+  });
+
+  it('preserves a restored SSH tab when reconnecting its transport fails', async () => {
+    const sshProfileId = 'offline@box.local:22:password';
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId, host: 'box.local', port: 22, username: 'offline',
+        auth: 'password', password: 'secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'offline-ssh', title: 'offline host', type: 'ssh', sshProfileId,
+          root: {
+            type: 'leaf', terminalType: 'ssh', sshProfileId,
+            startupCommands: ['remote-only-command'], startupShellDialect: 'posix',
+          },
+        }],
+        activeTabId: 'offline-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    });
+    (window.janet.sshConnect as any).mockRejectedValueOnce(new Error('host offline'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      render(<App />);
+      await waitFor(() => {
+        const restored = rendererMocks.verticalTabBarProps.tabs.find(
+          (tab: { title: string }) => tab.title === 'offline host',
+        );
+        expect(restored).toMatchObject({ type: 'ssh', sshProfileId });
+        expect(restored.root).toMatchObject({
+          terminalType: 'ssh', sshProfileId,
+          startupCommands: ['remote-only-command'], startupShellDialect: 'posix',
+        });
+        expect(screen.getByTestId(`terminal-${restored.root.id}`))
+          .toHaveAttribute('data-ssh-connection-lost', 'true');
+      });
+      expect(window.janet.terminalCreate).not.toHaveBeenCalled();
+      expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('preserves a restored workspace SSH leaf when reconnecting its transport fails', async () => {
+    const sshProfileId = 'mixed-offline@box.local:22:password';
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId, host: 'box.local', port: 22, username: 'mixed-offline',
+        auth: 'password', password: 'secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'mixed-offline', title: 'mixed offline', type: 'local',
+          root: {
+            type: 'split', direction: 'vertical', sizes: [1, 1],
+            children: [
+              { type: 'leaf', terminalType: 'local' },
+              {
+                type: 'leaf', terminalType: 'ssh', sshProfileId,
+                startupCommands: ['remote-only-command'], startupShellDialect: 'posix',
+              },
+            ],
+          },
+        }],
+        activeTabId: 'mixed-offline', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    });
+    (window.janet.sshConnect as any).mockRejectedValueOnce(new Error('host offline'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      render(<App />);
+      await waitFor(() => {
+        const restored = rendererMocks.verticalTabBarProps.tabs.find(
+          (tab: { title: string }) => tab.title === 'mixed offline',
+        );
+        const remote = restored.root.children.find(
+          (leaf: { terminalType?: string }) => leaf.terminalType === 'ssh',
+        );
+        expect(remote).toMatchObject({
+          terminalType: 'ssh', sshProfileId,
+          startupCommands: ['remote-only-command'], startupShellDialect: 'posix',
+        });
+        expect(screen.getByTestId(`terminal-${remote.id}`))
+          .toHaveAttribute('data-ssh-connection-lost', 'true');
+      });
+      expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1);
+      expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it('retries a mixed-workspace SSH leaf with measured dimensions and surfaces transport failure', async () => {
