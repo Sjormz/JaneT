@@ -49,11 +49,12 @@ Apple notarization.
 
 ### Windows ConPTY packaging
 
-JaneT currently locks `node-pty` 1.1.0. Its postinstall step applies an
-idempotent backport of [upstream node-pty PR #885](https://github.com/microsoft/node-pty/pull/885),
-which defers the native ConPTY pipe connection until the output worker reports
-ready. Without that ordering fix, constrained Windows CI runners can block the
-Node event loop inside `ConnectNamedPipe` before a JavaScript timeout can run.
+JaneT currently locks `node-pty` 1.2.0-beta.14, which contains upstream race fix #922.
+Its postinstall step also applies an idempotent backport of [upstream node-pty
+PR #885](https://github.com/microsoft/node-pty/pull/885), which defers
+the native ConPTY pipe connection until the output worker reports ready.
+Without that ordering fix, constrained Windows CI runners can block the Node
+event loop inside `ConnectNamedPipe` before a JavaScript timeout can run.
 
 The Windows release verifier checks that the backport and unpacked worker path
 survived packaging, then exercises the packaged module with a real ConPTY
