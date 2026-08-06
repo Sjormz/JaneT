@@ -209,6 +209,8 @@ test('consumes Hermes plugin lifecycle output through the local PTY', async ({},
   const turnGatePath = path.join(userData, 'release-turn');
   const turnStartedPath = path.join(userData, 'turn-started');
   const turnEndGatePath = path.join(userData, 'release-turn-end');
+  const staleTurnGatePath = path.join(userData, 'release-stale-turn');
+  const exitGatePath = path.join(userData, 'release-exit');
   fs.writeFileSync(probePath, String.raw`
 import importlib.util
 import io
@@ -223,6 +225,8 @@ session_ready = pathlib.Path(sys.argv[2])
 turn_gate = pathlib.Path(sys.argv[3])
 turn_started = pathlib.Path(sys.argv[4])
 turn_end_gate = pathlib.Path(sys.argv[5])
+stale_turn_gate = pathlib.Path(sys.argv[6])
+exit_gate = pathlib.Path(sys.argv[7])
 spec = importlib.util.spec_from_file_location("janet_hermes_awareness", plugin_dir / "__init__.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
@@ -248,6 +252,16 @@ module._on_turn_end(
     platform="tui",
     completed=True,
 )
+while not stale_turn_gate.exists():
+    time.sleep(0.05)
+module._on_turn_start(
+    session_id="e2e-session-rotated",
+    turn_id="e2e-stale-turn",
+    platform="tui",
+)
+turn_started.touch()
+while not exit_gate.exists():
+    time.sleep(0.05)
 protocol_output = protocol_stdout.getvalue()
 sys.stdout = terminal_stdout
 if protocol_output:
@@ -276,7 +290,7 @@ print("TUI_AWARENESS_OK")
 
     await firstTerminal.click();
     await page.keyboard.type(
-      `python "${probePath.replace(/\\/g, '/')}" "${pluginDir.replace(/\\/g, '/')}" "${sessionReadyPath.replace(/\\/g, '/')}" "${turnGatePath.replace(/\\/g, '/')}" "${turnStartedPath.replace(/\\/g, '/')}" "${turnEndGatePath.replace(/\\/g, '/')}"`,
+      `python "${probePath.replace(/\\/g, '/')}" "${pluginDir.replace(/\\/g, '/')}" "${sessionReadyPath.replace(/\\/g, '/')}" "${turnGatePath.replace(/\\/g, '/')}" "${turnStartedPath.replace(/\\/g, '/')}" "${turnEndGatePath.replace(/\\/g, '/')}" "${staleTurnGatePath.replace(/\\/g, '/')}" "${exitGatePath.replace(/\\/g, '/')}"; exit`,
     );
     await page.keyboard.press('Enter');
 
@@ -300,16 +314,23 @@ print("TUI_AWARENESS_OK")
     expect(await page.locator('.terminal-leaf-header').first().evaluate((element) => (
       element.scrollWidth <= element.clientWidth + 1
     ))).toBe(true);
-    await expect.poll(async () => page.locator('.xterm-rows').first().innerText())
-      .not.toContain('janet-agent');
-    await expect(page.locator('.xterm-rows').first()).toContainText('TUI_AWARENESS_OK');
-
     const screenshot = testInfo.outputPath('hermes-agent-awareness.png');
     await page.screenshot({ path: screenshot });
     await testInfo.attach('hermes-agent-awareness', {
       path: screenshot,
       contentType: 'image/png',
     });
+
+    fs.rmSync(turnStartedPath, { force: true });
+    fs.writeFileSync(staleTurnGatePath, '');
+    await expect.poll(() => fs.existsSync(turnStartedPath)).toBe(true);
+    await expect(firstTab.locator('.vtab-sub')).toHaveText('Hermes · Running');
+    fs.writeFileSync(exitGatePath, '');
+    await expect(firstTab.locator('.vtab-sub')).toHaveText('Exited');
+    await expect(page.locator('.terminal-leaf').first().locator('.leaf-awareness')).toHaveText('Exited');
+    await expect.poll(async () => page.locator('.xterm-rows').first().innerText())
+      .not.toContain('janet-agent');
+    await expect(page.locator('.xterm-rows').first()).toContainText('TUI_AWARENESS_OK');
   } finally {
     await forceClose(app);
     fs.rmSync(userData, {

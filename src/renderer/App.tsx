@@ -1598,6 +1598,11 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     const hasSiblingOwner = () => tabsRef.current.flatMap(collectTerminalOwners).some(
       (owner) => owner.type === 'ssh' && owner.sshSessionId === sessionId && owner.termId !== termId,
     );
+    setAwarenessByTerminal((current) => {
+      const awareness = current[termId];
+      if (!awareness || awareness.phase === 'ready') return current;
+      return { ...current, [termId]: { ...awareness, phase: 'ready', phaseChangedAt: Date.now() } };
+    });
     sshShellStateByTerminalRef.current.delete(termId);
     if (!hasSiblingOwner()) markSshSessionDisconnected(sessionId);
     try {

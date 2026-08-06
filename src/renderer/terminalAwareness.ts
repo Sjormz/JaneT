@@ -89,11 +89,9 @@ export function terminalStatus(
   awareness: AgentAwareness | undefined,
   transport?: TerminalTransportStatus,
 ): AgentStatus | undefined {
-  const status = awareness ? agentStatus(awareness) : undefined;
-  if (status && status.kind !== 'ready') return status;
   if (transport === 'exited') return { kind: 'exited', label: 'Exited' };
   if (transport === 'disconnected') return { kind: 'disconnected', label: 'SSH disconnected' };
-  return status;
+  return awareness ? agentStatus(awareness) : undefined;
 }
 
 export function applyAgentEvent(

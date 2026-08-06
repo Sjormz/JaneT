@@ -870,11 +870,11 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(rendererMocks.terminalExitHandler).toBeTypeOf('function'));
 
     act(() => rendererMocks.agentEventHandlers.get(termId)!({
-      version: 1, provider: 'hermes', event: 'session.start',
-      sessionId: 'session-1',
+      version: 1, provider: 'hermes', event: 'turn.start',
+      sessionId: 'session-1', turnId: 'turn-1',
     }));
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[tabId])
-      .toEqual({ kind: 'ready', label: 'Hermes · Ready' }));
+      .toEqual({ kind: 'running', label: 'Hermes · Running' }));
 
     act(() => rendererMocks.terminalExitHandler!({ id: termId, exitCode: 17, signal: 0 }));
 
@@ -2275,6 +2275,19 @@ describe('split panes in the app', () => {
       connectionState: 'ready',
       ready: true,
     }));
+    const emitAgentEvent = rendererMocks.agentEventHandlers.get(shellArgs.termId)!;
+    act(() => {
+      emitAgentEvent({
+        version: 1, provider: 'hermes', event: 'session.start', sessionId: 'agent-session-1',
+      });
+      emitAgentEvent({
+        version: 1, provider: 'hermes', event: 'attention.request',
+        sessionId: 'agent-session-1', turnId: 'turn-1',
+      });
+    });
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[
+      rendererMocks.verticalTabBarProps.activeTabId
+    ]).toEqual({ kind: 'needs-input', label: 'Hermes · Needs input' }));
 
     act(() => {
       rendererMocks.verticalTabBarProps.onSSHProfilesChange([{ ...profile, host: 'renamed-box.local' }]);
@@ -2366,6 +2379,75 @@ describe('split panes in the app', () => {
         ready: true,
       }));
       expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
+      expect(rendererMocks.verticalTabBarProps.awarenessByTab[
+        rendererMocks.verticalTabBarProps.activeTabId
+      ]).toEqual({ kind: 'ready', label: 'Hermes · Ready' });
+    });
+
+    act(() => {
+      emitAgentEvent({
+        version: 1, provider: 'hermes', event: 'session.start',
+        sessionId: 'agent-session-no-event',
+      });
+      emitAgentEvent({
+        version: 1, provider: 'hermes', event: 'attention.request',
+        sessionId: 'agent-session-no-event', turnId: 'turn-no-event',
+      });
+    });
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[
+      rendererMocks.verticalTabBarProps.activeTabId
+    ]).toEqual({ kind: 'needs-input', label: 'Hermes · Needs input' }));
+    act(() => {
+      rendererMocks.sshConnectionClosedHandler?.({ id: connectArgs.id, reason: 'transport reset' });
+    });
+    (window.janet.sshCreateShell as any).mockRejectedValueOnce(new Error('session not found'));
+    await act(async () => {
+      await retry?.(shellArgs.termId, { cols: 120, rows: 40 });
+    });
+    await waitFor(() => {
+      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(8);
+      expect(window.janet.sshConnect).toHaveBeenCalledTimes(5);
+      expect(rendererMocks.verticalTabBarProps.awarenessByTab[
+        rendererMocks.verticalTabBarProps.activeTabId
+      ]).toEqual({ kind: 'ready', label: 'Hermes · Ready' });
+    });
+
+    act(() => {
+      emitAgentEvent({
+        version: 1, provider: 'hermes', event: 'session.start',
+        sessionId: 'agent-session-pending',
+      });
+      emitAgentEvent({
+        version: 1, provider: 'hermes', event: 'attention.request',
+        sessionId: 'agent-session-pending', turnId: 'turn-pending',
+      });
+    });
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[
+      rendererMocks.verticalTabBarProps.activeTabId
+    ]).toEqual({ kind: 'needs-input', label: 'Hermes · Needs input' }));
+    act(() => {
+      rendererMocks.sshConnectionClosedHandler?.({ id: connectArgs.id, reason: 'transport reset' });
+    });
+    const replacementShell = deferred<{ connected: true }>();
+    (window.janet.sshCreateShell as any)
+      .mockRejectedValueOnce(new Error('session not found'))
+      .mockImplementationOnce(() => replacementShell.promise);
+    let successfulRetry!: Promise<void>;
+    await act(async () => {
+      successfulRetry = Promise.resolve(retry?.(shellArgs.termId, { cols: 120, rows: 40 }));
+      await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(10));
+      emitAgentEvent({
+        version: 1, provider: 'hermes', event: 'turn.start',
+        sessionId: 'agent-session-pending', turnId: 'turn-fresh',
+      });
+      replacementShell.resolve({ connected: true });
+      await successfulRetry;
+    });
+    await waitFor(() => {
+      expect(window.janet.sshConnect).toHaveBeenCalledTimes(6);
+      expect(rendererMocks.verticalTabBarProps.awarenessByTab[
+        rendererMocks.verticalTabBarProps.activeTabId
+      ]).toEqual({ kind: 'running', label: 'Hermes · Running' });
     });
   });
 
