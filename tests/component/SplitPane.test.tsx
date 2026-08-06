@@ -2524,6 +2524,57 @@ describe('split panes in the app', () => {
     expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
   });
 
+  it('does not reconnect after closing the sole owner cancels its direct retry', async () => {
+    const sshProfileId = 'cancelled-retry@box.local:22:password';
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      sshProfiles: [{
+        id: sshProfileId, host: 'box.local', port: 22, username: 'cancelled-retry',
+        auth: 'password', password: 'secret',
+      }],
+      session: {
+        tabs: [{
+          id: 'cancelled-retry-ssh', title: 'cancelled retry host', type: 'ssh', sshProfileId,
+          root: { type: 'leaf', terminalType: 'ssh', sshProfileId },
+        }],
+        activeTabId: 'cancelled-retry-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
+    });
+    const restored = rendererMocks.verticalTabBarProps.tabs.find(
+      (tab: { title: string }) => tab.title === 'cancelled retry host',
+    );
+    const retry = rendererMocks.sshRetryHandlers.get(restored.root.id)!;
+    const retryShell = deferred<{ connected: true }>();
+    (window.janet.sshCreateShell as any).mockImplementationOnce(() => retryShell.promise);
+
+    let retryPromise!: Promise<void>;
+    await act(async () => {
+      retryPromise = Promise.resolve(retry(restored.root.id, { cols: 120, rows: 40 }));
+      await Promise.resolve();
+    });
+    expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    await confirmPendingAction(/^close tab$/i);
+    await waitFor(() => {
+      expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: restored.sshSessionId });
+      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+    });
+
+    await act(async () => {
+      retryShell.reject(new Error(`SSH connection ${restored.sshSessionId} was closed`));
+      await retryPromise;
+    });
+    expect(window.janet.sshConnect).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
+  });
+
   it('does not restore SSH status when a replacement shell finishes after its sole owner closes', async () => {
     const sshProfileId = 'late-sole-replacement@box.local:22:password';
     window.janet.getSettings = vi.fn().mockResolvedValue({

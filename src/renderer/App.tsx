@@ -1574,6 +1574,12 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       }
       markSshSessionReady(sessionId);
     } catch (shellErr) {
+      if (!ownsSshTerminal(tabsRef.current, termId, sessionId)) {
+        if (!ownsSshSession(tabsRef.current, sessionId)) {
+          window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
+        }
+        return;
+      }
       // Shell open failed — the session itself may be dead. Try
       // re-establishing the SSH connection from the saved profile,
       // then re-open the shell. If the profile is missing the user
