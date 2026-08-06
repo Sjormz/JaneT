@@ -2,6 +2,47 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import { safeStorage } from 'electron';
 
+const LEGACY_KEYBINDINGS = {
+  'search-toggle': 'Ctrl+F',
+  'palette-toggle': 'Ctrl+K',
+  'new-terminal': 'Ctrl+N',
+  'close-tab': 'Ctrl+W',
+  'toggle-sidebar': 'Ctrl+B',
+  'font-increase': 'Ctrl+Plus',
+  'font-decrease': 'Ctrl+-',
+  'snippets-toggle': 'Ctrl+Shift+P',
+  'split-right': 'Ctrl+\\',
+  'split-down': 'Ctrl+Shift+\\',
+  'close-pane': 'Ctrl+Shift+W',
+  'rename-pane': 'F2',
+  'rename-tab': 'Ctrl+F2',
+  'previous-command': 'Ctrl+Shift+ArrowUp',
+  'next-command': 'Ctrl+Shift+ArrowDown',
+  'copy-command': 'Ctrl+Alt+C',
+  'copy-command-output': 'Ctrl+Alt+O',
+  'rerun-command': 'Ctrl+Alt+R',
+};
+
+async function loadKeybindings(
+  platformName: 'win32' | 'darwin',
+  storedForDefaults: (defaults: Record<string, string>) => Record<string, string>,
+): Promise<{ actual: Record<string, string>; defaults: Record<string, string> }> {
+  const fsMock = await import('fs');
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { ...platform, value: platformName });
+  vi.resetModules();
+  try {
+    const { SettingsManager } = await import('../../src/main/settings');
+    const defaults = new SettingsManager().get().keybindings;
+    const storedKeybindings = storedForDefaults(defaults);
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({ keybindings: storedKeybindings }));
+    return { actual: new SettingsManager().get().keybindings, defaults };
+  } finally {
+    Object.defineProperty(process, 'platform', platform);
+    vi.resetModules();
+  }
+}
+
 // Mock electron's app module
 vi.mock('electron', () => ({
   app: {
@@ -165,6 +206,40 @@ describe('SettingsManager', () => {
       'font-reset': `${primaryModifier}+0`,
       'history-toggle': '',
     });
+  });
+
+  it.each(['win32', 'darwin'] as const)(
+    'migrates the exact raw legacy %s keybindings to current defaults',
+    async (platformName) => {
+      const { actual, defaults } = await loadKeybindings(platformName, () => LEGACY_KEYBINDINGS);
+      expect(actual).toEqual(defaults);
+    },
+  );
+
+  it.each(['win32', 'darwin'] as const)(
+    'migrates the exact JaneT-expanded legacy %s keybindings to current defaults',
+    async (platformName) => {
+      const { actual, defaults } = await loadKeybindings(platformName, (current) => ({
+        ...current,
+        ...LEGACY_KEYBINDINGS,
+      }));
+      expect(actual).toEqual(defaults);
+    },
+  );
+
+  it.each([
+    ['sparse', { 'close-tab': 'Alt+X' }],
+    ['changed complete', { ...LEGACY_KEYBINDINGS, 'palette-toggle': 'Alt+K' }],
+    ['explicit empty', { ...LEGACY_KEYBINDINGS, 'palette-toggle': '' }],
+    ['extra key', { ...LEGACY_KEYBINDINGS, custom: 'Alt+J' }],
+    ['missing key', Object.fromEntries(
+      Object.entries(LEGACY_KEYBINDINGS).filter(([key]) => key !== 'rerun-command'),
+    )],
+  ])('preserves the user-owned %s keybinding map', async (_name, keybindings) => {
+    for (const platformName of ['win32', 'darwin'] as const) {
+      const { actual, defaults } = await loadKeybindings(platformName, () => keybindings);
+      expect(actual).toEqual({ ...defaults, ...keybindings });
+    }
   });
 
   it('rejects shortcut updates whose merged map exceeds the entry limit', async () => {

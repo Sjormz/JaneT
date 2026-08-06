@@ -143,6 +143,33 @@ function defaultKeybindingsForPlatform(platform: string): Record<KeybindingActio
 
 const PLATFORM_DEFAULT_KEYBINDINGS = defaultKeybindingsForPlatform(process.platform);
 
+const LEGACY_KEYBINDINGS: Record<string, string> = {
+  'search-toggle': 'Ctrl+F',
+  'palette-toggle': 'Ctrl+K',
+  'new-terminal': 'Ctrl+N',
+  'close-tab': 'Ctrl+W',
+  'toggle-sidebar': 'Ctrl+B',
+  'font-increase': 'Ctrl+Plus',
+  'font-decrease': 'Ctrl+-',
+  'snippets-toggle': 'Ctrl+Shift+P',
+  'split-right': 'Ctrl+\\',
+  'split-down': 'Ctrl+Shift+\\',
+  'close-pane': 'Ctrl+Shift+W',
+  'rename-pane': 'F2',
+  'rename-tab': 'Ctrl+F2',
+  'previous-command': 'Ctrl+Shift+ArrowUp',
+  'next-command': 'Ctrl+Shift+ArrowDown',
+  'copy-command': 'Ctrl+Alt+C',
+  'copy-command-output': 'Ctrl+Alt+O',
+  'rerun-command': 'Ctrl+Alt+R',
+};
+
+function exactlyMatches(record: Record<string, string>, expected: Record<string, string>): boolean {
+  const keys = Object.keys(record);
+  return keys.length === Object.keys(expected).length
+    && keys.every((key) => record[key] === expected[key]);
+}
+
 export interface AppSettings {
   theme: ThemeName;
   fontSize: number;
@@ -441,11 +468,15 @@ export class SettingsManager {
       throw new Error('Invalid settings');
     }
     const storedSettings = parsed as Partial<StoredAppSettings>;
+    const storedKeybindings = isBoundedStringRecord(storedSettings.keybindings, MAX_KEYBINDINGS, 256, 256)
+      ? storedSettings.keybindings
+      : {};
     const mergedKeybindings = {
       ...PLATFORM_DEFAULT_KEYBINDINGS,
-      ...(isBoundedStringRecord(storedSettings.keybindings, MAX_KEYBINDINGS, 256, 256)
-        ? storedSettings.keybindings
-        : {}),
+      ...((exactlyMatches(storedKeybindings, LEGACY_KEYBINDINGS)
+        || exactlyMatches(storedKeybindings, { ...PLATFORM_DEFAULT_KEYBINDINGS, ...LEGACY_KEYBINDINGS }))
+        ? {}
+        : storedKeybindings),
     };
     const stored = {
       ...DEFAULT_SETTINGS,
