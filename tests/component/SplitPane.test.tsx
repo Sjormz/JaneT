@@ -1844,6 +1844,7 @@ describe('split panes in the app', () => {
 
     render(<App />);
     await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
+    await act(async () => {});
     const connectionCallStart = (window.janet.sshConnect as any).mock.calls.length;
     const shellCallStart = (window.janet.sshCreateShell as any).mock.calls.length;
 
