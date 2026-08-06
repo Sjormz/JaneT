@@ -75,6 +75,9 @@ interface TerminalPaneProps {
 }
 
 type SshNoticeState = React.ComponentProps<typeof SSHConnectionNotice>['state'];
+type LocalSpawnState =
+  | { kind: 'starting' | 'ready' | 'retrying' }
+  | { kind: 'error'; message: string };
 type TerminalPathDropState = 'valid' | 'invalid' | null;
 
 const MIN_SSH_COLS = 120;
@@ -125,6 +128,9 @@ interface CachedTerminalPane {
   sshNoticeListener: ((state: SshNoticeState) => void) | null;
   sshShellReadyListener: TerminalPaneProps['onSshShellReady'];
   sshShellFailedListener: TerminalPaneProps['onSshShellFailed'];
+  localSpawnState: LocalSpawnState;
+  localSpawnListener: ((state: LocalSpawnState) => void) | null;
+  localSpawnReadyListener: TerminalPaneProps['onReady'] | null;
   agentEventListener: ((termId: string, event: AgentLifecycleEvent) => void) | null;
   broadcastInputListener: TerminalPaneProps['onBroadcastInput'];
   inputSource: { userInput: boolean };
@@ -188,6 +194,9 @@ export default function TerminalPane({
   const [sshNoticeState, setSshNoticeState] = useState<SshNoticeState>(
     () => terminalPaneCache.get(termId)?.sshNoticeState ?? { kind: 'hidden' },
   );
+  const [localSpawnState, setLocalSpawnState] = useState<LocalSpawnState>(
+    () => terminalPaneCache.get(termId)?.localSpawnState ?? { kind: 'starting' },
+  );
   const [pathDropState, setPathDropState] = useState<TerminalPathDropState>(null);
   const componentMountedRef = useRef(false);
   const searchVisibleRef = useRef(false);
@@ -196,6 +205,7 @@ export default function TerminalPane({
   if (cachedForAgentListener) {
     cachedForAgentListener.sshShellReadyListener = onSshShellReady;
     cachedForAgentListener.sshShellFailedListener = onSshShellFailed;
+    cachedForAgentListener.localSpawnReadyListener = onReady;
     cachedForAgentListener.agentEventListener = onAgentEvent ?? null;
     cachedForAgentListener.semanticCommandStartedListener.current = onSemanticCommandStarted;
     cachedForAgentListener.semanticCommandCancelledListener.current = onSemanticCommandCancelled;
@@ -219,6 +229,16 @@ export default function TerminalPane({
       else if (componentMountedRef.current) setSshNoticeState(next);
     } else if (componentMountedRef.current) {
       setSshNoticeState(next);
+    }
+  }, [termId]);
+
+  const publishLocalSpawnState = useCallback((next: LocalSpawnState) => {
+    const cached = terminalPaneCache.get(termId);
+    if (cached) {
+      cached.localSpawnState = next;
+      cached.localSpawnListener?.(next);
+    } else if (componentMountedRef.current) {
+      setLocalSpawnState(next);
     }
   }, [termId]);
 
@@ -433,6 +453,8 @@ export default function TerminalPane({
     ) {
       const { term, fitAddon, searchAddon } = cached;
       cached.sshNoticeListener = setSshNoticeState;
+      cached.localSpawnListener = setLocalSpawnState;
+      cached.localSpawnReadyListener = onReady;
       cached.semanticCommandStartedListener.current = onSemanticCommandStarted;
       cached.semanticCommandCancelledListener.current = onSemanticCommandCancelled;
       cached.semanticCommandListener.current = onSemanticCommand;
@@ -451,7 +473,7 @@ export default function TerminalPane({
       if (tabType !== 'ssh') {
         publishSshNoticeState({ kind: 'hidden' });
       }
-      onReady(termId);
+      if (tabType === 'ssh' || cached.localSpawnState.kind === 'ready') onReady(termId);
 
       return () => {
         effectActive = false;
@@ -460,6 +482,12 @@ export default function TerminalPane({
         const currentCache = terminalPaneCache.get(termId);
         if (currentCache?.sshNoticeListener === setSshNoticeState) {
           currentCache.sshNoticeListener = null;
+        }
+        if (currentCache?.localSpawnListener === setLocalSpawnState) {
+          currentCache.localSpawnListener = null;
+        }
+        if (currentCache?.localSpawnReadyListener === onReady) {
+          currentCache.localSpawnReadyListener = null;
         }
         if (currentCache && currentCache.broadcastInputListener === onBroadcastInput) {
           currentCache.broadcastInputListener = undefined;
@@ -639,9 +667,19 @@ export default function TerminalPane({
         ...(startupCommands?.length ? { startupCommands } : {}),
         ...(startupShellDialect ? { startupShellDialect } : {}),
       }).then(() => {
+        const currentCache = terminalPaneCache.get(termId);
+        if (currentCache?.term !== term || currentCache.tabType !== 'local') return;
+        currentCache.localSpawnState = { kind: 'ready' };
         if (!effectActive) return;
         onReady(termId);
-      }).catch(console.error);
+      }).catch((error: unknown) => {
+        const currentCache = terminalPaneCache.get(termId);
+        if (currentCache?.term !== term || currentCache.tabType !== 'local') return;
+        publishLocalSpawnState({
+          kind: 'error',
+          message: error instanceof Error ? error.message : 'Terminal process could not be started',
+        });
+      });
     }
 
 
@@ -687,6 +725,9 @@ export default function TerminalPane({
       sshNoticeListener: setSshNoticeState,
       sshShellReadyListener: onSshShellReady,
       sshShellFailedListener: onSshShellFailed,
+      localSpawnState: tabType === 'local' && !hasSession ? { kind: 'starting' } : { kind: 'ready' },
+      localSpawnListener: setLocalSpawnState,
+      localSpawnReadyListener: onReady,
       agentEventListener: onAgentEvent ?? null,
       broadcastInputListener: onBroadcastInput,
       inputSource,
@@ -703,6 +744,12 @@ export default function TerminalPane({
       const currentCache = terminalPaneCache.get(termId);
       if (currentCache?.sshNoticeListener === setSshNoticeState) {
         currentCache.sshNoticeListener = null;
+      }
+      if (currentCache?.localSpawnListener === setLocalSpawnState) {
+        currentCache.localSpawnListener = null;
+      }
+      if (currentCache?.localSpawnReadyListener === onReady) {
+        currentCache.localSpawnReadyListener = null;
       }
       if (currentCache && currentCache.broadcastInputListener === onBroadcastInput) {
         currentCache.broadcastInputListener = undefined;
@@ -758,6 +805,37 @@ export default function TerminalPane({
         if (sshNoticeAttemptRef.current !== noticeAttempt) return;
         publishSshNoticeState({ kind: 'error', message: err?.message || 'Reconnect failed' });
       });
+  };
+
+  const retryLocalTerminal = () => {
+    const term = termRef.current;
+    const cached = terminalPaneCache.get(termId);
+    if (
+      !term
+      || cached?.term !== term
+      || cached.tabType !== 'local'
+      || cached.localSpawnState.kind !== 'error'
+    ) return;
+
+    publishLocalSpawnState({ kind: 'retrying' });
+    window.janet.terminalCreate({
+      id: termId,
+      cwd: initialCwd,
+      ...(startupCommands?.length ? { startupCommands } : {}),
+      ...(startupShellDialect ? { startupShellDialect } : {}),
+    }).then(() => {
+      const currentCache = terminalPaneCache.get(termId);
+      if (currentCache?.term !== term || currentCache.tabType !== 'local') return;
+      publishLocalSpawnState({ kind: 'ready' });
+      currentCache.localSpawnReadyListener?.(termId);
+    }).catch((error: unknown) => {
+      const currentCache = terminalPaneCache.get(termId);
+      if (currentCache?.term !== term || currentCache.tabType !== 'local') return;
+      publishLocalSpawnState({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Terminal process could not be started',
+      });
+    });
   };
 
   const pathDropTarget = tabType === 'local'
@@ -842,6 +920,35 @@ export default function TerminalPane({
       {pathDropState && (
         <div className="terminal-path-drop-indicator" role="status" aria-live="polite">
           {pathDropState === 'valid' ? 'Drop to paste path' : 'Path belongs to another terminal'}
+        </div>
+      )}
+      {(localSpawnState.kind === 'error' || localSpawnState.kind === 'retrying') && (
+        <div
+          className={`ssh-terminal-notice${localSpawnState.kind === 'error' ? ' is-error' : ''}`}
+          data-testid="local-terminal-notice"
+          role={localSpawnState.kind === 'error' ? 'alert' : 'status'}
+          aria-live={localSpawnState.kind === 'error' ? 'assertive' : 'polite'}
+        >
+          <div className="ssh-terminal-notice-text">
+            <div className="ssh-terminal-notice-title">
+              {localSpawnState.kind === 'error' ? 'Couldn’t start local terminal' : 'Starting local terminal'}
+            </div>
+            <div className="ssh-terminal-notice-subtitle">
+              {localSpawnState.kind === 'error'
+                ? 'Retry to start this terminal in the same pane.'
+                : 'Starting the terminal process.'}
+            </div>
+            {localSpawnState.kind === 'error' && (
+              <div className="ssh-terminal-notice-message">{localSpawnState.message}</div>
+            )}
+            {localSpawnState.kind === 'error' && (
+              <div className="ssh-terminal-notice-actions">
+                <button type="button" className="ssh-notice-action primary" onClick={retryLocalTerminal}>
+                  Retry
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
       <SSHConnectionNotice

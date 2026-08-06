@@ -307,6 +307,103 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(terminalWrite).not.toHaveBeenCalled();
   });
 
+  it('keeps a failed local terminal recoverable across a cached remount', async () => {
+    terminalCreate.mockRejectedValueOnce(new Error('File not found'));
+    const { default: TerminalPane } = await loadTerminalPane();
+    const onReady = vi.fn();
+    const onRemoved = vi.fn();
+    const props = {
+      termId: 'term-local-spawn-failed',
+      tabType: 'local' as const,
+      initialCwd: '/repo',
+      startupCommands: ['npm run dev'],
+      onReady,
+      onRemoved,
+      themeName: 'tokyo-night',
+    };
+    const request = {
+      id: props.termId,
+      cwd: props.initialCwd,
+      startupCommands: props.startupCommands,
+    };
+
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('File not found');
+    expect(terminalCreate).toHaveBeenCalledTimes(1);
+    expect(terminalCreate).toHaveBeenNthCalledWith(1, request);
+    expect(onReady).not.toHaveBeenCalled();
+    first.unmount();
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Couldn’t start local terminal');
+    expect(alert).toHaveTextContent('File not found');
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    expect(retry).toHaveAttribute('type', 'button');
+    expect(retry.tabIndex).toBe(0);
+    expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1);
+    expect(terminalCreate).toHaveBeenCalledTimes(1);
+    expect(onReady).not.toHaveBeenCalled();
+
+    fireEvent.click(retry);
+
+    await waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
+    expect(onReady).toHaveBeenCalledWith(props.termId);
+    expect(terminalCreate).toHaveBeenCalledTimes(2);
+    expect(terminalCreate).toHaveBeenNthCalledWith(2, request);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('ignores a local retry that completes after its cached terminal is replaced', async () => {
+    let resolveRetry!: (value: { pid: number }) => void;
+    terminalCreate
+      .mockRejectedValueOnce(new Error('File not found'))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveRetry = resolve; }));
+    const { default: TerminalPane, disposeCachedTerminal } = await loadTerminalPane();
+    const oldReady = vi.fn();
+    const replacementReady = vi.fn();
+    const props = {
+      termId: 'term-local-retry-replaced',
+      tabType: 'local' as const,
+      onRemoved: vi.fn(),
+      themeName: 'tokyo-night',
+    };
+
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} onReady={oldReady} />
+      </KeybindingsProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(terminalCreate).toHaveBeenCalledTimes(2);
+
+    first.unmount();
+    expect(disposeCachedTerminal(props.termId)).toBe(true);
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} onReady={replacementReady} />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(replacementReady).toHaveBeenCalledTimes(1));
+    expect(MockTerminal.instances).toHaveLength(2);
+
+    await act(async () => resolveRetry({ pid: 456 }));
+
+    expect(oldReady).not.toHaveBeenCalled();
+    expect(replacementReady).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('does not ready a local terminal whose creation resolves after removal', async () => {
     let resolveCreate!: (value: { pid: number }) => void;
     terminalCreate.mockReturnValueOnce(new Promise((resolve) => { resolveCreate = resolve; }));
