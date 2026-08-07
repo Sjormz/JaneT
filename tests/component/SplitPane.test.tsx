@@ -1266,6 +1266,46 @@ describe('split panes in the app', () => {
     expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['right', /split pane right/i],
+    ['below', /split pane below/i],
+  ] as const)('focuses a newly split pane %s after its terminal attaches', async (_side, splitButton) => {
+    render(<App />);
+
+    const originalTerminal = await screen.findByTestId(/terminal-/);
+    fireEvent.click(screen.getByRole('button', { name: splitButton }));
+
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    const newTerminalInput = within(screen.getAllByTestId(/terminal-/)[1]).getByRole('textbox');
+
+    await waitFor(() => expect(newTerminalInput).toHaveFocus());
+    expect(within(originalTerminal).getByRole('textbox')).not.toHaveFocus();
+  });
+
+  it('keeps the newly split pane current after focus moves to a workspace tool', async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    const [originalTerminal, newTerminal] = screen.getAllByTestId(/terminal-/);
+    const originalPane = originalTerminal.closest('.terminal-leaf');
+    const newPane = newTerminal.closest('.terminal-leaf');
+
+    expect(originalPane).not.toHaveAttribute('aria-current');
+    expect(newPane).toHaveAttribute('aria-current', 'true');
+
+    const workspaceTool = screen.getByRole('button', { name: 'Mock tool content' });
+    act(() => workspaceTool.focus());
+
+    expect(workspaceTool).toHaveFocus();
+    expect(newPane).toHaveAttribute('aria-current', 'true');
+
+    act(() => within(originalTerminal).getByRole('textbox').focus());
+
+    expect(originalPane).toHaveAttribute('aria-current', 'true');
+    expect(newPane).not.toHaveAttribute('aria-current');
+  });
+
   it('surviving pane fills space when sibling is closed', async () => {
     render(<App />);
 

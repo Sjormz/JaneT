@@ -184,7 +184,7 @@ test('maximizes and restores a terminal pane in Electron', async () => {
     await expect(closePaneDialog).toBeVisible();
     await closePaneDialog.getByRole('button', { name: 'Close pane' }).click();
     await expect(page.locator('.terminal-leaf')).toHaveCount(1);
-    await expect(page.getByLabel('left — Local terminal pane')).toBeVisible();
+    await expect(page.locator('.leaf-title', { hasText: 'left' })).toBeVisible();
   } finally {
     await closeApp(browser, electronProcess, userData);
   }
@@ -202,6 +202,36 @@ test('focuses the first terminal after clicking a terminal tab', async () => {
     await expect.poll(() => page.evaluate(() => (
       document.activeElement === document.querySelector('.terminal-container .xterm-helper-textarea')
     ))).toBe(true);
+  } finally {
+    await closeApp(browser, electronProcess, userData);
+  }
+});
+
+test('focuses and persistently marks a newly split pane', async () => {
+  const { browser, electronProcess, page, userData } = await launchTwoPaneApp();
+
+  try {
+    const panes = page.locator('.terminal-leaf');
+    await expect(panes).toHaveCount(2);
+    await page.getByRole('button', { name: 'Split pane right' }).nth(1).click();
+    await expect(panes).toHaveCount(3);
+
+    const newPane = panes.nth(2);
+    await expect(newPane.locator('.xterm-helper-textarea')).toBeFocused();
+    await expect(newPane).toHaveAttribute('aria-current', 'true');
+    await expect(panes.nth(0)).not.toHaveAttribute('aria-current');
+    const activeHeader = newPane.locator('.terminal-leaf-header');
+    const inactiveHeader = panes.nth(0).locator('.terminal-leaf-header');
+    const activeShadow = await activeHeader.evaluate((element) => getComputedStyle(element).boxShadow);
+    const inactiveShadow = await inactiveHeader.evaluate((element) => getComputedStyle(element).boxShadow);
+    expect(activeShadow).not.toBe('none');
+    expect(activeShadow).not.toBe(inactiveShadow);
+
+    const workspaceTool = page.locator('.workspace-tool-button').first();
+    await workspaceTool.focus();
+    await expect(workspaceTool).toBeFocused();
+    await expect(newPane).toHaveAttribute('aria-current', 'true');
+    expect(await activeHeader.evaluate((element) => getComputedStyle(element).boxShadow)).toBe(activeShadow);
   } finally {
     await closeApp(browser, electronProcess, userData);
   }

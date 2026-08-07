@@ -2755,6 +2755,7 @@ html, body, #root {
   min-height: 0;
   position: relative;
 }
+.terminal-leaf[aria-current="true"] .terminal-leaf-header { box-shadow: inset 2px 0 0 var(--text-accent); }
 .terminal-leaf.pane-dragging { opacity: 0.45; }
 .terminal-leaf-header[draggable="true"] { cursor: grab; }
 .terminal-leaf-header[draggable="true"]:active { cursor: grabbing; }

@@ -27,6 +27,7 @@ interface SplitPaneProps {
   node: PaneNode;
   tabId: string;
   tabType: 'local' | 'ssh';
+  activeTerminalId?: string | null;
   sshSessionId?: string;
   onTerminalReady: (termId: string) => void;
   onTerminalRemoved: (termId: string) => void;
@@ -90,6 +91,7 @@ function TerminalPaneLeaf({
   onBroadcastRecipientChange,
   awareness,
   transport,
+  isActive,
   onSplitRight,
   onSplitDown,
   onClose,
@@ -130,6 +132,7 @@ function TerminalPaneLeaf({
   onBroadcastRecipientChange?: (termId: string, selected: boolean) => void;
   awareness?: AgentAwareness;
   transport?: TerminalTransportStatus;
+  isActive?: boolean;
   onSplitRight: () => void;
   onSplitDown: () => void;
   onClose: () => void;
@@ -195,6 +198,7 @@ function TerminalPaneLeaf({
   return (
     <div
       className={`terminal-leaf ${draggedLeafId === leaf.id ? 'pane-dragging' : ''}${broadcastSelected ? ' broadcast-selected' : ''}`}
+      aria-current={isActive ? 'true' : undefined}
       style={{ viewTransitionName: `terminal-pane-${leaf.id.replace(/[^a-zA-Z0-9_-]/g, '_')}` }}
       onDragOver={(event) => {
         if (!draggedLeafId || draggedLeafId === leaf.id) return;
@@ -428,6 +432,7 @@ export default function SplitPane(props: SplitPaneProps) {
     node,
     tabId,
     tabType,
+    activeTerminalId,
     sshSessionId,
     onTerminalReady,
     onTerminalRemoved,
@@ -484,6 +489,7 @@ export default function SplitPane(props: SplitPaneProps) {
         onBroadcastRecipientChange={onBroadcastRecipientChange}
         awareness={awarenessByTerminal?.[node.id]}
         transport={transportByTerminal?.[node.id]}
+        isActive={activeTerminalId === node.id}
         onSplitRight={() => onSplitPane(node.id, 'vertical')}
         onSplitDown={() => onSplitPane(node.id, 'horizontal')}
         onClose={() => onClosePane(node.id)}
@@ -523,6 +529,7 @@ export default function SplitPane(props: SplitPaneProps) {
             node={maximizedBranch}
             tabId={tabId}
             tabType={tabType}
+            activeTerminalId={activeTerminalId}
             sshSessionId={sshSessionId}
             onTerminalReady={onTerminalReady}
             onTerminalRemoved={onTerminalRemoved}
@@ -587,6 +594,7 @@ export default function SplitPane(props: SplitPaneProps) {
               node={child}
               tabId={tabId}
               tabType={tabType}
+              activeTerminalId={activeTerminalId}
               sshSessionId={sshSessionId}
               onTerminalReady={onTerminalReady}
               onTerminalRemoved={onTerminalRemoved}

@@ -1391,11 +1391,21 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const handleSplitPane = useCallback(
     (tabId: string, leafId: string, direction: 'horizontal' | 'vertical') => {
       if (terminalCount() >= MAX_RESTORED_TERMINALS) return;
-      const next = tabsRef.current.map((tab) => tab.id === tabId
-        ? { ...tab, root: splitPane(tab.root, leafId, direction) }
-        : tab);
+      let newLeafId: string | undefined;
+      const next = tabsRef.current.map((tab) => {
+        if (tab.id !== tabId) return tab;
+        const previousLeafIds = new Set(getAllLeafIds(tab.root));
+        const root = splitPane(tab.root, leafId, direction);
+        newLeafId = getAllLeafIds(root).find((id) => !previousLeafIds.has(id));
+        return { ...tab, root };
+      });
+      if (!newLeafId) return;
       tabsRef.current = next;
+      terminalFocusTargetIdRef.current = newLeafId;
+      restoreTerminalFocusRef.current = true;
+      setFocusedTerminalId(newLeafId);
       setTabs(next);
+      setTerminalFocusRequest((request) => request + 1);
     },
     [terminalCount],
   );
@@ -2486,6 +2496,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
                 node={activeTab.root}
                 tabId={activeTab.id}
                 tabType={activeTab.type}
+                activeTerminalId={sidebarTerminalId}
                 sshSessionId={activeTab.sshSessionId}
                 sshShellReady={activeTab.type !== 'ssh' || activeTab.sshShellReady === true}
                 onTerminalReady={handleTerminalReady}
