@@ -2282,15 +2282,21 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         shortcut: bindings['rename-tab'], handler: requestRenameTab,
       },
       {
+        id: 'save-workspace', label: 'Save current workspace', category: 'Workspace',
+        keywords: ['preset', 'layout'], handler: () => requestSaveWorkspaceTab(activeTab),
+      },
+      {
         id: 'toggle-sidebar', label: 'Show or hide workspace tools', category: 'View',
         shortcut: bindings['toggle-sidebar'], handler: toggleWorkspaceTools,
       },
       {
         id: 'sidebar-files', label: 'Open Explorer', category: 'View',
+        keywords: ['files', 'project'],
         handler: () => { setWorkspaceToolsExpanded(true); setSidebarSection('files'); },
       },
       {
         id: 'sidebar-ssh', label: 'Open SSH connections', category: 'View',
+        keywords: ['connect', 'remote'],
         handler: () => {
           responsiveTabsCollapsedRef.current = false;
           setTabsOpen(true);
@@ -2303,6 +2309,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       },
       {
         id: 'settings-toggle', label: 'Open Settings', category: 'View',
+        keywords: ['preferences'],
         shortcut: bindings['settings-toggle'], handler: () => setSettingsOpen(true),
       },
       {
@@ -2436,7 +2443,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   }, [
     activeTab, activeTabId, sidebarTerminalId, activeDocumentKey, addTab, requestCloseTab,
     handleSplitPane, requestClosePane, handleToggleMaximizePane, cycleTerminalPane, cycleTerminalTab, moveActivePane,
-    requestRenamePane, requestRenameTab, saveEditorDocument, requestCloseEditorDocument,
+    requestRenamePane, requestRenameTab, requestSaveWorkspaceTab, saveEditorDocument, requestCloseEditorDocument,
     documentCloseFallbackFocus,
     fontSize, persistFontSize, persistTheme, setWorkspaceToolsExpanded, toggleWorkspaceTools, bindings,
   ]);

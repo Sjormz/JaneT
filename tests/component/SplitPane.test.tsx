@@ -12,7 +12,14 @@ const readyTermIds: string[] = [];
 const rendererMocks = vi.hoisted(() => ({
   disposeCachedTerminal: vi.fn(),
   awaitLocalCreate: false,
-  paletteActions: [] as Array<{ id: string; handler: () => void }>,
+  paletteActions: [] as Array<{
+    id: string;
+    label: string;
+    category: string;
+    keywords?: readonly string[];
+    shortcut?: string;
+    handler: () => void;
+  }>,
   titlebarProps: null as any,
   shortcutEditorProps: null as any,
   sidebarProps: null as any,
@@ -102,7 +109,14 @@ vi.mock('../../src/renderer/components/StatusBar', () => ({
   ),
 }));
 vi.mock('../../src/renderer/components/CommandPalette', () => ({
-  default: ({ actions }: { actions: Array<{ id: string; handler: () => void }> }) => {
+  default: ({ actions }: { actions: Array<{
+    id: string;
+    label: string;
+    category: string;
+    keywords?: readonly string[];
+    shortcut?: string;
+    handler: () => void;
+  }> }) => {
     React.useLayoutEffect(() => {
       rendererMocks.paletteActions = actions;
     }, [actions]);
@@ -1503,6 +1517,35 @@ describe('split panes in the app', () => {
       expect.objectContaining({ id: 'save-document', shortcut: '' }),
       expect.objectContaining({ id: 'close-document', shortcut: '' }),
     ])));
+  });
+
+  it('discovers core workflows and saves the current workspace from the palette', async () => {
+    render(<App />);
+    await screen.findByTestId(/terminal-/);
+
+    await waitFor(() => expect(rendererMocks.paletteActions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'sidebar-files', keywords: ['files', 'project'] }),
+      expect.objectContaining({ id: 'sidebar-ssh', keywords: ['connect', 'remote'] }),
+      expect.objectContaining({ id: 'settings-toggle', keywords: ['preferences'] }),
+      expect.objectContaining({
+        id: 'save-workspace',
+        label: 'Save current workspace',
+        keywords: ['preset', 'layout'],
+      }),
+    ])));
+
+    const activeTab = rendererMocks.verticalTabBarProps.tabs.find(
+      (tab: { id: string }) => tab.id === rendererMocks.verticalTabBarProps.activeTabId,
+    );
+    vi.mocked(window.janet.setSettings).mockClear();
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'save-workspace')!.handler());
+
+    await waitFor(() => expect(window.janet.setSettings).toHaveBeenCalledWith({
+      workspaceTabs: [expect.objectContaining({
+        name: activeTab.title,
+        terminalCount: 1,
+      })],
+    }));
   });
 
   it('moves the active pane by keyboard and pointer without replacing its terminal', async () => {

@@ -176,6 +176,17 @@ describe('VerticalTabBar', () => {
     ]));
   });
 
+  it('saves the current workspace from the empty presets state', () => {
+    const onSaveWorkspaceTab = vi.fn();
+    renderTabs({ onSaveWorkspaceTab });
+
+    fireEvent.click(screen.getByRole('button', { name: /^presets$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save current workspace' }));
+
+    expect(onSaveWorkspaceTab).toHaveBeenCalledOnce();
+    expect(onSaveWorkspaceTab).toHaveBeenCalledWith(tabs[0]);
+  });
+
   it('creates optional names for each preset terminal', () => {
     const onWorkspaceTabsChange = vi.fn();
     renderTabs({ onWorkspaceTabsChange });

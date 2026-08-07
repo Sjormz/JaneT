@@ -468,7 +468,19 @@ export default function VerticalTabBar({
             </button>
 
             {workspaceTabs.length === 0 ? (
-              <div className="workspace-empty">No presets saved</div>
+              <div className="workspace-empty">
+                <span>No presets saved</span>
+                <button
+                  type="button"
+                  className="workspace-add-btn"
+                  onClick={() => {
+                    const activeTab = tabs.find((tab) => tab.id === activeTabId);
+                    if (activeTab) onSaveWorkspaceTab(activeTab);
+                  }}
+                >
+                  Save current workspace
+                </button>
+              </div>
             ) : (
               <div className="workspace-list">
                 {workspaceTabs.map((preset) => {

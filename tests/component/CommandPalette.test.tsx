@@ -71,6 +71,24 @@ describe('CommandPalette', () => {
     expect(screen.queryByText('Close Tab')).toBeNull();
   });
 
+  it('filters actions by static task-language keywords', () => {
+    const actions: CommandAction[] = [
+      {
+        id: 'sidebar-files', label: 'Open Explorer', category: 'View',
+        keywords: ['files', 'project'], handler: vi.fn(),
+      },
+      { id: 'settings-toggle', label: 'Open Settings', category: 'View', handler: vi.fn() },
+    ];
+    render(<CommandPalette visible={true} onClose={vi.fn()} actions={actions} />);
+
+    fireEvent.change(screen.getByTestId('command-palette-input'), {
+      target: { value: 'project' },
+    });
+
+    expect(screen.getByText('Open Explorer')).toBeInTheDocument();
+    expect(screen.queryByText('Open Settings')).toBeNull();
+  });
+
   it('executes handler when clicking an action', () => {
     const handler = vi.fn();
     const onClose = vi.fn();
