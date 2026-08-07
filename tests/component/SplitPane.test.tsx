@@ -4305,10 +4305,11 @@ describe('unsaved editor shutdown handshake', () => {
     fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
     await waitFor(() => expect(rendererMocks.prepareForCloseHandler).toBeTypeOf('function'));
+    const maximizePane = rendererMocks.paletteActions.find((action) => action.id === 'maximize-pane')!;
     vi.mocked(window.janet.setSettings).mockClear();
 
     await act(async () => {
-      fireEvent.click(screen.getAllByRole('button', { name: /maximize pane/i })[1]);
+      maximizePane.handler();
       await rendererMocks.prepareForCloseHandler!({
         requestId: 'maximized-close',
         reason: 'application-quit',
@@ -4325,6 +4326,29 @@ describe('unsaved editor shutdown handshake', () => {
     });
     expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
       requestId: 'maximized-close', resolution: 'saved',
+    });
+  });
+
+  it('persists a same-batch active tab selection before close', async () => {
+    render(<App />);
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.onNewTab).toBeTypeOf('function'));
+    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
+    const [firstTab, secondTab] = rendererMocks.verticalTabBarProps.tabs;
+    act(() => rendererMocks.verticalTabBarProps.onSelectTab(firstTab.id));
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(firstTab.id));
+    vi.mocked(window.janet.setSettings).mockClear();
+
+    await act(async () => {
+      rendererMocks.verticalTabBarProps.onSelectTab(secondTab.id);
+      await rendererMocks.prepareForCloseHandler!({
+        requestId: 'active-tab-close',
+        reason: 'application-quit',
+      });
+    });
+
+    expect(window.janet.setSettings).toHaveBeenCalledWith({
+      session: expect.objectContaining({ activeTabId: secondTab.id }),
     });
   });
 

@@ -292,9 +292,14 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const [tabs, setTabs] = useState<TabInfo[]>(initialState.tabs);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
-  const [activeTabId, setActiveTabId] = useState(initialState.activeTabId);
+  const [activeTabId, setActiveTabIdState] = useState(initialState.activeTabId);
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
+  const setActiveTabId = useCallback((next: React.SetStateAction<string>) => {
+    const value = typeof next === 'function' ? next(activeTabIdRef.current) : next;
+    activeTabIdRef.current = value;
+    setActiveTabIdState(value);
+  }, []);
   const [sidebarOpen, setSidebarOpen] = useState(initialState.sidebarOpen);
   const [tabsOpen, setTabsOpen] = useState(initialState.tabsOpen);
   const responsiveTabsCollapsedRef = useRef(false);
@@ -309,9 +314,18 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const sshProfilesRef = useRef(sshProfiles);
   sshProfilesRef.current = sshProfiles;
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>(initialState.workspaceTabs);
-  const [maximizedLeafByTab, setMaximizedLeafByTab] = useState<Record<string, string | null>>(
+  const [maximizedLeafByTab, setMaximizedLeafByTabState] = useState<Record<string, string | null>>(
     initialState.maximizedLeafByTab,
   );
+  const maximizedLeafByTabRef = useRef(maximizedLeafByTab);
+  maximizedLeafByTabRef.current = maximizedLeafByTab;
+  const setMaximizedLeafByTab = useCallback((
+    next: React.SetStateAction<Record<string, string | null>>,
+  ) => {
+    const value = typeof next === 'function' ? next(maximizedLeafByTabRef.current) : next;
+    maximizedLeafByTabRef.current = value;
+    setMaximizedLeafByTabState(value);
+  }, []);
   const [broadcastRecipientIds, setBroadcastRecipientIds] = useState<Set<string>>(new Set());
   const [broadcastArmed, setBroadcastArmed] = useState(false);
   const [broadcastConfirmationOpen, setBroadcastConfirmationOpen] = useState(false);
@@ -492,7 +506,14 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   //   never blank.
   const [cwdByTerminal, setCwdByTerminal] = useState<Record<string, string>>({});
   const cwdByTerminalRef = useRef(cwdByTerminal);
-  const [focusedTerminalId, setFocusedTerminalId] = useState<string | null>(initialState.focusedTerminalId);
+  const [focusedTerminalId, setFocusedTerminalIdState] = useState<string | null>(initialState.focusedTerminalId);
+  const focusedTerminalIdRef = useRef(focusedTerminalId);
+  focusedTerminalIdRef.current = focusedTerminalId;
+  const setFocusedTerminalId = useCallback((next: React.SetStateAction<string | null>) => {
+    const value = typeof next === 'function' ? next(focusedTerminalIdRef.current) : next;
+    focusedTerminalIdRef.current = value;
+    setFocusedTerminalIdState(value);
+  }, []);
   const [awarenessByTerminal, setAwarenessByTerminal] = useState<Record<string, AgentAwareness>>({});
   const [localTransportByTerminal, setLocalTransportByTerminal] = useState<Record<string, TerminalTransportStatus>>({});
   const [terminalStatusAnnouncement, setTerminalStatusAnnouncement] = useState({ sequence: 0, text: '' });
@@ -650,14 +671,17 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   }, [markSshSessionDisconnected, sshProfiles]);
 
   const persistSession = useCallback(async (): Promise<boolean> => {
+    const currentActiveTabId = activeTabIdRef.current;
+    const currentFocusedTerminalId = focusedTerminalIdRef.current;
+    const currentMaximizedLeafByTab = maximizedLeafByTabRef.current;
     const session: SavedSession = {
       tabs: tabsRef.current.map((tab) => {
-        const selectedLeafId = tab.id === activeTabId
-          ? preferredLeafId(tab, focusedTerminalId, maximizedLeafByTab[tab.id])
+        const selectedLeafId = tab.id === currentActiveTabId
+          ? preferredLeafId(tab, currentFocusedTerminalId, currentMaximizedLeafByTab[tab.id])
           : null;
         const selectedPanePath = selectedLeafId ? panePathForLeaf(tab.root, selectedLeafId) : null;
-        const maximizedPanePath = maximizedLeafByTab[tab.id]
-          ? panePathForLeaf(tab.root, maximizedLeafByTab[tab.id]!)
+        const maximizedPanePath = currentMaximizedLeafByTab[tab.id]
+          ? panePathForLeaf(tab.root, currentMaximizedLeafByTab[tab.id]!)
           : null;
         return {
           id: tab.id,
@@ -670,7 +694,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           root: serializePaneTree(tab.root, cwdByTerminalRef.current, { includeStartupCommands: true }),
         };
       }),
-      activeTabId,
+      activeTabId: currentActiveTabId,
       sidebarOpen,
       tabsOpen: responsiveTabsCollapsedRef.current ? true : tabsOpen,
       sidebarSection,
