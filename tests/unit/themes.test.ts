@@ -79,11 +79,19 @@ describe('themes', () => {
 
   it('keeps the Following label legible on the sidebar surface in every theme', () => {
     const rule = globalCss.match(/\.workspace-tools-following\s*\{([^}]*)\}/)?.[1];
-    const sidebarRule = globalCss.match(/\.sidebar\s*\{([^}]*)\}/)?.[1];
     const textToken = rule?.match(/color:\s*var\(--([\w-]+)\)/)?.[1];
-    const surfaceToken = sidebarRule?.match(/background:\s*var\(--([\w-]+)\)/)?.[1];
+    const sidebarSurfaceTokens = [...globalCss.matchAll(/([^{}]+)\{([^{}]*)\}/gs)]
+      .filter(([, selectors]) => selectors.split(',').some((selector) => selector.trim() === '.sidebar'))
+      .flatMap(([, , declarations]) => (
+        [...declarations.matchAll(/background:\s*var\(--([\w-]+)\)/g)].map((match) => match[1])
+      ));
+    const surfaceToken = sidebarSurfaceTokens.at(-1);
+    const themeSurfaceToken = globalCss.match(
+      new RegExp(`--${surfaceToken}:\\s*var\\(--([\\w-]+)\\)`),
+    )?.[1];
     expect(textToken).toBe('text-secondary');
-    expect(surfaceToken).toBe('glass-bg');
+    expect(surfaceToken).toBe('surface-panel');
+    expect(themeSurfaceToken).toBe('bg-secondary');
 
     const root = document.documentElement;
     const originalStyle = root.style.cssText;
@@ -91,7 +99,7 @@ describe('themes', () => {
       for (const name of themeNames) {
         applyCssTheme(getTheme(name).css);
         const foreground = root.style.getPropertyValue(`--${textToken}`);
-        const background = root.style.getPropertyValue(`--${surfaceToken}`);
+        const background = root.style.getPropertyValue(`--${themeSurfaceToken}`);
         expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5);
       }
     } finally {
