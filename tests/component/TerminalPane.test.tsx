@@ -1683,6 +1683,41 @@ describe('TerminalPane SSH shell output', () => {
     expect(screen.queryByTestId('ssh-terminal-notice')).toBeNull();
   });
 
+  it('starts only one SSH retry when the reconnect button is double-clicked', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    let rejectRetry: (error: Error) => void = () => {};
+    const onSshRetry = vi.fn(() => new Promise<void>((_resolve, reject) => { rejectRetry = reject; }));
+    sshCreateShellImpl = () => Promise.reject(new Error('Initial shell failure'));
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-ssh-double-retry"
+          tabType="ssh"
+          sshSessionId="ssh-double-retry"
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          onSshRetry={onSshRetry}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    const retry = await screen.findByTestId('ssh-notice-retry');
+    act(() => {
+      fireEvent.click(retry);
+      fireEvent.click(retry);
+    });
+
+    expect(onSshRetry).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId('ssh-notice-retry')).not.toBeInTheDocument();
+    expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'reconnecting');
+
+    await act(async () => rejectRetry(new Error('Reconnect failed')));
+    fireEvent.click(await screen.findByTestId('ssh-notice-retry'));
+    expect(onSshRetry).toHaveBeenCalledTimes(2);
+  });
+
   it('preserves the initial shell error when its session is marked disconnected', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     sshCreateShellImpl = () => Promise.reject(new Error('Remote shell unavailable'));
@@ -1722,8 +1757,11 @@ describe('TerminalPane SSH shell output', () => {
       'term-ssh-initial-error',
       'ssh-initial-error',
     ));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Remote shell unavailable');
-    expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'error');
+    const notice = await screen.findByTestId('ssh-terminal-notice');
+    expect(notice).toHaveTextContent('Remote shell unavailable');
+    expect(notice).toHaveAttribute('data-state', 'error');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /reconnect/i })).toBeInTheDocument();
   });
 
@@ -1745,7 +1783,7 @@ describe('TerminalPane SSH shell output', () => {
         <TerminalPane {...props} />
       </KeybindingsProvider>,
     );
-    expect(await screen.findByRole('alert')).toHaveTextContent('Remote shell unavailable');
+    expect(await screen.findByTestId('ssh-terminal-notice')).toHaveTextContent('Remote shell unavailable');
     first.unmount();
 
     render(
@@ -1754,7 +1792,7 @@ describe('TerminalPane SSH shell output', () => {
       </KeybindingsProvider>,
     );
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Remote shell unavailable');
+    expect(screen.getByTestId('ssh-terminal-notice')).toHaveTextContent('Remote shell unavailable');
     expect(screen.getByRole('button', { name: /reconnect/i })).toBeInTheDocument();
     expect(sshCreateShell).toHaveBeenCalledTimes(1);
   });
@@ -1873,7 +1911,7 @@ describe('TerminalPane SSH shell output', () => {
         <TerminalPane {...props} />
       </KeybindingsProvider>,
     );
-    expect(await screen.findByRole('alert')).toHaveTextContent('Detached shell failed');
+    expect(await screen.findByTestId('ssh-terminal-notice')).toHaveTextContent('Detached shell failed');
     expect(sshCreateShell).toHaveBeenCalledTimes(1);
     expect(onSshShellFailed).toHaveBeenCalledTimes(1);
   });
@@ -1995,8 +2033,50 @@ describe('TerminalPane SSH shell output', () => {
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'reconnecting');
 
     await act(async () => rejectRetry(new Error('Transport reconnect failed')));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Transport reconnect failed');
+    expect(await screen.findByTestId('ssh-terminal-notice')).toHaveTextContent('Transport reconnect failed');
     expect(screen.getByRole('button', { name: /reconnect/i })).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('ignores an SSH retry that fails after its cached terminal is replaced', async () => {
+    const { default: TerminalPane, disposeCachedTerminal } = await loadTerminalPane();
+    let rejectRetry: (error: Error) => void = () => {};
+    const onSshRetry = vi.fn(() => new Promise<void>((_resolve, reject) => {
+      rejectRetry = reject;
+    }));
+    sshCreateShellImpl = () => Promise.reject(new Error('Initial shell failure'));
+    const props = {
+      termId: 'term-ssh-retry-replaced',
+      tabType: 'ssh' as const,
+      sshSessionId: 'ssh-retry-replaced',
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      onSshRetry,
+      themeName: 'tokyo-night',
+    };
+
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    fireEvent.click(await screen.findByTestId('ssh-notice-retry'));
+    expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'reconnecting');
+
+    first.unmount();
+    expect(disposeCachedTerminal(props.termId)).toBe(true);
+    sshCreateShellImpl = () => Promise.resolve({ connected: true });
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} hasSession />
+      </KeybindingsProvider>,
+    );
+    expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'waiting');
+
+    await act(async () => rejectRetry(new Error('Obsolete retry failed')));
+    expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'waiting');
+    expect(screen.queryByText('Obsolete retry failed')).not.toBeInTheDocument();
   });
 
   it('shows reconnecting while a restored SSH transport is not ready', async () => {
@@ -2018,6 +2098,8 @@ describe('TerminalPane SSH shell output', () => {
 
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'reconnecting');
     expect(sshCreateShell).not.toHaveBeenCalled();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('shows a reconnect action when an established SSH transport closes', async () => {
@@ -2049,6 +2131,8 @@ describe('TerminalPane SSH shell output', () => {
     expect(await screen.findByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'closed');
     expect(screen.getByText('Connection closed')).toBeInTheDocument();
     expect(screen.getByTestId('ssh-notice-retry')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('opens SSH shells with terminal-app friendly minimum dimensions', async () => {

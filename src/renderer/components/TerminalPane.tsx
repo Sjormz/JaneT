@@ -124,6 +124,7 @@ interface CachedTerminalPane {
   tabType: 'local' | 'ssh';
   sshSessionId?: string;
   sshShellReady: boolean;
+  sshRetryPromise: Promise<void> | null;
   sshNoticeState: SshNoticeState;
   sshNoticeListener: ((state: SshNoticeState) => void) | null;
   sshShellReadyListener: TerminalPaneProps['onSshShellReady'];
@@ -722,6 +723,7 @@ export default function TerminalPane({
       tabType,
       sshSessionId,
       sshShellReady,
+      sshRetryPromise: null,
       sshNoticeState: tabType !== 'ssh'
         ? { kind: 'hidden' }
         : sshShellReady
@@ -799,17 +801,48 @@ export default function TerminalPane({
 
   const retrySshShell = () => {
     if (!onSshRetry) return;
+    const term = termRef.current;
+    const cached = terminalPaneCache.get(termId);
+    if (!term || cached?.term !== term || cached.tabType !== 'ssh' || cached.sshRetryPromise) return;
     const noticeAttempt = ++sshNoticeAttemptRef.current;
     const dimensions = sshDimensions(fitAddonRef.current?.proposeDimensions());
+    let resolveRetry!: () => void;
+    let rejectRetry!: (reason?: unknown) => void;
+    const retryPromise = new Promise<void>((resolve, reject) => {
+      resolveRetry = resolve;
+      rejectRetry = reject;
+    });
+    cached.sshRetryPromise = retryPromise;
     publishSshNoticeState({ kind: 'reconnecting' });
-    Promise.resolve(onSshRetry(termId, dimensions))
+    try {
+      Promise.resolve(onSshRetry(termId, dimensions)).then(resolveRetry, rejectRetry);
+    } catch (error) {
+      rejectRetry(error);
+    }
+    retryPromise
       .then(() => {
-        if (sshNoticeAttemptRef.current !== noticeAttempt) return;
+        const currentCache = terminalPaneCache.get(termId);
+        if (
+          currentCache?.term !== term ||
+          currentCache.sshRetryPromise !== retryPromise ||
+          sshNoticeAttemptRef.current !== noticeAttempt
+        ) return;
         publishSshNoticeState({ kind: 'waiting' });
       })
       .catch((err: any) => {
-        if (sshNoticeAttemptRef.current !== noticeAttempt) return;
+        const currentCache = terminalPaneCache.get(termId);
+        if (
+          currentCache?.term !== term ||
+          currentCache.sshRetryPromise !== retryPromise ||
+          sshNoticeAttemptRef.current !== noticeAttempt
+        ) return;
         publishSshNoticeState({ kind: 'error', message: err?.message || 'Reconnect failed' });
+      })
+      .finally(() => {
+        const currentCache = terminalPaneCache.get(termId);
+        if (currentCache?.term === term && currentCache.sshRetryPromise === retryPromise) {
+          currentCache.sshRetryPromise = null;
+        }
       });
   };
 
