@@ -721,6 +721,22 @@ function registerIpcHandlers() {
     return copyTextToClipboard(text);
   });
 
+  handle('app:copyDiagnostics', () => {
+    try {
+      electron.clipboard.writeText([
+        `JaneT version: ${getApplicationVersion()}`,
+        `OS: ${process.platform}`,
+        `Architecture: ${process.arch}`,
+        `Mode: ${electron.app.isPackaged ? 'packaged' : 'development'}`,
+        `Electron version: ${process.versions.electron}`,
+        `Notifications: ${electron.Notification.isSupported() ? 'supported' : 'unsupported'}`,
+      ].join('\n'));
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
   handle(WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL, (event, resolution: unknown) => {
     return closePreparation.resolve(event.sender, resolution);
   });

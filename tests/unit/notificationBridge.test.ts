@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import packageMetadata from '../../package.json';
 
 const validPayload = {
   durationMs: 10_000,
@@ -14,7 +15,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-async function loadMain(options: { enabled?: boolean; threshold?: number; supported?: boolean; focused?: boolean; minimized?: boolean; constructorFails?: boolean; e2e?: boolean; selectedDirectory?: string } = {}) {
+async function loadMain(options: { enabled?: boolean; threshold?: number; supported?: boolean; focused?: boolean; minimized?: boolean; constructorFails?: boolean; e2e?: boolean; selectedDirectory?: string; packaged?: boolean } = {}) {
   vi.stubEnv('NODE_ENV', 'test');
   const handlers = new Map<string, Function>();
   const notificationOn = vi.fn();
@@ -44,6 +45,7 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
     : { canceled: true, filePaths: [] });
   if (options.e2e) vi.stubEnv('JANET_E2E_EVENTS_PATH', 'events.jsonl');
   const writeFileSync = vi.fn();
+  const clipboardWriteText = vi.fn();
   vi.doMock('fs', async (original) => ({
     ...(await original<typeof import('fs')>()),
     appendFileSync: vi.fn(),
@@ -56,9 +58,9 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
     writeFileSync,
   }));
   vi.doMock('electron', () => ({
-    app: { commandLine: { appendSwitch: vi.fn() }, getAppPath: vi.fn(() => '.'), getPath: vi.fn(() => '/tmp/janet-test'), getVersion: vi.fn(), isPackaged: false, requestSingleInstanceLock: vi.fn(() => true), quit: vi.fn(), on: vi.fn(), whenReady: vi.fn(() => Promise.resolve()), setPath: vi.fn(), setAppUserModelId },
+    app: { commandLine: { appendSwitch: vi.fn() }, getAppPath: vi.fn(() => '.'), getPath: vi.fn(() => '/tmp/janet-test'), getVersion: vi.fn(() => packageMetadata.version), isPackaged: options.packaged ?? false, requestSingleInstanceLock: vi.fn(() => true), quit: vi.fn(), on: vi.fn(), whenReady: vi.fn(() => Promise.resolve()), setPath: vi.fn(), setAppUserModelId },
     protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() }, net: { fetch: vi.fn() }, Menu: { setApplicationMenu: vi.fn() },
-    BrowserWindow, Notification, clipboard: { writeText: vi.fn() }, dialog: { showMessageBox: vi.fn(), showOpenDialog, showErrorBox: vi.fn() }, shell: { openExternal: vi.fn() }, autoUpdater: { on: vi.fn() },
+    BrowserWindow, Notification, clipboard: { writeText: clipboardWriteText }, dialog: { showMessageBox: vi.fn(), showOpenDialog, showErrorBox: vi.fn() }, shell: { openExternal: vi.fn() }, autoUpdater: { on: vi.fn() },
     ipcMain: { handle: vi.fn((channel: string, listener: Function) => handlers.set(channel, listener)), on: vi.fn() },
   }));
   const settings = await import('../../src/main/settings');
@@ -77,7 +79,7 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
   return {
     invoke, invokeChannel, setSettings, writeFileSync, settingsGetSpy, settingsRecoveryStateSpy,
     restorePreviousSpy, resetSettingsSpy, Notification, notificationOn, notificationShow,
-    restore, show, focus, setAppUserModelId, showOpenDialog, webContents,
+    restore, show, focus, setAppUserModelId, showOpenDialog, webContents, clipboardWriteText,
   };
 }
 
@@ -224,6 +226,66 @@ describe('main notification bridge', () => {
       .rejects.toThrow(/untrusted/i);
   });
 
+  it('copies the exact main-owned development diagnostics without a renderer payload', async () => {
+    Object.defineProperty(process.versions, 'electron', { configurable: true, value: '43.2.0' });
+    try {
+      const bridge = await loadMain({ supported: true });
+
+      await expect(bridge.invokeChannel('app:copyDiagnostics')).resolves.toBe(true);
+      expect(bridge.clipboardWriteText).toHaveBeenCalledWith([
+        'JaneT version: 0.8.1',
+        `OS: ${process.platform}`,
+        `Architecture: ${process.arch}`,
+        'Mode: development',
+        'Electron version: 43.2.0',
+        'Notifications: supported',
+      ].join('\n'));
+    } finally {
+      delete (process.versions as Record<string, string | undefined>).electron;
+    }
+  });
+
+  it('copies exact packaged diagnostics with bounded capability data and ignores renderer data', async () => {
+    Object.defineProperty(process.versions, 'electron', { configurable: true, value: '43.2.0' });
+    try {
+      const bridge = await loadMain({ packaged: true, supported: false });
+      const rendererData = { path: 'C:\\Users\\private', command: 'secret', host: 'private.example' };
+
+      await expect(bridge.invokeChannel('app:copyDiagnostics', rendererData)).resolves.toBe(true);
+      const copied = [
+        'JaneT version: 0.8.1',
+        `OS: ${process.platform}`,
+        `Architecture: ${process.arch}`,
+        'Mode: packaged',
+        'Electron version: 43.2.0',
+        'Notifications: unsupported',
+      ].join('\n');
+      expect(bridge.clipboardWriteText).toHaveBeenCalledWith(copied);
+      expect(copied).not.toMatch(/private|secret|command|host|path/i);
+    } finally {
+      delete (process.versions as Record<string, string | undefined>).electron;
+    }
+  });
+
+  it('contains diagnostics clipboard failures', async () => {
+    const bridge = await loadMain();
+    bridge.clipboardWriteText.mockImplementationOnce(() => {
+      throw new Error('C:\\Users\\private\\settings.json');
+    });
+
+    await expect(bridge.invokeChannel('app:copyDiagnostics')).resolves.toBe(false);
+  });
+
+  it('rejects untrusted diagnostics senders before clipboard access', async () => {
+    const bridge = await loadMain();
+
+    await expect(bridge.invokeChannel('app:copyDiagnostics', undefined, {}))
+      .rejects.toThrow(/untrusted/i);
+    await expect(bridge.invokeChannel('app:copyDiagnostics', undefined, bridge.webContents, {}))
+      .rejects.toThrow(/untrusted/i);
+    expect(bridge.clipboardWriteText).not.toHaveBeenCalled();
+  });
+
   it('selects only a native local directory and maps cancellation to null', async () => {
     const selected = await loadMain({ selectedDirectory: 'C:\\work\\sample-project' });
     await expect(selected.invokeChannel('app:selectLocalDirectory'))
@@ -266,6 +328,17 @@ describe('preload notification bridge', () => {
     expect(invoke).toHaveBeenNthCalledWith(1, 'settings:recovery-state');
     expect(invoke).toHaveBeenNthCalledWith(2, 'settings:restore-previous');
     expect(invoke).toHaveBeenNthCalledWith(3, 'settings:reset');
+  });
+
+  it('exposes copy diagnostics without a renderer payload', async () => {
+    const invoke = vi.fn().mockResolvedValue(true);
+    const exposeInMainWorld = vi.fn();
+    vi.doMock('electron', () => ({ contextBridge: { exposeInMainWorld }, ipcRenderer: { invoke, sendSync: vi.fn(), send: vi.fn(), on: vi.fn(), removeListener: vi.fn() } }));
+    await import('../../src/main/preload');
+    const api = exposeInMainWorld.mock.calls[0][1];
+
+    await expect(api.copyDiagnostics()).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith('app:copyDiagnostics');
   });
 
   it('exposes local-directory selection without a renderer payload', async () => {

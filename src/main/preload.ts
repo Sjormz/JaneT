@@ -244,6 +244,7 @@ const api = {
   selectLocalDirectory: (): Promise<string | null> => ipcRenderer.invoke('app:selectLocalDirectory'),
   openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
   copyText: (text: string): Promise<boolean> => ipcRenderer.invoke('app:copyText', text),
+  copyDiagnostics: (): Promise<boolean> => ipcRenderer.invoke('app:copyDiagnostics'),
   copyTerminalText: (text: string): boolean => ipcRenderer.sendSync('app:copyTerminalText', text) === true,
   onPrepareForClose: (callback: PrepareForCloseCallback) => {
     prepareForCloseCallback = callback;
