@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { SessionInfo, TabInfo, SavedSSHProfile, WorkspaceTabPreset } from '../types';
 import {
@@ -91,8 +91,18 @@ export default function VerticalTabBar({
   const [editingPreset, setEditingPreset] = useState<WorkspaceTabPreset | null>(null);
   const [presetPendingDeletion, setPresetPendingDeletion] = useState<WorkspaceTabPreset | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
-  const [tabMenu, setTabMenu] = useState<{ tab: TabInfo; x: number; y: number } | null>(null);
+  const [tabMenu, setTabMenu] = useState<{
+    tab: TabInfo;
+    x: number;
+    y: number;
+    opener: HTMLElement;
+  } | null>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
+  const closeTabMenu = () => {
+    const opener = tabMenu?.opener;
+    setTabMenu(null);
+    if (opener?.isConnected) opener.focus();
+  };
   const [forwardTarget, setForwardTarget] = useState<{ tabId: string; sessionId: string } | null>(null);
   const [forwards, setForwards] = useState<SSHLocalForwardStatus[]>([]);
   const [localPort, setLocalPort] = useState('0');
@@ -127,13 +137,31 @@ export default function VerticalTabBar({
     });
   }, [tabs]);
 
+  useLayoutEffect(() => {
+    if (!tabMenu || !tabMenuRef.current) return;
+    const rect = tabMenuRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(tabMenu.x, window.innerWidth - rect.width));
+    const y = Math.max(0, Math.min(tabMenu.y, window.innerHeight - rect.height));
+    if (x !== tabMenu.x || y !== tabMenu.y) setTabMenu({ ...tabMenu, x, y });
+  }, [tabMenu]);
+
   useEffect(() => {
     if (!tabMenu) return;
+    tabMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus();
     const closeOnOutsidePointerDown = (event: PointerEvent) => {
-      if (!tabMenuRef.current?.contains(event.target as Node)) setTabMenu(null);
+      if (!tabMenuRef.current?.contains(event.target as Node)) closeTabMenu();
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeTabMenu();
     };
     document.addEventListener('pointerdown', closeOnOutsidePointerDown, true);
-    return () => document.removeEventListener('pointerdown', closeOnOutsidePointerDown, true);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointerDown, true);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
   }, [tabMenu]);
 
   useEffect(() => {
@@ -157,9 +185,8 @@ export default function VerticalTabBar({
     setDraftTitle('');
   };
 
-  const openTabMenu = (event: React.MouseEvent, tab: TabInfo) => {
-    event.preventDefault();
-    setTabMenu({ tab, x: event.clientX, y: event.clientY });
+  const openTabMenu = (tab: TabInfo, opener: HTMLElement, x: number, y: number) => {
+    setTabMenu({ tab, opener, x, y });
   };
 
   const openWorkspaceForm = () => {
@@ -339,8 +366,18 @@ export default function VerticalTabBar({
               tabIndex={0}
               className={`vtab-item ${isActive ? 'active' : ''} ${isSSH ? 'ssh' : ''}`}
               onClick={() => !editing && onSelectTab(tab.id)}
-              onContextMenu={(event) => !editing && openTabMenu(event, tab)}
+              onContextMenu={(event) => {
+                if (editing) return;
+                event.preventDefault();
+                openTabMenu(tab, event.currentTarget, event.clientX, event.clientY);
+              }}
               onKeyDown={(e) => {
+                if (!editing && (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) {
+                  e.preventDefault();
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  openTabMenu(tab, e.currentTarget, rect.left + 12, rect.top + 12);
+                  return;
+                }
                 if (!editing && (e.key === 'Enter' || e.key === ' ')) {
                   e.preventDefault();
                   onSelectTab(tab.id);
@@ -500,20 +537,28 @@ export default function VerticalTabBar({
           ref={tabMenuRef}
           className="vtab-context-menu"
           role="menu"
+          aria-label={`Actions for ${tabMenu.tab.title}`}
           style={{ left: tabMenu.x, top: tabMenu.y }}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+            event.preventDefault();
+            const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)'));
+            const current = items.indexOf(document.activeElement as HTMLButtonElement);
+            items[(current + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus();
+          }}
         >
-          <button role="menuitem" onClick={() => { startRename(tabMenu.tab); setTabMenu(null); }}>
+          <button role="menuitem" onClick={() => { startRename(tabMenu.tab); closeTabMenu(); }}>
             Rename tab
           </button>
           {tabMenu.tab.type === 'ssh' && tabMenu.tab.sshSessionId && tabMenu.tab.sshShellReady === true && (
-            <button role="menuitem" onClick={() => { openForwardDialog(tabMenu.tab); setTabMenu(null); }}>Manage local forwards</button>
+            <button role="menuitem" onClick={() => { openForwardDialog(tabMenu.tab); closeTabMenu(); }}>Manage local forwards</button>
           )}
           {tabMenu.tab.workspaceId && workspaceTabs.find((preset) => preset.id === tabMenu.tab.workspaceId) && (
-            <button role="menuitem" onClick={() => { editPreset(workspaceTabs.find((preset) => preset.id === tabMenu.tab.workspaceId)!); setTabMenu(null); }}>
+            <button role="menuitem" onClick={() => { editPreset(workspaceTabs.find((preset) => preset.id === tabMenu.tab.workspaceId)!); closeTabMenu(); }}>
               Edit preset
             </button>
           )}
-          <button role="menuitem" onClick={() => { onSaveWorkspaceTab(tabMenu.tab); setTabMenu(null); }}>
+          <button role="menuitem" onClick={() => { onSaveWorkspaceTab(tabMenu.tab); closeTabMenu(); }}>
             {tabMenu.tab.workspaceId ? 'Update saved preset' : 'Save as preset'}
           </button>
         </div>,

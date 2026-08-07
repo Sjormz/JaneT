@@ -192,6 +192,40 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     expect(sshConnections).not.toBeNull();
     expect(sshConnections!.y + sshConnections!.height).toBeLessThanOrEqual(narrow.tabs.y + narrow.tabs.height + 1);
 
+    const tabOpener = tabsPanel.locator('.vtab-item.active');
+    const tabTitle = (await tabOpener.locator('.vtab-name').textContent())!.trim();
+    await tabOpener.focus();
+    await tabOpener.press('Shift+F10');
+    const tabMenu = page.getByRole('menu', { name: `Actions for ${tabTitle}` });
+    await expect(tabMenu).toBeVisible();
+    const tabMenuItems = tabMenu.getByRole('menuitem');
+    await expect(tabMenuItems.first()).toBeFocused();
+    await tabMenu.press('ArrowUp');
+    await expect(tabMenuItems.last()).toBeFocused();
+    await tabMenu.press('ArrowDown');
+    await expect(tabMenuItems.first()).toBeFocused();
+    await tabMenu.press('Escape');
+    await expect(tabMenu).toBeHidden();
+    await expect(tabOpener).toBeFocused();
+
+    await tabOpener.evaluate((element, point) => element.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: point.x,
+      clientY: point.y,
+    })), { x: narrowViewport.width - 1, y: narrowViewport.height - 1 });
+    await expect(tabMenu).toBeVisible();
+    const edgeMenu = await tabMenu.boundingBox();
+    expect(edgeMenu).not.toBeNull();
+    expect(edgeMenu!.x).toBeGreaterThanOrEqual(0);
+    expect(edgeMenu!.y).toBeGreaterThanOrEqual(0);
+    expect(edgeMenu!.x + edgeMenu!.width).toBeLessThanOrEqual(narrowViewport.width + 1);
+    expect(edgeMenu!.y + edgeMenu!.height).toBeLessThanOrEqual(narrowViewport.height + 1);
+    await page.evaluate(() => document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
+    await expect(tabMenu).toBeHidden();
+    await expect(tabOpener).toBeFocused();
+
     const narrowScreenshot = testInfo.outputPath('workspace-left-narrow-ssh.png');
     await page.screenshot({ path: narrowScreenshot });
     await testInfo.attach('workspace-left-narrow-ssh', { path: narrowScreenshot, contentType: 'image/png' });

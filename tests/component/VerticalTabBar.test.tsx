@@ -592,9 +592,10 @@ describe('VerticalTabBar', () => {
     const onRenameTab = vi.fn();
     const onSaveWorkspaceTab = vi.fn();
     renderTabs({ onRenameTab, onSaveWorkspaceTab });
+    const opener = screen.getByRole('button', { name: /Main app Local/i });
 
     expect(screen.queryByRole('button', { name: /rename tab/i })).not.toBeInTheDocument();
-    fireEvent.contextMenu(screen.getAllByRole('button', { name: /^close /i })[0].closest('.vtab-item')!);
+    fireEvent.contextMenu(opener);
     expect(screen.getByRole('menu').parentElement).toBe(document.body);
     fireEvent.click(screen.getByRole('menuitem', { name: /rename tab/i }));
     const nameInput = screen.getByRole('textbox', { name: /^tab name$/i });
@@ -604,9 +605,33 @@ describe('VerticalTabBar', () => {
 
     expect(onRenameTab).toHaveBeenCalledWith('tab-1', 'Renamed');
 
-    fireEvent.contextMenu(screen.getAllByRole('button', { name: /^close /i })[0].closest('.vtab-item')!);
+    fireEvent.contextMenu(opener);
     fireEvent.click(screen.getByRole('menuitem', { name: /save as preset/i }));
     expect(onSaveWorkspaceTab).toHaveBeenCalledWith(tabs[0]);
+    expect(opener).toHaveFocus();
+  });
+
+  it('opens the named tab menu from either keyboard command and restores its opener', async () => {
+    renderTabs();
+    const opener = screen.getByRole('button', { name: /Main app Local/i });
+
+    act(() => opener.focus());
+    fireEvent.keyDown(opener, { key: 'ContextMenu' });
+
+    const menu = screen.getByRole('menu', { name: 'Actions for Main app' });
+    const rename = screen.getByRole('menuitem', { name: 'Rename tab' });
+    const save = screen.getByRole('menuitem', { name: 'Save as preset' });
+    await waitFor(() => expect(rename).toHaveFocus());
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    expect(save).toHaveFocus();
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(rename).toHaveFocus();
+    fireEvent.keyDown(menu, { key: 'Escape' });
+    await waitFor(() => expect(opener).toHaveFocus());
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+
+    fireEvent.keyDown(opener, { key: 'F10', shiftKey: true });
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Rename tab' })).toHaveFocus());
   });
 
   it('labels saving a linked tab as a preset update', () => {
@@ -620,11 +645,40 @@ describe('VerticalTabBar', () => {
 
   it('closes the tab context menu when clicking outside it', () => {
     renderTabs();
+    const opener = screen.getByRole('button', { name: /Main app Local/i });
 
-    fireEvent.contextMenu(screen.getAllByRole('button', { name: /^close /i })[0].closest('.vtab-item')!);
+    act(() => opener.focus());
+    fireEvent.contextMenu(opener);
     expect(screen.getByRole('menu')).toBeInTheDocument();
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+  });
+
+  it('keeps the tab context menu inside the viewport', async () => {
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const width = this.classList.contains('vtab-context-menu') ? 160 : 0;
+      const height = this.classList.contains('vtab-context-menu') ? 80 : 0;
+      return { x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height, toJSON: () => ({}) };
+    });
+    const previousWidth = window.innerWidth;
+    const previousHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 320 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 200 });
+
+    try {
+      renderTabs();
+      fireEvent.contextMenu(screen.getByRole('button', { name: /Main app Local/i }), {
+        clientX: 310,
+        clientY: 190,
+      });
+
+      await waitFor(() => expect(screen.getByRole('menu')).toHaveStyle({ left: '160px', top: '120px' }));
+    } finally {
+      rect.mockRestore();
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: previousWidth });
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: previousHeight });
+    }
   });
 
   it('creates, lists, and deliberately stops a forward for a ready live SSH tab', async () => {
