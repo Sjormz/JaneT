@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -6,6 +8,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WINDOWS_PATCH_POSTCONDITIONS } from './patch-node-pty-windows-worker.mjs';
 
 const execFileAsync = promisify(execFile);
+const projectRequire = createRequire(import.meta.url);
+const electronBuilderRequire = createRequire(projectRequire.resolve('electron-builder/package.json'));
+const appBuilderRequire = createRequire(electronBuilderRequire.resolve('app-builder-lib/package.json'));
+const { load: loadYaml } = appBuilderRequire('js-yaml');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
 const PACKAGED_PTY_MARKER = '__JANET_PACKAGED_PTY_OK__';
@@ -45,6 +51,98 @@ export function expectedReleaseArtifacts(platformValue, version) {
     `JaneT-${version}-linux-x64.deb`,
     'latest-linux.yml',
   ];
+}
+
+function releaseManifestPolicy(platformValue, version) {
+  const platform = normalizeReleasePlatform(platformValue);
+  if (platform === 'windows') {
+    const setup = `JaneT-Setup-${version}-win-x64.exe`;
+    return {
+      manifest: 'latest.yml',
+      files: [setup],
+      primary: setup,
+      blockmaps: [`${setup}.blockmap`],
+    };
+  }
+  if (platform === 'macos') {
+    const x64Zip = `JaneT-${version}-mac-x64.zip`;
+    const arm64Zip = `JaneT-${version}-mac-arm64.zip`;
+    return {
+      manifest: 'latest-mac.yml',
+      files: [
+        x64Zip,
+        arm64Zip,
+        `JaneT-${version}-mac-x64.dmg`,
+        `JaneT-${version}-mac-arm64.dmg`,
+      ],
+      primary: x64Zip,
+      blockmaps: [`${x64Zip}.blockmap`, `${arm64Zip}.blockmap`],
+    };
+  }
+  const appImage = `JaneT-${version}-linux-x64.AppImage`;
+  return {
+    manifest: 'latest-linux.yml',
+    files: [appImage, `JaneT-${version}-linux-x64.deb`],
+    primary: appImage,
+    blockmaps: [],
+  };
+}
+
+function hashFileSha512(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha512');
+    fs.createReadStream(filePath)
+      .on('error', reject)
+      .on('data', (chunk) => hash.update(chunk))
+      .on('end', () => resolve(hash.digest('base64')));
+  });
+}
+
+export async function verifyReleaseManifest(platformValue, version, releaseRoot) {
+  const platform = normalizeReleasePlatform(platformValue);
+  const policy = releaseManifestPolicy(platform, version);
+  const manifestPath = path.join(releaseRoot, policy.manifest);
+  const manifestStat = requireNonEmptyFile(manifestPath, `${platform} update manifest`);
+  if (manifestStat.size > 64 * 1024) throw new Error(`Update manifest is unexpectedly large: ${manifestPath}`);
+  let manifest;
+  try {
+    manifest = loadYaml(fs.readFileSync(manifestPath, 'utf8'));
+  } catch {
+    throw new Error(`Invalid ${platform} update manifest: ${manifestPath}`);
+  }
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || !Array.isArray(manifest.files)) {
+    throw new Error(`Invalid ${platform} update manifest: ${manifestPath}`);
+  }
+  if (manifest.version !== version) {
+    throw new Error(`Update manifest version mismatch: expected ${version}, received ${manifest.version}`);
+  }
+  const urls = manifest.files.map((entry) => entry?.url);
+  if (JSON.stringify(urls) !== JSON.stringify(policy.files)) {
+    throw new Error(`Update manifest file matrix mismatch: expected ${policy.files.join(', ')}`);
+  }
+  for (const entry of manifest.files) {
+    const filePath = path.join(releaseRoot, entry.url);
+    const stat = requireNonEmptyFile(filePath, 'manifest package');
+    if (entry.size !== stat.size) {
+      throw new Error(`Update manifest size mismatch for ${entry.url}: expected ${stat.size}, received ${entry.size}`);
+    }
+    const sha512 = await hashFileSha512(filePath);
+    if (entry.sha512 !== sha512) throw new Error(`Update manifest SHA-512 mismatch for ${entry.url}`);
+  }
+  const primary = manifest.files.find((entry) => entry.url === policy.primary);
+  if (manifest.path !== policy.primary || manifest.sha512 !== primary.sha512) {
+    throw new Error(`Update manifest primary package mismatch: expected ${policy.primary}`);
+  }
+  for (const blockmap of policy.blockmaps) {
+    requireNonEmptyFile(path.join(releaseRoot, blockmap), 'referenced blockmap');
+  }
+
+  const expectedArtifacts = new Set(expectedReleaseArtifacts(platform, version));
+  const unexpected = fs.readdirSync(releaseRoot, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && (entry.name.startsWith('JaneT-') || /^latest.*\.yml$/.test(entry.name)))
+    .map((entry) => entry.name)
+    .filter((name) => !expectedArtifacts.has(name));
+  if (unexpected.length > 0) throw new Error(`Unexpected ${platform} release artifacts: ${unexpected.join(', ')}`);
 }
 
 export function packagedRuntime(platformValue, releaseRoot, hostArch = process.arch) {
@@ -305,6 +403,7 @@ export async function verifyReleaseArtifacts(platformValue, releaseRoot = path.j
   if (missing.length > 0) {
     throw new Error(`Missing or empty release artifacts for ${platform}: ${missing.join(', ')}`);
   }
+  await verifyReleaseManifest(platform, packageJson.version, releaseRoot);
   if (platform === 'macos') await verifyMacApplications(releaseRoot);
   await smokePackagedTerminal(platform, releaseRoot);
   console.log(`Verified ${platform} release artifacts and packaged PTY runtime.`);

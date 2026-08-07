@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +9,62 @@ const projectRoot = path.resolve(import.meta.dirname, '../..');
 
 async function loadScript(name: string): Promise<any> {
   return import(pathToFileURL(path.join(projectRoot, 'scripts', name)).href);
+}
+
+function writeWindowsReleaseFixture(releaseRoot: string, version = '1.2.3') {
+  const setup = `JaneT-Setup-${version}-win-x64.exe`;
+  const setupBytes = Buffer.from('windows setup bytes');
+  const setupSha512 = createHash('sha512').update(setupBytes).digest('base64');
+  fs.mkdirSync(releaseRoot, { recursive: true });
+  fs.writeFileSync(path.join(releaseRoot, setup), setupBytes);
+  fs.writeFileSync(path.join(releaseRoot, `${setup}.blockmap`), 'blockmap');
+  fs.writeFileSync(path.join(releaseRoot, `JaneT-Portable-${version}-win-x64.exe`), 'portable');
+  fs.writeFileSync(path.join(releaseRoot, 'latest.yml'), [
+    `version: ${version}`,
+    'files:',
+    `  - url: ${setup}`,
+    `    sha512: ${setupSha512}`,
+    `    size: ${setupBytes.length}`,
+    `path: ${setup}`,
+    `sha512: ${setupSha512}`,
+    "releaseDate: '2026-08-08T00:00:00.000Z'",
+    '',
+  ].join('\n'));
+  return { setupSha512 };
+}
+
+function writeReleaseManifestFixture(
+  releaseRoot: string,
+  manifestName: string,
+  version: string,
+  fileNames: string[],
+  primary: string,
+  blockmaps: string[] = [],
+) {
+  const files = fileNames.map((name) => {
+    const bytes = Buffer.from(`${name} bytes`);
+    fs.writeFileSync(path.join(releaseRoot, name), bytes);
+    return {
+      name,
+      sha512: createHash('sha512').update(bytes).digest('base64'),
+      size: bytes.length,
+    };
+  });
+  const primaryFile = files.find(({ name }) => name === primary)!;
+  for (const blockmap of blockmaps) fs.writeFileSync(path.join(releaseRoot, blockmap), `${blockmap} bytes`);
+  fs.writeFileSync(path.join(releaseRoot, manifestName), [
+    `version: ${version}`,
+    'files:',
+    ...files.flatMap(({ name, sha512, size }) => [
+      `  - url: ${name}`,
+      `    sha512: ${sha512}`,
+      `    size: ${size}`,
+    ]),
+    `path: ${primary}`,
+    `sha512: ${primaryFile.sha512}`,
+    "releaseDate: '2026-08-08T00:00:00.000Z'",
+    '',
+  ].join('\n'));
 }
 
 describe('development tooling', () => {
@@ -150,6 +207,150 @@ describe('release tooling', () => {
       'JaneT-1.2.3-linux-x64.deb',
       'latest-linux.yml',
     ]);
+  });
+
+  it('recomputes the updater manifest SHA-512 from local package bytes', async () => {
+    const { verifyReleaseManifest } = await loadScript('verify-release-artifacts.mjs');
+    const releaseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-release-manifest-'));
+    try {
+      const { setupSha512 } = writeWindowsReleaseFixture(releaseRoot);
+      await expect(verifyReleaseManifest('windows', '1.2.3', releaseRoot)).resolves.toBeUndefined();
+
+      const manifestPath = path.join(releaseRoot, 'latest.yml');
+      const manifest = fs.readFileSync(manifestPath, 'utf8');
+      fs.writeFileSync(manifestPath, manifest.replaceAll(setupSha512, Buffer.alloc(64).toString('base64')));
+      await expect(verifyReleaseManifest('windows', '1.2.3', releaseRoot))
+        .rejects.toThrow(/SHA-512 mismatch/);
+    } finally {
+      fs.rmSync(releaseRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('enforces the updater manifest version and exact package matrix', async () => {
+    const { verifyReleaseManifest } = await loadScript('verify-release-artifacts.mjs');
+    const releaseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-release-manifest-'));
+    try {
+      writeWindowsReleaseFixture(releaseRoot);
+      const manifestPath = path.join(releaseRoot, 'latest.yml');
+      const manifest = fs.readFileSync(manifestPath, 'utf8');
+
+      fs.writeFileSync(manifestPath, manifest.replace('version: 1.2.3', 'version: 1.2.4'));
+      await expect(verifyReleaseManifest('windows', '1.2.3', releaseRoot))
+        .rejects.toThrow(/version mismatch/);
+
+      fs.writeFileSync(manifestPath, manifest.replace(
+        'url: JaneT-Setup-1.2.3-win-x64.exe',
+        'url: JaneT-Portable-1.2.3-win-x64.exe',
+      ));
+      await expect(verifyReleaseManifest('windows', '1.2.3', releaseRoot))
+        .rejects.toThrow(/file matrix mismatch/);
+
+      const duplicateEntry = manifest.match(/  - url:.*\n    sha512:.*\n    size:.*\n/)?.[0] ?? '';
+      fs.writeFileSync(manifestPath, manifest.replace('path:', `${duplicateEntry}path:`));
+      await expect(verifyReleaseManifest('windows', '1.2.3', releaseRoot))
+        .rejects.toThrow(/file matrix mismatch/);
+    } finally {
+      fs.rmSync(releaseRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts the generated macOS and Linux architecture matrices', async () => {
+    const { verifyReleaseManifest } = await loadScript('verify-release-artifacts.mjs');
+    const releaseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-release-manifest-'));
+    try {
+      const version = '1.2.3';
+      const macFiles = [
+        `JaneT-${version}-mac-x64.zip`,
+        `JaneT-${version}-mac-arm64.zip`,
+        `JaneT-${version}-mac-x64.dmg`,
+        `JaneT-${version}-mac-arm64.dmg`,
+      ];
+      writeReleaseManifestFixture(releaseRoot, 'latest-mac.yml', version, macFiles, macFiles[0], [
+        `${macFiles[0]}.blockmap`,
+        `${macFiles[1]}.blockmap`,
+      ]);
+      await expect(verifyReleaseManifest('macos', version, releaseRoot)).resolves.toBeUndefined();
+
+      fs.rmSync(releaseRoot, { recursive: true, force: true });
+      fs.mkdirSync(releaseRoot);
+      const linuxFiles = [
+        `JaneT-${version}-linux-x64.AppImage`,
+        `JaneT-${version}-linux-x64.deb`,
+      ];
+      writeReleaseManifestFixture(releaseRoot, 'latest-linux.yml', version, linuxFiles, linuxFiles[0]);
+      await expect(verifyReleaseManifest('linux', version, releaseRoot)).resolves.toBeUndefined();
+    } finally {
+      fs.rmSync(releaseRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('matches manifest sizes and primary metadata to local package bytes', async () => {
+    const { verifyReleaseManifest } = await loadScript('verify-release-artifacts.mjs');
+    const releaseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-release-manifest-'));
+    try {
+      writeWindowsReleaseFixture(releaseRoot);
+      const manifestPath = path.join(releaseRoot, 'latest.yml');
+      const manifest = fs.readFileSync(manifestPath, 'utf8');
+
+      fs.writeFileSync(manifestPath, manifest.replace(/    size: \d+/, '    size: 1'));
+      await expect(verifyReleaseManifest('windows', '1.2.3', releaseRoot))
+        .rejects.toThrow(/size mismatch/);
+
+      fs.writeFileSync(manifestPath, manifest.replace(
+        'path: JaneT-Setup-1.2.3-win-x64.exe',
+        'path: JaneT-Portable-1.2.3-win-x64.exe',
+      ));
+      await expect(verifyReleaseManifest('windows', '1.2.3', releaseRoot))
+        .rejects.toThrow(/primary package mismatch/);
+
+      fs.writeFileSync(manifestPath, manifest.replace(
+        /^sha512: .*$/m,
+        `sha512: ${Buffer.alloc(64).toString('base64')}`,
+      ));
+      await expect(verifyReleaseManifest('windows', '1.2.3', releaseRoot))
+        .rejects.toThrow(/primary package mismatch/);
+    } finally {
+      fs.rmSync(releaseRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('requires policy blockmaps and rejects unexpected release artifacts', async () => {
+    const { verifyReleaseManifest } = await loadScript('verify-release-artifacts.mjs');
+    const releaseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-release-manifest-'));
+    try {
+      writeWindowsReleaseFixture(releaseRoot);
+      const blockmap = path.join(releaseRoot, 'JaneT-Setup-1.2.3-win-x64.exe.blockmap');
+      fs.rmSync(blockmap);
+      await expect(verifyReleaseManifest('windows', '1.2.3', releaseRoot))
+        .rejects.toThrow(/referenced blockmap/);
+
+      fs.writeFileSync(blockmap, 'blockmap');
+      fs.writeFileSync(path.join(releaseRoot, 'JaneT-Debug-1.2.3-win-x64.zip'), 'unexpected');
+      await expect(verifyReleaseManifest('windows', '1.2.3', releaseRoot))
+        .rejects.toThrow(/Unexpected windows release artifacts.*JaneT-Debug/);
+    } finally {
+      fs.rmSync(releaseRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects oversized or malformed updater manifests', async () => {
+    const { verifyReleaseManifest } = await loadScript('verify-release-artifacts.mjs');
+    const releaseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-release-manifest-'));
+    try {
+      writeWindowsReleaseFixture(releaseRoot);
+      const manifestPath = path.join(releaseRoot, 'latest.yml');
+      const manifest = fs.readFileSync(manifestPath, 'utf8');
+
+      fs.writeFileSync(manifestPath, `${manifest}\n#${'x'.repeat(64 * 1024)}`);
+      await expect(verifyReleaseManifest('windows', '1.2.3', releaseRoot))
+        .rejects.toThrow(/unexpectedly large/);
+
+      fs.writeFileSync(manifestPath, 'version: [unterminated');
+      await expect(verifyReleaseManifest('windows', '1.2.3', releaseRoot))
+        .rejects.toThrow(/Invalid windows update manifest/);
+    } finally {
+      fs.rmSync(releaseRoot, { recursive: true, force: true });
+    }
   });
 
   it('validates unpacked PTY files but loads the logical asar module path', async () => {
