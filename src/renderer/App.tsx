@@ -1403,6 +1403,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
       tabsRef.current = next;
       terminalFocusTargetIdRef.current = newLeafId;
       restoreTerminalFocusRef.current = true;
+      setMaximizedLeafByTab((maximized) => (
+        maximized[tabId] ? { ...maximized, [tabId]: null } : maximized
+      ));
       setFocusedTerminalId(newLeafId);
       setTabs(next);
       setTerminalFocusRequest((request) => request + 1);

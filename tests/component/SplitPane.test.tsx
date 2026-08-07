@@ -1838,6 +1838,33 @@ describe('split panes in the app', () => {
     });
   });
 
+  it('restores a maximized layout before splitting its current pane', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    const existingTerminalIds = new Set(
+      screen.getAllByTestId(/terminal-/).map((terminal) => terminal.getAttribute('data-terminal-id')),
+    );
+
+    fireEvent.click(screen.getAllByRole('button', { name: /maximize pane/i })[1]);
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+    await waitFor(() => {
+      expect(rendererMocks.paletteActions.find((action) => action.id === 'split-right')).toBeTruthy();
+    });
+
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'split-right')!.handler());
+
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(3));
+    const newTerminal = screen.getAllByTestId(/terminal-/).find(
+      (terminal) => !existingTerminalIds.has(terminal.getAttribute('data-terminal-id')),
+    )!;
+    const currentPanes = document.querySelectorAll('.terminal-leaf[aria-current="true"]');
+
+    expect(currentPanes).toHaveLength(1);
+    expect(currentPanes[0]).toBe(newTerminal.closest('.terminal-leaf'));
+    expect(within(newTerminal).getByRole('textbox')).toHaveFocus();
+  });
+
   it('clears maximized state if the maximized pane is closed', async () => {
     render(<App />);
 

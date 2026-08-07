@@ -207,13 +207,15 @@ test('focuses the first terminal after clicking a terminal tab', async () => {
   }
 });
 
-test('focuses and persistently marks a newly split pane', async () => {
+test('focuses and persistently marks a newly split maximized pane', async () => {
   const { browser, electronProcess, page, userData } = await launchTwoPaneApp();
 
   try {
     const panes = page.locator('.terminal-leaf');
     await expect(panes).toHaveCount(2);
-    await page.getByRole('button', { name: 'Split pane right' }).nth(1).click();
+    await page.getByRole('button', { name: 'Maximize pane' }).nth(1).click();
+    await expect(panes).toHaveCount(1);
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+\\' : 'Control+\\');
     await expect(panes).toHaveCount(3);
 
     const newPane = panes.nth(2);
