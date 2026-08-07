@@ -95,6 +95,7 @@ async function launchApp(settings: unknown, prefix: string, existingUserData?: s
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: false,
+    windowsHide: true,
   });
   electronProcess.stdout?.on('data', (chunk) => console.log(`[electron] ${chunk}`));
   electronProcess.stderr?.on('data', (chunk) => console.error(`[electron] ${chunk}`));
@@ -451,6 +452,128 @@ test('refreshes external branch and file changes without a manual reload', async
   } finally {
     if (app) await closeApp(app.browser, app.electronProcess, app.userData);
     fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test('focuses the exact worktree MRU across tabs and a maximized layout without creating terminals', async () => {
+  test.setTimeout(60_000);
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-worktree-focus-repo-'));
+  const nestedPath = path.join(repoPath, 'nested');
+  const olderCwd = path.join(repoPath, 'older');
+  const targetCwd = path.join(repoPath, 'target');
+  let app: Awaited<ReturnType<typeof launchApp>> | undefined;
+  try {
+    const git = (args: string[]) => execFileSync('git', args, { cwd: repoPath, windowsHide: true });
+    git(['init', '-b', 'main']);
+    git(['config', 'user.email', 'janet-e2e@example.invalid']);
+    git(['config', 'user.name', 'JaneT E2E']);
+    fs.writeFileSync(path.join(repoPath, 'base.txt'), 'base\n', 'utf-8');
+    git(['add', 'base.txt']);
+    git(['commit', '-m', 'base']);
+    git(['branch', 'feature/nested']);
+    git(['worktree', 'add', nestedPath, 'feature/nested']);
+    fs.mkdirSync(olderCwd);
+    fs.mkdirSync(targetCwd);
+
+    app = await launchApp({
+      theme: 'tokyo-night',
+      fontSize: 14,
+      sidebarSide: 'left',
+      keybindings: {},
+      workspaceTabs: [],
+      session: {
+        tabs: [
+          {
+            id: 'parent-tab',
+            title: 'parent terminals',
+            type: 'local',
+            cwd: repoPath,
+            root: {
+              type: 'split',
+              direction: 'vertical',
+              sizes: [1, 1],
+              children: [
+                { type: 'leaf', title: 'parent older', terminalType: 'local', cwd: olderCwd },
+                { type: 'leaf', title: 'parent target', terminalType: 'local', cwd: targetCwd },
+              ],
+            },
+          },
+          {
+            id: 'nested-tab',
+            title: 'nested terminal',
+            type: 'local',
+            cwd: nestedPath,
+            root: { type: 'leaf', title: 'nested owner', terminalType: 'local', cwd: nestedPath },
+          },
+        ],
+        activeTabId: 'parent-tab',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'git',
+      },
+    }, 'janet-e2e-worktree-focus-app-');
+
+    const page = app.page;
+    const parentPanes = page.locator('.terminal-leaf');
+    await expect(parentPanes).toHaveCount(2);
+    const parentIds = await page.locator('[data-terminal-id]').evaluateAll(
+      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')!),
+    );
+    expect(new Set(parentIds).size).toBe(2);
+
+    const targetPane = parentPanes.filter({ has: page.locator('.leaf-title', { hasText: 'parent target' }) });
+    const olderPane = parentPanes.filter({ has: page.locator('.leaf-title', { hasText: 'parent older' }) });
+    const targetId = await targetPane.locator('[data-terminal-id]').getAttribute('data-terminal-id');
+    const olderId = await olderPane.locator('[data-terminal-id]').getAttribute('data-terminal-id');
+    expect(targetId).toBeTruthy();
+    expect(olderId).toBeTruthy();
+    await targetPane.locator('.xterm-helper-textarea').focus();
+    await expect(targetPane).toHaveAttribute('aria-current', 'true');
+
+    await olderPane.getByRole('button', { name: /Maximize pane/ }).click();
+    await expect(parentPanes).toHaveCount(1);
+    await expect(page.locator(`[data-terminal-id="${olderId}"]`)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Restore pane layout' })).toBeVisible();
+
+    await page.locator('.vtab-item').filter({ hasText: 'nested terminal' }).click();
+    const nestedTerminal = page.locator('[data-terminal-id]');
+    await expect(nestedTerminal).toHaveCount(1);
+    const nestedId = await nestedTerminal.getAttribute('data-terminal-id');
+    expect(nestedId).toBeTruthy();
+
+    const sourceControl = page.locator('.git-tree');
+    const parentWorktree = sourceControl.getByRole('button', {
+      name: `Focus worktree ${path.basename(repoPath)} terminal`,
+    });
+    const nestedWorktree = sourceControl.getByRole('button', {
+      name: `Focus worktree ${path.basename(nestedPath)} terminal`,
+    });
+    await expect(parentWorktree).toContainText('main · 2 panes', { timeout: 10_000 });
+    await expect(nestedWorktree).toContainText('feature/nested · open');
+    await expect(nestedWorktree.locator('xpath=..')).toHaveAttribute('aria-current', 'location');
+
+    await parentWorktree.click();
+
+    await expect(page.locator('.vtab-item.active')).toContainText('parent terminals');
+    await expect(parentPanes).toHaveCount(2);
+    await expect(page.getByRole('button', { name: 'Restore pane layout' })).toHaveCount(0);
+    const revealedTarget = page.locator(`[data-terminal-id="${targetId}"]`);
+    const revealedOlder = page.locator(`[data-terminal-id="${olderId}"]`);
+    await expect(revealedTarget.locator('.xterm-helper-textarea')).toBeFocused();
+    const targetOwner = revealedTarget.locator('xpath=ancestor::div[contains(concat(" ",normalize-space(@class)," ")," terminal-leaf ")][1]');
+    const olderOwner = revealedOlder.locator('xpath=ancestor::div[contains(concat(" ",normalize-space(@class)," ")," terminal-leaf ")][1]');
+    await expect(targetOwner).toHaveAttribute('aria-current', 'true');
+    await expect(olderOwner).not.toHaveAttribute('aria-current');
+    expect(new Set(await page.locator('[data-terminal-id]').evaluateAll(
+      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')!),
+    ))).toEqual(new Set(parentIds));
+
+    await page.locator('.vtab-item').filter({ hasText: 'nested terminal' }).click();
+    await expect(page.locator('[data-terminal-id]')).toHaveAttribute('data-terminal-id', nestedId as string);
+    await expect(page.locator('.vtab-item')).toHaveCount(2);
+  } finally {
+    if (app) await closeApp(app.browser, app.electronProcess, app.userData);
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
