@@ -63,6 +63,7 @@ async function measureCompactTargets(page: Page, state: string) {
       '[role="menuitem"]',
       '[role="option"]',
       '[role="radio"]',
+      '[role="separator"]',
       '[role="switch"]',
       '[role="tab"]',
     ].join(',');
@@ -215,7 +216,10 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
       expect(box!.width).toBeGreaterThanOrEqual(24);
       expect(box!.height).toBeGreaterThanOrEqual(24);
     }
-    reports.push(await measureCompactTargets(page, 'compact pane'));
+    const compactPaneReport = await measureCompactTargets(page, 'compact pane');
+    expect(compactPaneReport.measurements.some(({ target }) => target.includes('[role=separator]')))
+      .toBe(true);
+    reports.push(compactPaneReport);
 
     await page.getByRole('button', { name: 'Show terminal tabs' }).click();
     const activeTab = page.locator('.vtab-item.active');
