@@ -39,6 +39,233 @@ async function workspaceToolBoxes(page: Page) {
   return { tools: tools!, rail: rail!, panel: panel! };
 }
 
+interface CompactTargetMeasurement {
+  target: string;
+  width: number;
+  height: number;
+  centerX: number;
+  centerY: number;
+  nearestClearance: number | null;
+  conflicts: string[];
+}
+
+async function measureCompactTargets(page: Page, state: string) {
+  return page.evaluate((currentState) => {
+    const selector = [
+      'a[href]',
+      'button:not(:disabled)',
+      'input:not([type="hidden"]):not(:disabled)',
+      'select:not(:disabled)',
+      'textarea:not(:disabled)',
+      '[role="button"]',
+      '[role="checkbox"]',
+      '[role="link"]',
+      '[role="menuitem"]',
+      '[role="option"]',
+      '[role="radio"]',
+      '[role="switch"]',
+      '[role="tab"]',
+    ].join(',');
+    const identity = (element: HTMLElement) => {
+      const classes = Array.from(element.classList).sort().map((name) => `.${name}`).join('');
+      const role = element.getAttribute('role');
+      const type = element instanceof HTMLInputElement ? element.type : null;
+      return `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ''}${classes}${role ? `[role=${role}]` : ''}${type ? `[type=${type}]` : ''}`;
+    };
+    const rectFor = (element: HTMLElement) => {
+      if (element instanceof HTMLInputElement && ['checkbox', 'radio'].includes(element.type)) {
+        const label = element.labels?.[0];
+        if (label) return label.getBoundingClientRect();
+      }
+      return element.getBoundingClientRect();
+    };
+    const targets = Array.from(new Set(document.querySelectorAll<HTMLElement>(selector)))
+      .map((element) => ({ element, rect: rectFor(element) }))
+      .filter(({ element, rect }) => {
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        if (rect.right <= 0 || rect.bottom <= 0 || rect.left >= innerWidth || rect.top >= innerHeight) return false;
+        if (!element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+        if (getComputedStyle(element).pointerEvents === 'none') return false;
+        const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return top instanceof Element && (element.contains(top) || top.contains(element));
+      })
+      .map(({ element, rect }) => ({
+        target: identity(element),
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+        centerX: rect.left + rect.width / 2,
+        centerY: rect.top + rect.height / 2,
+      }));
+    const undersized = targets.filter((target) => target.width < 24 || target.height < 24);
+    const measurements = undersized.map((target) => {
+      let nearestClearance = Number.POSITIVE_INFINITY;
+      const conflicts: string[] = [];
+      for (const other of targets) {
+        if (other === target) continue;
+        const otherUndersized = other.width < 24 || other.height < 24;
+        const targetClearance = Math.hypot(
+          Math.max(other.left - target.centerX, 0, target.centerX - other.right),
+          Math.max(other.top - target.centerY, 0, target.centerY - other.bottom),
+        ) - 12;
+        const clearance = otherUndersized
+          ? Math.min(
+            targetClearance,
+            Math.hypot(target.centerX - other.centerX, target.centerY - other.centerY) - 24,
+          )
+          : targetClearance;
+        nearestClearance = Math.min(nearestClearance, clearance);
+        if (clearance < -0.01) conflicts.push(other.target);
+      }
+      return {
+        target: target.target,
+        width: target.width,
+        height: target.height,
+        centerX: target.centerX,
+        centerY: target.centerY,
+        nearestClearance: Number.isFinite(nearestClearance) ? nearestClearance : null,
+        conflicts,
+      } satisfies CompactTargetMeasurement;
+    });
+    return {
+      state: currentState,
+      viewport: { width: innerWidth, height: innerHeight },
+      targetCount: targets.length,
+      measurements,
+    };
+  }, state);
+}
+
+test('proves compact controls meet WCAG target size or center spacing at minimum size', async ({}, testInfo) => {
+  test.setTimeout(60_000);
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-target-geometry-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+    theme: 'tokyo-night',
+    fontSize: 14,
+    sidebarSide: 'left',
+    keybindings: {},
+    workspaceTabs: [{
+      id: 'geometry-preset',
+      name: 'Geometry preset',
+      type: 'local',
+      cwd: root,
+      root: {
+        type: 'split',
+        direction: 'vertical',
+        sizes: [1, 1],
+        children: [
+          { type: 'leaf', title: 'Left', terminalType: 'local', cwd: root },
+          { type: 'leaf', title: 'Right', terminalType: 'local', cwd: root },
+        ],
+      },
+      terminalCount: 2,
+      splitDirection: 'vertical',
+    }],
+    session: {
+      tabs: [{
+        id: 'geometry-tab',
+        title: 'Geometry fixture',
+        type: 'local',
+        cwd: root,
+        root: {
+          type: 'split',
+          direction: 'vertical',
+          sizes: [1, 1],
+          children: [
+            { type: 'leaf', title: 'Left', terminalType: 'local', cwd: root },
+            { type: 'leaf', title: 'Right', terminalType: 'local', cwd: root },
+          ],
+        },
+      }],
+      activeTabId: 'geometry-tab',
+      sidebarOpen: true,
+      tabsOpen: false,
+      sidebarSection: 'files',
+    },
+  }, null, 2), 'utf8');
+  let app: ElectronApplication | undefined;
+
+  try {
+    app = await electron.launch({
+      args: ['.'],
+      cwd: root,
+      env: electronEnv({
+        NODE_ENV: 'test',
+        JANET_E2E_USER_DATA_DIR: userData,
+      }),
+    });
+    const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(800, 600));
+    await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
+      .toEqual({ width: 800, height: 600 });
+    await expect(page.locator('.terminal-container').first()).toBeVisible();
+
+    const reports = [];
+    const pane = page.locator('.terminal-leaf').first();
+    await pane.hover();
+    const paneActions = pane.locator('.leaf-btn');
+    await expect(paneActions).toHaveCount(5);
+    for (const action of await paneActions.all()) {
+      const box = await action.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.width).toBeGreaterThanOrEqual(24);
+      expect(box!.height).toBeGreaterThanOrEqual(24);
+    }
+    reports.push(await measureCompactTargets(page, 'compact pane'));
+
+    await page.getByRole('button', { name: 'Show terminal tabs' }).click();
+    const activeTab = page.locator('.vtab-item.active');
+    await activeTab.hover();
+    const tabClose = activeTab.locator('.vtab-close');
+    await expect(tabClose).toBeVisible();
+    const tabCloseBox = await tabClose.boundingBox();
+    expect(tabCloseBox).not.toBeNull();
+    expect(tabCloseBox!.width).toBeGreaterThanOrEqual(24);
+    expect(tabCloseBox!.height).toBeGreaterThanOrEqual(24);
+    reports.push(await measureCompactTargets(page, 'expanded tabs'));
+
+    await page.getByRole('tab', { name: 'Source Control' }).click();
+    await expect(page.getByRole('tab', { name: 'Source Control' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.git-repo-path')).toBeVisible();
+    const sourceControlReport = await measureCompactTargets(page, 'source control');
+    expect(sourceControlReport.measurements.some(({ target }) => target.includes('button.git-section-action')))
+      .toBe(true);
+    reports.push(sourceControlReport);
+
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+    reports.push(await measureCompactTargets(page, 'settings'));
+    await page.getByRole('button', { name: 'Hide settings' }).click();
+
+    const presets = page.getByRole('button', { name: 'Presets' });
+    if (await presets.getAttribute('aria-expanded') === 'false') await presets.click();
+    const preset = page.locator('.workspace-item').filter({ hasText: 'Geometry preset' });
+    await preset.getByRole('button', { name: 'Edit preset Geometry preset' }).click();
+    const presetDialog = page.getByRole('dialog', { name: 'Edit preset' });
+    await expect(presetDialog).toBeVisible();
+    const presetReport = await measureCompactTargets(page, 'preset editor');
+    expect(presetReport.measurements.some(({ target }) => target.includes('button.workspace-terminal-remove')))
+      .toBe(true);
+    reports.push(presetReport);
+
+    await testInfo.attach('compact-target-geometry', {
+      body: Buffer.from(JSON.stringify(reports, null, 2)),
+      contentType: 'application/json',
+    });
+    const measurements = reports.flatMap((report) => report.measurements);
+    const violations = measurements.filter((measurement) => measurement.conflicts.length > 0);
+    expect(measurements.length).toBeGreaterThan(0);
+    expect(violations).toEqual([]);
+  } finally {
+    await forceClose(app);
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
+
 test('keeps workspace views in their dedicated regions at desktop and minimum size', async ({}, testInfo) => {
   test.setTimeout(60_000);
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-workspace-layout-e2e-'));
