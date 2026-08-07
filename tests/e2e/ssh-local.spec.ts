@@ -420,6 +420,7 @@ async function launchAppWithLocalSsh(
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: false,
+    windowsHide: true,
   });
   electronProcess.stdout?.on('data', (chunk) => console.log(`[electron] ${chunk}`));
   electronProcess.stderr?.on('data', (chunk) => console.error(`[electron] ${chunk}`));
@@ -657,5 +658,180 @@ test('opens saved local SSH profile, persists profile id, refreshes, and runs ls
   } finally {
     await closeApp(browser, electronProcess, userData);
     await ssh.close();
+  }
+});
+
+test('restores a mutated mixed workspace in a genuine second Electron process', async () => {
+  test.setTimeout(90_000);
+  const ssh = await startLocalSshServer();
+  const localWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-resume-workspace-'));
+  const normalizedWorkspace = localWorkspace.replace(/\\/g, '/');
+  const profileId = `janet@127.0.0.1:${ssh.port}:password`;
+  let first: Awaited<ReturnType<typeof launchAppWithLocalSsh>> | undefined;
+  let second: Awaited<ReturnType<typeof launchAppWithLocalSsh>> | undefined;
+  let userData: string | undefined;
+
+  try {
+    first = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint, { seedSession: false });
+    userData = first.userData;
+    const firstPage = first.page;
+    const firstLocalTerminal = firstPage.locator('.terminal-container').first();
+    await expect(firstLocalTerminal).toBeVisible({ timeout: 15_000 });
+    await expect(firstLocalTerminal.locator('.xterm-helper-textarea'))
+      .toHaveAttribute('data-shell-ready', 'true', { timeout: 15_000 });
+    await firstLocalTerminal.locator('.xterm-helper-textarea').focus();
+
+    const firstLocalMarker = '__JANET_RESUME_LOCAL_ONE__';
+    const firstLocalCommand = process.platform === 'win32'
+      ? `Set-Location -LiteralPath '${localWorkspace.replace(/'/g, "''")}'; Write-Output '${firstLocalMarker}'`
+      : `cd -- '${localWorkspace.replace(/'/g, "'\\''")}'; printf '${firstLocalMarker}\\n'`;
+    await firstPage.keyboard.type(firstLocalCommand, { delay: 5 });
+    await firstPage.keyboard.press('Enter');
+    await expect.poll(
+      () => firstLocalTerminal.locator('.xterm-rows').innerText(),
+      { timeout: 15_000 },
+    ).toContain(firstLocalMarker);
+    await expect.poll(
+      () => firstPage.locator('.status-cwd').getAttribute('aria-label'),
+      { timeout: 15_000 },
+    ).toContain(path.basename(localWorkspace));
+
+    await firstPage.keyboard.press(process.platform === 'darwin' ? 'Meta+F2' : 'Control+F2');
+    const tabName = firstPage.getByRole('dialog', { name: 'Rename tab' })
+      .getByRole('textbox', { name: 'Tab name' });
+    await tabName.fill('Project');
+    await tabName.press('Enter');
+
+    await firstPage.getByRole('button', { name: 'Split pane right' }).click();
+    await expect(firstPage.locator('.terminal-leaf')).toHaveCount(2);
+    const generatedInput = firstPage.locator('.terminal-leaf').nth(1).locator('.xterm-helper-textarea');
+    await expect(generatedInput).toBeFocused();
+    await firstPage.keyboard.press('F2');
+    const paneName = firstPage.getByRole('dialog', { name: 'Rename terminal' })
+      .getByRole('textbox', { name: 'Terminal name' });
+    await paneName.fill('Build');
+    await paneName.press('Enter');
+
+    await firstPage.getByRole('button', { name: 'SSH connections' }).click();
+    await firstPage.getByRole('button', {
+      name: new RegExp(`connect to janet@127\\.0\\.0\\.1:${ssh.port}`, 'i'),
+    }).click();
+    await waitForShellCreateCount(first.eventsPath, 1);
+    await runMarkedLs(firstPage, 'RESUME_REMOTE_ONE');
+
+    await firstPage.locator('.vtab-item').filter({ hasText: 'Project' }).click();
+    await expect(firstPage.locator('.terminal-container')).toHaveCount(2);
+    const firstLocalIds = await firstPage.locator('.terminal-container').evaluateAll((terminals) => (
+      terminals.map((terminal) => terminal.getAttribute('data-terminal-id'))
+    ));
+    expect(firstLocalIds).toHaveLength(2);
+    expect(firstLocalIds.every(Boolean)).toBe(true);
+    expect(new Set(firstLocalIds).size).toBe(2);
+
+    const buildPane = firstPage.locator('.terminal-leaf').filter({
+      has: firstPage.locator('.leaf-title', { hasText: 'Build' }),
+    });
+    await buildPane.getByRole('button', { name: /^Maximize pane/ }).click();
+    await expect(firstPage.locator('.terminal-leaf')).toHaveCount(1);
+    await expect(buildPane).toHaveAttribute('aria-current', 'true');
+
+    await expect.poll(() => {
+      const session = readSettings(first!.settingsPath).session;
+      const localTab = session?.tabs?.find((tab: Record<string, any>) => tab.title === 'Project');
+      const sshTab = session?.tabs?.find((tab: Record<string, any>) => tab.type === 'ssh');
+      return {
+        tabTypes: session?.tabs?.map((tab: Record<string, any>) => tab.type).sort(),
+        activeTitle: session?.tabs?.find((tab: Record<string, any>) => tab.id === session.activeTabId)?.title,
+        paneTitles: localTab?.root?.children?.map((leaf: Record<string, any>) => leaf.title),
+        localCwd: localTab?.root?.children?.[0]?.cwd,
+        selectedPanePath: localTab?.selectedPanePath,
+        maximizedPanePath: localTab?.maximizedPanePath,
+        sshProfileId: sshTab?.sshProfileId,
+      };
+    }, { timeout: 15_000 }).toEqual({
+      tabTypes: ['local', 'ssh'],
+      activeTitle: 'Project',
+      paneTitles: ['terminal', 'Build'],
+      localCwd: normalizedWorkspace,
+      selectedPanePath: [1],
+      maximizedPanePath: [1],
+      sshProfileId: profileId,
+    });
+    const firstSavedSettings = fs.readFileSync(first.settingsPath, 'utf-8');
+    for (const terminalId of firstLocalIds) expect(firstSavedSettings).not.toContain(terminalId as string);
+
+    const firstProcessExit = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('First Electron process did not exit')), 20_000);
+      first!.electronProcess.once('exit', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      first!.electronProcess.once('error', (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+    });
+    await firstPage.evaluate(() => window.janet.windowClose());
+    await expect.poll(() => readEvents(first!.eventsPath).filter((event) => (
+      event.type === 'workspace:prepare-for-close'
+    )).at(-1), { timeout: 15_000 }).toMatchObject({
+      type: 'workspace:prepare-for-close',
+      reason: 'window-close',
+      resolution: 'saved',
+    });
+    await firstProcessExit;
+    await first.browser.close().catch(() => {});
+
+    second = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint, { userData });
+    const secondPage = second.page;
+    await expect(secondPage.locator('.vtab-item').filter({ hasText: 'Project' })).toBeVisible();
+    await expect(secondPage.locator('.vtab-item.ssh')).toHaveCount(1);
+    const restoredBuildPane = secondPage.locator('.terminal-leaf').filter({
+      has: secondPage.locator('.leaf-title', { hasText: 'Build' }),
+    });
+    await expect(secondPage.locator('.terminal-leaf')).toHaveCount(1);
+    await expect(restoredBuildPane).toHaveAttribute('aria-current', 'true');
+
+    await secondPage.getByRole('button', { name: 'Restore pane layout' }).click();
+    await expect(secondPage.locator('.terminal-leaf')).toHaveCount(2);
+    await expect(secondPage.locator('.terminal-leaf .leaf-title-text')).toHaveText(['Terminal', 'Build']);
+    await expect(restoredBuildPane).toHaveAttribute('aria-current', 'true');
+    const secondLocalIds = await secondPage.locator('.terminal-container').evaluateAll((terminals) => (
+      terminals.map((terminal) => terminal.getAttribute('data-terminal-id'))
+    ));
+    expect(secondLocalIds).toHaveLength(2);
+    expect(secondLocalIds.every(Boolean)).toBe(true);
+    expect(secondLocalIds.every((terminalId) => !firstLocalIds.includes(terminalId))).toBe(true);
+
+    const restoredCwdPane = secondPage.locator('.terminal-leaf').nth(0);
+    await restoredCwdPane.locator('.xterm-helper-textarea').focus();
+    await expect.poll(
+      () => secondPage.locator('.status-cwd').getAttribute('aria-label'),
+      { timeout: 15_000 },
+    ).toContain(path.basename(localWorkspace));
+    const secondLocalMarker = '__JANET_RESUME_LOCAL_TWO__';
+    const secondLocalCommand = process.platform === 'win32'
+      ? `Write-Output '${secondLocalMarker}'`
+      : `printf '${secondLocalMarker}\\n'`;
+    await secondPage.keyboard.type(secondLocalCommand, { delay: 5 });
+    await secondPage.keyboard.press('Enter');
+    await expect.poll(
+      () => restoredCwdPane.locator('.xterm-rows').innerText(),
+      { timeout: 15_000 },
+    ).toContain(secondLocalMarker);
+
+    await secondPage.locator('.vtab-item.ssh').click();
+    await waitForShellCreateCount(second.eventsPath, 2);
+    await runMarkedLs(secondPage, 'RESUME_REMOTE_TWO');
+    const restoredSettings = readSettings(second.settingsPath);
+    expect(restoredSettings.session.tabs.find((tab: Record<string, any>) => tab.type === 'ssh'))
+      .toMatchObject({ sshProfileId: profileId });
+  } finally {
+    if (second) await closeApp(second.browser, second.electronProcess, userData);
+    else if (first) await closeApp(first.browser, first.electronProcess, userData);
+    else if (userData) fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    ssh.disconnectClients();
+    await ssh.close().catch(() => {});
+    fs.rmSync(localWorkspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
