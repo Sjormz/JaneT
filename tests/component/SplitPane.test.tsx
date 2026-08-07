@@ -1821,6 +1821,91 @@ describe('split panes in the app', () => {
     expect(document.startViewTransition).toHaveBeenCalledTimes(2);
   });
 
+  it('restores selected and maximized panes from structural paths without saving runtime ids', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {},
+      workspaceTabs: [],
+      session: {
+        tabs: [{
+          id: 'nested-tab',
+          title: 'Nested panes',
+          type: 'local',
+          selectedPanePath: [1, 1],
+          maximizedPanePath: [1, 1],
+          root: {
+            type: 'split', direction: 'vertical', sizes: [1, 1],
+            children: [
+              { type: 'leaf', title: 'left' },
+              {
+                type: 'split', direction: 'horizontal', sizes: [1, 1],
+                children: [
+                  { type: 'leaf', title: 'top right' },
+                  { type: 'leaf', title: 'restored owner' },
+                ],
+              },
+            ],
+          },
+        }],
+        activeTabId: 'nested-tab',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'files',
+      },
+    });
+
+    render(<App />);
+
+    const terminal = await screen.findByTestId(/terminal-/);
+    const terminalId = terminal.dataset.terminalId!;
+    const currentPane = terminal.closest('.terminal-leaf')!;
+    expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
+    expect(currentPane).toHaveAttribute('aria-current', 'true');
+    expect(within(currentPane as HTMLElement).getByText('restored owner')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /restore pane layout/i })).toBeInTheDocument();
+
+    await waitFor(() => {
+      const sessions = vi.mocked(window.janet.setSettings).mock.calls
+        .map(([update]) => (update as any).session)
+        .filter(Boolean);
+      const savedTab = sessions.at(-1)?.tabs[0];
+      expect(savedTab).toMatchObject({
+        selectedPanePath: [1, 1],
+        maximizedPanePath: [1, 1],
+      });
+      expect(JSON.stringify(savedTab)).not.toContain(terminalId);
+    }, { timeout: 1_500 });
+
+    fireEvent.click(screen.getByRole('button', { name: /restore pane layout/i }));
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(3));
+    const restoredOwner = screen.getByText('restored owner').closest('.terminal-leaf')!;
+    expect(document.querySelectorAll('.terminal-leaf[aria-current="true"]')).toHaveLength(1);
+    expect(restoredOwner).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('restores a selected pane without maximizing the layout', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      session: {
+        tabs: [{
+          id: 'selected-tab', title: 'Selected pane', type: 'local', selectedPanePath: [1],
+          root: {
+            type: 'split', direction: 'vertical', sizes: [1, 1],
+            children: [{ type: 'leaf', title: 'left' }, { type: 'leaf', title: 'selected right' }],
+          },
+        }],
+        activeTabId: 'selected-tab',
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    const selectedPane = screen.getByText('selected right').closest('.terminal-leaf')!;
+    expect(document.querySelectorAll('.terminal-leaf[aria-current="true"]')).toHaveLength(1);
+    expect(selectedPane).toHaveAttribute('aria-current', 'true');
+    expect(screen.queryByRole('button', { name: /restore pane layout/i })).toBeNull();
+  });
+
   it('restores a maximized layout before focusing an existing worktree terminal', async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
@@ -4213,6 +4298,34 @@ describe('unsaved editor shutdown handshake', () => {
       }),
     });
     expect(events).toEqual(['session', 'resolved']);
+  });
+
+  it('persists same-batch selected and maximized pane paths before close', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    await waitFor(() => expect(rendererMocks.prepareForCloseHandler).toBeTypeOf('function'));
+    vi.mocked(window.janet.setSettings).mockClear();
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: /maximize pane/i })[1]);
+      await rendererMocks.prepareForCloseHandler!({
+        requestId: 'maximized-close',
+        reason: 'application-quit',
+      });
+    });
+
+    expect(window.janet.setSettings).toHaveBeenCalledWith({
+      session: expect.objectContaining({
+        tabs: [expect.objectContaining({
+          selectedPanePath: [1],
+          maximizedPanePath: [1],
+        })],
+      }),
+    });
+    expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
+      requestId: 'maximized-close', resolution: 'saved',
+    });
   });
 
   it('persists a cwd reported in the same batch as close preparation', async () => {

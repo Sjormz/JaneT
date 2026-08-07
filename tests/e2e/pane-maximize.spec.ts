@@ -190,6 +190,51 @@ test('maximizes and restores a terminal pane in Electron', async () => {
   }
 });
 
+test('restores the selected maximized pane structurally in a second Electron process', async () => {
+  let app: Awaited<ReturnType<typeof launchTwoPaneApp>> | undefined;
+  let userData: string | undefined;
+  try {
+    app = await launchTwoPaneApp();
+    userData = app.userData;
+    const firstRightPane = app.page.locator('.terminal-leaf').filter({
+      has: app.page.locator('.leaf-title', { hasText: 'right' }),
+    });
+    await firstRightPane.getByRole('button', { name: 'Maximize pane' }).click();
+    await expect(app.page.locator('.terminal-leaf')).toHaveCount(1);
+    await expect(firstRightPane).toHaveAttribute('aria-current', 'true');
+
+    const settingsPath = path.join(userData, 'settings.json');
+    await expect.poll(() => {
+      const saved = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      const tab = saved.session.tabs[0];
+      return [tab.selectedPanePath, tab.maximizedPanePath];
+    }).toEqual([[1], [1]]);
+
+    await closeApp(app.browser, app.electronProcess);
+    app = undefined;
+    app = await launchApp(undefined, 'janet-e2e-pane-restart-', userData);
+
+    const restoredPanes = app.page.locator('.terminal-leaf');
+    await expect(restoredPanes).toHaveCount(1);
+    await expect(app.page.locator('.leaf-title', { hasText: 'right' })).toBeVisible();
+    await expect(restoredPanes).toHaveAttribute('aria-current', 'true');
+    const freshTerminalId = await restoredPanes.locator('.terminal-container').getAttribute('data-terminal-id');
+    expect(freshTerminalId).toBeTruthy();
+    expect(fs.readFileSync(settingsPath, 'utf-8')).not.toContain(freshTerminalId as string);
+
+    await app.page.getByRole('button', { name: 'Restore pane layout' }).click();
+    await expect(restoredPanes).toHaveCount(2);
+    const restoredRightPane = restoredPanes.filter({
+      has: app.page.locator('.leaf-title', { hasText: 'right' }),
+    });
+    await expect(restoredRightPane).toHaveAttribute('aria-current', 'true');
+    await expect(app.page.locator('.terminal-leaf[aria-current="true"]')).toHaveCount(1);
+  } finally {
+    if (app) await closeApp(app.browser, app.electronProcess, userData);
+    else if (userData) fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
 test('focuses the first terminal after clicking a terminal tab', async () => {
   const { browser, electronProcess, page, userData } = await launchTwoPaneApp();
 

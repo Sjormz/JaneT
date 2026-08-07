@@ -47,6 +47,8 @@ export interface SavedTab {
   type: 'local' | 'ssh';
   cwd?: string;
   sshProfileId?: string;
+  selectedPanePath?: number[];
+  maximizedPanePath?: number[];
   root: SavedPaneNode;
 }
 
@@ -265,7 +267,7 @@ const SAVED_SESSION_KEYS = new Set([
   'tabs', 'activeTabId', 'sidebarOpen', 'tabsOpen', 'sidebarSection',
 ]);
 const SAVED_TAB_KEYS = new Set([
-  'id', 'title', 'type', 'cwd', 'sshProfileId', 'root',
+  'id', 'title', 'type', 'cwd', 'sshProfileId', 'selectedPanePath', 'maximizedPanePath', 'root',
 ]);
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -717,14 +719,29 @@ function cloneSavedTab(value: unknown): SavedTab | undefined {
     || tab.title.length > MAX_SAVED_TITLE_LENGTH
     || (tab.type !== 'local' && tab.type !== 'ssh')
   ) return undefined;
+  const selectedPanePath = cloneSavedPanePath(tab.selectedPanePath, root);
+  const maximizedPanePath = cloneSavedPanePath(tab.maximizedPanePath, root);
   return {
     id: tab.id,
     title: tab.title,
     type: tab.type,
     ...(typeof tab.cwd === 'string' ? { cwd: tab.cwd } : {}),
     ...(typeof tab.sshProfileId === 'string' ? { sshProfileId: tab.sshProfileId } : {}),
+    ...(selectedPanePath !== undefined ? { selectedPanePath } : {}),
+    ...(maximizedPanePath !== undefined ? { maximizedPanePath } : {}),
     root,
   };
+}
+
+function cloneSavedPanePath(value: unknown, root: SavedPaneNode): number[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_SAVED_PANE_DEPTH
+    || !Array.from(value).every((index) => Number.isInteger(index) && index >= 0)) return undefined;
+  let node = root;
+  for (const index of value) {
+    if (node.type !== 'split' || index >= node.children.length) return undefined;
+    node = node.children[index];
+  }
+  return node.type === 'leaf' ? [...value] : undefined;
 }
 
 function cloneSavedSession(value: unknown): SavedSession {
@@ -801,6 +818,10 @@ function isValidRuntimeSession(value: unknown): boolean {
     ) return false;
     const leaves = validateRuntimePaneTree(tab.root, MAX_SAVED_SESSION_TERMINALS - terminalCount);
     if (leaves === null) return false;
+    if ((tab.selectedPanePath !== undefined
+      && cloneSavedPanePath(tab.selectedPanePath, tab.root as SavedPaneNode) === undefined)
+      || (tab.maximizedPanePath !== undefined
+        && cloneSavedPanePath(tab.maximizedPanePath, tab.root as SavedPaneNode) === undefined)) return false;
     terminalCount += leaves;
   }
   return true;

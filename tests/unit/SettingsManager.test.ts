@@ -1005,6 +1005,8 @@ describe('SettingsManager', () => {
             title: 'JaneT - fixes',
             type: 'local',
             cwd: 'C:/repo',
+            selectedPanePath: [1],
+            maximizedPanePath: [1],
             root: { type: 'split', direction: 'vertical', sizes: [1, 1], children: [{ type: 'leaf', title: 'Dev server' }, { type: 'leaf', title: 'Tests' }] },
           },
           {
@@ -1034,19 +1036,55 @@ describe('SettingsManager', () => {
     expect(loaded.session.tabs[0].cwd).toBe('C:/repo');
     expect(loaded.session.tabs[0]).toMatchObject({
       title: 'JaneT - fixes',
+      selectedPanePath: [1],
+      maximizedPanePath: [1],
       root: { children: [{ title: 'Dev server' }, { title: 'Tests' }] },
     });
     expect(loaded.session.tabs[1].sshProfileId).toBe('pckpr@box.local:22:password');
 
     loaded.keybindings['new-tab'] = 'Ctrl+Alt+M';
     loaded.session.tabs[0].title = 'mutated';
+    loaded.session.tabs[0].selectedPanePath![0] = 0;
+    loaded.session.tabs[0].maximizedPanePath![0] = 0;
     if (loaded.session.tabs[0].root.type === 'split') {
       loaded.session.tabs[0].root.sizes[0] = 99;
     }
     const isolated = loadedManager.get();
     expect(isolated.keybindings['new-tab']).not.toBe('Ctrl+Alt+M');
     expect(isolated.session.tabs[0].title).toBe('JaneT - fixes');
+    expect(isolated.session.tabs[0].selectedPanePath).toEqual([1]);
+    expect(isolated.session.tabs[0].maximizedPanePath).toEqual([1]);
     expect(isolated.session.tabs[0].root).toMatchObject({ sizes: [1, 1] });
+  });
+
+  it('rejects a runtime pane path that does not resolve to a saved leaf', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+
+    expect(() => manager.set({
+      session: {
+        tabs: [{
+          id: 'tab', title: 'Tab', type: 'local', selectedPanePath: [1],
+          root: { type: 'leaf' },
+        }],
+        activeTabId: 'tab', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    })).toThrow(/invalid settings/i);
+    expect(() => manager.set({
+      session: {
+        tabs: [{
+          id: 'tab', title: 'Tab', type: 'local', selectedPanePath: new Array(1),
+          root: {
+            type: 'split', direction: 'vertical', sizes: [1, 1],
+            children: [{ type: 'leaf' }, { type: 'leaf' }],
+          },
+        }],
+        activeTabId: 'tab', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    })).toThrow(/invalid settings/i);
+    expect(manager.get().session.tabs).toEqual([]);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
   });
 
   it('bounds saved tab and pane names while loading settings from disk', async () => {

@@ -28,7 +28,7 @@ import { ThemeName, applyCssTheme, getTheme } from './themes';
 import { KeybindingsProvider, useKeybindings } from './KeybindingsContext';
 import { KeybindingAction } from './keybindings';
 import {
-  serializePaneTree, restorePaneTree, normalizeSession, SavedSession,
+  serializePaneTree, restorePaneTree, normalizeSession, panePathForLeaf, leafIdAtPanePath, SavedSession,
   MAX_RESTORED_TABS, MAX_RESTORED_TERMINALS,
 } from './sessionRestore';
 import { GitStatusSummary, summarizeGitStatus } from './gitStatus';
@@ -186,6 +186,8 @@ function sshConnectProfile(profile: SavedSSHProfile, profiles: SavedSSHProfile[]
 interface InitialAppState {
   tabs: TabInfo[];
   activeTabId: string;
+  focusedTerminalId: string | null;
+  maximizedLeafByTab: Record<string, string | null>;
   sidebarOpen: boolean;
   tabsOpen: boolean;
   sidebarSection: WorkspaceToolSection;
@@ -208,6 +210,8 @@ function createInitialAppState(settings: any): InitialAppState {
   const session = normalizeSession(s.session);
   const restored: TabInfo[] = [];
   let restoredActiveId: string | null = null;
+  let restoredFocusedTerminalId: string | null = null;
+  const restoredMaximizedLeafByTab: Record<string, string | null> = {};
 
   for (const saved of session.tabs) {
     let tree = restorePaneTree(saved.root);
@@ -233,7 +237,16 @@ function createInitialAppState(settings: any): InitialAppState {
       root: tree,
     };
     restored.push(tab);
-    if (saved.id === session.activeTabId) restoredActiveId = tab.id;
+    const maximizedLeafId = saved.maximizedPanePath
+      ? leafIdAtPanePath(tree, saved.maximizedPanePath)
+      : null;
+    if (maximizedLeafId) restoredMaximizedLeafByTab[tab.id] = maximizedLeafId;
+    if (saved.id === session.activeTabId) {
+      restoredActiveId = tab.id;
+      restoredFocusedTerminalId = maximizedLeafId ?? (saved.selectedPanePath
+        ? leafIdAtPanePath(tree, saved.selectedPanePath)
+        : null);
+    }
   }
 
   const starterTab: TabInfo = {
@@ -251,6 +264,8 @@ function createInitialAppState(settings: any): InitialAppState {
   return {
     tabs,
     activeTabId: restoredActiveId ?? tabs[0].id,
+    focusedTerminalId: restoredFocusedTerminalId,
+    maximizedLeafByTab: restoredMaximizedLeafByTab,
     sidebarOpen: restoreMovedLegacySurface ? false : session.sidebarOpen,
     tabsOpen: restoreLegacySsh ? true : session.tabsOpen,
     sidebarSection: session.sidebarSection === 'git' ? 'git' : 'files',
@@ -294,7 +309,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const sshProfilesRef = useRef(sshProfiles);
   sshProfilesRef.current = sshProfiles;
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabPreset[]>(initialState.workspaceTabs);
-  const [maximizedLeafByTab, setMaximizedLeafByTab] = useState<Record<string, string | null>>({});
+  const [maximizedLeafByTab, setMaximizedLeafByTab] = useState<Record<string, string | null>>(
+    initialState.maximizedLeafByTab,
+  );
   const [broadcastRecipientIds, setBroadcastRecipientIds] = useState<Set<string>>(new Set());
   const [broadcastArmed, setBroadcastArmed] = useState(false);
   const [broadcastConfirmationOpen, setBroadcastConfirmationOpen] = useState(false);
@@ -475,7 +492,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   //   never blank.
   const [cwdByTerminal, setCwdByTerminal] = useState<Record<string, string>>({});
   const cwdByTerminalRef = useRef(cwdByTerminal);
-  const [focusedTerminalId, setFocusedTerminalId] = useState<string | null>(null);
+  const [focusedTerminalId, setFocusedTerminalId] = useState<string | null>(initialState.focusedTerminalId);
   const [awarenessByTerminal, setAwarenessByTerminal] = useState<Record<string, AgentAwareness>>({});
   const [localTransportByTerminal, setLocalTransportByTerminal] = useState<Record<string, TerminalTransportStatus>>({});
   const [terminalStatusAnnouncement, setTerminalStatusAnnouncement] = useState({ sequence: 0, text: '' });
@@ -634,14 +651,25 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
 
   const persistSession = useCallback(async (): Promise<boolean> => {
     const session: SavedSession = {
-      tabs: tabsRef.current.map((tab) => ({
-        id: tab.id,
-        title: tab.title,
-        type: tab.type,
-        cwd: tab.cwd,
-        sshProfileId: tab.sshProfileId,
-        root: serializePaneTree(tab.root, cwdByTerminalRef.current, { includeStartupCommands: true }),
-      })),
+      tabs: tabsRef.current.map((tab) => {
+        const selectedLeafId = tab.id === activeTabId
+          ? preferredLeafId(tab, focusedTerminalId, maximizedLeafByTab[tab.id])
+          : null;
+        const selectedPanePath = selectedLeafId ? panePathForLeaf(tab.root, selectedLeafId) : null;
+        const maximizedPanePath = maximizedLeafByTab[tab.id]
+          ? panePathForLeaf(tab.root, maximizedLeafByTab[tab.id]!)
+          : null;
+        return {
+          id: tab.id,
+          title: tab.title,
+          type: tab.type,
+          cwd: tab.cwd,
+          sshProfileId: tab.sshProfileId,
+          ...(selectedPanePath ? { selectedPanePath } : {}),
+          ...(maximizedPanePath ? { maximizedPanePath } : {}),
+          root: serializePaneTree(tab.root, cwdByTerminalRef.current, { includeStartupCommands: true }),
+        };
+      }),
       activeTabId,
       sidebarOpen,
       tabsOpen: responsiveTabsCollapsedRef.current ? true : tabsOpen,
@@ -653,7 +681,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     } catch {
       return false;
     }
-  }, [activeTabId, cwdByTerminal, sidebarOpen, sidebarSection, tabsOpen]);
+  }, [activeTabId, cwdByTerminal, focusedTerminalId, maximizedLeafByTab, sidebarOpen, sidebarSection, tabsOpen]);
 
   // Debounce normal changes, but the close handshake below forces a flush.
   useEffect(() => {
