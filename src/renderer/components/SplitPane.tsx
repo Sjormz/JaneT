@@ -270,6 +270,7 @@ function TerminalPaneLeaf({
         <TerminalPane
           termId={leaf.id}
           tabType={leafType}
+          inputLabel={paneLabel}
           sshSessionId={effectiveSshSessionId}
           onReady={onTerminalReady}
           onRemoved={onTerminalRemoved}

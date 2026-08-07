@@ -92,6 +92,10 @@ test('renames the focused pane and active tab without interrupting xterm input',
     await expect(terminals).toHaveCount(2);
     await expect(page.getByRole('button', { name: 'Show terminal tabs' })).toBeVisible();
     await expect.poll(async () => terminals.nth(1).locator('.xterm-rows').innerText(), { timeout: 15_000 }).not.toBe('');
+    const terminalInputs = page.locator('.xterm-helper-textarea');
+    await expect(terminalInputs).toHaveCount(2);
+    await expect(terminalInputs.nth(0)).toHaveAttribute('aria-label', 'Left — Local terminal pane');
+    await expect(terminalInputs.nth(1)).toHaveAttribute('aria-label', 'Right — Local terminal pane');
 
     const secondInput = terminals.nth(1).locator('.xterm-helper-textarea');
     await secondInput.focus();
@@ -109,6 +113,7 @@ test('renames the focused pane and active tab without interrupting xterm input',
     await paneName.press('Enter');
 
     await expect(page.locator('.terminal-leaf').nth(1).locator('.leaf-title-text')).toHaveText('Tests');
+    await expect(secondInput).toHaveAttribute('aria-label', 'Tests — Local terminal pane');
     await expect.poll(() => activeElementIs(page, '.xterm-helper-textarea', 1)).toBe(true);
     await page.keyboard.type(`echo ${PANE_MARKER}`);
     await page.keyboard.press('Enter');
@@ -152,6 +157,10 @@ test('renames the focused pane and active tab without interrupting xterm input',
     page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('.terminal-leaf .leaf-title-text')).toHaveText(['Left', 'Tests']);
+    await expect(page.locator('.xterm-helper-textarea').nth(0))
+      .toHaveAttribute('aria-label', 'Left — Local terminal pane');
+    await expect(page.locator('.xterm-helper-textarea').nth(1))
+      .toHaveAttribute('aria-label', 'Tests — Local terminal pane');
     await page.getByRole('button', { name: 'Show terminal tabs' }).click();
     await expect(page.locator('.vtab-item').filter({ hasText: 'JaneT - fixes' })).toBeVisible();
   } finally {

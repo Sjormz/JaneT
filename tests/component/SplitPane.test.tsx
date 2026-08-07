@@ -33,6 +33,7 @@ const rendererMocks = vi.hoisted(() => ({
   semanticCommandCancelledHandlers: new Map<string, (event: SemanticCommandStartedEvent) => void>(),
   semanticCommandHandlers: new Map<string, (event: SemanticCommandEvent) => void>(),
   broadcastInputHandlers: new Map<string, (data: string, binary?: boolean) => boolean>(),
+  inputLabels: new Map<string, string>(),
 }));
 
 vi.mock('../../src/renderer/components/Titlebar', () => ({
@@ -170,6 +171,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     onSemanticCommandCancelled,
     onSemanticCommand,
     onBroadcastInput,
+    inputLabel,
   }: {
     termId: string;
     hasSession?: boolean;
@@ -195,6 +197,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     onSemanticCommandCancelled?: (termId: string, event: SemanticCommandStartedEvent) => void;
     onSemanticCommand?: (termId: string, event: SemanticCommandEvent) => void;
     onBroadcastInput?: (termId: string, data: string, binary?: boolean) => boolean;
+    inputLabel?: string;
   }) {
     let effectActive = true;
     if (onSshRetry) rendererMocks.sshRetryHandlers.set(termId, onSshRetry);
@@ -204,6 +207,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     if (onSemanticCommandCancelled) rendererMocks.semanticCommandCancelledHandlers.set(termId, (event) => onSemanticCommandCancelled(termId, event));
     if (onSemanticCommand) rendererMocks.semanticCommandHandlers.set(termId, (event) => onSemanticCommand(termId, event));
     if (onBroadcastInput) rendererMocks.broadcastInputHandlers.set(termId, (data, binary) => onBroadcastInput(termId, data, binary));
+    if (inputLabel) rendererMocks.inputLabels.set(termId, inputLabel);
     const containerRef = React.useRef<HTMLDivElement>(null);
 
     React.useEffect(() => {
@@ -299,6 +303,7 @@ beforeEach(() => {
   rendererMocks.semanticCommandCancelledHandlers.clear();
   rendererMocks.semanticCommandHandlers.clear();
   rendererMocks.broadcastInputHandlers.clear();
+  rendererMocks.inputLabels.clear();
   Object.defineProperty(document, 'startViewTransition', {
     configurable: true,
     value: vi.fn((update: () => void) => {
@@ -428,6 +433,40 @@ async function requestWorkspaceClose(
 }
 
 describe('split panes in the app', () => {
+  it('passes the existing local and SSH pane names to their terminal inputs', async () => {
+    const noop = vi.fn();
+    const baseProps = {
+      tabId: 'named-inputs',
+      tabType: 'local' as const,
+      onTerminalReady: noop,
+      onTerminalRemoved: noop,
+      onSplitPane: noop,
+      onClosePane: noop,
+      onResizePane: noop,
+      onMovePane: noop,
+      onPaneDragStart: noop,
+      onPaneDragOver: noop,
+      onPaneDragEnd: noop,
+      onToggleMaximizePane: noop,
+    };
+    const { rerender } = render(
+      <SplitPane
+        {...baseProps}
+        node={{ type: 'leaf', id: 'local-input', terminalType: 'local', title: 'Tests' }}
+      />,
+    );
+
+    expect(rendererMocks.inputLabels.get('local-input')).toBe('Tests — Local terminal pane');
+
+    rerender(
+      <SplitPane
+        {...baseProps}
+        node={{ type: 'leaf', id: 'ssh-input', terminalType: 'ssh', title: 'Deploy' }}
+      />,
+    );
+    expect(rendererMocks.inputLabels.get('ssh-input')).toBe('Deploy — SSH pane');
+  });
+
   it('propagates semantic commands from nested and maximized leaves with explicit tab ownership', () => {
     const onSemanticCommand = vi.fn();
     const event: SemanticCommandEvent = {

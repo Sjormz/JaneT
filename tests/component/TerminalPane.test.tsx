@@ -282,6 +282,113 @@ async function loadTerminalPane() {
 }
 
 describe('TerminalPane SSH reinitialization', () => {
+  it("uses the pane label for xterm's helper input", async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-named-input"
+          tabType="local"
+          inputLabel="Tests — Local terminal pane"
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    expect(MockTerminal.instances[0].textarea).toHaveAttribute(
+      'aria-label',
+      'Tests — Local terminal pane',
+    );
+  });
+
+  it('updates the helper input name without recreating xterm', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const props = {
+      termId: 'term-renamed-input',
+      tabType: 'local' as const,
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      themeName: 'tokyo-night',
+    };
+    const { rerender } = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} inputLabel="Logs — Local terminal pane" />
+      </KeybindingsProvider>,
+    );
+    const term = MockTerminal.instances[0];
+
+    rerender(
+      <KeybindingsProvider>
+        <TerminalPane {...props} inputLabel="Tests — Local terminal pane" />
+      </KeybindingsProvider>,
+    );
+
+    expect(MockTerminal.instances).toHaveLength(1);
+    expect(term.dispose).not.toHaveBeenCalled();
+    expect(term.textarea).toHaveAttribute('aria-label', 'Tests — Local terminal pane');
+  });
+
+  it('refreshes the helper input name when a cached xterm reattaches', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const props = {
+      termId: 'term-remounted-input',
+      tabType: 'local' as const,
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      themeName: 'tokyo-night',
+    };
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} inputLabel="Old — Local terminal pane" />
+      </KeybindingsProvider>,
+    );
+    const term = MockTerminal.instances[0];
+    first.unmount();
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} inputLabel="Current — Local terminal pane" hasSession />
+      </KeybindingsProvider>,
+    );
+
+    expect(MockTerminal.instances).toHaveLength(1);
+    expect(term.dispose).not.toHaveBeenCalled();
+    expect(term.textarea).toHaveAttribute('aria-label', 'Current — Local terminal pane');
+  });
+
+  it('does not reuse the input name from a disposed same-ID terminal', async () => {
+    const { default: TerminalPane, disposeCachedTerminal } = await loadTerminalPane();
+    const props = {
+      termId: 'term-replaced-input',
+      tabType: 'local' as const,
+      hasSession: true,
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      themeName: 'tokyo-night',
+    };
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} inputLabel="Old — Local terminal pane" />
+      </KeybindingsProvider>,
+    );
+    const oldTerm = MockTerminal.instances[0];
+    first.unmount();
+    disposeCachedTerminal(props.termId);
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} inputLabel="New — Local terminal pane" />
+      </KeybindingsProvider>,
+    );
+
+    expect(MockTerminal.instances).toHaveLength(2);
+    expect(oldTerm.textarea).toHaveAttribute('aria-label', 'Old — Local terminal pane');
+    expect(MockTerminal.instances[1].textarea).toHaveAttribute('aria-label', 'New — Local terminal pane');
+  });
+
   it('passes local startup commands to backend creation without typing them from the renderer', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
 

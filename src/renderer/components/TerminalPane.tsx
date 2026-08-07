@@ -49,6 +49,7 @@ import '@xterm/xterm/css/xterm.css';
 interface TerminalPaneProps {
   termId: string;
   tabType: 'local' | 'ssh';
+  inputLabel?: string;
   sshSessionId?: string;
   sshSessionLabel?: string;
   onReady: (termId: string) => void;
@@ -157,6 +158,7 @@ export function disposeCachedTerminal(termId: string): boolean {
 export default function TerminalPane({
   termId,
   tabType,
+  inputLabel,
   sshSessionId,
   sshSessionLabel,
   onReady,
@@ -425,6 +427,7 @@ export default function TerminalPane({
     // process uses this bit to cancel pending startup only for real user input.
     mountCleanup.push(term.onKey(() => { inputSource.userInput = true; }));
     const textarea = term.textarea;
+    if (textarea && inputLabel) textarea.setAttribute('aria-label', inputLabel);
     const markUserInput = () => { inputSource.userInput = true; };
     textarea?.addEventListener('paste', markUserInput, true);
     textarea?.addEventListener('input', markUserInput, true);
@@ -767,6 +770,10 @@ export default function TerminalPane({
       searchAddonRef.current = null;
     };
   }, [termId, tabType, sshSessionId, sshShellReady, initialCwd, onReady, onRemoved, onFocus, onCwdChange, onSshShellReady, onSshShellFailed]);
+
+  useEffect(() => {
+    if (inputLabel) termRef.current?.textarea?.setAttribute('aria-label', inputLabel);
+  }, [inputLabel]);
 
   useEffect(() => {
     if (termRef.current && themeName) {
