@@ -119,3 +119,48 @@ test('copies exact privacy-safe diagnostics from the packaged runtime', async ()
     fs.rmSync(userData, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
+
+test('keeps a packaged updater failure actionable with the fixed releases fallback', async () => {
+  const executablePath = process.env.JANET_PACKAGED_EXECUTABLE;
+  test.skip(!executablePath, 'Set JANET_PACKAGED_EXECUTABLE to a freshly built unpacked application');
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-updater-failure-e2e-'));
+  let app: ElectronApplication | undefined;
+
+  try {
+    app = await electron.launch({
+      executablePath,
+      cwd: path.dirname(executablePath!),
+      env: electronEnv({
+        NODE_ENV: 'test',
+        JANET_E2E_USER_DATA_DIR: userData,
+      }),
+    });
+    const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
+    await expect(page.locator('.terminal-container').first()).toBeVisible();
+
+    await app.evaluate(({ BrowserWindow, shell }) => {
+      const state = globalThis as typeof globalThis & { janetOpenedExternalUrl?: string };
+      state.janetOpenedExternalUrl = undefined;
+      shell.openExternal = async (url) => {
+        state.janetOpenedExternalUrl = url;
+      };
+      BrowserWindow.getAllWindows()[0]?.webContents.send('update:error', {
+        message: 'Synthetic packaged updater failure',
+      });
+    });
+
+    const alert = page.getByRole('alert');
+    await expect(alert).toContainText('Update failed: Synthetic packaged updater failure');
+    await expect(alert.getByRole('button', { name: 'Retry' })).toBeVisible();
+    await expect(alert.getByRole('button', { name: 'Dismiss update notification' })).toBeVisible();
+    await alert.getByRole('button', { name: 'View JaneT releases' }).click();
+
+    await expect.poll(() => app!.evaluate(() => (
+      globalThis as typeof globalThis & { janetOpenedExternalUrl?: string }
+    ).janetOpenedExternalUrl)).toBe('https://github.com/Sjormz/JaneT/releases/latest');
+  } finally {
+    await forceClose(app);
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  }
+});
