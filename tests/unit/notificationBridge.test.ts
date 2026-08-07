@@ -14,7 +14,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-async function loadMain(options: { enabled?: boolean; threshold?: number; supported?: boolean; focused?: boolean; minimized?: boolean; constructorFails?: boolean; e2e?: boolean } = {}) {
+async function loadMain(options: { enabled?: boolean; threshold?: number; supported?: boolean; focused?: boolean; minimized?: boolean; constructorFails?: boolean; e2e?: boolean; selectedDirectory?: string } = {}) {
   vi.stubEnv('NODE_ENV', 'test');
   const handlers = new Map<string, Function>();
   const notificationOn = vi.fn();
@@ -39,6 +39,9 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
   });
   (Notification as any).isSupported = vi.fn(() => options.supported ?? true);
   class BrowserWindow { constructor() { return window; } }
+  const showOpenDialog = vi.fn().mockResolvedValue(options.selectedDirectory
+    ? { canceled: false, filePaths: [options.selectedDirectory] }
+    : { canceled: true, filePaths: [] });
   if (options.e2e) vi.stubEnv('JANET_E2E_EVENTS_PATH', 'events.jsonl');
   const writeFileSync = vi.fn();
   vi.doMock('fs', async (original) => ({
@@ -55,7 +58,7 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
   vi.doMock('electron', () => ({
     app: { commandLine: { appendSwitch: vi.fn() }, getAppPath: vi.fn(() => '.'), getPath: vi.fn(() => '/tmp/janet-test'), getVersion: vi.fn(), isPackaged: false, requestSingleInstanceLock: vi.fn(() => true), quit: vi.fn(), on: vi.fn(), whenReady: vi.fn(() => Promise.resolve()), setPath: vi.fn(), setAppUserModelId },
     protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() }, net: { fetch: vi.fn() }, Menu: { setApplicationMenu: vi.fn() },
-    BrowserWindow, Notification, clipboard: { writeText: vi.fn() }, dialog: { showMessageBox: vi.fn(), showErrorBox: vi.fn() }, shell: { openExternal: vi.fn() }, autoUpdater: { on: vi.fn() },
+    BrowserWindow, Notification, clipboard: { writeText: vi.fn() }, dialog: { showMessageBox: vi.fn(), showOpenDialog, showErrorBox: vi.fn() }, shell: { openExternal: vi.fn() }, autoUpdater: { on: vi.fn() },
     ipcMain: { handle: vi.fn((channel: string, listener: Function) => handlers.set(channel, listener)), on: vi.fn() },
   }));
   const settings = await import('../../src/main/settings');
@@ -74,7 +77,7 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
   return {
     invoke, invokeChannel, setSettings, writeFileSync, settingsGetSpy, settingsRecoveryStateSpy,
     restorePreviousSpy, resetSettingsSpy, Notification, notificationOn, notificationShow,
-    restore, show, focus, setAppUserModelId, webContents,
+    restore, show, focus, setAppUserModelId, showOpenDialog, webContents,
   };
 }
 
@@ -220,6 +223,22 @@ describe('main notification bridge', () => {
     await expect(bridge.invokeChannel('settings:reset', undefined, bridge.webContents, {}))
       .rejects.toThrow(/untrusted/i);
   });
+
+  it('selects only a native local directory and maps cancellation to null', async () => {
+    const selected = await loadMain({ selectedDirectory: 'C:\\work\\sample-project' });
+    await expect(selected.invokeChannel('app:selectLocalDirectory'))
+      .resolves.toBe('C:\\work\\sample-project');
+    expect(selected.showOpenDialog).toHaveBeenCalledWith(expect.anything(), {
+      title: 'Open project',
+      properties: ['openDirectory'],
+    });
+    await expect(selected.invokeChannel(
+      'app:selectLocalDirectory', undefined, selected.webContents, {},
+    )).rejects.toThrow(/untrusted/i);
+
+    selected.showOpenDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] });
+    await expect(selected.invokeChannel('app:selectLocalDirectory')).resolves.toBeNull();
+  });
 });
 
 describe('preload notification bridge', () => {
@@ -247,5 +266,16 @@ describe('preload notification bridge', () => {
     expect(invoke).toHaveBeenNthCalledWith(1, 'settings:recovery-state');
     expect(invoke).toHaveBeenNthCalledWith(2, 'settings:restore-previous');
     expect(invoke).toHaveBeenNthCalledWith(3, 'settings:reset');
+  });
+
+  it('exposes local-directory selection without a renderer payload', async () => {
+    const invoke = vi.fn().mockResolvedValue('C:\\work\\sample-project');
+    const exposeInMainWorld = vi.fn();
+    vi.doMock('electron', () => ({ contextBridge: { exposeInMainWorld }, ipcRenderer: { invoke, sendSync: vi.fn(), send: vi.fn(), on: vi.fn(), removeListener: vi.fn() } }));
+    await import('../../src/main/preload');
+    const api = exposeInMainWorld.mock.calls[0][1];
+
+    await expect(api.selectLocalDirectory()).resolves.toBe('C:\\work\\sample-project');
+    expect(invoke).toHaveBeenCalledWith('app:selectLocalDirectory');
   });
 });

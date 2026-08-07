@@ -1072,6 +1072,45 @@ html, body, #root {
   background: var(--bg-primary);
 }
 
+.fresh-profile-entry {
+  position: absolute;
+  z-index: 5;
+  top: 16px;
+  left: 50%;
+  width: min(520px, calc(100% - 32px));
+  padding: 14px 42px 14px 16px;
+  transform: translateX(-50%);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-overlay);
+  box-shadow: var(--glass-shadow);
+  color: var(--text-secondary);
+}
+.fresh-profile-entry strong { color: var(--text-primary); font-size: 13px; }
+.fresh-profile-entry p { margin: 5px 0 10px; font-size: 11px; line-height: 1.45; }
+.fresh-profile-entry-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.fresh-profile-entry-actions button,
+.fresh-profile-entry-dismiss {
+  min-height: 30px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: 600 11px/1 var(--font-ui);
+}
+.fresh-profile-entry-actions button { padding: 0 11px; }
+.fresh-profile-entry-actions button:hover,
+.fresh-profile-entry-dismiss:hover { border-color: var(--text-accent); background: var(--control-hover); }
+.fresh-profile-entry-dismiss {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  padding: 0;
+  font-size: 16px;
+}
+
 /* === Terminal-owned document workspace === */
 .workspace-content {
   flex: 1;

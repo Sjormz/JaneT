@@ -356,6 +356,7 @@ beforeEach(() => {
         },
       },
     }),
+    selectLocalDirectory: vi.fn().mockResolvedValue(null),
     getSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [], notificationsEnabled: false, notificationThresholdSeconds: 10 }),
     getSettingsRecoveryState: vi.fn().mockResolvedValue({ previousAvailable: false }),
     restorePreviousSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] }),
@@ -1546,6 +1547,93 @@ describe('split panes in the app', () => {
         terminalCount: 1,
       })],
     }));
+  });
+
+  it('keeps the starter terminal and shows bounded fresh-profile entry actions', async () => {
+    render(<App />);
+
+    expect(await screen.findByTestId(/terminal-/)).toBeInTheDocument();
+    const entry = await screen.findByRole('region', { name: 'Get started' });
+
+    expect(within(entry).getByText(
+      'Projects open in their own tabs; workspace tools follow the active pane.',
+    )).toBeInTheDocument();
+    expect(within(entry).getByRole('button', { name: 'Open project' })).toBeInTheDocument();
+    expect(within(entry).getByRole('button', { name: 'Add SSH' })).toBeInTheDocument();
+    expect(within(entry).getByRole('button', { name: 'Save workspace' })).toBeInTheDocument();
+    fireEvent.click(within(entry).getByRole('button', { name: 'Dismiss get started' }));
+    expect(screen.queryByRole('region', { name: 'Get started' })).not.toBeInTheDocument();
+    expect(screen.getByTestId(/terminal-/)).toBeInTheDocument();
+  });
+
+  it('opens a selected project in a new local tab while chooser cancellation is inert', async () => {
+    vi.mocked(window.janet.selectLocalDirectory)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('C:\\work\\sample-project');
+    render(<App />);
+
+    const entry = await screen.findByRole('region', { name: 'Get started' });
+    const openProject = within(entry).getByRole('button', { name: 'Open project' });
+    await screen.findByTestId(/terminal-/);
+    const starterTab = rendererMocks.verticalTabBarProps.tabs[0];
+    vi.mocked(window.janet.terminalDestroy).mockClear();
+
+    fireEvent.click(openProject);
+    await waitFor(() => expect(window.janet.selectLocalDirectory).toHaveBeenCalledTimes(1));
+    expect(rendererMocks.verticalTabBarProps.tabs).toEqual([starterTab]);
+
+    fireEvent.click(openProject);
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
+    const openedTab = rendererMocks.verticalTabBarProps.tabs[1];
+    expect(openedTab).toMatchObject({
+      title: 'sample-project',
+      type: 'local',
+      cwd: 'C:\\work\\sample-project',
+    });
+    expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(openedTab.id);
+    expect(window.janet.selectLocalDirectory).toHaveBeenNthCalledWith(1);
+    expect(window.janet.selectLocalDirectory).toHaveBeenNthCalledWith(2);
+    expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
+  });
+
+  it('routes fresh-profile SSH and workspace actions through their existing owners', async () => {
+    render(<App />);
+
+    const entry = await screen.findByRole('region', { name: 'Get started' });
+    expect(rendererMocks.verticalTabBarProps.sshConnectionsOpen).toBe(false);
+    fireEvent.click(within(entry).getByRole('button', { name: 'Add SSH' }));
+    await waitFor(() => {
+      expect(rendererMocks.verticalTabBarProps.sshConnectionsOpen).toBe(true);
+    });
+
+    const activeTab = rendererMocks.verticalTabBarProps.tabs.find(
+      (tab: { id: string }) => tab.id === rendererMocks.verticalTabBarProps.activeTabId,
+    );
+    vi.mocked(window.janet.setSettings).mockClear();
+    fireEvent.click(within(entry).getByRole('button', { name: 'Save workspace' }));
+    await waitFor(() => expect(window.janet.setSettings).toHaveBeenCalledWith({
+      workspaceTabs: [expect.objectContaining({
+        name: activeTab.title,
+        terminalCount: 1,
+      })],
+    }));
+  });
+
+  it('does not show first exposure when the original session restores a valid workspace', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: {}, workspaceTabs: [],
+      session: {
+        tabs: [{
+          id: 'restored', title: 'Restored workspace', type: 'local',
+          root: { type: 'leaf', title: 'Restored pane', terminalType: 'local' },
+        }],
+        activeTabId: 'restored',
+      },
+    });
+
+    render(<App />);
+    expect(await screen.findByText('Restored pane')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Get started' })).not.toBeInTheDocument();
   });
 
   it('moves the active pane by keyboard and pointer without replacing its terminal', async () => {

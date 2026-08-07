@@ -44,6 +44,7 @@ import { useEditorDocuments } from './useEditorDocuments';
 import { emptyTabDocumentWorkspace, isEditorDocumentDirty, type EditorResource } from './editorDocuments';
 import { snippetTextForPaste, type Snippet } from '../shared/snippets';
 import { MAX_COMMAND_HISTORY_ENTRIES, type CommandHistoryEntry } from '../shared/commandHistory';
+import { basename } from '../shared/gitWorktrees';
 import {
   acknowledgeAgentAwareness,
   aggregateAgentStatus,
@@ -185,6 +186,7 @@ function sshConnectProfile(profile: SavedSSHProfile, profiles: SavedSSHProfile[]
 
 interface InitialAppState {
   tabs: TabInfo[];
+  showFreshProfileEntry: boolean;
   activeTabId: string;
   focusedTerminalId: string | null;
   maximizedLeafByTab: Record<string, string | null>;
@@ -263,6 +265,7 @@ function createInitialAppState(settings: any): InitialAppState {
 
   return {
     tabs,
+    showFreshProfileEntry: restored.length === 0,
     activeTabId: restoredActiveId ?? tabs[0].id,
     focusedTerminalId: restoredFocusedTerminalId,
     maximizedLeafByTab: restoredMaximizedLeafByTab,
@@ -290,6 +293,9 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   // being created before a saved workspace replaces it.
   const [initialState] = useState(() => createInitialAppState(initialSettings));
   const [tabs, setTabs] = useState<TabInfo[]>(initialState.tabs);
+  const [showFreshProfileEntry, setShowFreshProfileEntry] = useState(
+    initialState.showFreshProfileEntry,
+  );
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const [activeTabId, setActiveTabIdState] = useState(initialState.activeTabId);
@@ -1262,6 +1268,12 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
   const openLocalTabAt = useCallback((cwd: string, title?: string) => {
     addTab('local', undefined, true, undefined, cwd, title);
   }, [addTab]);
+
+  const selectAndOpenLocalDirectory = useCallback(() => {
+    void window.janet.selectLocalDirectory().then((cwd) => {
+      if (cwd) openLocalTabAt(cwd, basename(cwd));
+    }).catch(() => {});
+  }, [openLocalTabAt]);
 
   const closeTab = useCallback(
     (tabId: string) => {
@@ -2566,6 +2578,31 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
           </Tooltip>
         )}
         <div key="terminal" className="terminal-area">
+          {showFreshProfileEntry && (
+            <section className="fresh-profile-entry" aria-labelledby="fresh-profile-entry-title">
+              <button
+                type="button"
+                className="fresh-profile-entry-dismiss"
+                aria-label="Dismiss get started"
+                onClick={() => setShowFreshProfileEntry(false)}
+              >
+                ×
+              </button>
+              <strong id="fresh-profile-entry-title">Get started</strong>
+              <p>Projects open in their own tabs; workspace tools follow the active pane.</p>
+              <div className="fresh-profile-entry-actions">
+                <button type="button" onClick={selectAndOpenLocalDirectory}>Open project</button>
+                <button type="button" onClick={() => {
+                  responsiveTabsCollapsedRef.current = false;
+                  setTabsOpen(true);
+                  setSshConnectionsOpen(true);
+                }}>Add SSH</button>
+                <button type="button" onClick={() => requestSaveWorkspaceTab(activeTab)}>
+                  Save workspace
+                </button>
+              </div>
+            </section>
+          )}
           <div
             className="sr-only"
             role="status"

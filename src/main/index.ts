@@ -702,6 +702,15 @@ function registerIpcHandlers() {
     return getApplicationVersion();
   });
 
+  handle('app:selectLocalDirectory', async () => {
+    if (!mainWindow) return null;
+    const result = await electron.dialog.showOpenDialog(mainWindow, {
+      title: 'Open project',
+      properties: ['openDirectory'],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
   handle('app:openExternal', async (event, url: unknown) => {
     if (typeof url !== 'string' || !isAllowedExternalUrl(url)) return false;
     await electron.shell.openExternal(url);
