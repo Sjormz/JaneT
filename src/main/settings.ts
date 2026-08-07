@@ -82,6 +82,10 @@ export type KeybindingAction =
   | 'maximize-pane'
   | 'focus-next-pane'
   | 'focus-previous-pane'
+  | 'move-pane-left'
+  | 'move-pane-right'
+  | 'move-pane-up'
+  | 'move-pane-down'
   | 'rename-pane'
   | 'rename-tab'
   | 'save-document'
@@ -112,6 +116,10 @@ export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'maximize-pane': '',
   'focus-next-pane': '',
   'focus-previous-pane': '',
+  'move-pane-left': '',
+  'move-pane-right': '',
+  'move-pane-up': '',
+  'move-pane-down': '',
   'rename-pane': 'F2',
   'rename-tab': 'Ctrl+F2',
   'save-document': '',
@@ -144,6 +152,9 @@ function defaultKeybindingsForPlatform(platform: string): Record<KeybindingActio
 }
 
 const PLATFORM_DEFAULT_KEYBINDINGS = defaultKeybindingsForPlatform(process.platform);
+const PREVIOUS_PLATFORM_DEFAULT_KEYBINDINGS = Object.fromEntries(
+  Object.entries(PLATFORM_DEFAULT_KEYBINDINGS).filter(([action]) => !action.startsWith('move-pane-')),
+);
 
 const LEGACY_KEYBINDINGS: Record<string, string> = {
   'search-toggle': 'Ctrl+F',
@@ -476,7 +487,8 @@ export class SettingsManager {
     const mergedKeybindings = {
       ...PLATFORM_DEFAULT_KEYBINDINGS,
       ...((exactlyMatches(storedKeybindings, LEGACY_KEYBINDINGS)
-        || exactlyMatches(storedKeybindings, { ...PLATFORM_DEFAULT_KEYBINDINGS, ...LEGACY_KEYBINDINGS }))
+        || exactlyMatches(storedKeybindings, { ...PLATFORM_DEFAULT_KEYBINDINGS, ...LEGACY_KEYBINDINGS })
+        || exactlyMatches(storedKeybindings, { ...PREVIOUS_PLATFORM_DEFAULT_KEYBINDINGS, ...LEGACY_KEYBINDINGS }))
         ? {}
         : storedKeybindings),
     };

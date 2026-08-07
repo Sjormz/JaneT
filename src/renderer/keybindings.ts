@@ -28,6 +28,10 @@ export type KeybindingAction =
   | 'maximize-pane'
   | 'focus-next-pane'
   | 'focus-previous-pane'
+  | 'move-pane-left'
+  | 'move-pane-right'
+  | 'move-pane-up'
+  | 'move-pane-down'
   | 'rename-pane'
   | 'rename-tab'
   | 'save-document'
@@ -58,6 +62,10 @@ export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   'maximize-pane': 'Maximize or restore current pane',
   'focus-next-pane': 'Focus next pane',
   'focus-previous-pane': 'Focus previous pane',
+  'move-pane-left': 'Move current pane left',
+  'move-pane-right': 'Move current pane right',
+  'move-pane-up': 'Move current pane up',
+  'move-pane-down': 'Move current pane down',
   'rename-pane': 'Rename current terminal',
   'rename-tab': 'Rename current tab',
   'save-document': 'Save current document',
@@ -89,6 +97,10 @@ export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'maximize-pane': '',
   'focus-next-pane': '',
   'focus-previous-pane': '',
+  'move-pane-left': '',
+  'move-pane-right': '',
+  'move-pane-up': '',
+  'move-pane-down': '',
   'rename-pane': 'F2',
   'rename-tab': 'Ctrl+F2',
   'save-document': '',

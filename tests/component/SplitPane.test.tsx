@@ -1496,9 +1496,67 @@ describe('split panes in the app', () => {
       expect.objectContaining({ id: 'maximize-pane', shortcut: '' }),
       expect.objectContaining({ id: 'focus-next-pane', shortcut: '' }),
       expect.objectContaining({ id: 'focus-previous-pane', shortcut: '' }),
+      expect.objectContaining({ id: 'move-pane-left', shortcut: '' }),
+      expect.objectContaining({ id: 'move-pane-right', shortcut: '' }),
+      expect.objectContaining({ id: 'move-pane-up', shortcut: '' }),
+      expect.objectContaining({ id: 'move-pane-down', shortcut: '' }),
       expect.objectContaining({ id: 'save-document', shortcut: '' }),
       expect.objectContaining({ id: 'close-document', shortcut: '' }),
     ])));
+  });
+
+  it('moves the active pane by keyboard and pointer without replacing its terminal', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({
+      keybindings: { 'move-pane-right': 'Alt+ArrowRight' }, workspaceTabs: [],
+      session: {
+        tabs: [{
+          id: 'move-tab', title: 'Move panes', type: 'local', selectedPanePath: [0],
+          root: {
+            type: 'split', direction: 'vertical', sizes: [1, 2],
+            children: [{ type: 'leaf', title: 'left' }, { type: 'leaf', title: 'right' }],
+          },
+        }],
+        activeTabId: 'move-tab',
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    const leftPane = screen.getByText('left').closest('.terminal-leaf')!;
+    const rightPane = screen.getByText('right').closest('.terminal-leaf')!;
+    const leftTerminal = within(leftPane as HTMLElement).getByTestId(/terminal-/);
+    const initialIds = screen.getAllByTestId(/terminal-/).map((terminal) => terminal.textContent);
+    const leftFlex = (leftPane.parentElement as HTMLElement).style.flex;
+    const rightFlex = (rightPane.parentElement as HTMLElement).style.flex;
+    fireEvent.focus(leftTerminal);
+    fireEvent.click(within(leftPane as HTMLElement).getByRole('button', { name: /maximize pane/i }));
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+
+    fireEvent.keyDown(document, { key: 'ArrowRight', altKey: true });
+
+    await waitFor(() => expect(screen.getAllByText(/^(left|right)$/).map((title) => title.textContent))
+      .toEqual(['right', 'left']));
+    expect(screen.getAllByTestId(/terminal-/).map((terminal) => terminal.textContent))
+      .toEqual([initialIds[1], initialIds[0]]);
+    let movedPane = screen.getByText('left').closest('.terminal-leaf')!;
+    expect((movedPane.parentElement as HTMLElement).style.flex).toBe(leftFlex);
+    expect((screen.getByText('right').closest('.terminal-leaf')!.parentElement as HTMLElement).style.flex)
+      .toBe(rightFlex);
+    expect(movedPane).toHaveAttribute('aria-current', 'true');
+    expect(within(movedPane as HTMLElement).getByRole('textbox')).toHaveFocus();
+
+    fireEvent.click(screen.getByTestId('command-palette-action-move-pane-left'));
+
+    await waitFor(() => expect(screen.getAllByText(/^(left|right)$/).map((title) => title.textContent))
+      .toEqual(['left', 'right']));
+    expect(screen.getAllByTestId(/terminal-/).map((terminal) => terminal.textContent)).toEqual(initialIds);
+    movedPane = screen.getByText('left').closest('.terminal-leaf')!;
+    expect((movedPane.parentElement as HTMLElement).style.flex).toBe(leftFlex);
+    expect((screen.getByText('right').closest('.terminal-leaf')!.parentElement as HTMLElement).style.flex)
+      .toBe(rightFlex);
+    expect(movedPane).toHaveAttribute('aria-current', 'true');
+    expect(within(movedPane as HTMLElement).getByRole('textbox')).toHaveFocus();
+    expect(window.janet.terminalCreate).toHaveBeenCalledTimes(2);
   });
 
   it('requires confirmation before the close-tab shortcut destroys its terminal', async () => {
@@ -4357,6 +4415,7 @@ describe('unsaved editor shutdown handshake', () => {
     const terminal = await screen.findByTestId(/terminal-/);
     const terminalId = terminal.getAttribute('data-terminal-id')!;
     const latestCwd = 'C:/repo/latest';
+    await waitFor(() => expect(rendererMocks.prepareForCloseHandler).toBeTypeOf('function'));
 
     await act(async () => {
       rendererMocks.cwdChangeHandlers.get(terminalId)!(terminalId, latestCwd);

@@ -22,7 +22,7 @@ import {
   SavedSSHProfile,
   WorkspaceTabPreset,
   PaneNode, PaneDropSide, TerminalLeaf,
-  createPaneRoot, splitPane, removePane, movePane, resizePane, getAllLeafIds, genId, mapLeaves, findLeaf, countLeaves,
+  createPaneRoot, splitPane, removePane, movePane, directionalPaneTarget, resizePane, getAllLeafIds, genId, mapLeaves, findLeaf, countLeaves,
 } from './types';
 import { ThemeName, applyCssTheme, getTheme } from './themes';
 import { KeybindingsProvider, useKeybindings } from './KeybindingsContext';
@@ -1684,6 +1684,27 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     setPaneDropTarget(null);
   }, [updateTab]);
 
+  const moveActivePane = useCallback((side: PaneDropSide) => {
+    const tab = tabsRef.current.find((candidate) => candidate.id === activeTabIdRef.current);
+    if (!tab) return;
+    const source = preferredLeafId(
+      tab,
+      focusedTerminalIdRef.current,
+      maximizedLeafByTabRef.current[tab.id],
+    );
+    const target = source ? directionalPaneTarget(tab.root, source, side) : null;
+    if (!source || !target) return;
+    handleMovePane(tab.id, source, target, side);
+    terminalFocusTargetIdRef.current = source;
+    restoreTerminalFocusRef.current = true;
+    setMaximizedLeafByTab((maximized) => (
+      maximized[tab.id] ? { ...maximized, [tab.id]: null } : maximized
+    ));
+    setFocusedTerminalId(source);
+    editorDocuments.selectSurface(tab.id, 'terminal');
+    setTerminalFocusRequest((request) => request + 1);
+  }, [editorDocuments.selectSurface, handleMovePane]);
+
   // === SSH session management ===
 
   const handleSSHConnected = useCallback(
@@ -2213,12 +2234,17 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     });
     const unsub7 = on('focus-next-pane', () => cycleTerminalPane(1));
     const unsub8 = on('focus-previous-pane', () => cycleTerminalPane(-1));
+    const unsub9 = on('move-pane-left', () => moveActivePane('left'));
+    const unsub10 = on('move-pane-right', () => moveActivePane('right'));
+    const unsub11 = on('move-pane-up', () => moveActivePane('top'));
+    const unsub12 = on('move-pane-down', () => moveActivePane('bottom'));
     return () => {
       unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8();
+      unsub9(); unsub10(); unsub11(); unsub12();
     };
   }, [
     on, activeTab, sidebarTerminalId, handleSplitPane, requestClosePane,
-    requestRenamePane, requestRenameTab, handleToggleMaximizePane, cycleTerminalPane,
+    requestRenamePane, requestRenameTab, handleToggleMaximizePane, cycleTerminalPane, moveActivePane,
   ]);
 
   // === Escape handler for palette ===
@@ -2325,6 +2351,22 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
         shortcut: bindings['focus-previous-pane'], handler: () => cycleTerminalPane(-1),
       },
       {
+        id: 'move-pane-left', label: 'Move current pane left', category: 'Pane',
+        shortcut: bindings['move-pane-left'], handler: () => moveActivePane('left'),
+      },
+      {
+        id: 'move-pane-right', label: 'Move current pane right', category: 'Pane',
+        shortcut: bindings['move-pane-right'], handler: () => moveActivePane('right'),
+      },
+      {
+        id: 'move-pane-up', label: 'Move current pane up', category: 'Pane',
+        shortcut: bindings['move-pane-up'], handler: () => moveActivePane('top'),
+      },
+      {
+        id: 'move-pane-down', label: 'Move current pane down', category: 'Pane',
+        shortcut: bindings['move-pane-down'], handler: () => moveActivePane('bottom'),
+      },
+      {
         id: 'save-document', label: 'Save current document', category: 'Editor',
         shortcut: bindings['save-document'], handler: () => {
           if (activeDocumentKey) void saveEditorDocument(activeDocumentKey);
@@ -2393,7 +2435,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     return actions;
   }, [
     activeTab, activeTabId, sidebarTerminalId, activeDocumentKey, addTab, requestCloseTab,
-    handleSplitPane, requestClosePane, handleToggleMaximizePane, cycleTerminalPane, cycleTerminalTab,
+    handleSplitPane, requestClosePane, handleToggleMaximizePane, cycleTerminalPane, cycleTerminalTab, moveActivePane,
     requestRenamePane, requestRenameTab, saveEditorDocument, requestCloseEditorDocument,
     documentCloseFallbackFocus,
     fontSize, persistFontSize, persistTheme, setWorkspaceToolsExpanded, toggleWorkspaceTools, bindings,

@@ -285,6 +285,77 @@ test('focuses and persistently marks a newly split maximized pane', async () => 
   }
 });
 
+test('moves the active pane by configured keyboard and command palette without replacing terminals', async () => {
+  const app = await launchApp({
+    theme: 'tokyo-night',
+    fontSize: 14,
+    sidebarSide: 'left',
+    keybindings: { 'move-pane-right': 'Alt+ArrowRight' },
+    workspaceTabs: [],
+    session: {
+      tabs: [{
+        id: 'move-pane-tab',
+        title: 'move panes',
+        type: 'local',
+        selectedPanePath: [0],
+        root: {
+          type: 'split',
+          direction: 'vertical',
+          sizes: [1, 2],
+          children: [{ type: 'leaf', title: 'left' }, { type: 'leaf', title: 'right' }],
+        },
+      }],
+      activeTabId: 'move-pane-tab',
+      sidebarOpen: true,
+      tabsOpen: true,
+      sidebarSection: 'files',
+    },
+  }, 'janet-e2e-pane-move-');
+  const pane = (title: string) => app.page.locator('.terminal-leaf').filter({
+    has: app.page.locator('.leaf-title', { hasText: title }),
+  });
+
+  try {
+    await expect(app.page.locator('.terminal-leaf')).toHaveCount(2);
+    const initialIds = await app.page.locator('[data-terminal-id]').evaluateAll(
+      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')),
+    );
+    const initialFlex = {
+      left: await pane('left').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex),
+      right: await pane('right').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex),
+    };
+    await pane('left').locator('.xterm-helper-textarea').focus();
+    await pane('left').getByRole('button', { name: 'Maximize pane' }).click();
+    await expect(app.page.locator('.terminal-leaf')).toHaveCount(1);
+
+    await app.page.keyboard.press('Alt+ArrowRight');
+
+    await expect(app.page.locator('.leaf-title-text')).toHaveText(['right', 'left']);
+    expect(await app.page.locator('[data-terminal-id]').evaluateAll(
+      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')),
+    )).toEqual([initialIds[1], initialIds[0]]);
+    await expect(pane('left')).toHaveAttribute('aria-current', 'true');
+    await expect(pane('left').locator('.xterm-helper-textarea')).toBeFocused();
+    expect(await pane('left').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex))
+      .toBe(initialFlex.left);
+    expect(await pane('right').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex))
+      .toBe(initialFlex.right);
+
+    await app.page.getByRole('button', { name: /open command palette/i }).click();
+    await app.page.getByRole('combobox', { name: 'Search commands' }).fill('Move current pane left');
+    await app.page.getByRole('option', { name: 'Move current pane left' }).click();
+
+    await expect(app.page.locator('.leaf-title-text')).toHaveText(['left', 'right']);
+    expect(await app.page.locator('[data-terminal-id]').evaluateAll(
+      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')),
+    )).toEqual(initialIds);
+    await expect(pane('left')).toHaveAttribute('aria-current', 'true');
+    await expect(pane('left').locator('.xterm-helper-textarea')).toBeFocused();
+  } finally {
+    await closeApp(app.browser, app.electronProcess, app.userData);
+  }
+});
+
 test('runs ordered preset startup commands once per fresh terminal', async () => {
   const markerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-startup-'));
   const markerPath = path.join(markerDir, 'ordered.txt');

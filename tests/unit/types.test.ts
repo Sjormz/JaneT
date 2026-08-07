@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  createLeaf, splitPane, removePane, movePane, findLeaf,
+  createLeaf, splitPane, removePane, movePane, directionalPaneTarget, findLeaf,
   getAllLeafIds, countLeaves, resizePane, PaneNode,
 } from '../../src/renderer/types';
 
@@ -211,6 +211,33 @@ describe('removePane', () => {
 });
 
 describe('movePane', () => {
+  it('selects directional targets from normalized nested pane geometry', () => {
+    const topLeft = createLeaf();
+    const topRight = createLeaf();
+    const bottomLeft = createLeaf();
+    const bottomRight = createLeaf();
+    const tree: PaneNode = {
+      id: 'rows', type: 'split', direction: 'horizontal', sizes: [1, 2],
+      children: [
+        {
+          id: 'top', type: 'split', direction: 'vertical', sizes: [1, 2],
+          children: [topLeft, topRight],
+        },
+        {
+          id: 'bottom', type: 'split', direction: 'vertical', sizes: [1, 2],
+          children: [bottomLeft, bottomRight],
+        },
+      ],
+    };
+
+    expect(directionalPaneTarget(tree, topLeft.id, 'right')).toBe(topRight.id);
+    expect(directionalPaneTarget(tree, topLeft.id, 'bottom')).toBe(bottomLeft.id);
+    expect(directionalPaneTarget(tree, bottomRight.id, 'left')).toBe(bottomLeft.id);
+    expect(directionalPaneTarget(tree, bottomRight.id, 'top')).toBe(topRight.id);
+    expect(directionalPaneTarget(tree, topLeft.id, 'left')).toBeNull();
+    expect(directionalPaneTarget(tree, topLeft.id, 'top')).toBeNull();
+  });
+
   it('moves a nested leaf beside its target without replacing either terminal', () => {
     const leafA = createLeaf();
     const leafB = createLeaf();
@@ -259,6 +286,21 @@ describe('movePane', () => {
       expect(result.direction).toBe('vertical');
       expect(result.children).toEqual([leafA, leafB, leafC]);
     }
+  });
+
+  it('keeps direct sibling sizes attached to their panes when reordering them', () => {
+    const leafA = createLeaf();
+    const leafB = createLeaf();
+    const tree: PaneNode = {
+      id: 'root', type: 'split', direction: 'vertical',
+      children: [leafA, leafB], sizes: [1, 3],
+    };
+
+    const result = movePane(tree, leafA.id, leafB.id, 'right');
+
+    expect(result).toMatchObject({
+      type: 'split', children: [leafB, leafA], sizes: [3, 1],
+    });
   });
 
   it('ignores a drop onto the dragged pane or an unknown target', () => {

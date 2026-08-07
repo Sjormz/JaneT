@@ -108,6 +108,10 @@ describe('SettingsManager', () => {
       'copy-command': 'Ctrl+Alt+C',
       'copy-command-output': 'Ctrl+Alt+O',
       'rerun-command': 'Ctrl+Alt+R',
+      'move-pane-left': '',
+      'move-pane-right': '',
+      'move-pane-up': '',
+      'move-pane-down': '',
     });
   });
 
@@ -221,6 +225,17 @@ describe('SettingsManager', () => {
     async (platformName) => {
       const { actual, defaults } = await loadKeybindings(platformName, (current) => ({
         ...current,
+        ...LEGACY_KEYBINDINGS,
+      }));
+      expect(actual).toEqual(defaults);
+    },
+  );
+
+  it.each(['win32', 'darwin'] as const)(
+    'migrates the previous JaneT-expanded legacy %s keybindings after new actions are added',
+    async (platformName) => {
+      const { actual, defaults } = await loadKeybindings(platformName, (current) => ({
+        ...Object.fromEntries(Object.entries(current).filter(([action]) => !action.startsWith('move-pane-'))),
         ...LEGACY_KEYBINDINGS,
       }));
       expect(actual).toEqual(defaults);
