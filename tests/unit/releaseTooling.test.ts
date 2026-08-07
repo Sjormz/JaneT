@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 const projectRoot = path.resolve(import.meta.dirname, '../..');
 
@@ -350,6 +350,63 @@ describe('release tooling', () => {
         .rejects.toThrow(/Invalid windows update manifest/);
     } finally {
       fs.rmSync(releaseRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects invalid parsed updater manifest shapes', async () => {
+    const { verifyReleaseManifest } = await loadScript('verify-release-artifacts.mjs');
+    const releaseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-release-manifest-'));
+    const manifestPath = path.join(releaseRoot, 'latest.yml');
+    const createReadStream = vi.spyOn(fs, 'createReadStream');
+    const invalidManifests = [
+      ['scalar root', 'manifest', /Invalid windows update manifest/],
+      ['array root', '- manifest', /Invalid windows update manifest/],
+      ['missing files', 'version: 1.2.3', /Invalid windows update manifest/],
+      ['scalar files', 'version: 1.2.3\nfiles: manifest', /Invalid windows update manifest/],
+      ['scalar entry', 'version: 1.2.3\nfiles:\n  - package', /file matrix mismatch/],
+      ['array entry', 'version: 1.2.3\nfiles:\n  - [package]', /file matrix mismatch/],
+      ['missing URL', 'version: 1.2.3\nfiles:\n  - size: 1', /file matrix mismatch/],
+    ] as const;
+    try {
+      for (const [name, manifest, error] of invalidManifests) {
+        fs.writeFileSync(manifestPath, manifest);
+        await expect(verifyReleaseManifest('windows', '1.2.3', releaseRoot), name)
+          .rejects.toThrow(error);
+      }
+      expect(createReadStream).not.toHaveBeenCalled();
+    } finally {
+      createReadStream.mockRestore();
+      fs.rmSync(releaseRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects traversal references before reading package bytes outside the release root', async () => {
+    const { verifyReleaseManifest } = await loadScript('verify-release-artifacts.mjs');
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-release-manifest-'));
+    const releaseRoot = path.join(fixtureRoot, 'release');
+    const outsidePath = path.join(fixtureRoot, 'outside.exe');
+    const outsideBytes = Buffer.from('outside package bytes');
+    const createReadStream = vi.spyOn(fs, 'createReadStream');
+    try {
+      fs.mkdirSync(releaseRoot);
+      fs.writeFileSync(outsidePath, outsideBytes);
+      fs.writeFileSync(path.join(releaseRoot, 'latest.yml'), [
+        'version: 1.2.3',
+        'files:',
+        '  - url: ../outside.exe',
+        `    sha512: ${createHash('sha512').update(outsideBytes).digest('base64')}`,
+        `    size: ${outsideBytes.length}`,
+        'path: JaneT-Setup-1.2.3-win-x64.exe',
+        `sha512: ${createHash('sha512').update(outsideBytes).digest('base64')}`,
+        '',
+      ].join('\n'));
+
+      await expect(verifyReleaseManifest('windows', '1.2.3', releaseRoot))
+        .rejects.toThrow(/file matrix mismatch/);
+      expect(createReadStream).not.toHaveBeenCalledWith(outsidePath);
+    } finally {
+      createReadStream.mockRestore();
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
     }
   });
 
