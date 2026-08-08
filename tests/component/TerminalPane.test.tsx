@@ -282,6 +282,113 @@ async function loadTerminalPane() {
 }
 
 describe('TerminalPane SSH reinitialization', () => {
+  it("uses the pane label for xterm's helper input", async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-named-input"
+          tabType="local"
+          inputLabel="Tests — Local terminal pane"
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    expect(MockTerminal.instances[0].textarea).toHaveAttribute(
+      'aria-label',
+      'Tests — Local terminal pane',
+    );
+  });
+
+  it('updates the helper input name without recreating xterm', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const props = {
+      termId: 'term-renamed-input',
+      tabType: 'local' as const,
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      themeName: 'tokyo-night',
+    };
+    const { rerender } = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} inputLabel="Logs — Local terminal pane" />
+      </KeybindingsProvider>,
+    );
+    const term = MockTerminal.instances[0];
+
+    rerender(
+      <KeybindingsProvider>
+        <TerminalPane {...props} inputLabel="Tests — Local terminal pane" />
+      </KeybindingsProvider>,
+    );
+
+    expect(MockTerminal.instances).toHaveLength(1);
+    expect(term.dispose).not.toHaveBeenCalled();
+    expect(term.textarea).toHaveAttribute('aria-label', 'Tests — Local terminal pane');
+  });
+
+  it('refreshes the helper input name when a cached xterm reattaches', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const props = {
+      termId: 'term-remounted-input',
+      tabType: 'local' as const,
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      themeName: 'tokyo-night',
+    };
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} inputLabel="Old — Local terminal pane" />
+      </KeybindingsProvider>,
+    );
+    const term = MockTerminal.instances[0];
+    first.unmount();
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} inputLabel="Current — Local terminal pane" hasSession />
+      </KeybindingsProvider>,
+    );
+
+    expect(MockTerminal.instances).toHaveLength(1);
+    expect(term.dispose).not.toHaveBeenCalled();
+    expect(term.textarea).toHaveAttribute('aria-label', 'Current — Local terminal pane');
+  });
+
+  it('does not reuse the input name from a disposed same-ID terminal', async () => {
+    const { default: TerminalPane, disposeCachedTerminal } = await loadTerminalPane();
+    const props = {
+      termId: 'term-replaced-input',
+      tabType: 'local' as const,
+      hasSession: true,
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      themeName: 'tokyo-night',
+    };
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} inputLabel="Old — Local terminal pane" />
+      </KeybindingsProvider>,
+    );
+    const oldTerm = MockTerminal.instances[0];
+    first.unmount();
+    disposeCachedTerminal(props.termId);
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} inputLabel="New — Local terminal pane" />
+      </KeybindingsProvider>,
+    );
+
+    expect(MockTerminal.instances).toHaveLength(2);
+    expect(oldTerm.textarea).toHaveAttribute('aria-label', 'Old — Local terminal pane');
+    expect(MockTerminal.instances[1].textarea).toHaveAttribute('aria-label', 'New — Local terminal pane');
+  });
+
   it('passes local startup commands to backend creation without typing them from the renderer', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
 
@@ -307,6 +414,103 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(terminalWrite).not.toHaveBeenCalled();
   });
 
+  it('keeps a failed local terminal recoverable across a cached remount', async () => {
+    terminalCreate.mockRejectedValueOnce(new Error('File not found'));
+    const { default: TerminalPane } = await loadTerminalPane();
+    const onReady = vi.fn();
+    const onRemoved = vi.fn();
+    const props = {
+      termId: 'term-local-spawn-failed',
+      tabType: 'local' as const,
+      initialCwd: '/repo',
+      startupCommands: ['npm run dev'],
+      onReady,
+      onRemoved,
+      themeName: 'tokyo-night',
+    };
+    const request = {
+      id: props.termId,
+      cwd: props.initialCwd,
+      startupCommands: props.startupCommands,
+    };
+
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('File not found');
+    expect(terminalCreate).toHaveBeenCalledTimes(1);
+    expect(terminalCreate).toHaveBeenNthCalledWith(1, request);
+    expect(onReady).not.toHaveBeenCalled();
+    first.unmount();
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} initialCwd="/resolved-home" />
+      </KeybindingsProvider>,
+    );
+
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Couldn’t start local terminal');
+    expect(alert).toHaveTextContent('File not found');
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    expect(retry).toHaveAttribute('type', 'button');
+    expect(retry.tabIndex).toBe(0);
+    expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1);
+    expect(terminalCreate).toHaveBeenCalledTimes(1);
+    expect(onReady).not.toHaveBeenCalled();
+
+    fireEvent.click(retry);
+
+    await waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
+    expect(onReady).toHaveBeenCalledWith(props.termId);
+    expect(terminalCreate).toHaveBeenCalledTimes(2);
+    expect(terminalCreate).toHaveBeenNthCalledWith(2, request);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('ignores a local retry that completes after its cached terminal is replaced', async () => {
+    let resolveRetry!: (value: { pid: number }) => void;
+    terminalCreate
+      .mockRejectedValueOnce(new Error('File not found'))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveRetry = resolve; }));
+    const { default: TerminalPane, disposeCachedTerminal } = await loadTerminalPane();
+    const oldReady = vi.fn();
+    const replacementReady = vi.fn();
+    const props = {
+      termId: 'term-local-retry-replaced',
+      tabType: 'local' as const,
+      onRemoved: vi.fn(),
+      themeName: 'tokyo-night',
+    };
+
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} onReady={oldReady} />
+      </KeybindingsProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(terminalCreate).toHaveBeenCalledTimes(2);
+
+    first.unmount();
+    expect(disposeCachedTerminal(props.termId)).toBe(true);
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} onReady={replacementReady} />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(replacementReady).toHaveBeenCalledTimes(1));
+    expect(MockTerminal.instances).toHaveLength(2);
+
+    await act(async () => resolveRetry({ pid: 456 }));
+
+    expect(oldReady).not.toHaveBeenCalled();
+    expect(replacementReady).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('does not ready a local terminal whose creation resolves after removal', async () => {
     let resolveCreate!: (value: { pid: number }) => void;
     terminalCreate.mockReturnValueOnce(new Promise((resolve) => { resolveCreate = resolve; }));
@@ -330,6 +534,40 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(onRemoved).toHaveBeenCalledWith('term-removed-before-create');
     await act(async () => resolveCreate({ pid: 123 }));
     expect(onReady).not.toHaveBeenCalled();
+  });
+
+  it('readies a local terminal whose creation resolves after a cached remount', async () => {
+    let resolveCreate!: (value: { pid: number }) => void;
+    terminalCreate.mockReturnValueOnce(new Promise((resolve) => { resolveCreate = resolve; }));
+    const { default: TerminalPane } = await loadTerminalPane();
+    const oldReady = vi.fn();
+    const currentReady = vi.fn();
+    const props = {
+      termId: 'term-remounted-before-create',
+      tabType: 'local' as const,
+      onRemoved: vi.fn(),
+      themeName: 'tokyo-night',
+    };
+
+    const view = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} initialCwd="/repo" onReady={oldReady} />
+      </KeybindingsProvider>,
+    );
+
+    view.rerender(
+      <KeybindingsProvider>
+        <TerminalPane {...props} initialCwd="/resolved-home" onReady={currentReady} />
+      </KeybindingsProvider>,
+    );
+    expect(terminalCreate).toHaveBeenCalledTimes(1);
+    expect(MockTerminal.instances).toHaveLength(1);
+
+    await act(async () => resolveCreate({ pid: 123 }));
+
+    expect(oldReady).not.toHaveBeenCalled();
+    expect(currentReady).toHaveBeenCalledTimes(1);
+    expect(currentReady).toHaveBeenCalledWith(props.termId);
   });
 
   it('creates a new SSH shell when the pane switches from a local terminal to SSH props', async () => {
@@ -1552,6 +1790,88 @@ describe('TerminalPane SSH shell output', () => {
     expect(screen.queryByTestId('ssh-terminal-notice')).toBeNull();
   });
 
+  it('starts only one SSH retry when the reconnect button is double-clicked', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    let rejectRetry: (error: Error) => void = () => {};
+    const onSshRetry = vi.fn(() => new Promise<void>((_resolve, reject) => { rejectRetry = reject; }));
+    sshCreateShellImpl = () => Promise.reject(new Error('Initial shell failure'));
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane
+          termId="term-ssh-double-retry"
+          tabType="ssh"
+          sshSessionId="ssh-double-retry"
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          onSshRetry={onSshRetry}
+          themeName="tokyo-night"
+        />
+      </KeybindingsProvider>,
+    );
+
+    const retry = await screen.findByTestId('ssh-notice-retry');
+    act(() => {
+      fireEvent.click(retry);
+      fireEvent.click(retry);
+    });
+
+    expect(onSshRetry).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId('ssh-notice-retry')).not.toBeInTheDocument();
+    expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'reconnecting');
+
+    await act(async () => rejectRetry(new Error('Reconnect failed')));
+    fireEvent.click(await screen.findByTestId('ssh-notice-retry'));
+    expect(onSshRetry).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves the initial shell error when its session is marked disconnected', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    sshCreateShellImpl = () => Promise.reject(new Error('Remote shell unavailable'));
+    const onReady = vi.fn();
+    const onRemoved = vi.fn();
+    const onSshRetry = vi.fn(() => Promise.resolve());
+    const onShellFailed = vi.fn();
+
+    function Harness() {
+      const [connectionLost, setConnectionLost] = React.useState(false);
+      const handleShellFailed = React.useCallback((termId: string, sessionId: string) => {
+        onShellFailed(termId, sessionId);
+        setConnectionLost(true);
+      }, []);
+      return (
+        <TerminalPane
+          termId="term-ssh-initial-error"
+          tabType="ssh"
+          sshSessionId="ssh-initial-error"
+          sshConnectionLost={connectionLost}
+          onReady={onReady}
+          onRemoved={onRemoved}
+          onSshShellFailed={handleShellFailed}
+          onSshRetry={onSshRetry}
+          themeName="tokyo-night"
+        />
+      );
+    }
+
+    render(
+      <KeybindingsProvider>
+        <Harness />
+      </KeybindingsProvider>,
+    );
+
+    await waitFor(() => expect(onShellFailed).toHaveBeenCalledWith(
+      'term-ssh-initial-error',
+      'ssh-initial-error',
+    ));
+    const notice = await screen.findByTestId('ssh-terminal-notice');
+    expect(notice).toHaveTextContent('Remote shell unavailable');
+    expect(notice).toHaveAttribute('data-state', 'error');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /reconnect/i })).toBeInTheDocument();
+  });
+
   it('preserves a failed SSH notice when a cached terminal is remounted', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     sshCreateShellImpl = () => Promise.reject(new Error('Remote shell unavailable'));
@@ -1570,7 +1890,7 @@ describe('TerminalPane SSH shell output', () => {
         <TerminalPane {...props} />
       </KeybindingsProvider>,
     );
-    expect(await screen.findByRole('alert')).toHaveTextContent('Remote shell unavailable');
+    expect(await screen.findByTestId('ssh-terminal-notice')).toHaveTextContent('Remote shell unavailable');
     first.unmount();
 
     render(
@@ -1579,9 +1899,175 @@ describe('TerminalPane SSH shell output', () => {
       </KeybindingsProvider>,
     );
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Remote shell unavailable');
+    expect(screen.getByTestId('ssh-terminal-notice')).toHaveTextContent('Remote shell unavailable');
     expect(screen.getByRole('button', { name: /reconnect/i })).toBeInTheDocument();
     expect(sshCreateShell).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes initial SSH shell readiness while its cached pane is detached', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    let resolveShell: (value: unknown) => void = () => {};
+    sshCreateShellImpl = () => new Promise((resolve) => { resolveShell = resolve; });
+    const onSshShellReady = vi.fn();
+    const props = {
+      termId: 'term-ssh-detached-ready',
+      tabType: 'ssh' as const,
+      sshSessionId: 'ssh-detached-ready',
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      onSshShellReady,
+      themeName: 'tokyo-night',
+    };
+
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    await act(async () => resolveShell({ connected: true }));
+    expect(onSshShellReady).toHaveBeenCalledTimes(1);
+    expect(onSshShellReady).toHaveBeenCalledWith(props.termId, props.sshSessionId);
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    expect(sshCreateShell).toHaveBeenCalledTimes(1);
+    expect(onSshShellReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores initial SSH shell readiness after its cached pane is replaced', async () => {
+    const { default: TerminalPane, disposeCachedTerminal } = await loadTerminalPane();
+    let resolveInitial: (value: unknown) => void = () => {};
+    let resolveReplacement: (value: unknown) => void = () => {};
+    let shellCount = 0;
+    sshCreateShellImpl = () => new Promise((resolve) => {
+      shellCount += 1;
+      if (shellCount === 1) resolveInitial = resolve;
+      else resolveReplacement = resolve;
+    });
+    const onSshShellReady = vi.fn();
+    const props = {
+      termId: 'term-ssh-replaced-ready',
+      tabType: 'ssh' as const,
+      sshSessionId: 'ssh-replaced-ready',
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      onSshShellReady,
+      themeName: 'tokyo-night',
+    };
+
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(1));
+    first.unmount();
+    disposeCachedTerminal(props.termId);
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} hasSession />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(2));
+
+    await act(async () => resolveInitial({ connected: true }));
+    expect(onSshShellReady).not.toHaveBeenCalled();
+
+    await act(async () => resolveReplacement({ connected: true }));
+    expect(onSshShellReady).toHaveBeenCalledTimes(1);
+    expect(onSshShellReady).toHaveBeenCalledWith(props.termId, props.sshSessionId);
+  });
+
+  it('publishes initial SSH shell failure while its cached pane is detached', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    let rejectShell: (error: Error) => void = () => {};
+    sshCreateShellImpl = () => new Promise((_resolve, reject) => { rejectShell = reject; });
+    const onSshShellFailed = vi.fn();
+    const props = {
+      termId: 'term-ssh-detached-failed',
+      tabType: 'ssh' as const,
+      sshSessionId: 'ssh-detached-failed',
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      onSshShellFailed,
+      onSshRetry: vi.fn(() => Promise.resolve()),
+      themeName: 'tokyo-night',
+    };
+
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    await act(async () => rejectShell(new Error('Detached shell failed')));
+    expect(onSshShellFailed).toHaveBeenCalledTimes(1);
+    expect(onSshShellFailed).toHaveBeenCalledWith(props.termId, props.sshSessionId);
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    expect(await screen.findByTestId('ssh-terminal-notice')).toHaveTextContent('Detached shell failed');
+    expect(sshCreateShell).toHaveBeenCalledTimes(1);
+    expect(onSshShellFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores initial SSH shell failure after its cached pane is replaced', async () => {
+    const { default: TerminalPane, disposeCachedTerminal } = await loadTerminalPane();
+    let rejectInitial: (error: Error) => void = () => {};
+    let resolveReplacement: (value: unknown) => void = () => {};
+    let shellCount = 0;
+    sshCreateShellImpl = () => new Promise((resolve, reject) => {
+      shellCount += 1;
+      if (shellCount === 1) rejectInitial = reject;
+      else resolveReplacement = resolve;
+    });
+    const onSshShellReady = vi.fn();
+    const onSshShellFailed = vi.fn();
+    const props = {
+      termId: 'term-ssh-replaced-failed',
+      tabType: 'ssh' as const,
+      sshSessionId: 'ssh-replaced-failed',
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      onSshShellReady,
+      onSshShellFailed,
+      themeName: 'tokyo-night',
+    };
+
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(1));
+    first.unmount();
+    disposeCachedTerminal(props.termId);
+
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} hasSession />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(2));
+    await act(async () => resolveReplacement({ connected: true }));
+    expect(onSshShellReady).toHaveBeenCalledTimes(1);
+
+    await act(async () => rejectInitial(new Error('Obsolete shell failed')));
+    expect(onSshShellFailed).not.toHaveBeenCalled();
+    expect(onSshShellReady).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('Obsolete shell failed')).not.toBeInTheDocument();
   });
 
   it('does not restore a stale waiting notice after cached output arrives offscreen', async () => {
@@ -1654,8 +2140,50 @@ describe('TerminalPane SSH shell output', () => {
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'reconnecting');
 
     await act(async () => rejectRetry(new Error('Transport reconnect failed')));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Transport reconnect failed');
+    expect(await screen.findByTestId('ssh-terminal-notice')).toHaveTextContent('Transport reconnect failed');
     expect(screen.getByRole('button', { name: /reconnect/i })).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('ignores an SSH retry that fails after its cached terminal is replaced', async () => {
+    const { default: TerminalPane, disposeCachedTerminal } = await loadTerminalPane();
+    let rejectRetry: (error: Error) => void = () => {};
+    const onSshRetry = vi.fn(() => new Promise<void>((_resolve, reject) => {
+      rejectRetry = reject;
+    }));
+    sshCreateShellImpl = () => Promise.reject(new Error('Initial shell failure'));
+    const props = {
+      termId: 'term-ssh-retry-replaced',
+      tabType: 'ssh' as const,
+      sshSessionId: 'ssh-retry-replaced',
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      onSshRetry,
+      themeName: 'tokyo-night',
+    };
+
+    const first = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    fireEvent.click(await screen.findByTestId('ssh-notice-retry'));
+    expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'reconnecting');
+
+    first.unmount();
+    expect(disposeCachedTerminal(props.termId)).toBe(true);
+    sshCreateShellImpl = () => Promise.resolve({ connected: true });
+    render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} hasSession />
+      </KeybindingsProvider>,
+    );
+    expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'waiting');
+
+    await act(async () => rejectRetry(new Error('Obsolete retry failed')));
+    expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'waiting');
+    expect(screen.queryByText('Obsolete retry failed')).not.toBeInTheDocument();
   });
 
   it('shows reconnecting while a restored SSH transport is not ready', async () => {
@@ -1677,6 +2205,8 @@ describe('TerminalPane SSH shell output', () => {
 
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'reconnecting');
     expect(sshCreateShell).not.toHaveBeenCalled();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('shows a reconnect action when an established SSH transport closes', async () => {
@@ -1708,6 +2238,8 @@ describe('TerminalPane SSH shell output', () => {
     expect(await screen.findByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'closed');
     expect(screen.getByText('Connection closed')).toBeInTheDocument();
     expect(screen.getByTestId('ssh-notice-retry')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('opens SSH shells with terminal-app friendly minimum dimensions', async () => {

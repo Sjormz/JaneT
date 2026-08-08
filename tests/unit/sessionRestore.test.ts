@@ -1,12 +1,43 @@
 import { describe, it, expect } from 'vitest';
 import {
-  serializePaneTree, restorePaneTree, normalizeSession,
+  serializePaneTree, restorePaneTree, normalizeSession, panePathForLeaf, leafIdAtPanePath,
 } from '../../src/renderer/sessionRestore';
 import {
   createLeaf, splitPane, getAllLeafIds, countLeaves, PaneNode,
 } from '../../src/renderer/types';
 
 describe('serializePaneTree', () => {
+  it('round-trips a leaf location structurally through fresh runtime ids', () => {
+    const tree: PaneNode = {
+      id: 'split-root',
+      type: 'split',
+      direction: 'vertical',
+      sizes: [1, 1],
+      children: [
+        { id: 'term-left', type: 'leaf' },
+        {
+          id: 'split-right',
+          type: 'split',
+          direction: 'horizontal',
+          sizes: [1, 1],
+          children: [
+            { id: 'term-top', type: 'leaf' },
+            { id: 'runtime-selected', type: 'leaf' },
+          ],
+        },
+      ],
+    };
+
+    const path = panePathForLeaf(tree, 'runtime-selected');
+    const restored = restorePaneTree(serializePaneTree(tree));
+
+    expect(path).toEqual([1, 1]);
+    expect(restored).not.toBeNull();
+    expect(leafIdAtPanePath(restored!, path!)).toBe(getAllLeafIds(restored!)[2]);
+    expect(leafIdAtPanePath(restored!, path!)).not.toBe('runtime-selected');
+    expect(leafIdAtPanePath(restored!, [2])).toBeNull();
+  });
+
   it('includes startup automation only when explicitly requested', () => {
     const tree: PaneNode = {
       id: 'ssh-1',
@@ -299,6 +330,25 @@ describe('normalizeSession', () => {
     expect(result.tabs[0].id).toBe('a');
     expect(result.sidebarSection).toBe('files');
     expect(result.activeTabId).toBe('a');
+  });
+
+  it('drops invalid pane paths without dropping an otherwise valid legacy tab', () => {
+    const result = normalizeSession({
+      tabs: [{
+        id: 'legacy', title: 'Legacy', type: 'local',
+        selectedPanePath: [2],
+        maximizedPanePath: new Array(65).fill(0),
+        root: {
+          type: 'split', direction: 'vertical', sizes: [1, 1],
+          children: [{ type: 'leaf' }, { type: 'leaf' }],
+        },
+      }],
+      activeTabId: 'legacy',
+    });
+
+    expect(result.tabs).toHaveLength(1);
+    expect(result.tabs[0]).not.toHaveProperty('selectedPanePath');
+    expect(result.tabs[0]).not.toHaveProperty('maximizedPanePath');
   });
 
   it('drops a saved tab whose required title exceeds the persisted limit', () => {

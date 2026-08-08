@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import packageMetadata from '../../package.json';
 
 const validPayload = {
   durationMs: 10_000,
@@ -14,7 +15,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-async function loadMain(options: { enabled?: boolean; threshold?: number; supported?: boolean; focused?: boolean; minimized?: boolean; constructorFails?: boolean; e2e?: boolean } = {}) {
+async function loadMain(options: { enabled?: boolean; threshold?: number; supported?: boolean; focused?: boolean; minimized?: boolean; constructorFails?: boolean; e2e?: boolean; selectedDirectory?: string; packaged?: boolean } = {}) {
   vi.stubEnv('NODE_ENV', 'test');
   const handlers = new Map<string, Function>();
   const notificationOn = vi.fn();
@@ -39,32 +40,47 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
   });
   (Notification as any).isSupported = vi.fn(() => options.supported ?? true);
   class BrowserWindow { constructor() { return window; } }
+  const showOpenDialog = vi.fn().mockResolvedValue(options.selectedDirectory
+    ? { canceled: false, filePaths: [options.selectedDirectory] }
+    : { canceled: true, filePaths: [] });
   if (options.e2e) vi.stubEnv('JANET_E2E_EVENTS_PATH', 'events.jsonl');
   const writeFileSync = vi.fn();
+  const clipboardWriteText = vi.fn();
   vi.doMock('fs', async (original) => ({
     ...(await original<typeof import('fs')>()),
     appendFileSync: vi.fn(),
     existsSync: vi.fn(() => true),
-    readFileSync: vi.fn(() => { throw new Error('File not found'); }),
+    readFileSync: vi.fn(() => {
+      throw Object.assign(new Error('File not found'), { code: 'ENOENT' });
+    }),
     renameSync: vi.fn(),
     rmSync: vi.fn(),
     writeFileSync,
   }));
   vi.doMock('electron', () => ({
-    app: { commandLine: { appendSwitch: vi.fn() }, getAppPath: vi.fn(() => '.'), getPath: vi.fn(() => '/tmp/janet-test'), getVersion: vi.fn(), isPackaged: false, requestSingleInstanceLock: vi.fn(() => true), quit: vi.fn(), on: vi.fn(), whenReady: vi.fn(() => Promise.resolve()), setPath: vi.fn(), setAppUserModelId },
+    app: { commandLine: { appendSwitch: vi.fn() }, getAppPath: vi.fn(() => '.'), getPath: vi.fn(() => '/tmp/janet-test'), getVersion: vi.fn(() => packageMetadata.version), isPackaged: options.packaged ?? false, requestSingleInstanceLock: vi.fn(() => true), quit: vi.fn(), on: vi.fn(), whenReady: vi.fn(() => Promise.resolve()), setPath: vi.fn(), setAppUserModelId },
     protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() }, net: { fetch: vi.fn() }, Menu: { setApplicationMenu: vi.fn() },
-    BrowserWindow, Notification, clipboard: { writeText: vi.fn() }, dialog: { showMessageBox: vi.fn(), showErrorBox: vi.fn() }, shell: { openExternal: vi.fn() }, autoUpdater: { on: vi.fn() },
+    BrowserWindow, Notification, clipboard: { writeText: clipboardWriteText }, dialog: { showMessageBox: vi.fn(), showOpenDialog, showErrorBox: vi.fn() }, shell: { openExternal: vi.fn() }, autoUpdater: { on: vi.fn() },
     ipcMain: { handle: vi.fn((channel: string, listener: Function) => handlers.set(channel, listener)), on: vi.fn() },
   }));
   const settings = await import('../../src/main/settings');
   const settingsGetSpy = vi.spyOn(settings.SettingsManager.prototype, 'get').mockReturnValue({ notificationsEnabled: options.enabled ?? true, notificationThresholdSeconds: options.threshold ?? 10 } as any);
+  const settingsRecoveryStateSpy = vi.spyOn(settings.SettingsManager.prototype, 'getRecoveryState').mockReturnValue({ previousAvailable: true });
+  const restorePreviousSpy = vi.spyOn(settings.SettingsManager.prototype, 'restorePrevious').mockReturnValue({ theme: 'dracula' } as any);
+  const resetSettingsSpy = vi.spyOn(settings.SettingsManager.prototype, 'reset').mockReturnValue({ theme: 'tokyo-night' } as any);
   await import('../../src/main/index');
   await vi.waitFor(() => expect(handlers.has('notifications:command-completed')).toBe(true));
   const invoke = (payload: unknown, sender: unknown = webContents, senderFrame: unknown = webContents.mainFrame) =>
     Promise.resolve().then(() => handlers.get('notifications:command-completed')!({ sender, senderFrame }, payload));
   const setSettings = (updates: unknown) =>
     Promise.resolve().then(() => handlers.get('settings:set')!({ sender: webContents, senderFrame: webContents.mainFrame }, updates));
-  return { invoke, setSettings, writeFileSync, settingsGetSpy, Notification, notificationOn, notificationShow, restore, show, focus, setAppUserModelId, webContents };
+  const invokeChannel = (channel: string, payload?: unknown, sender: unknown = webContents, senderFrame: unknown = webContents.mainFrame) =>
+    Promise.resolve().then(() => handlers.get(channel)!({ sender, senderFrame }, payload));
+  return {
+    invoke, invokeChannel, setSettings, writeFileSync, settingsGetSpy, settingsRecoveryStateSpy,
+    restorePreviousSpy, resetSettingsSpy, Notification, notificationOn, notificationShow,
+    restore, show, focus, setAppUserModelId, showOpenDialog, webContents, clipboardWriteText,
+  };
 }
 
 describe('main notification bridge', () => {
@@ -193,6 +209,98 @@ describe('main notification bridge', () => {
     await expect(bridge.invoke(validPayload, bridge.webContents, {})).rejects.toThrow(/untrusted/i);
     expect(bridge.setAppUserModelId).toHaveBeenCalledWith('com.sjorm.janet');
   });
+
+  it('guards zero-payload settings recovery operations with the trusted sender boundary', async () => {
+    const bridge = await loadMain();
+
+    await expect(bridge.invokeChannel('settings:recovery-state', { ignored: true }))
+      .resolves.toEqual({ previousAvailable: true });
+    await expect(bridge.invokeChannel('settings:restore-previous', { ignored: true }))
+      .resolves.toMatchObject({ theme: 'dracula' });
+    await expect(bridge.invokeChannel('settings:reset', { ignored: true }))
+      .resolves.toMatchObject({ theme: 'tokyo-night' });
+    expect(bridge.settingsRecoveryStateSpy).toHaveBeenCalledWith();
+    expect(bridge.restorePreviousSpy).toHaveBeenCalledWith();
+    expect(bridge.resetSettingsSpy).toHaveBeenCalledWith();
+    await expect(bridge.invokeChannel('settings:reset', undefined, bridge.webContents, {}))
+      .rejects.toThrow(/untrusted/i);
+  });
+
+  it('copies the exact main-owned development diagnostics without a renderer payload', async () => {
+    Object.defineProperty(process.versions, 'electron', { configurable: true, value: '43.2.0' });
+    try {
+      const bridge = await loadMain({ supported: true });
+
+      await expect(bridge.invokeChannel('app:copyDiagnostics')).resolves.toBe(true);
+      expect(bridge.clipboardWriteText).toHaveBeenCalledWith([
+        `JaneT version: ${packageMetadata.version}`,
+        `OS: ${process.platform}`,
+        `Architecture: ${process.arch}`,
+        'Mode: development',
+        'Electron version: 43.2.0',
+        'Notifications: supported',
+      ].join('\n'));
+    } finally {
+      delete (process.versions as Record<string, string | undefined>).electron;
+    }
+  });
+
+  it('copies exact packaged diagnostics with bounded capability data and ignores renderer data', async () => {
+    Object.defineProperty(process.versions, 'electron', { configurable: true, value: '43.2.0' });
+    try {
+      const bridge = await loadMain({ packaged: true, supported: false });
+      const rendererData = { path: 'C:\\Users\\private', command: 'secret', host: 'private.example' };
+
+      await expect(bridge.invokeChannel('app:copyDiagnostics', rendererData)).resolves.toBe(true);
+      const copied = [
+        `JaneT version: ${packageMetadata.version}`,
+        `OS: ${process.platform}`,
+        `Architecture: ${process.arch}`,
+        'Mode: packaged',
+        'Electron version: 43.2.0',
+        'Notifications: unsupported',
+      ].join('\n');
+      expect(bridge.clipboardWriteText).toHaveBeenCalledWith(copied);
+      expect(copied).not.toMatch(/private|secret|command|host|path/i);
+    } finally {
+      delete (process.versions as Record<string, string | undefined>).electron;
+    }
+  });
+
+  it('contains diagnostics clipboard failures', async () => {
+    const bridge = await loadMain();
+    bridge.clipboardWriteText.mockImplementationOnce(() => {
+      throw new Error('C:\\Users\\private\\settings.json');
+    });
+
+    await expect(bridge.invokeChannel('app:copyDiagnostics')).resolves.toBe(false);
+  });
+
+  it('rejects untrusted diagnostics senders before clipboard access', async () => {
+    const bridge = await loadMain();
+
+    await expect(bridge.invokeChannel('app:copyDiagnostics', undefined, {}))
+      .rejects.toThrow(/untrusted/i);
+    await expect(bridge.invokeChannel('app:copyDiagnostics', undefined, bridge.webContents, {}))
+      .rejects.toThrow(/untrusted/i);
+    expect(bridge.clipboardWriteText).not.toHaveBeenCalled();
+  });
+
+  it('selects only a native local directory and maps cancellation to null', async () => {
+    const selected = await loadMain({ selectedDirectory: 'C:\\work\\sample-project' });
+    await expect(selected.invokeChannel('app:selectLocalDirectory'))
+      .resolves.toBe('C:\\work\\sample-project');
+    expect(selected.showOpenDialog).toHaveBeenCalledWith(expect.anything(), {
+      title: 'Open project',
+      properties: ['openDirectory'],
+    });
+    await expect(selected.invokeChannel(
+      'app:selectLocalDirectory', undefined, selected.webContents, {},
+    )).rejects.toThrow(/untrusted/i);
+
+    selected.showOpenDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] });
+    await expect(selected.invokeChannel('app:selectLocalDirectory')).resolves.toBeNull();
+  });
 });
 
 describe('preload notification bridge', () => {
@@ -204,5 +312,43 @@ describe('preload notification bridge', () => {
     const api = exposeInMainWorld.mock.calls[0][1];
     await expect(api.notifyCommandCompleted(validPayload)).resolves.toBe(true);
     expect(invoke).toHaveBeenCalledWith('notifications:command-completed', validPayload);
+  });
+
+  it('exposes zero-payload settings recovery operations', async () => {
+    const invoke = vi.fn().mockResolvedValue({ previousAvailable: true });
+    const exposeInMainWorld = vi.fn();
+    vi.doMock('electron', () => ({ contextBridge: { exposeInMainWorld }, ipcRenderer: { invoke, sendSync: vi.fn(), send: vi.fn(), on: vi.fn(), removeListener: vi.fn() } }));
+    await import('../../src/main/preload');
+    const api = exposeInMainWorld.mock.calls[0][1];
+
+    await api.getSettingsRecoveryState();
+    await api.restorePreviousSettings();
+    await api.resetSettings();
+
+    expect(invoke).toHaveBeenNthCalledWith(1, 'settings:recovery-state');
+    expect(invoke).toHaveBeenNthCalledWith(2, 'settings:restore-previous');
+    expect(invoke).toHaveBeenNthCalledWith(3, 'settings:reset');
+  });
+
+  it('exposes copy diagnostics without a renderer payload', async () => {
+    const invoke = vi.fn().mockResolvedValue(true);
+    const exposeInMainWorld = vi.fn();
+    vi.doMock('electron', () => ({ contextBridge: { exposeInMainWorld }, ipcRenderer: { invoke, sendSync: vi.fn(), send: vi.fn(), on: vi.fn(), removeListener: vi.fn() } }));
+    await import('../../src/main/preload');
+    const api = exposeInMainWorld.mock.calls[0][1];
+
+    await expect(api.copyDiagnostics()).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith('app:copyDiagnostics');
+  });
+
+  it('exposes local-directory selection without a renderer payload', async () => {
+    const invoke = vi.fn().mockResolvedValue('C:\\work\\sample-project');
+    const exposeInMainWorld = vi.fn();
+    vi.doMock('electron', () => ({ contextBridge: { exposeInMainWorld }, ipcRenderer: { invoke, sendSync: vi.fn(), send: vi.fn(), on: vi.fn(), removeListener: vi.fn() } }));
+    await import('../../src/main/preload');
+    const api = exposeInMainWorld.mock.calls[0][1];
+
+    await expect(api.selectLocalDirectory()).resolves.toBe('C:\\work\\sample-project');
+    expect(invoke).toHaveBeenCalledWith('app:selectLocalDirectory');
   });
 });

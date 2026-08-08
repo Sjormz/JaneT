@@ -95,6 +95,7 @@ async function launchApp(settings: unknown, prefix: string, existingUserData?: s
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: false,
+    windowsHide: true,
   });
   electronProcess.stdout?.on('data', (chunk) => console.log(`[electron] ${chunk}`));
   electronProcess.stderr?.on('data', (chunk) => console.error(`[electron] ${chunk}`));
@@ -184,9 +185,54 @@ test('maximizes and restores a terminal pane in Electron', async () => {
     await expect(closePaneDialog).toBeVisible();
     await closePaneDialog.getByRole('button', { name: 'Close pane' }).click();
     await expect(page.locator('.terminal-leaf')).toHaveCount(1);
-    await expect(page.getByLabel('left — Local terminal pane')).toBeVisible();
+    await expect(page.locator('.leaf-title', { hasText: 'left' })).toBeVisible();
   } finally {
     await closeApp(browser, electronProcess, userData);
+  }
+});
+
+test('restores the selected maximized pane structurally in a second Electron process', async () => {
+  let app: Awaited<ReturnType<typeof launchTwoPaneApp>> | undefined;
+  let userData: string | undefined;
+  try {
+    app = await launchTwoPaneApp();
+    userData = app.userData;
+    const firstRightPane = app.page.locator('.terminal-leaf').filter({
+      has: app.page.locator('.leaf-title', { hasText: 'right' }),
+    });
+    await firstRightPane.getByRole('button', { name: 'Maximize pane' }).click();
+    await expect(app.page.locator('.terminal-leaf')).toHaveCount(1);
+    await expect(firstRightPane).toHaveAttribute('aria-current', 'true');
+
+    const settingsPath = path.join(userData, 'settings.json');
+    await expect.poll(() => {
+      const saved = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      const tab = saved.session.tabs[0];
+      return [tab.selectedPanePath, tab.maximizedPanePath];
+    }).toEqual([[1], [1]]);
+
+    await closeApp(app.browser, app.electronProcess);
+    app = undefined;
+    app = await launchApp(undefined, 'janet-e2e-pane-restart-', userData);
+
+    const restoredPanes = app.page.locator('.terminal-leaf');
+    await expect(restoredPanes).toHaveCount(1);
+    await expect(app.page.locator('.leaf-title', { hasText: 'right' })).toBeVisible();
+    await expect(restoredPanes).toHaveAttribute('aria-current', 'true');
+    const freshTerminalId = await restoredPanes.locator('.terminal-container').getAttribute('data-terminal-id');
+    expect(freshTerminalId).toBeTruthy();
+    expect(fs.readFileSync(settingsPath, 'utf-8')).not.toContain(freshTerminalId as string);
+
+    await app.page.getByRole('button', { name: 'Restore pane layout' }).click();
+    await expect(restoredPanes).toHaveCount(2);
+    const restoredRightPane = restoredPanes.filter({
+      has: app.page.locator('.leaf-title', { hasText: 'right' }),
+    });
+    await expect(restoredRightPane).toHaveAttribute('aria-current', 'true');
+    await expect(app.page.locator('.terminal-leaf[aria-current="true"]')).toHaveCount(1);
+  } finally {
+    if (app) await closeApp(app.browser, app.electronProcess, userData);
+    else if (userData) fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -204,6 +250,109 @@ test('focuses the first terminal after clicking a terminal tab', async () => {
     ))).toBe(true);
   } finally {
     await closeApp(browser, electronProcess, userData);
+  }
+});
+
+test('focuses and persistently marks a newly split maximized pane', async () => {
+  const { browser, electronProcess, page, userData } = await launchTwoPaneApp();
+
+  try {
+    const panes = page.locator('.terminal-leaf');
+    await expect(panes).toHaveCount(2);
+    await page.getByRole('button', { name: 'Maximize pane' }).nth(1).click();
+    await expect(panes).toHaveCount(1);
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+\\' : 'Control+\\');
+    await expect(panes).toHaveCount(3);
+
+    const newPane = panes.nth(2);
+    await expect(newPane.locator('.xterm-helper-textarea')).toBeFocused();
+    await expect(newPane).toHaveAttribute('aria-current', 'true');
+    await expect(panes.nth(0)).not.toHaveAttribute('aria-current');
+    const activeHeader = newPane.locator('.terminal-leaf-header');
+    const inactiveHeader = panes.nth(0).locator('.terminal-leaf-header');
+    const activeShadow = await activeHeader.evaluate((element) => getComputedStyle(element).boxShadow);
+    const inactiveShadow = await inactiveHeader.evaluate((element) => getComputedStyle(element).boxShadow);
+    expect(activeShadow).not.toBe('none');
+    expect(activeShadow).not.toBe(inactiveShadow);
+
+    const workspaceTool = page.locator('.workspace-tool-button').first();
+    await workspaceTool.focus();
+    await expect(workspaceTool).toBeFocused();
+    await expect(newPane).toHaveAttribute('aria-current', 'true');
+    expect(await activeHeader.evaluate((element) => getComputedStyle(element).boxShadow)).toBe(activeShadow);
+  } finally {
+    await closeApp(browser, electronProcess, userData);
+  }
+});
+
+test('moves the active pane by configured keyboard and command palette without replacing terminals', async () => {
+  const app = await launchApp({
+    theme: 'tokyo-night',
+    fontSize: 14,
+    sidebarSide: 'left',
+    keybindings: { 'move-pane-right': 'Alt+ArrowRight' },
+    workspaceTabs: [],
+    session: {
+      tabs: [{
+        id: 'move-pane-tab',
+        title: 'move panes',
+        type: 'local',
+        selectedPanePath: [0],
+        root: {
+          type: 'split',
+          direction: 'vertical',
+          sizes: [1, 2],
+          children: [{ type: 'leaf', title: 'left' }, { type: 'leaf', title: 'right' }],
+        },
+      }],
+      activeTabId: 'move-pane-tab',
+      sidebarOpen: true,
+      tabsOpen: true,
+      sidebarSection: 'files',
+    },
+  }, 'janet-e2e-pane-move-');
+  const pane = (title: string) => app.page.locator('.terminal-leaf').filter({
+    has: app.page.locator('.leaf-title', { hasText: title }),
+  });
+
+  try {
+    await expect(app.page.locator('.terminal-leaf')).toHaveCount(2);
+    const initialIds = await app.page.locator('[data-terminal-id]').evaluateAll(
+      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')),
+    );
+    const initialFlex = {
+      left: await pane('left').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex),
+      right: await pane('right').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex),
+    };
+    await pane('left').locator('.xterm-helper-textarea').focus();
+    await pane('left').getByRole('button', { name: 'Maximize pane' }).click();
+    await expect(app.page.locator('.terminal-leaf')).toHaveCount(1);
+
+    await app.page.keyboard.press('Alt+ArrowRight');
+
+    await expect(app.page.locator('.leaf-title-text')).toHaveText(['right', 'left']);
+    expect(await app.page.locator('[data-terminal-id]').evaluateAll(
+      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')),
+    )).toEqual([initialIds[1], initialIds[0]]);
+    await expect(pane('left')).toHaveAttribute('aria-current', 'true');
+    await expect(pane('left').locator('.xterm-helper-textarea')).toBeFocused();
+    expect(await pane('left').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex))
+      .toBe(initialFlex.left);
+    expect(await pane('right').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex))
+      .toBe(initialFlex.right);
+
+    await app.page.getByRole('button', { name: /open command palette/i }).click();
+    await app.page.getByRole('combobox', { name: 'Search commands' }).fill('Move current pane left');
+    await app.page.getByRole('option', { name: 'Move current pane left' }).click();
+
+    await expect(app.page.locator('.leaf-title-text')).toHaveText(['left', 'right']);
+    expect(await app.page.locator('[data-terminal-id]').evaluateAll(
+      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')),
+    )).toEqual(initialIds);
+    await expect(pane('left')).toHaveAttribute('aria-current', 'true');
+    await expect(pane('left').locator('.xterm-helper-textarea')).toBeFocused();
+  } finally {
+    await closeApp(app.browser, app.electronProcess, app.userData);
   }
 });
 
@@ -374,6 +523,128 @@ test('refreshes external branch and file changes without a manual reload', async
   } finally {
     if (app) await closeApp(app.browser, app.electronProcess, app.userData);
     fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test('focuses the exact worktree MRU across tabs and a maximized layout without creating terminals', async () => {
+  test.setTimeout(60_000);
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-worktree-focus-repo-'));
+  const nestedPath = path.join(repoPath, 'nested');
+  const olderCwd = path.join(repoPath, 'older');
+  const targetCwd = path.join(repoPath, 'target');
+  let app: Awaited<ReturnType<typeof launchApp>> | undefined;
+  try {
+    const git = (args: string[]) => execFileSync('git', args, { cwd: repoPath, windowsHide: true });
+    git(['init', '-b', 'main']);
+    git(['config', 'user.email', 'janet-e2e@example.invalid']);
+    git(['config', 'user.name', 'JaneT E2E']);
+    fs.writeFileSync(path.join(repoPath, 'base.txt'), 'base\n', 'utf-8');
+    git(['add', 'base.txt']);
+    git(['commit', '-m', 'base']);
+    git(['branch', 'feature/nested']);
+    git(['worktree', 'add', nestedPath, 'feature/nested']);
+    fs.mkdirSync(olderCwd);
+    fs.mkdirSync(targetCwd);
+
+    app = await launchApp({
+      theme: 'tokyo-night',
+      fontSize: 14,
+      sidebarSide: 'left',
+      keybindings: {},
+      workspaceTabs: [],
+      session: {
+        tabs: [
+          {
+            id: 'parent-tab',
+            title: 'parent terminals',
+            type: 'local',
+            cwd: repoPath,
+            root: {
+              type: 'split',
+              direction: 'vertical',
+              sizes: [1, 1],
+              children: [
+                { type: 'leaf', title: 'parent older', terminalType: 'local', cwd: olderCwd },
+                { type: 'leaf', title: 'parent target', terminalType: 'local', cwd: targetCwd },
+              ],
+            },
+          },
+          {
+            id: 'nested-tab',
+            title: 'nested terminal',
+            type: 'local',
+            cwd: nestedPath,
+            root: { type: 'leaf', title: 'nested owner', terminalType: 'local', cwd: nestedPath },
+          },
+        ],
+        activeTabId: 'parent-tab',
+        sidebarOpen: true,
+        tabsOpen: true,
+        sidebarSection: 'git',
+      },
+    }, 'janet-e2e-worktree-focus-app-');
+
+    const page = app.page;
+    const parentPanes = page.locator('.terminal-leaf');
+    await expect(parentPanes).toHaveCount(2);
+    const parentIds = await page.locator('[data-terminal-id]').evaluateAll(
+      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')!),
+    );
+    expect(new Set(parentIds).size).toBe(2);
+
+    const targetPane = parentPanes.filter({ has: page.locator('.leaf-title', { hasText: 'parent target' }) });
+    const olderPane = parentPanes.filter({ has: page.locator('.leaf-title', { hasText: 'parent older' }) });
+    const targetId = await targetPane.locator('[data-terminal-id]').getAttribute('data-terminal-id');
+    const olderId = await olderPane.locator('[data-terminal-id]').getAttribute('data-terminal-id');
+    expect(targetId).toBeTruthy();
+    expect(olderId).toBeTruthy();
+    await targetPane.locator('.xterm-helper-textarea').focus();
+    await expect(targetPane).toHaveAttribute('aria-current', 'true');
+
+    await olderPane.getByRole('button', { name: /Maximize pane/ }).click();
+    await expect(parentPanes).toHaveCount(1);
+    await expect(page.locator(`[data-terminal-id="${olderId}"]`)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Restore pane layout' })).toBeVisible();
+
+    await page.locator('.vtab-item').filter({ hasText: 'nested terminal' }).click();
+    const nestedTerminal = page.locator('[data-terminal-id]');
+    await expect(nestedTerminal).toHaveCount(1);
+    const nestedId = await nestedTerminal.getAttribute('data-terminal-id');
+    expect(nestedId).toBeTruthy();
+
+    const sourceControl = page.locator('.git-tree');
+    const parentWorktree = sourceControl.getByRole('button', {
+      name: `Focus worktree ${path.basename(repoPath)} terminal`,
+    });
+    const nestedWorktree = sourceControl.getByRole('button', {
+      name: `Focus worktree ${path.basename(nestedPath)} terminal`,
+    });
+    await expect(parentWorktree).toContainText('main · 2 panes', { timeout: 10_000 });
+    await expect(nestedWorktree).toContainText('feature/nested · open');
+    await expect(nestedWorktree.locator('xpath=..')).toHaveAttribute('aria-current', 'location');
+
+    await parentWorktree.click();
+
+    await expect(page.locator('.vtab-item.active')).toContainText('parent terminals');
+    await expect(parentPanes).toHaveCount(2);
+    await expect(page.getByRole('button', { name: 'Restore pane layout' })).toHaveCount(0);
+    const revealedTarget = page.locator(`[data-terminal-id="${targetId}"]`);
+    const revealedOlder = page.locator(`[data-terminal-id="${olderId}"]`);
+    await expect(revealedTarget.locator('.xterm-helper-textarea')).toBeFocused();
+    const targetOwner = revealedTarget.locator('xpath=ancestor::div[contains(concat(" ",normalize-space(@class)," ")," terminal-leaf ")][1]');
+    const olderOwner = revealedOlder.locator('xpath=ancestor::div[contains(concat(" ",normalize-space(@class)," ")," terminal-leaf ")][1]');
+    await expect(targetOwner).toHaveAttribute('aria-current', 'true');
+    await expect(olderOwner).not.toHaveAttribute('aria-current');
+    expect(new Set(await page.locator('[data-terminal-id]').evaluateAll(
+      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')!),
+    ))).toEqual(new Set(parentIds));
+
+    await page.locator('.vtab-item').filter({ hasText: 'nested terminal' }).click();
+    await expect(page.locator('[data-terminal-id]')).toHaveAttribute('data-terminal-id', nestedId as string);
+    await expect(page.locator('.vtab-item')).toHaveCount(2);
+  } finally {
+    if (app) await closeApp(app.browser, app.electronProcess, app.userData);
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

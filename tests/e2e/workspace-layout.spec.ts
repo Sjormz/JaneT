@@ -1,4 +1,5 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -38,6 +39,250 @@ async function workspaceToolBoxes(page: Page) {
   expect(panel).not.toBeNull();
   return { tools: tools!, rail: rail!, panel: panel! };
 }
+
+interface CompactTargetMeasurement {
+  target: string;
+  width: number;
+  height: number;
+  centerX: number;
+  centerY: number;
+  nearestClearance: number | null;
+  conflicts: string[];
+}
+
+async function measureCompactTargets(page: Page, state: string) {
+  return page.evaluate((currentState) => {
+    const selector = [
+      'a[href]',
+      'button:not(:disabled)',
+      'input:not([type="hidden"]):not(:disabled)',
+      'select:not(:disabled)',
+      'textarea:not(:disabled)',
+      '[role="button"]',
+      '[role="checkbox"]',
+      '[role="link"]',
+      '[role="menuitem"]',
+      '[role="option"]',
+      '[role="radio"]',
+      '[role="separator"]',
+      '[role="switch"]',
+      '[role="tab"]',
+    ].join(',');
+    const identity = (element: HTMLElement) => {
+      const classes = Array.from(element.classList).sort().map((name) => `.${name}`).join('');
+      const role = element.getAttribute('role');
+      const type = element instanceof HTMLInputElement ? element.type : null;
+      return `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ''}${classes}${role ? `[role=${role}]` : ''}${type ? `[type=${type}]` : ''}`;
+    };
+    const rectFor = (element: HTMLElement) => {
+      if (element instanceof HTMLInputElement && ['checkbox', 'radio'].includes(element.type)) {
+        const label = element.labels?.[0];
+        if (label) return label.getBoundingClientRect();
+      }
+      return element.getBoundingClientRect();
+    };
+    const targets = Array.from(new Set(document.querySelectorAll<HTMLElement>(selector)))
+      .map((element) => ({ element, rect: rectFor(element) }))
+      .filter(({ element, rect }) => {
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        if (rect.right <= 0 || rect.bottom <= 0 || rect.left >= innerWidth || rect.top >= innerHeight) return false;
+        if (!element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+        if (getComputedStyle(element).pointerEvents === 'none') return false;
+        const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return top instanceof Element && (element.contains(top) || top.contains(element));
+      })
+      .map(({ element, rect }) => ({
+        target: identity(element),
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+        centerX: rect.left + rect.width / 2,
+        centerY: rect.top + rect.height / 2,
+      }));
+    const undersized = targets.filter((target) => target.width < 24 || target.height < 24);
+    const measurements = undersized.map((target) => {
+      let nearestClearance = Number.POSITIVE_INFINITY;
+      const conflicts: string[] = [];
+      for (const other of targets) {
+        if (other === target) continue;
+        const otherUndersized = other.width < 24 || other.height < 24;
+        const targetClearance = Math.hypot(
+          Math.max(other.left - target.centerX, 0, target.centerX - other.right),
+          Math.max(other.top - target.centerY, 0, target.centerY - other.bottom),
+        ) - 12;
+        const clearance = otherUndersized
+          ? Math.min(
+            targetClearance,
+            Math.hypot(target.centerX - other.centerX, target.centerY - other.centerY) - 24,
+          )
+          : targetClearance;
+        nearestClearance = Math.min(nearestClearance, clearance);
+        if (clearance < -0.01) conflicts.push(other.target);
+      }
+      return {
+        target: target.target,
+        width: target.width,
+        height: target.height,
+        centerX: target.centerX,
+        centerY: target.centerY,
+        nearestClearance: Number.isFinite(nearestClearance) ? nearestClearance : null,
+        conflicts,
+      } satisfies CompactTargetMeasurement;
+    });
+    return {
+      state: currentState,
+      viewport: { width: innerWidth, height: innerHeight },
+      targetCount: targets.length,
+      measurements,
+    };
+  }, state);
+}
+
+test('proves compact controls meet WCAG target size or center spacing at minimum size', async ({}, testInfo) => {
+  test.setTimeout(60_000);
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-target-geometry-e2e-'));
+  const repoPath = path.join(userData, 'repo');
+  fs.mkdirSync(repoPath);
+  fs.writeFileSync(path.join(repoPath, 'first.txt'), 'base\n', 'utf8');
+  fs.writeFileSync(path.join(repoPath, 'second.txt'), 'base\n', 'utf8');
+  execFileSync('git', ['init'], { cwd: repoPath, stdio: 'ignore' });
+  execFileSync('git', ['add', '.'], { cwd: repoPath, stdio: 'ignore' });
+  execFileSync('git', ['-c', 'user.name=JaneT E2E', '-c', 'user.email=janet@example.invalid', 'commit', '-m', 'fixture'], {
+    cwd: repoPath,
+    stdio: 'ignore',
+  });
+  fs.writeFileSync(path.join(repoPath, 'first.txt'), 'changed\n', 'utf8');
+  fs.writeFileSync(path.join(repoPath, 'second.txt'), 'changed\n', 'utf8');
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+    theme: 'tokyo-night',
+    fontSize: 14,
+    sidebarSide: 'left',
+    keybindings: {},
+    workspaceTabs: [{
+      id: 'geometry-preset',
+      name: 'Geometry preset',
+      type: 'local',
+      cwd: repoPath,
+      root: {
+        type: 'split',
+        direction: 'vertical',
+        sizes: [1, 1],
+        children: [
+          { type: 'leaf', title: 'Left', terminalType: 'local', cwd: repoPath },
+          { type: 'leaf', title: 'Right', terminalType: 'local', cwd: repoPath },
+        ],
+      },
+      terminalCount: 2,
+      splitDirection: 'vertical',
+    }],
+    session: {
+      tabs: [{
+        id: 'geometry-tab',
+        title: 'Geometry fixture',
+        type: 'local',
+        cwd: repoPath,
+        root: {
+          type: 'split',
+          direction: 'vertical',
+          sizes: [1, 1],
+          children: [
+            { type: 'leaf', title: 'Left', terminalType: 'local', cwd: repoPath },
+            { type: 'leaf', title: 'Right', terminalType: 'local', cwd: repoPath },
+          ],
+        },
+      }],
+      activeTabId: 'geometry-tab',
+      sidebarOpen: true,
+      tabsOpen: false,
+      sidebarSection: 'files',
+    },
+  }, null, 2), 'utf8');
+  let app: ElectronApplication | undefined;
+
+  try {
+    app = await electron.launch({
+      args: ['.'],
+      cwd: root,
+      env: electronEnv({
+        NODE_ENV: 'test',
+        JANET_E2E_USER_DATA_DIR: userData,
+      }),
+    });
+    const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(800, 600));
+    await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
+      .toEqual({ width: 800, height: 600 });
+    await expect(page.locator('.terminal-container').first()).toBeVisible();
+
+    const reports = [];
+    const pane = page.locator('.terminal-leaf').first();
+    await pane.hover();
+    const paneActions = pane.locator('.leaf-btn');
+    await expect(paneActions).toHaveCount(5);
+    for (const action of await paneActions.all()) {
+      const box = await action.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.width).toBeGreaterThanOrEqual(24);
+      expect(box!.height).toBeGreaterThanOrEqual(24);
+    }
+    const compactPaneReport = await measureCompactTargets(page, 'compact pane');
+    expect(compactPaneReport.measurements.some(({ target }) => target.includes('[role=separator]')))
+      .toBe(true);
+    reports.push(compactPaneReport);
+
+    await page.getByRole('button', { name: 'Show terminal tabs' }).click();
+    const activeTab = page.locator('.vtab-item.active');
+    await activeTab.hover();
+    const tabClose = activeTab.locator('.vtab-close');
+    await expect(tabClose).toBeVisible();
+    const tabCloseBox = await tabClose.boundingBox();
+    expect(tabCloseBox).not.toBeNull();
+    expect(tabCloseBox!.width).toBeGreaterThanOrEqual(24);
+    expect(tabCloseBox!.height).toBeGreaterThanOrEqual(24);
+    reports.push(await measureCompactTargets(page, 'expanded tabs'));
+
+    await page.getByRole('tab', { name: 'Source Control' }).click();
+    await expect(page.getByRole('tab', { name: 'Source Control' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.git-repo-path')).toBeVisible();
+    await expect(page.locator('.git-file-item.unstaged')).toHaveCount(2);
+    const sourceControlReport = await measureCompactTargets(page, 'source control');
+    expect(sourceControlReport.measurements.some(({ target }) => target.includes('button.git-section-action')))
+      .toBe(true);
+    reports.push(sourceControlReport);
+
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+    reports.push(await measureCompactTargets(page, 'settings'));
+    await page.getByRole('button', { name: 'Hide settings' }).click();
+
+    const presets = page.getByRole('button', { name: 'Presets' });
+    if (await presets.getAttribute('aria-expanded') === 'false') await presets.click();
+    const preset = page.locator('.workspace-item').filter({ hasText: 'Geometry preset' });
+    await preset.getByRole('button', { name: 'Edit preset Geometry preset' }).click();
+    const presetDialog = page.getByRole('dialog', { name: 'Edit preset' });
+    await expect(presetDialog).toBeVisible();
+    const presetReport = await measureCompactTargets(page, 'preset editor');
+    expect(presetReport.measurements.some(({ target }) => target.includes('button.workspace-terminal-remove')))
+      .toBe(true);
+    reports.push(presetReport);
+
+    await testInfo.attach('compact-target-geometry', {
+      body: Buffer.from(JSON.stringify(reports, null, 2)),
+      contentType: 'application/json',
+    });
+    const measurements = reports.flatMap((report) => report.measurements);
+    const violations = measurements.filter((measurement) => measurement.conflicts.length > 0);
+    expect(measurements.length).toBeGreaterThan(0);
+    expect(violations).toEqual([]);
+  } finally {
+    await forceClose(app);
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
 
 test('keeps workspace views in their dedicated regions at desktop and minimum size', async ({}, testInfo) => {
   test.setTimeout(60_000);
@@ -192,6 +437,40 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     expect(sshConnections).not.toBeNull();
     expect(sshConnections!.y + sshConnections!.height).toBeLessThanOrEqual(narrow.tabs.y + narrow.tabs.height + 1);
 
+    const tabOpener = tabsPanel.locator('.vtab-item.active');
+    const tabTitle = (await tabOpener.locator('.vtab-name').textContent())!.trim();
+    await tabOpener.focus();
+    await tabOpener.press('Shift+F10');
+    const tabMenu = page.getByRole('menu', { name: `Actions for ${tabTitle}` });
+    await expect(tabMenu).toBeVisible();
+    const tabMenuItems = tabMenu.getByRole('menuitem');
+    await expect(tabMenuItems.first()).toBeFocused();
+    await tabMenu.press('ArrowUp');
+    await expect(tabMenuItems.last()).toBeFocused();
+    await tabMenu.press('ArrowDown');
+    await expect(tabMenuItems.first()).toBeFocused();
+    await tabMenu.press('Escape');
+    await expect(tabMenu).toBeHidden();
+    await expect(tabOpener).toBeFocused();
+
+    await tabOpener.evaluate((element, point) => element.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: point.x,
+      clientY: point.y,
+    })), { x: narrowViewport.width - 1, y: narrowViewport.height - 1 });
+    await expect(tabMenu).toBeVisible();
+    const edgeMenu = await tabMenu.boundingBox();
+    expect(edgeMenu).not.toBeNull();
+    expect(edgeMenu!.x).toBeGreaterThanOrEqual(0);
+    expect(edgeMenu!.y).toBeGreaterThanOrEqual(0);
+    expect(edgeMenu!.x + edgeMenu!.width).toBeLessThanOrEqual(narrowViewport.width + 1);
+    expect(edgeMenu!.y + edgeMenu!.height).toBeLessThanOrEqual(narrowViewport.height + 1);
+    await page.evaluate(() => document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
+    await expect(tabMenu).toBeHidden();
+    await expect(tabOpener).toBeFocused();
+
     const narrowScreenshot = testInfo.outputPath('workspace-left-narrow-ssh.png');
     await page.screenshot({ path: narrowScreenshot });
     await testInfo.attach('workspace-left-narrow-ssh', { path: narrowScreenshot, contentType: 'image/png' });
@@ -209,6 +488,8 @@ test('consumes Hermes plugin lifecycle output through the local PTY', async ({},
   const turnGatePath = path.join(userData, 'release-turn');
   const turnStartedPath = path.join(userData, 'turn-started');
   const turnEndGatePath = path.join(userData, 'release-turn-end');
+  const staleTurnGatePath = path.join(userData, 'release-stale-turn');
+  const exitGatePath = path.join(userData, 'release-exit');
   fs.writeFileSync(probePath, String.raw`
 import importlib.util
 import io
@@ -223,6 +504,8 @@ session_ready = pathlib.Path(sys.argv[2])
 turn_gate = pathlib.Path(sys.argv[3])
 turn_started = pathlib.Path(sys.argv[4])
 turn_end_gate = pathlib.Path(sys.argv[5])
+stale_turn_gate = pathlib.Path(sys.argv[6])
+exit_gate = pathlib.Path(sys.argv[7])
 spec = importlib.util.spec_from_file_location("janet_hermes_awareness", plugin_dir / "__init__.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
@@ -248,6 +531,16 @@ module._on_turn_end(
     platform="tui",
     completed=True,
 )
+while not stale_turn_gate.exists():
+    time.sleep(0.05)
+module._on_turn_start(
+    session_id="e2e-session-rotated",
+    turn_id="e2e-stale-turn",
+    platform="tui",
+)
+turn_started.touch()
+while not exit_gate.exists():
+    time.sleep(0.05)
 protocol_output = protocol_stdout.getvalue()
 sys.stdout = terminal_stdout
 if protocol_output:
@@ -276,7 +569,7 @@ print("TUI_AWARENESS_OK")
 
     await firstTerminal.click();
     await page.keyboard.type(
-      `python "${probePath.replace(/\\/g, '/')}" "${pluginDir.replace(/\\/g, '/')}" "${sessionReadyPath.replace(/\\/g, '/')}" "${turnGatePath.replace(/\\/g, '/')}" "${turnStartedPath.replace(/\\/g, '/')}" "${turnEndGatePath.replace(/\\/g, '/')}"`,
+      `python "${probePath.replace(/\\/g, '/')}" "${pluginDir.replace(/\\/g, '/')}" "${sessionReadyPath.replace(/\\/g, '/')}" "${turnGatePath.replace(/\\/g, '/')}" "${turnStartedPath.replace(/\\/g, '/')}" "${turnEndGatePath.replace(/\\/g, '/')}" "${staleTurnGatePath.replace(/\\/g, '/')}" "${exitGatePath.replace(/\\/g, '/')}"; exit`,
     );
     await page.keyboard.press('Enter');
 
@@ -300,16 +593,23 @@ print("TUI_AWARENESS_OK")
     expect(await page.locator('.terminal-leaf-header').first().evaluate((element) => (
       element.scrollWidth <= element.clientWidth + 1
     ))).toBe(true);
-    await expect.poll(async () => page.locator('.xterm-rows').first().innerText())
-      .not.toContain('janet-agent');
-    await expect(page.locator('.xterm-rows').first()).toContainText('TUI_AWARENESS_OK');
-
     const screenshot = testInfo.outputPath('hermes-agent-awareness.png');
     await page.screenshot({ path: screenshot });
     await testInfo.attach('hermes-agent-awareness', {
       path: screenshot,
       contentType: 'image/png',
     });
+
+    fs.rmSync(turnStartedPath, { force: true });
+    fs.writeFileSync(staleTurnGatePath, '');
+    await expect.poll(() => fs.existsSync(turnStartedPath)).toBe(true);
+    await expect(firstTab.locator('.vtab-sub')).toHaveText('Hermes · Running');
+    fs.writeFileSync(exitGatePath, '');
+    await expect(firstTab.locator('.vtab-sub')).toHaveText('Exited');
+    await expect(page.locator('.terminal-leaf').first().locator('.leaf-awareness')).toHaveText('Exited');
+    await expect.poll(async () => page.locator('.xterm-rows').first().innerText())
+      .not.toContain('janet-agent');
+    await expect(page.locator('.xterm-rows').first()).toContainText('TUI_AWARENESS_OK');
   } finally {
     await forceClose(app);
     fs.rmSync(userData, {

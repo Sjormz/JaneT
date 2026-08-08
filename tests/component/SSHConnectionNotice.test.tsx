@@ -8,6 +8,22 @@ describe('SSHConnectionNotice', () => {
     expect(container.querySelector('[data-testid="ssh-terminal-notice"]')).toBeNull();
   });
 
+  it.each([
+    { kind: 'waiting' } as const,
+    { kind: 'stalled' } as const,
+    { kind: 'closed' } as const,
+    { kind: 'error', message: 'private backend detail' } as const,
+    { kind: 'reconnecting' } as const,
+  ])('keeps the visible $kind notice outside live regions', (state) => {
+    render(<SSHConnectionNotice state={state} />);
+
+    const notice = screen.getByTestId('ssh-terminal-notice');
+    expect(notice).not.toHaveAttribute('role');
+    expect(notice).not.toHaveAttribute('aria-live');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('renders the "waiting" banner with the host label', () => {
     render(
       <SSHConnectionNotice
@@ -71,7 +87,7 @@ describe('SSHConnectionNotice', () => {
   it('describes a closed connection separately from a shell-open failure', () => {
     render(<SSHConnectionNotice state={{ kind: 'closed' }} onRetry={vi.fn()} />);
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Connection closed');
+    expect(screen.getByTestId('ssh-terminal-notice')).toHaveTextContent('Connection closed');
     expect(screen.getByText('Reconnect to open a new remote shell.')).toBeInTheDocument();
     expect(screen.getByTestId('ssh-notice-retry')).toBeInTheDocument();
   });

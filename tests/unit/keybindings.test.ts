@@ -20,6 +20,10 @@ describe('keyboard shortcut defaults', () => {
       'maximize-pane': '',
       'focus-next-pane': '',
       'focus-previous-pane': '',
+      'move-pane-left': '',
+      'move-pane-right': '',
+      'move-pane-up': '',
+      'move-pane-down': '',
       'save-document': '',
       'close-document': '',
     });

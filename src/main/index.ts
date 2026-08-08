@@ -688,6 +688,10 @@ function registerIpcHandlers() {
     return settingsManager.set(updates);
   });
 
+  handle('settings:recovery-state', () => settingsManager.getRecoveryState());
+  handle('settings:restore-previous', () => settingsManager.restorePrevious());
+  handle('settings:reset', () => settingsManager.reset());
+
   handle('notifications:command-completed', (_event, payload: unknown) => deliverCommandNotification(payload));
 
   handle('app:getPlatform', () => {
@@ -698,6 +702,15 @@ function registerIpcHandlers() {
     return getApplicationVersion();
   });
 
+  handle('app:selectLocalDirectory', async () => {
+    if (!mainWindow) return null;
+    const result = await electron.dialog.showOpenDialog(mainWindow, {
+      title: 'Open project',
+      properties: ['openDirectory'],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
   handle('app:openExternal', async (event, url: unknown) => {
     if (typeof url !== 'string' || !isAllowedExternalUrl(url)) return false;
     await electron.shell.openExternal(url);
@@ -706,6 +719,22 @@ function registerIpcHandlers() {
 
   handle('app:copyText', (event, text: unknown) => {
     return copyTextToClipboard(text);
+  });
+
+  handle('app:copyDiagnostics', () => {
+    try {
+      electron.clipboard.writeText([
+        `JaneT version: ${getApplicationVersion()}`,
+        `OS: ${process.platform}`,
+        `Architecture: ${process.arch}`,
+        `Mode: ${electron.app.isPackaged ? 'packaged' : 'development'}`,
+        `Electron version: ${process.versions.electron}`,
+        `Notifications: ${electron.Notification.isSupported() ? 'supported' : 'unsupported'}`,
+      ].join('\n'));
+      return true;
+    } catch {
+      return false;
+    }
   });
 
   handle(WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL, (event, resolution: unknown) => {

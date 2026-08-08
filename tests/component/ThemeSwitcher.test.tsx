@@ -1,7 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import type React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import ThemeSwitcher from '../../src/renderer/components/ThemeSwitcher';
+
+const originalJanet = window.janet;
+
+afterEach(() => {
+  window.janet = originalJanet;
+});
 
 function renderThemeSwitcher(overrides?: Partial<React.ComponentProps<typeof ThemeSwitcher>>) {
   return render(
@@ -101,5 +107,43 @@ describe('ThemeSwitcher', () => {
     renderThemeSwitcher({ notificationsEnabled: true, onNotificationThresholdSecondsChange });
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Notification threshold (seconds)' }), { target: { value: '42' } });
     expect(onNotificationThresholdSecondsChange).toHaveBeenCalledWith(42);
+  });
+
+  it('copies diagnostics without renderer data and politely confirms success', async () => {
+    const copyDiagnostics = vi.fn().mockResolvedValue(true);
+    window.janet = { ...originalJanet, copyDiagnostics };
+    renderThemeSwitcher();
+
+    const button = screen.getByRole('button', { name: 'Copy diagnostics' });
+    expect(button).toHaveAttribute('type', 'button');
+    fireEvent.click(button);
+
+    await waitFor(() => expect(copyDiagnostics).toHaveBeenCalledWith());
+    const status = screen.getByRole('status');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(status).toHaveAttribute('aria-atomic', 'true');
+    expect(status).toHaveTextContent('Diagnostics copied');
+  });
+
+  it('politely reports a failed diagnostics copy', async () => {
+    window.janet = { ...originalJanet, copyDiagnostics: vi.fn().mockResolvedValue(false) };
+    renderThemeSwitcher();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Could not copy diagnostics'));
+  });
+
+  it('contains diagnostics bridge failures without exposing error details', async () => {
+    window.janet = {
+      ...originalJanet,
+      copyDiagnostics: vi.fn().mockRejectedValue(new Error('C:\\Users\\private\\settings.json')),
+    };
+    renderThemeSwitcher();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Could not copy diagnostics'));
+    expect(document.body).not.toHaveTextContent('C:\\Users\\private\\settings.json');
   });
 });
