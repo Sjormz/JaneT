@@ -275,6 +275,7 @@ async function startLocalSshServer(options: { port?: number; privateKey?: string
     .replace(/=+$/, '')}`;
 
   const clients = new Set<{ end: () => void }>();
+  const sockets = new Set<net.Socket>();
   const receivedCommands: string[] = [];
   const server = new Server({ hostKeys: [privateKey] }, (client) => {
     clients.add(client);
@@ -328,10 +329,15 @@ async function startLocalSshServer(options: { port?: number; privateKey?: string
       });
     });
   });
+  const listener = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+    server.injectSocket(socket);
+  });
 
   await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, '127.0.0.1', () => resolve());
+    listener.once('error', reject);
+    listener.listen(port, '127.0.0.1', () => resolve());
   });
 
   return {
@@ -341,7 +347,10 @@ async function startLocalSshServer(options: { port?: number; privateKey?: string
     disconnectClients: () => {
       for (const client of clients) client.end();
     },
-    close: () => new Promise((resolve) => server.close(() => resolve())),
+    close: () => new Promise((resolve) => {
+      listener.close(() => resolve());
+      for (const socket of sockets) socket.destroy();
+    }),
     restart: () => startLocalSshServer({ port, privateKey }),
   };
 }
@@ -473,6 +482,29 @@ test('does not let stale CDP cleanup hide the first failure', async () => {
       setTimeout(() => reject(new Error('Stale CDP cleanup blocked')), 250);
     }),
   ])).resolves.toBeUndefined();
+});
+
+test('closes the SSH fixture without waiting for a stalled client', async () => {
+  const ssh = await startLocalSshServer();
+  const socket = net.connect(ssh.port, '127.0.0.1');
+  await new Promise<void>((resolve, reject) => {
+    socket.once('connect', resolve);
+    socket.once('error', reject);
+  });
+  ssh.disconnectClients();
+  const close = ssh.close();
+
+  try {
+    await expect(Promise.race([
+      close,
+      new Promise<void>((_, reject) => {
+        setTimeout(() => reject(new Error('SSH fixture cleanup blocked')), 250);
+      }),
+    ])).resolves.toBeUndefined();
+  } finally {
+    socket.destroy();
+    await close;
+  }
 });
 
 async function runMarkedLs(page: Page, marker: string) {

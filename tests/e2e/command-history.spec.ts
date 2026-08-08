@@ -103,7 +103,9 @@ test('persists real command metadata and history selection pastes without execut
     await expect.poll(() => fs.readFileSync(markerPath, 'utf-8'), { timeout: 15_000 }).toBe('XX');
     await expect.poll(() => {
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-      return settings.commandHistory?.length === 1 && settings.commandHistory[0]?.command === command;
+      return settings.commandHistory?.length === 1
+        && settings.commandHistory[0]?.command === command
+        && settings.commandHistory[0]?.exitCode === 0;
     }, { timeout: 15_000 }).toBe(true);
     const persisted = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
     expect(persisted.commandHistory).toHaveLength(1);
