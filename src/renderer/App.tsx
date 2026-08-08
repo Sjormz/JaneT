@@ -1536,6 +1536,7 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     if (!broadcastArmed || broadcastRecipientIds.size < 2) return undefined;
     const cancelOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      if (event.target instanceof Element && event.target.closest('[role="menu"]')) return;
       event.preventDefault();
       event.stopPropagation();
       setBroadcastArmed(false);

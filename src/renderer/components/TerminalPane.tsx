@@ -483,6 +483,7 @@ export default function TerminalPane({
       return () => {
         effectActive = false;
         runCleanup(mountCleanup);
+        term.element?.remove();
         onRemoved(termId);
         const currentCache = terminalPaneCache.get(termId);
         if (currentCache?.sshNoticeListener === setSshNoticeState) {
@@ -751,6 +752,7 @@ export default function TerminalPane({
     return () => {
       effectActive = false;
       runCleanup(mountCleanup);
+      term.element?.remove();
       onRemoved(termId);
       const currentCache = terminalPaneCache.get(termId);
       if (currentCache?.sshNoticeListener === setSshNoticeState) {
