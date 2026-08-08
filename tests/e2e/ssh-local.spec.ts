@@ -449,15 +449,31 @@ async function closeApp(browser: Browser, electronProcess: ChildProcess, userDat
   try {
     for (const context of browser.contexts()) {
       for (const page of context.pages()) {
-        await page.evaluate(() => window.close()).catch(() => {});
+        void page.evaluate(() => window.close()).catch(() => {});
       }
     }
-    await browser.close().catch(() => {});
+    void browser.close().catch(() => {});
   } finally {
     await killProcessTree(electronProcess);
     if (userData) fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
+
+test('does not let stale CDP cleanup hide the first failure', async () => {
+  const stalled = new Promise<never>(() => {});
+  const browser = {
+    contexts: () => [{ pages: () => [{ evaluate: () => stalled }] }],
+    close: () => stalled,
+  } as unknown as Browser;
+  const electronProcess = { pid: undefined } as unknown as ChildProcess;
+
+  await expect(Promise.race([
+    closeApp(browser, electronProcess),
+    new Promise<void>((_, reject) => {
+      setTimeout(() => reject(new Error('Stale CDP cleanup blocked')), 250);
+    }),
+  ])).resolves.toBeUndefined();
+});
 
 async function runMarkedLs(page: Page, marker: string) {
   const terminal = page.locator('.terminal-container').first();
