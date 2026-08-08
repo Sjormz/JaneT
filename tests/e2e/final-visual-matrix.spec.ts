@@ -314,9 +314,7 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
           const showTabs = page.getByRole('button', { name: 'Show terminal tabs' });
           if (await showTabs.isVisible()) await showTabs.click();
         }
-        await expect.poll(async () => (
-          await activeTerminals.nth(1).locator('.xterm-rows > div').allTextContents()
-        ).some((row) => row.trimEnd().endsWith(failingCommand))).toBe(true);
+        await expect(activeTerminals.nth(1).locator('.terminal-command-failed')).toHaveCount(1);
         await tab(page, 'Active workspace').focus();
         await page.keyboard.press('Tab');
         await page.keyboard.press('Shift+Tab');

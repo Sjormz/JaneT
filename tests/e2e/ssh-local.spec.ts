@@ -783,7 +783,7 @@ test('restores a mutated mixed workspace in a genuine second Electron process', 
       resolution: 'saved',
     });
     await firstProcessExit;
-    await first.browser.close().catch(() => {});
+    void first.browser.close().catch(() => {});
 
     second = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint, { userData });
     const secondPage = second.page;

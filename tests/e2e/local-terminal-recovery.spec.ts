@@ -50,7 +50,9 @@ test('recovers a failed local terminal in the same pane only after explicit retr
 
     const alert = page.getByRole('alert');
     await expect(alert).toContainText('Couldn’t start local terminal');
-    await expect(alert).toContainText('File not found');
+    await expect(alert).toContainText(
+      process.platform === 'win32' ? 'File not found' : 'Shell executable was not found',
+    );
     const retry = page.getByRole('button', { name: 'Retry' });
     await expect(retry).toHaveCount(1);
     await expect(retry).toBeVisible();

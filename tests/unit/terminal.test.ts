@@ -88,6 +88,21 @@ beforeEach(() => {
 });
 
 describe('TerminalManager', () => {
+  it('rejects a missing absolute Unix shell before node-pty reports a false start', async () => {
+    const { TerminalManager } = await loadTerminalManager();
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    const manager = new TerminalManager();
+    const missingShell = path.join(os.tmpdir(), `janet-missing-shell-${Date.now()}`);
+
+    try {
+      expect(() => manager.create('term-missing-shell', undefined, missingShell, () => {}))
+        .toThrow(/shell executable was not found/i);
+      expect(mocks.spawnMock).not.toHaveBeenCalled();
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   it('runs PowerShell startup commands at launch without writing them into the PTY', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);

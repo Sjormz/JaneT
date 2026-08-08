@@ -223,6 +223,9 @@ export class TerminalManager {
     }
 
     const defaultShell = shell || (process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || '/bin/bash');
+    if (process.platform !== 'win32' && path.isAbsolute(defaultShell) && !fs.existsSync(defaultShell)) {
+      throw new Error(`Shell executable was not found: ${defaultShell}`);
+    }
     const defaultCwd = resolveTerminalCwd(cwd);
     const startupDialect = inferStartupShellDialect(defaultShell);
     const startupExpression = startupDialect
