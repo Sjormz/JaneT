@@ -1,4 +1,5 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -143,6 +144,18 @@ async function measureCompactTargets(page: Page, state: string) {
 test('proves compact controls meet WCAG target size or center spacing at minimum size', async ({}, testInfo) => {
   test.setTimeout(60_000);
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-target-geometry-e2e-'));
+  const repoPath = path.join(userData, 'repo');
+  fs.mkdirSync(repoPath);
+  fs.writeFileSync(path.join(repoPath, 'first.txt'), 'base\n', 'utf8');
+  fs.writeFileSync(path.join(repoPath, 'second.txt'), 'base\n', 'utf8');
+  execFileSync('git', ['init'], { cwd: repoPath, stdio: 'ignore' });
+  execFileSync('git', ['add', '.'], { cwd: repoPath, stdio: 'ignore' });
+  execFileSync('git', ['-c', 'user.name=JaneT E2E', '-c', 'user.email=janet@example.invalid', 'commit', '-m', 'fixture'], {
+    cwd: repoPath,
+    stdio: 'ignore',
+  });
+  fs.writeFileSync(path.join(repoPath, 'first.txt'), 'changed\n', 'utf8');
+  fs.writeFileSync(path.join(repoPath, 'second.txt'), 'changed\n', 'utf8');
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
     theme: 'tokyo-night',
     fontSize: 14,
@@ -152,14 +165,14 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
       id: 'geometry-preset',
       name: 'Geometry preset',
       type: 'local',
-      cwd: root,
+      cwd: repoPath,
       root: {
         type: 'split',
         direction: 'vertical',
         sizes: [1, 1],
         children: [
-          { type: 'leaf', title: 'Left', terminalType: 'local', cwd: root },
-          { type: 'leaf', title: 'Right', terminalType: 'local', cwd: root },
+          { type: 'leaf', title: 'Left', terminalType: 'local', cwd: repoPath },
+          { type: 'leaf', title: 'Right', terminalType: 'local', cwd: repoPath },
         ],
       },
       terminalCount: 2,
@@ -170,14 +183,14 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
         id: 'geometry-tab',
         title: 'Geometry fixture',
         type: 'local',
-        cwd: root,
+        cwd: repoPath,
         root: {
           type: 'split',
           direction: 'vertical',
           sizes: [1, 1],
           children: [
-            { type: 'leaf', title: 'Left', terminalType: 'local', cwd: root },
-            { type: 'leaf', title: 'Right', terminalType: 'local', cwd: root },
+            { type: 'leaf', title: 'Left', terminalType: 'local', cwd: repoPath },
+            { type: 'leaf', title: 'Right', terminalType: 'local', cwd: repoPath },
           ],
         },
       }],
@@ -235,6 +248,7 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
     await page.getByRole('tab', { name: 'Source Control' }).click();
     await expect(page.getByRole('tab', { name: 'Source Control' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.locator('.git-repo-path')).toBeVisible();
+    await expect(page.locator('.git-file-item.unstaged')).toHaveCount(2);
     const sourceControlReport = await measureCompactTargets(page, 'source control');
     expect(sourceControlReport.measurements.some(({ target }) => target.includes('button.git-section-action')))
       .toBe(true);

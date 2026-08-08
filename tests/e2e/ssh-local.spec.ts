@@ -640,7 +640,7 @@ test('opens saved local SSH profile, persists profile id, refreshes, and runs ls
     { seedSession: false },
   );
   try {
-    await page.getByRole('button', { name: 'SSH' }).click();
+    await page.getByRole('button', { name: 'SSH connections', exact: true }).click();
     await page.getByRole('button', { name: new RegExp(`connect to janet@127\\.0\\.0\\.1:${ssh.port}`, 'i') }).click();
 
     await waitForShellCreateCount(eventsPath, 1);

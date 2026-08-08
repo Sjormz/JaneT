@@ -180,7 +180,7 @@ const themes: Record<ThemeName, ThemeDefinition> = {
       'border-color': '#cdc5ab',
       'border-active': '#0b5d8f',
       'red': '#b12220',
-      'green': '#4e6e00',
+      'green': '#4d6c00',
       'yellow': '#735100',
       'blue': '#0b5d8f',
       'magenta': '#a21f65',

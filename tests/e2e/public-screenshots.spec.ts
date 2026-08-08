@@ -239,11 +239,21 @@ async function warmTerminal(page: Page, terminal: Locator): Promise<void> {
 
 async function capture(name: typeof screenshotNames[number], target: Page | Locator): Promise<void> {
   const output = path.join(screenshots, name);
-  const captured = await target.screenshot({
+  const options = {
     animations: 'disabled',
     caret: 'hide',
-  });
-  const bytes = await sharp(captured).png({ compressionLevel: 9, adaptiveFiltering: false }).toBuffer();
+  } as const;
+  let previous: Buffer | undefined;
+  let bytes: Buffer | undefined;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await sharp(await target.screenshot(options)).png({ compressionLevel: 9, adaptiveFiltering: false }).toBuffer();
+    if (previous?.equals(current)) {
+      bytes = current;
+      break;
+    }
+    previous = current;
+  }
+  if (!bytes) throw new Error(`${name} did not produce two consecutive byte-identical frames`);
   fs.writeFileSync(output, bytes);
   expect(bytes.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   expect(bytes.length).toBeGreaterThan(4_000);
@@ -343,8 +353,11 @@ test('recaptures the shipped public screenshot set from the real app', async () 
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1440, 800));
     await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
       .toEqual({ width: 1440, height: 800 });
-    await page.evaluate(() => document.fonts.ready);
-    await page.addStyleTag({ content: '.xterm-cursor { visibility: hidden !important; }' });
+    await expect.poll(() => page.evaluate(() => ['Inter Variable', 'JetBrains Mono Variable'].map((family) => (
+      Array.from(document.fonts).some((face) => face.family === family && face.status === 'loaded')
+    ))), { timeout: 20_000 }).toEqual([true, true]);
+    await page.addStyleTag({ content: '.xterm-cursor, .status-version { visibility: hidden !important; }' });
+    await expect(page.locator('.status-version')).toHaveCSS('visibility', 'hidden');
     await expect(page.getByRole('button', { name: 'Open command palette (Ctrl+Shift+P)' })).toBeVisible();
     await expect(page.getByText('Ctrl+K', { exact: true })).toHaveCount(0);
     await expect(tab(page, 'Demo workspace')).toHaveClass(/active/);

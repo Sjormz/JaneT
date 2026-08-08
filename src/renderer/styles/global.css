@@ -2201,6 +2201,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   width: 100%;
+  min-height: 24px;
   padding: 3px 40px 3px 28px;
   gap: 8px;
   font-size: 12px;

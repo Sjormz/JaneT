@@ -233,7 +233,7 @@ describe('main notification bridge', () => {
 
       await expect(bridge.invokeChannel('app:copyDiagnostics')).resolves.toBe(true);
       expect(bridge.clipboardWriteText).toHaveBeenCalledWith([
-        'JaneT version: 0.8.1',
+        `JaneT version: ${packageMetadata.version}`,
         `OS: ${process.platform}`,
         `Architecture: ${process.arch}`,
         'Mode: development',
@@ -253,7 +253,7 @@ describe('main notification bridge', () => {
 
       await expect(bridge.invokeChannel('app:copyDiagnostics', rendererData)).resolves.toBe(true);
       const copied = [
-        'JaneT version: 0.8.1',
+        `JaneT version: ${packageMetadata.version}`,
         `OS: ${process.platform}`,
         `Architecture: ${process.arch}`,
         'Mode: packaged',
