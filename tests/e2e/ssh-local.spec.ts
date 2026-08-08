@@ -774,7 +774,7 @@ test('restores a mutated mixed workspace in a genuine second Electron process', 
         reject(error);
       });
     });
-    await firstPage.evaluate(() => { void window.janet.windowClose(); });
+    void firstPage.evaluate(() => { void window.janet.windowClose(); }).catch(() => {});
     await expect.poll(() => readEvents(first!.eventsPath).filter((event) => (
       event.type === 'workspace:prepare-for-close'
     )).at(-1), { timeout: 15_000 }).toMatchObject({
