@@ -47,6 +47,15 @@ const mocks = {
 
 async function loadTerminalManager() {
   vi.resetModules();
+  vi.doMock('fs', async (original) => {
+    const actual = await original<typeof import('fs')>();
+    return {
+      ...actual,
+      existsSync: vi.fn((candidate: fs.PathLike) => (
+        candidate === '/bin/zsh' || actual.existsSync(candidate)
+      )),
+    };
+  });
   vi.doMock('node-pty', () => ({
     spawn: mocks.spawnMock,
   }));
