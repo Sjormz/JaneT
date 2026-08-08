@@ -283,11 +283,13 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
       event: 'attention.request', sessionId: 'visual-active', turnId: 'turn-active',
     }));
     await expect(page.locator('.leaf-awareness.needs-input')).toHaveText('Hermes · Needs input');
-    await typeCommand(page, activeTerminals.nth(0), 'cls');
-    await typeCommand(page, activeTerminals.nth(1), 'cls');
+    const clearCommand = process.platform === 'win32' ? 'cls' : 'clear';
+    await typeCommand(page, activeTerminals.nth(0), clearCommand);
+    await typeCommand(page, activeTerminals.nth(1), clearCommand);
     const failingCommand = process.platform === 'win32' ? 'test' : 'false';
     await typeCommand(page, activeTerminals.nth(1), failingCommand);
-    await expect(page.locator('.terminal-command-failed')).toBeVisible({ timeout: 15_000 });
+    await expect(activeTerminals.nth(1).locator('.terminal-command-failed'))
+      .toHaveCount(1, { timeout: 15_000 });
 
     const recipients = page.locator('.broadcast-recipient');
     await recipients.nth(0).check();

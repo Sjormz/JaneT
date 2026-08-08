@@ -3938,6 +3938,24 @@ describe('split panes in the app', () => {
       });
       expect(window.janet.terminalCreate).not.toHaveBeenCalled();
       expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
+
+      const restored = rendererMocks.verticalTabBarProps.tabs.find(
+        (tab: { title: string }) => tab.title === 'offline host',
+      );
+      (window.janet.sshCreateShell as any)
+        .mockRejectedValueOnce(new Error('session not found'))
+        .mockResolvedValueOnce({ connected: true });
+      await act(async () => {
+        await rendererMocks.sshRetryHandlers.get(restored.root.id)?.(
+          restored.root.id,
+          { cols: 120, rows: 40 },
+        );
+      });
+      await waitFor(() => {
+        expect(rendererMocks.verticalTabBarProps.tabs.find(
+          (tab: { title: string }) => tab.title === 'offline host',
+        )).toMatchObject({ sshShellReady: true });
+      });
     } finally {
       consoleError.mockRestore();
     }
@@ -4074,6 +4092,15 @@ describe('split panes in the app', () => {
       startupCommands: ['hermes doctor', 'hermes --tui'],
       startupShellDialect: 'posix',
     });
+    const retriedTab = rendererMocks.verticalTabBarProps.tabs.find(
+      (tab: { title: string }) => tab.title === 'mixed retry',
+    );
+    expect(retriedTab.root.children.find(
+      (leaf: { id: string }) => leaf.id === initialShell.termId,
+    )).toMatchObject({ sshShellReady: true });
+    expect(retriedTab.root.children.find(
+      (leaf: { terminalType?: string }) => leaf.terminalType === 'local',
+    )).not.toHaveProperty('sshShellReady');
 
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {

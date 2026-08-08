@@ -19,7 +19,9 @@ function electronEnv(userData: string): Record<string, string> {
     NODE_ENV: 'test',
     JANET_E2E_USER_DATA_DIR: userData,
     JANET_E2E_RESTORE_PATH: process.env.PATH ?? '',
+    JANET_E2E_RESTORE_SHELL: process.env.SHELL ?? '',
     PATH: '',
+    SHELL: path.join(userData, 'missing-shell'),
   };
 }
 
@@ -59,6 +61,11 @@ test('recovers a failed local terminal in the same pane only after explicit retr
 
     await app.evaluate(() => {
       process.env.PATH = process.env.JANET_E2E_RESTORE_PATH ?? '';
+      if (process.env.JANET_E2E_RESTORE_SHELL) {
+        process.env.SHELL = process.env.JANET_E2E_RESTORE_SHELL;
+      } else {
+        delete process.env.SHELL;
+      }
     });
     await retry.focus();
     await expect(retry).toBeFocused();

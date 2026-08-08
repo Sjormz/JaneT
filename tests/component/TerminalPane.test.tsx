@@ -359,6 +359,46 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(term.textarea).toHaveAttribute('aria-label', 'Current — Local terminal pane');
   });
 
+  it('keeps the cached xterm when an explicit SSH retry marks its shell ready', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+
+    function Harness() {
+      const [shellReady, setShellReady] = React.useState(false);
+      return (
+        <TerminalPane
+          termId="term-retry-ready"
+          tabType="ssh"
+          sshSessionId="ssh-retry-ready"
+          sshShellReady={shellReady}
+          sshConnectionLost={!shellReady}
+          onReady={vi.fn()}
+          onRemoved={vi.fn()}
+          onSshRetry={async (termId, dimensions) => {
+            await window.janet.sshCreateShell({ id: 'ssh-retry-ready', termId, ...dimensions });
+            setShellReady(true);
+          }}
+          themeName="tokyo-night"
+        />
+      );
+    }
+
+    render(<KeybindingsProvider><Harness /></KeybindingsProvider>);
+    const term = MockTerminal.instances[0];
+
+    fireEvent.click(screen.getByTestId('ssh-notice-retry'));
+    await waitFor(() => expect(screen.getByTestId('ssh-terminal-notice'))
+      .toHaveAttribute('data-state', 'waiting'));
+
+    expect(sshCreateShell).toHaveBeenCalledOnce();
+    expect(MockTerminal.instances).toHaveLength(1);
+    expect(term.dispose).not.toHaveBeenCalled();
+
+    act(() => terminalDataHandler!({
+      source: 'ssh', id: 'term-retry-ready', data: 'ready', generation: 1, sequence: 5,
+    }));
+    expect(term.write).toHaveBeenCalledWith('ready', expect.any(Function));
+  });
+
   it('does not reuse the input name from a disposed same-ID terminal', async () => {
     const { default: TerminalPane, disposeCachedTerminal } = await loadTerminalPane();
     const props = {

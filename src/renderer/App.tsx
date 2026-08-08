@@ -419,6 +419,25 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     if (!explicitRetry && invalidatedInitialSshShellsRef.current.get(termId) === sessionId) return;
     if (releasedSshSessionIdsRef.current.has(sessionId)) return;
     if (!ownsSshTerminal(tabsRef.current, termId, sessionId)) return;
+    if (explicitRetry) {
+      const next = tabsRef.current.map((tab) => {
+        const leaf = findLeaf(tab.root, termId);
+        if (!leaf) return tab;
+        if (tab.type === 'ssh') {
+          return tab.sshShellReady ? tab : { ...tab, sshShellReady: true };
+        }
+        return leaf.sshShellReady
+          ? tab
+          : {
+              ...tab,
+              root: mapLeaves(tab.root, (candidate) => (
+                candidate.id === termId ? { ...candidate, sshShellReady: true } : candidate
+              )),
+            };
+      });
+      tabsRef.current = next;
+      setTabs(next);
+    }
     sshShellStateByTerminalRef.current.set(termId, { sessionId, state: 'ready' });
     markSshSessionReady(sessionId);
   }, [markSshSessionReady]);

@@ -126,6 +126,7 @@ interface CachedTerminalPane {
   sshSessionId?: string;
   sshShellReady: boolean;
   sshRetryPromise: Promise<void> | null;
+  sshRetryOpenedShell: boolean;
   sshNoticeState: SshNoticeState;
   sshNoticeListener: ((state: SshNoticeState) => void) | null;
   sshShellReadyListener: TerminalPaneProps['onSshShellReady'];
@@ -450,12 +451,20 @@ export default function TerminalPane({
     let effectActive = true;
 
     const cached = terminalPaneCache.get(termId);
+    const retryMadeShellReady = Boolean(
+      cached?.sshRetryOpenedShell
+      && cached.tabType === 'ssh'
+      && !cached.sshShellReady
+      && sshShellReady,
+    );
     if (
       cached &&
       cached.tabType === tabType &&
       cached.sshSessionId === sshSessionId &&
-      cached.sshShellReady === sshShellReady
+      (cached.sshShellReady === sshShellReady || retryMadeShellReady)
     ) {
+      cached.sshShellReady = sshShellReady;
+      if (retryMadeShellReady) cached.sshRetryOpenedShell = false;
       const { term, fitAddon, searchAddon } = cached;
       cached.sshNoticeListener = setSshNoticeState;
       cached.localSpawnListener = setLocalSpawnState;
@@ -728,6 +737,7 @@ export default function TerminalPane({
       sshSessionId,
       sshShellReady,
       sshRetryPromise: null,
+      sshRetryOpenedShell: false,
       sshNoticeState: tabType !== 'ssh'
         ? { kind: 'hidden' }
         : sshShellReady
@@ -822,6 +832,7 @@ export default function TerminalPane({
       rejectRetry = reject;
     });
     cached.sshRetryPromise = retryPromise;
+    cached.sshRetryOpenedShell = true;
     publishSshNoticeState({ kind: 'reconnecting' });
     try {
       Promise.resolve(onSshRetry(termId, dimensions)).then(resolveRetry, rejectRetry);
@@ -845,6 +856,7 @@ export default function TerminalPane({
           currentCache.sshRetryPromise !== retryPromise ||
           sshNoticeAttemptRef.current !== noticeAttempt
         ) return;
+        currentCache.sshRetryOpenedShell = false;
         publishSshNoticeState({ kind: 'error', message: err?.message || 'Reconnect failed' });
       })
       .finally(() => {

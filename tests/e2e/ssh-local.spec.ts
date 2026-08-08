@@ -462,6 +462,9 @@ async function closeApp(browser: Browser, electronProcess: ChildProcess, userDat
 async function runMarkedLs(page: Page, marker: string) {
   const terminal = page.locator('.terminal-container').first();
   await expect(terminal).toBeVisible();
+  await expect.poll(() => terminal.locator('.xterm-rows').innerText(), { timeout: 20_000 })
+    .toContain('Welcome to JaneT local SSH fixture');
+  await expect(terminal.getByTestId('ssh-terminal-notice')).toHaveCount(0);
   await terminal.click();
   await page.keyboard.press('Control+L');
   await page.keyboard.type(`printf "__JANET_${marker}_START__\\n"; ls; printf "__JANET_${marker}_DONE__\\n"`);
@@ -569,7 +572,7 @@ test('preserves SSH identity after a failed second-process restore and reconnect
 
     restartedSsh = await ssh.restart();
     await second.page.getByRole('button', { name: 'Reconnect' }).click();
-    await waitForShellCreateCount(second.eventsPath, 2);
+    await waitForShellCreateCount(second.eventsPath, 3);
     await runMarkedLs(second.page, 'SECOND_PROCESS_RECONNECT');
   } finally {
     if (second) await closeApp(second.browser, second.electronProcess);
@@ -771,7 +774,7 @@ test('restores a mutated mixed workspace in a genuine second Electron process', 
         reject(error);
       });
     });
-    await firstPage.evaluate(() => window.janet.windowClose());
+    await firstPage.evaluate(() => { void window.janet.windowClose(); });
     await expect.poll(() => readEvents(first!.eventsPath).filter((event) => (
       event.type === 'workspace:prepare-for-close'
     )).at(-1), { timeout: 15_000 }).toMatchObject({
