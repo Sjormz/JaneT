@@ -181,7 +181,7 @@ Installers and portable builds are published on the [latest release](https://git
 | Platform | Packages |
 | --- | --- |
 | Windows x64 | Installer and portable `.exe` |
-| macOS Apple silicon and Intel | `.dmg` and `.zip` |
+| macOS Apple silicon | `.dmg` and `.zip` |
 | Linux x64 | AppImage and Debian package |
 
 JaneT checks GitHub Releases for updates from inside the app. If an in-app update cannot complete, download and install the latest package from the release page.

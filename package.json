@@ -88,14 +88,12 @@
         {
           "target": "dmg",
           "arch": [
-            "x64",
             "arm64"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "x64",
             "arm64"
           ]
         }
@@ -112,6 +110,7 @@
     },
     "dmg": {
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
+      "writeUpdateInfo": false,
       "contents": [
         {
           "x": 130,

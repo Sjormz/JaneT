@@ -194,9 +194,6 @@ describe('release tooling', () => {
       'latest.yml',
     ]);
     expect(expectedReleaseArtifacts('macos', '1.2.3')).toEqual([
-      'JaneT-1.2.3-mac-x64.dmg',
-      'JaneT-1.2.3-mac-x64.zip',
-      'JaneT-1.2.3-mac-x64.zip.blockmap',
       'JaneT-1.2.3-mac-arm64.dmg',
       'JaneT-1.2.3-mac-arm64.zip',
       'JaneT-1.2.3-mac-arm64.zip.blockmap',
@@ -260,15 +257,16 @@ describe('release tooling', () => {
     try {
       const version = '1.2.3';
       const macFiles = [
-        `JaneT-${version}-mac-x64.zip`,
         `JaneT-${version}-mac-arm64.zip`,
-        `JaneT-${version}-mac-x64.dmg`,
-        `JaneT-${version}-mac-arm64.dmg`,
       ];
-      writeReleaseManifestFixture(releaseRoot, 'latest-mac.yml', version, macFiles, macFiles[0], [
-        `${macFiles[0]}.blockmap`,
-        `${macFiles[1]}.blockmap`,
-      ]);
+      writeReleaseManifestFixture(
+        releaseRoot,
+        'latest-mac.yml',
+        version,
+        macFiles,
+        macFiles[0],
+        [`${macFiles[0]}.blockmap`],
+      );
       await expect(verifyReleaseManifest('macos', version, releaseRoot)).resolves.toBeUndefined();
 
       fs.rmSync(releaseRoot, { recursive: true, force: true });
@@ -431,9 +429,9 @@ describe('release tooling', () => {
     expect(windowsRuntime.nodePtyModule).toContain(path.join('app.asar', 'node_modules', 'node-pty'));
     expect(windowsRuntime.nodePtyModule).not.toContain('app.asar.unpacked');
     expect(PACKAGED_RUNTIME_TIMEOUT_MS).toBe(60_000);
-    expect(macPackagedRuntimes('/release').map((runtime: { arch: string }) => runtime.arch)).toEqual(['x64', 'arm64']);
+    expect(macPackagedRuntimes('/release').map((runtime: { arch: string }) => runtime.arch)).toEqual(['arm64']);
     expect(nativeMacRuntime('/release', 'arm64').arch).toBe('arm64');
-    expect(nativeMacRuntime('/release', 'x64').arch).toBe('x64');
+    expect(() => nativeMacRuntime('/release', 'x64')).toThrow(/No packaged macOS runtime matches/);
     expect(() => nativeMacRuntime('/release', 'riscv64')).toThrow(/No packaged macOS runtime matches/);
   });
 
@@ -524,7 +522,7 @@ describe('release tooling', () => {
     expect(packageJson.scripts.postinstall).toContain('patch-node-pty-windows-worker.mjs');
   });
 
-  it.skipIf(process.platform === 'win32')('validates both macOS native PTY layouts and helper execute bits', async () => {
+  it.skipIf(process.platform === 'win32')('validates the Apple Silicon PTY layout and helper execute bits', async () => {
     const { macPackagedRuntimes, validateMacPtyLayout } = await loadScript('verify-release-artifacts.mjs');
     const releaseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-release-layout-'));
     try {
@@ -541,10 +539,10 @@ describe('release tooling', () => {
         expect(() => validateMacPtyLayout(runtime)).not.toThrow();
       }
 
-      const nonHost = runtimes.find((runtime: { arch: string }) => runtime.arch !== process.arch) ?? runtimes[1];
-      const helper = path.join(nonHost.nodePtyRoot, 'prebuilds', `darwin-${nonHost.arch}`, 'spawn-helper');
+      const [runtime] = runtimes;
+      const helper = path.join(runtime.nodePtyRoot, 'prebuilds', `darwin-${runtime.arch}`, 'spawn-helper');
       fs.chmodSync(helper, 0o644);
-      expect(() => validateMacPtyLayout(nonHost)).toThrow(/helper is not executable/);
+      expect(() => validateMacPtyLayout(runtime)).toThrow(/helper is not executable/);
     } finally {
       fs.rmSync(releaseRoot, { recursive: true, force: true });
     }
@@ -637,7 +635,7 @@ module.exports = {
 
   it('pins release CI to explicit ad-hoc macOS signing without Apple credentials', () => {
     const workflow = fs.readFileSync(path.join(projectRoot, '.github', 'workflows', 'release.yml'), 'utf8');
-    expect(workflow).toContain('build-args: --mac -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false -c.npmRebuild=false');
+    expect(workflow).toContain('build-args: --mac --arm64 -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false -c.npmRebuild=false');
     expect(workflow).toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'");
     expect(workflow).not.toContain('Require macOS signing and notarization secrets');
     for (const secretName of [
@@ -655,6 +653,32 @@ module.exports = {
     expect(packageJson.build.mac.signIgnore).toEqual([
       'node_modules/node-pty/prebuilds/darwin-(?:x64|arm64)/(?:pty\\.node|spawn-helper)$',
     ]);
+  });
+
+  it('uses protected main release tooling when recovering an existing tag', () => {
+    const workflow = fs.readFileSync(path.join(projectRoot, '.github', 'workflows', 'release.yml'), 'utf8');
+    const recovery = [
+      '      - name: Apply release tooling recovery',
+      "        if: github.event_name == 'workflow_dispatch'",
+      '        shell: bash',
+      '        run: |',
+      '          test "$GITHUB_REF" = "refs/heads/main"',
+      '          git fetch --no-tags --depth=1 origin main',
+      '          test "$GITHUB_SHA" = "$(git rev-parse FETCH_HEAD)"',
+      '          git checkout "$GITHUB_SHA" -- .github/workflows/release.yml package.json scripts/verify-release-artifacts.mjs tests/unit/releaseTooling.test.ts',
+    ].join('\n');
+
+    expect(workflow.replaceAll('\r\n', '\n').split(recovery)).toHaveLength(3);
+  });
+
+  it('packages macOS releases for Apple Silicon only without DMG blockmaps', () => {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+
+    expect(packageJson.build.mac.target).toEqual([
+      { target: 'dmg', arch: ['arm64'] },
+      { target: 'zip', arch: ['arm64'] },
+    ]);
+    expect(packageJson.build.dmg.writeUpdateInfo).toBe(false);
   });
 
   it('declares the Node version required by Electron 43', () => {
