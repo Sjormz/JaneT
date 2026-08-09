@@ -91,7 +91,7 @@ describe('terminal agent awareness', () => {
       .toBe(state);
   });
 
-  it('projects current phase before unseen historical outcomes', () => {
+  it('projects live agent status only while its transport is healthy', () => {
     const ready = applyAgentEvent(undefined, event('session.start'), 10, true)!;
     const running = applyAgentEvent(ready, event('turn.start'), 20, false)!;
     const failed = applyAgentEvent(running, event('turn.end', { outcome: 'failed' }), 30, false)!;
@@ -103,9 +103,9 @@ describe('terminal agent awareness', () => {
     expect(agentStatus(attention)).toMatchObject({ kind: 'needs-input', label: 'Hermes · Needs input' });
     expect(aggregateAgentStatus([failed, running, attention])).toEqual(agentStatus(attention));
     expect(terminalStatus(ready, 'exited')).toEqual({ kind: 'exited', label: 'Exited' });
-    expect(terminalStatus(running, 'disconnected')).toEqual(agentStatus(running));
-    expect(terminalStatus(attention, 'exited')).toEqual(agentStatus(attention));
-    expect(terminalStatus(failed, 'disconnected')).toEqual(agentStatus(failed));
+    expect(terminalStatus(running, 'disconnected')).toEqual({ kind: 'disconnected', label: 'SSH disconnected' });
+    expect(terminalStatus(attention, 'exited')).toEqual({ kind: 'exited', label: 'Exited' });
+    expect(terminalStatus(failed, 'disconnected')).toEqual({ kind: 'disconnected', label: 'SSH disconnected' });
     expect(aggregateAgentStatus(
       [ready, undefined],
       [undefined, 'disconnected'],

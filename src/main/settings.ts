@@ -47,6 +47,8 @@ export interface SavedTab {
   type: 'local' | 'ssh';
   cwd?: string;
   sshProfileId?: string;
+  selectedPanePath?: number[];
+  maximizedPanePath?: number[];
   root: SavedPaneNode;
 }
 
@@ -80,6 +82,10 @@ export type KeybindingAction =
   | 'maximize-pane'
   | 'focus-next-pane'
   | 'focus-previous-pane'
+  | 'move-pane-left'
+  | 'move-pane-right'
+  | 'move-pane-up'
+  | 'move-pane-down'
   | 'rename-pane'
   | 'rename-tab'
   | 'save-document'
@@ -110,6 +116,10 @@ export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   'maximize-pane': '',
   'focus-next-pane': '',
   'focus-previous-pane': '',
+  'move-pane-left': '',
+  'move-pane-right': '',
+  'move-pane-up': '',
+  'move-pane-down': '',
   'rename-pane': 'F2',
   'rename-tab': 'Ctrl+F2',
   'save-document': '',
@@ -142,6 +152,36 @@ function defaultKeybindingsForPlatform(platform: string): Record<KeybindingActio
 }
 
 const PLATFORM_DEFAULT_KEYBINDINGS = defaultKeybindingsForPlatform(process.platform);
+const PREVIOUS_PLATFORM_DEFAULT_KEYBINDINGS = Object.fromEntries(
+  Object.entries(PLATFORM_DEFAULT_KEYBINDINGS).filter(([action]) => !action.startsWith('move-pane-')),
+);
+
+const LEGACY_KEYBINDINGS: Record<string, string> = {
+  'search-toggle': 'Ctrl+F',
+  'palette-toggle': 'Ctrl+K',
+  'new-terminal': 'Ctrl+N',
+  'close-tab': 'Ctrl+W',
+  'toggle-sidebar': 'Ctrl+B',
+  'font-increase': 'Ctrl+Plus',
+  'font-decrease': 'Ctrl+-',
+  'snippets-toggle': 'Ctrl+Shift+P',
+  'split-right': 'Ctrl+\\',
+  'split-down': 'Ctrl+Shift+\\',
+  'close-pane': 'Ctrl+Shift+W',
+  'rename-pane': 'F2',
+  'rename-tab': 'Ctrl+F2',
+  'previous-command': 'Ctrl+Shift+ArrowUp',
+  'next-command': 'Ctrl+Shift+ArrowDown',
+  'copy-command': 'Ctrl+Alt+C',
+  'copy-command-output': 'Ctrl+Alt+O',
+  'rerun-command': 'Ctrl+Alt+R',
+};
+
+function exactlyMatches(record: Record<string, string>, expected: Record<string, string>): boolean {
+  const keys = Object.keys(record);
+  return keys.length === Object.keys(expected).length
+    && keys.every((key) => record[key] === expected[key]);
+}
 
 export interface AppSettings {
   theme: ThemeName;
@@ -238,7 +278,7 @@ const SAVED_SESSION_KEYS = new Set([
   'tabs', 'activeTabId', 'sidebarOpen', 'tabsOpen', 'sidebarSection',
 ]);
 const SAVED_TAB_KEYS = new Set([
-  'id', 'title', 'type', 'cwd', 'sshProfileId', 'root',
+  'id', 'title', 'type', 'cwd', 'sshProfileId', 'selectedPanePath', 'maximizedPanePath', 'root',
 ]);
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -263,6 +303,9 @@ export class SettingsManager {
   private filePath: string;
   private cache: AppSettings;
   private storedSshSecrets = new Map<string, StoredSSHSecrets>();
+  private lastValidBytes: Buffer | undefined;
+  private recoveryRequired = false;
+  private previousAvailable = false;
 
   constructor() {
     const userDataPath = app.getPath('userData');
@@ -271,6 +314,7 @@ export class SettingsManager {
   }
 
   get(): AppSettings {
+    if (this.recoveryRequired) throw new Error('Could not load settings');
     return {
       ...this.cache,
       keybindings: { ...this.cache.keybindings },
@@ -283,6 +327,57 @@ export class SettingsManager {
       sshHostKeys: { ...this.cache.sshHostKeys },
       session: cloneSavedSession(this.cache.session),
     };
+  }
+
+  getRecoveryState(): { previousAvailable: boolean } {
+    return { previousAvailable: this.previousAvailable };
+  }
+
+  restorePrevious(): AppSettings {
+    if (!this.recoveryRequired || !this.previousAvailable) {
+      throw new Error('No previous settings are available');
+    }
+    const previousPath = `${this.filePath}.previous`;
+    const tempPath = `${this.filePath}.tmp`;
+    try {
+      const bytes = fs.readFileSync(previousPath);
+      const loaded = this.parse(bytes.toString('utf8'));
+      fs.writeFileSync(tempPath, bytes, { flush: true });
+      fs.renameSync(tempPath, this.filePath);
+      this.cache = loaded.settings;
+      this.captureStoredSecrets(loaded.sshProfiles);
+      this.lastValidBytes = bytes;
+      this.recoveryRequired = false;
+      this.previousAvailable = false;
+      this.syncDirectory();
+      return this.get();
+    } catch (err) {
+      try { fs.rmSync(tempPath, { force: true }); } catch {}
+      throw new Error('Could not restore previous settings', { cause: err });
+    }
+  }
+
+  reset(): AppSettings {
+    if (!this.recoveryRequired) throw new Error('Settings recovery is not required');
+    const raw = JSON.stringify(DEFAULT_SETTINGS, null, 2);
+    const loaded = this.parse(raw);
+    const bytes = Buffer.from(raw, 'utf8');
+    const tempPath = `${this.filePath}.tmp`;
+    try {
+      fs.writeFileSync(tempPath, bytes, { flush: true });
+      fs.renameSync(tempPath, this.filePath);
+      this.cache = loaded.settings;
+      this.captureStoredSecrets(loaded.sshProfiles);
+      this.lastValidBytes = bytes;
+      this.recoveryRequired = false;
+      this.previousAvailable = false;
+      try { fs.rmSync(`${this.filePath}.previous`, { force: true }); } catch {}
+      this.syncDirectory();
+      return this.get();
+    } catch (err) {
+      try { fs.rmSync(tempPath, { force: true }); } catch {}
+      throw new Error('Could not reset settings', { cause: err });
+    }
   }
 
   set(value: unknown): AppSettings {
@@ -366,47 +461,97 @@ export class SettingsManager {
 
   private load(): AppSettings {
     try {
-      const raw = fs.readFileSync(this.filePath, 'utf-8');
-      const parsed = JSON.parse(raw) as Partial<StoredAppSettings>;
-      const mergedKeybindings = {
-        ...PLATFORM_DEFAULT_KEYBINDINGS,
-        ...(isBoundedStringRecord(parsed.keybindings, MAX_KEYBINDINGS, 256, 256)
-          ? parsed.keybindings
-          : {}),
-      };
-      const stored = {
-        ...DEFAULT_SETTINGS,
-        ...parsed,
-        keybindings: isBoundedStringRecord(mergedKeybindings, MAX_KEYBINDINGS, 256, 256)
-          ? mergedKeybindings
-          : { ...PLATFORM_DEFAULT_KEYBINDINGS },
-        notificationsEnabled: typeof parsed.notificationsEnabled === 'boolean' ? parsed.notificationsEnabled : false,
-        notificationThresholdSeconds: isValidNotificationThreshold(parsed.notificationThresholdSeconds)
-          ? parsed.notificationThresholdSeconds
-          : 10,
-        sshProfiles: normalizeStoredSshProfiles(parsed.sshProfiles),
-      } as StoredAppSettings;
-      this.captureStoredSecrets(stored.sshProfiles);
-      return this.deserialize(stored);
-    } catch {
+      const raw = fs.readFileSync(this.filePath);
+      const loaded = this.parse(raw.toString('utf8'));
+      this.captureStoredSecrets(loaded.sshProfiles);
+      this.lastValidBytes = raw;
+      return loaded.settings;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        this.recoveryRequired = true;
+        this.previousAvailable = this.hasValidPrevious();
+      }
       return { ...DEFAULT_SETTINGS, session: { ...EMPTY_SESSION } };
     }
   }
 
+  private parse(raw: string): { settings: AppSettings; sshProfiles: StoredSSHProfile[] } {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Invalid settings');
+    }
+    const storedSettings = parsed as Partial<StoredAppSettings>;
+    const storedKeybindings = isBoundedStringRecord(storedSettings.keybindings, MAX_KEYBINDINGS, 256, 256)
+      ? storedSettings.keybindings
+      : {};
+    const mergedKeybindings = {
+      ...PLATFORM_DEFAULT_KEYBINDINGS,
+      ...((exactlyMatches(storedKeybindings, LEGACY_KEYBINDINGS)
+        || exactlyMatches(storedKeybindings, { ...PLATFORM_DEFAULT_KEYBINDINGS, ...LEGACY_KEYBINDINGS })
+        || exactlyMatches(storedKeybindings, { ...PREVIOUS_PLATFORM_DEFAULT_KEYBINDINGS, ...LEGACY_KEYBINDINGS }))
+        ? {}
+        : storedKeybindings),
+    };
+    const stored = {
+      ...DEFAULT_SETTINGS,
+      ...storedSettings,
+      keybindings: isBoundedStringRecord(mergedKeybindings, MAX_KEYBINDINGS, 256, 256)
+        ? mergedKeybindings
+        : { ...PLATFORM_DEFAULT_KEYBINDINGS },
+      notificationsEnabled: typeof storedSettings.notificationsEnabled === 'boolean' ? storedSettings.notificationsEnabled : false,
+      notificationThresholdSeconds: isValidNotificationThreshold(storedSettings.notificationThresholdSeconds)
+        ? storedSettings.notificationThresholdSeconds
+        : 10,
+      sshProfiles: normalizeStoredSshProfiles(storedSettings.sshProfiles),
+    } as StoredAppSettings;
+    return { settings: this.deserialize(stored), sshProfiles: stored.sshProfiles };
+  }
+
+  private hasValidPrevious(): boolean {
+    try {
+      this.parse(fs.readFileSync(`${this.filePath}.previous`, 'utf8'));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private syncDirectory(): void {
+    if (process.platform === 'win32') return;
+    try {
+      const directory = fs.openSync(path.dirname(this.filePath), 'r');
+      try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+    } catch (err) {
+      console.error('Settings were saved, but crash durability could not be confirmed:', err);
+    }
+  }
+
   private save(previousSshProfiles = this.cache.sshProfiles): boolean {
+    if (this.recoveryRequired) return false;
     const tempPath = `${this.filePath}.tmp`;
+    const previousPath = `${this.filePath}.previous`;
+    const previousTempPath = `${previousPath}.tmp`;
     try {
       const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
       const serialized = this.serialize(this.cache, previousSshProfiles);
-      fs.writeFileSync(tempPath, JSON.stringify(serialized, null, 2), 'utf-8');
+      const bytes = Buffer.from(JSON.stringify(serialized, null, 2), 'utf8');
+      if (this.lastValidBytes) {
+        fs.writeFileSync(previousTempPath, this.lastValidBytes, { flush: true });
+        fs.renameSync(previousTempPath, previousPath);
+      }
+      fs.writeFileSync(tempPath, bytes, { flush: true });
       fs.renameSync(tempPath, this.filePath);
+      this.lastValidBytes = bytes;
       this.captureStoredSecrets(serialized.sshProfiles);
+      // ponytail: Node cannot fsync directories on Windows; add it if Node exposes a supported primitive.
+      this.syncDirectory();
       return true;
     } catch (err) {
       try { fs.rmSync(tempPath, { force: true }); } catch {}
+      try { fs.rmSync(previousTempPath, { force: true }); } catch {}
       console.error('Failed to save settings:', err);
       return false;
     }
@@ -586,14 +731,29 @@ function cloneSavedTab(value: unknown): SavedTab | undefined {
     || tab.title.length > MAX_SAVED_TITLE_LENGTH
     || (tab.type !== 'local' && tab.type !== 'ssh')
   ) return undefined;
+  const selectedPanePath = cloneSavedPanePath(tab.selectedPanePath, root);
+  const maximizedPanePath = cloneSavedPanePath(tab.maximizedPanePath, root);
   return {
     id: tab.id,
     title: tab.title,
     type: tab.type,
     ...(typeof tab.cwd === 'string' ? { cwd: tab.cwd } : {}),
     ...(typeof tab.sshProfileId === 'string' ? { sshProfileId: tab.sshProfileId } : {}),
+    ...(selectedPanePath !== undefined ? { selectedPanePath } : {}),
+    ...(maximizedPanePath !== undefined ? { maximizedPanePath } : {}),
     root,
   };
+}
+
+function cloneSavedPanePath(value: unknown, root: SavedPaneNode): number[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_SAVED_PANE_DEPTH
+    || !Array.from(value).every((index) => Number.isInteger(index) && index >= 0)) return undefined;
+  let node = root;
+  for (const index of value) {
+    if (node.type !== 'split' || index >= node.children.length) return undefined;
+    node = node.children[index];
+  }
+  return node.type === 'leaf' ? [...value] : undefined;
 }
 
 function cloneSavedSession(value: unknown): SavedSession {
@@ -670,6 +830,10 @@ function isValidRuntimeSession(value: unknown): boolean {
     ) return false;
     const leaves = validateRuntimePaneTree(tab.root, MAX_SAVED_SESSION_TERMINALS - terminalCount);
     if (leaves === null) return false;
+    if ((tab.selectedPanePath !== undefined
+      && cloneSavedPanePath(tab.selectedPanePath, tab.root as SavedPaneNode) === undefined)
+      || (tab.maximizedPanePath !== undefined
+        && cloneSavedPanePath(tab.maximizedPanePath, tab.root as SavedPaneNode) === undefined)) return false;
     terminalCount += leaves;
   }
   return true;

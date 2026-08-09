@@ -6,6 +6,7 @@ export interface CommandAction {
   id: string;
   label: string;
   category: string;
+  keywords?: readonly string[];
   shortcut?: string;
   handler: () => void;
 }
@@ -27,7 +28,8 @@ export default function CommandPalette({ visible, onClose, actions }: CommandPal
     ? actions.filter(
         (a) =>
           a.label.toLowerCase().includes(query.toLowerCase()) ||
-          a.category.toLowerCase().includes(query.toLowerCase()),
+          a.category.toLowerCase().includes(query.toLowerCase()) ||
+          a.keywords?.some((keyword) => keyword.toLowerCase().includes(query.toLowerCase())),
       )
     : actions;
 

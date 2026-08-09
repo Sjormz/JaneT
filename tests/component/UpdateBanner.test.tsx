@@ -16,12 +16,14 @@ const handlers: UpdateHandlers = {};
 const downloadUpdate = vi.fn();
 const installUpdate = vi.fn();
 const checkForUpdates = vi.fn();
+const openExternal = vi.fn();
 
 beforeEach(() => {
   Object.keys(handlers).forEach((key) => delete handlers[key as keyof UpdateHandlers]);
   downloadUpdate.mockReset().mockResolvedValue(undefined);
   installUpdate.mockReset().mockResolvedValue(undefined);
   checkForUpdates.mockReset().mockResolvedValue(undefined);
+  openExternal.mockReset().mockResolvedValue(true);
   (window as any).janet = {
     onUpdateChecking: vi.fn((handler) => { handlers.checking = handler; return vi.fn(); }),
     onUpdateAvailable: vi.fn((handler) => { handlers.available = handler; return vi.fn(); }),
@@ -32,6 +34,7 @@ beforeEach(() => {
     downloadUpdate,
     installUpdate,
     checkForUpdates,
+    openExternal,
   };
 });
 
@@ -114,16 +117,45 @@ describe('UpdateBanner', () => {
     expect(installUpdate).toHaveBeenCalledOnce();
   });
 
-  it('keeps updater errors visible and offers a retry', () => {
-    render(<UpdateBanner />);
+  it('keeps updater errors until explicit handling and opens the fixed releases fallback', () => {
+    vi.useFakeTimers();
+    try {
+      render(<UpdateBanner />);
 
-    act(() => handlers.error?.({ message: 'Signature verification failed' }));
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'Update failed: Signature verification failed',
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(checkForUpdates).toHaveBeenCalledOnce();
-    expect(screen.getByRole('status')).toHaveTextContent('Checking for updates…');
+      act(() => handlers.error?.({ message: 'Signature verification failed' }));
+      act(() => vi.advanceTimersByTime(10_001));
+
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Update failed: Signature verification failed',
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'View JaneT releases' }));
+      expect(openExternal).toHaveBeenCalledWith('https://github.com/Sjormz/JaneT/releases/latest');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      expect(checkForUpdates).toHaveBeenCalledOnce();
+      expect(screen.getByRole('status')).toHaveTextContent('Checking for updates…');
+
+      act(() => handlers.error?.({ message: 'Still unavailable' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss update notification' }));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still auto-dismisses the temporary up-to-date message', () => {
+    vi.useFakeTimers();
+    try {
+      render(<UpdateBanner />);
+
+      act(() => handlers.notAvailable?.());
+      expect(screen.getByRole('status')).toHaveTextContent('JaneT is up to date');
+      act(() => vi.advanceTimersByTime(3_000));
+
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not let an old auto-dismiss timer hide a newer update', () => {

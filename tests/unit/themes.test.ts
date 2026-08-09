@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { getTheme, themeNames, applyCssTheme } from '../../src/renderer/themes';
+
+const globalCss = readFileSync(join(process.cwd(), 'src/renderer/styles/global.css'), 'utf8');
 
 function relativeLuminance(hex: string) {
   const channels = hex.slice(1).match(/.{2}/g)!.map((channel) => parseInt(channel, 16) / 255);
@@ -70,6 +74,36 @@ describe('themes', () => {
     expect(contrastRatio(theme.xterm.foreground!, theme.xterm.background!)).toBeGreaterThanOrEqual(4.5);
     for (const color of ['text-accent', 'red', 'green', 'yellow', 'cyan']) {
       expect(contrastRatio(theme.css[color], theme.css['bg-tertiary'])).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('keeps the Following label legible on the sidebar surface in every theme', () => {
+    const rule = globalCss.match(/\.workspace-tools-following\s*\{([^}]*)\}/)?.[1];
+    const textToken = rule?.match(/color:\s*var\(--([\w-]+)\)/)?.[1];
+    const sidebarSurfaceTokens = [...globalCss.matchAll(/([^{}]+)\{([^{}]*)\}/gs)]
+      .filter(([, selectors]) => selectors.split(',').some((selector) => selector.trim() === '.sidebar'))
+      .flatMap(([, , declarations]) => (
+        [...declarations.matchAll(/background:\s*var\(--([\w-]+)\)/g)].map((match) => match[1])
+      ));
+    const surfaceToken = sidebarSurfaceTokens.at(-1);
+    const themeSurfaceToken = globalCss.match(
+      new RegExp(`--${surfaceToken}:\\s*var\\(--([\\w-]+)\\)`),
+    )?.[1];
+    expect(textToken).toBe('text-secondary');
+    expect(surfaceToken).toBe('surface-panel');
+    expect(themeSurfaceToken).toBe('bg-secondary');
+
+    const root = document.documentElement;
+    const originalStyle = root.style.cssText;
+    try {
+      for (const name of themeNames) {
+        applyCssTheme(getTheme(name).css);
+        const foreground = root.style.getPropertyValue(`--${textToken}`);
+        const background = root.style.getPropertyValue(`--${themeSurfaceToken}`);
+        expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5);
+      }
+    } finally {
+      root.style.cssText = originalStyle;
     }
   });
 });

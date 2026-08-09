@@ -2,6 +2,47 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import { safeStorage } from 'electron';
 
+const LEGACY_KEYBINDINGS = {
+  'search-toggle': 'Ctrl+F',
+  'palette-toggle': 'Ctrl+K',
+  'new-terminal': 'Ctrl+N',
+  'close-tab': 'Ctrl+W',
+  'toggle-sidebar': 'Ctrl+B',
+  'font-increase': 'Ctrl+Plus',
+  'font-decrease': 'Ctrl+-',
+  'snippets-toggle': 'Ctrl+Shift+P',
+  'split-right': 'Ctrl+\\',
+  'split-down': 'Ctrl+Shift+\\',
+  'close-pane': 'Ctrl+Shift+W',
+  'rename-pane': 'F2',
+  'rename-tab': 'Ctrl+F2',
+  'previous-command': 'Ctrl+Shift+ArrowUp',
+  'next-command': 'Ctrl+Shift+ArrowDown',
+  'copy-command': 'Ctrl+Alt+C',
+  'copy-command-output': 'Ctrl+Alt+O',
+  'rerun-command': 'Ctrl+Alt+R',
+};
+
+async function loadKeybindings(
+  platformName: 'win32' | 'darwin',
+  storedForDefaults: (defaults: Record<string, string>) => Record<string, string>,
+): Promise<{ actual: Record<string, string>; defaults: Record<string, string> }> {
+  const fsMock = await import('fs');
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { ...platform, value: platformName });
+  vi.resetModules();
+  try {
+    const { SettingsManager } = await import('../../src/main/settings');
+    const defaults = new SettingsManager().get().keybindings;
+    const storedKeybindings = storedForDefaults(defaults);
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({ keybindings: storedKeybindings }));
+    return { actual: new SettingsManager().get().keybindings, defaults };
+  } finally {
+    Object.defineProperty(process, 'platform', platform);
+    vi.resetModules();
+  }
+}
+
 // Mock electron's app module
 vi.mock('electron', () => ({
   app: {
@@ -18,19 +59,25 @@ vi.mock('electron', () => ({
 vi.mock('fs', () => ({
   default: {
     readFileSync: vi.fn(() => {
-      throw new Error('File not found');
+      throw Object.assign(new Error('File not found'), { code: 'ENOENT' });
     }),
     writeFileSync: vi.fn(),
     renameSync: vi.fn(),
+    openSync: vi.fn(() => 17),
+    fsyncSync: vi.fn(),
+    closeSync: vi.fn(),
     rmSync: vi.fn(),
     existsSync: vi.fn(() => true),
     mkdirSync: vi.fn(),
   },
   readFileSync: vi.fn(() => {
-    throw new Error('File not found');
+    throw Object.assign(new Error('File not found'), { code: 'ENOENT' });
   }),
   writeFileSync: vi.fn(),
   renameSync: vi.fn(),
+  openSync: vi.fn(() => 17),
+  fsyncSync: vi.fn(),
+  closeSync: vi.fn(),
   rmSync: vi.fn(),
   existsSync: vi.fn(() => true),
   mkdirSync: vi.fn(),
@@ -61,6 +108,10 @@ describe('SettingsManager', () => {
       'copy-command': 'Ctrl+Alt+C',
       'copy-command-output': 'Ctrl+Alt+O',
       'rerun-command': 'Ctrl+Alt+R',
+      'move-pane-left': '',
+      'move-pane-right': '',
+      'move-pane-up': '',
+      'move-pane-down': '',
     });
   });
 
@@ -159,6 +210,51 @@ describe('SettingsManager', () => {
       'font-reset': `${primaryModifier}+0`,
       'history-toggle': '',
     });
+  });
+
+  it.each(['win32', 'darwin'] as const)(
+    'migrates the exact raw legacy %s keybindings to current defaults',
+    async (platformName) => {
+      const { actual, defaults } = await loadKeybindings(platformName, () => LEGACY_KEYBINDINGS);
+      expect(actual).toEqual(defaults);
+    },
+  );
+
+  it.each(['win32', 'darwin'] as const)(
+    'migrates the exact JaneT-expanded legacy %s keybindings to current defaults',
+    async (platformName) => {
+      const { actual, defaults } = await loadKeybindings(platformName, (current) => ({
+        ...current,
+        ...LEGACY_KEYBINDINGS,
+      }));
+      expect(actual).toEqual(defaults);
+    },
+  );
+
+  it.each(['win32', 'darwin'] as const)(
+    'migrates the previous JaneT-expanded legacy %s keybindings after new actions are added',
+    async (platformName) => {
+      const { actual, defaults } = await loadKeybindings(platformName, (current) => ({
+        ...Object.fromEntries(Object.entries(current).filter(([action]) => !action.startsWith('move-pane-'))),
+        ...LEGACY_KEYBINDINGS,
+      }));
+      expect(actual).toEqual(defaults);
+    },
+  );
+
+  it.each([
+    ['sparse', { 'close-tab': 'Alt+X' }],
+    ['changed complete', { ...LEGACY_KEYBINDINGS, 'palette-toggle': 'Alt+K' }],
+    ['explicit empty', { ...LEGACY_KEYBINDINGS, 'palette-toggle': '' }],
+    ['extra key', { ...LEGACY_KEYBINDINGS, custom: 'Alt+J' }],
+    ['missing key', Object.fromEntries(
+      Object.entries(LEGACY_KEYBINDINGS).filter(([key]) => key !== 'rerun-command'),
+    )],
+  ])('preserves the user-owned %s keybinding map', async (_name, keybindings) => {
+    for (const platformName of ['win32', 'darwin'] as const) {
+      const { actual, defaults } = await loadKeybindings(platformName, () => keybindings);
+      expect(actual).toEqual({ ...defaults, ...keybindings });
+    }
   });
 
   it('rejects shortcut updates whose merged map exceeds the entry limit', async () => {
@@ -422,13 +518,67 @@ describe('SettingsManager', () => {
     const fsMock = await import('fs');
     expect(fsMock.writeFileSync).toHaveBeenCalledWith(
       expect.stringMatching(/settings\.json\.tmp$/),
-      expect.stringContaining('"fontSize": 20'),
-      'utf-8',
+      expect.any(Buffer),
+      { flush: true },
     );
+    expect((fsMock.writeFileSync as any).mock.calls.at(-1)[1].toString('utf8'))
+      .toContain('"fontSize": 20');
     expect(fsMock.renameSync).toHaveBeenCalledWith(
       expect.stringMatching(/settings\.json\.tmp$/),
       expect.stringMatching(/settings\.json$/),
     );
+  });
+
+  it('syncs the containing directory after replacement where supported', async () => {
+    const fsMock = await import('fs');
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+    try {
+      const { SettingsManager } = await import('../../src/main/settings');
+      new SettingsManager().set({ fontSize: 20 });
+
+      expect(fsMock.openSync).toHaveBeenCalledWith(expect.stringMatching(/user-data$/), 'r');
+      expect(fsMock.fsyncSync).toHaveBeenCalledWith(17);
+      expect(fsMock.closeSync).toHaveBeenCalledWith(17);
+      expect(vi.mocked(fsMock.renameSync).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(fsMock.openSync).mock.invocationCallOrder[0]);
+    } finally {
+      Object.defineProperty(process, 'platform', platform!);
+    }
+  });
+
+  it('keeps the committed cache when directory sync cannot confirm durability', async () => {
+    const fsMock = await import('fs');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+    vi.mocked(fsMock.fsyncSync).mockImplementationOnce(() => { throw new Error('sync unavailable'); });
+    try {
+      const { SettingsManager } = await import('../../src/main/settings');
+      const manager = new SettingsManager();
+
+      expect(manager.set({ fontSize: 20 }).fontSize).toBe(20);
+      expect(manager.get().fontSize).toBe(20);
+      expect(error).toHaveBeenCalledWith(
+        'Settings were saved, but crash durability could not be confirmed:', expect.any(Error),
+      );
+    } finally {
+      Object.defineProperty(process, 'platform', platform!);
+    }
+  });
+
+  it('skips unsupported directory syncing on Windows', async () => {
+    const fsMock = await import('fs');
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+    try {
+      const { SettingsManager } = await import('../../src/main/settings');
+      expect(new SettingsManager().set({ fontSize: 20 }).fontSize).toBe(20);
+      expect(fsMock.openSync).not.toHaveBeenCalled();
+      expect(fsMock.fsyncSync).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, 'platform', platform!);
+    }
   });
 
   it.each([
@@ -621,7 +771,7 @@ describe('SettingsManager', () => {
     expect(() => manager.set({ fontSize: 20 })).toThrow(/persist settings/i);
 
     expect(fsMock.writeFileSync).toHaveBeenCalledWith(
-      expect.stringMatching(/settings\.json\.tmp$/), expect.any(String), 'utf-8',
+      expect.stringMatching(/settings\.json\.tmp$/), expect.any(Buffer), { flush: true },
     );
     expect(fsMock.writeFileSync).not.toHaveBeenCalledWith(
       expect.stringMatching(/settings\.json$/), expect.anything(), expect.anything(),
@@ -688,7 +838,7 @@ describe('SettingsManager', () => {
       }],
     });
 
-    const savedJson = (fsMock.writeFileSync as any).mock.calls.at(-1)[1] as string;
+    const savedJson = (fsMock.writeFileSync as any).mock.calls.at(-1)[1].toString('utf8');
     expect(savedJson).not.toContain('"password": "secret"');
     expect(savedJson).toContain('"passwordSecret"');
     expect(savedJson).toContain('"version": 1');
@@ -870,6 +1020,8 @@ describe('SettingsManager', () => {
             title: 'JaneT - fixes',
             type: 'local',
             cwd: 'C:/repo',
+            selectedPanePath: [1],
+            maximizedPanePath: [1],
             root: { type: 'split', direction: 'vertical', sizes: [1, 1], children: [{ type: 'leaf', title: 'Dev server' }, { type: 'leaf', title: 'Tests' }] },
           },
           {
@@ -899,19 +1051,55 @@ describe('SettingsManager', () => {
     expect(loaded.session.tabs[0].cwd).toBe('C:/repo');
     expect(loaded.session.tabs[0]).toMatchObject({
       title: 'JaneT - fixes',
+      selectedPanePath: [1],
+      maximizedPanePath: [1],
       root: { children: [{ title: 'Dev server' }, { title: 'Tests' }] },
     });
     expect(loaded.session.tabs[1].sshProfileId).toBe('pckpr@box.local:22:password');
 
     loaded.keybindings['new-tab'] = 'Ctrl+Alt+M';
     loaded.session.tabs[0].title = 'mutated';
+    loaded.session.tabs[0].selectedPanePath![0] = 0;
+    loaded.session.tabs[0].maximizedPanePath![0] = 0;
     if (loaded.session.tabs[0].root.type === 'split') {
       loaded.session.tabs[0].root.sizes[0] = 99;
     }
     const isolated = loadedManager.get();
     expect(isolated.keybindings['new-tab']).not.toBe('Ctrl+Alt+M');
     expect(isolated.session.tabs[0].title).toBe('JaneT - fixes');
+    expect(isolated.session.tabs[0].selectedPanePath).toEqual([1]);
+    expect(isolated.session.tabs[0].maximizedPanePath).toEqual([1]);
     expect(isolated.session.tabs[0].root).toMatchObject({ sizes: [1, 1] });
+  });
+
+  it('rejects a runtime pane path that does not resolve to a saved leaf', async () => {
+    const fsMock = await import('fs');
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+
+    expect(() => manager.set({
+      session: {
+        tabs: [{
+          id: 'tab', title: 'Tab', type: 'local', selectedPanePath: [1],
+          root: { type: 'leaf' },
+        }],
+        activeTabId: 'tab', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    })).toThrow(/invalid settings/i);
+    expect(() => manager.set({
+      session: {
+        tabs: [{
+          id: 'tab', title: 'Tab', type: 'local', selectedPanePath: new Array(1),
+          root: {
+            type: 'split', direction: 'vertical', sizes: [1, 1],
+            children: [{ type: 'leaf' }, { type: 'leaf' }],
+          },
+        }],
+        activeTabId: 'tab', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    })).toThrow(/invalid settings/i);
+    expect(manager.get().session.tabs).toEqual([]);
+    expect(fsMock.writeFileSync).not.toHaveBeenCalled();
   });
 
   it('bounds saved tab and pane names while loading settings from disk', async () => {

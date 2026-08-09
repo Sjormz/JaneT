@@ -27,6 +27,7 @@ interface SplitPaneProps {
   node: PaneNode;
   tabId: string;
   tabType: 'local' | 'ssh';
+  activeTerminalId?: string | null;
   sshSessionId?: string;
   onTerminalReady: (termId: string) => void;
   onTerminalRemoved: (termId: string) => void;
@@ -65,6 +66,8 @@ interface SplitPaneProps {
   sshShellReady?: boolean;
   /** Reports whether a specific SSH transport closed unexpectedly. */
   isSshSessionDisconnected?: (sessionId?: string) => boolean;
+  onSshShellReady?: (termId: string, sessionId: string) => void;
+  onSshShellFailed?: (termId: string, sessionId: string) => void;
   /** User clicked "Reconnect" on the SSH notice for this term. */
   onSshRetry?: (termId: string, dimensions: { cols: number; rows: number }) => void | Promise<void>;
   /** Total panes in the tab; propagated internally so leaf actions describe their real outcome. */
@@ -88,6 +91,7 @@ function TerminalPaneLeaf({
   onBroadcastRecipientChange,
   awareness,
   transport,
+  isActive,
   onSplitRight,
   onSplitDown,
   onClose,
@@ -108,6 +112,8 @@ function TerminalPaneLeaf({
   hasSessionForLeaf,
   sshShellReady,
   isSshSessionDisconnected,
+  onSshShellReady,
+  onSshShellFailed,
   onSshRetry,
   totalPaneCount,
 }: {
@@ -126,6 +132,7 @@ function TerminalPaneLeaf({
   onBroadcastRecipientChange?: (termId: string, selected: boolean) => void;
   awareness?: AgentAwareness;
   transport?: TerminalTransportStatus;
+  isActive?: boolean;
   onSplitRight: () => void;
   onSplitDown: () => void;
   onClose: () => void;
@@ -146,6 +153,8 @@ function TerminalPaneLeaf({
   hasSessionForLeaf?: (leafId: string) => boolean;
   sshShellReady?: boolean;
   isSshSessionDisconnected?: (sessionId?: string) => boolean;
+  onSshShellReady?: (termId: string, sessionId: string) => void;
+  onSshShellFailed?: (termId: string, sessionId: string) => void;
   onSshRetry?: (termId: string, dimensions: { cols: number; rows: number }) => void | Promise<void>;
   totalPaneCount: number;
 }) {
@@ -189,6 +198,7 @@ function TerminalPaneLeaf({
   return (
     <div
       className={`terminal-leaf ${draggedLeafId === leaf.id ? 'pane-dragging' : ''}${broadcastSelected ? ' broadcast-selected' : ''}`}
+      aria-current={isActive ? 'true' : undefined}
       style={{ viewTransitionName: `terminal-pane-${leaf.id.replace(/[^a-zA-Z0-9_-]/g, '_')}` }}
       onDragOver={(event) => {
         if (!draggedLeafId || draggedLeafId === leaf.id) return;
@@ -264,6 +274,7 @@ function TerminalPaneLeaf({
         <TerminalPane
           termId={leaf.id}
           tabType={leafType}
+          inputLabel={paneLabel}
           sshSessionId={effectiveSshSessionId}
           onReady={onTerminalReady}
           onRemoved={onTerminalRemoved}
@@ -283,6 +294,8 @@ function TerminalPaneLeaf({
           hasSession={hasSessionForLeaf?.(leaf.id)}
           sshShellReady={leaf.sshShellReady ?? sshShellReady}
           sshConnectionLost={leafType === 'ssh' && isSshSessionDisconnected?.(effectiveSshSessionId)}
+          onSshShellReady={onSshShellReady}
+          onSshShellFailed={onSshShellFailed}
           onSshRetry={onSshRetry}
         />
       </div>
@@ -419,6 +432,7 @@ export default function SplitPane(props: SplitPaneProps) {
     node,
     tabId,
     tabType,
+    activeTerminalId,
     sshSessionId,
     onTerminalReady,
     onTerminalRemoved,
@@ -451,6 +465,8 @@ export default function SplitPane(props: SplitPaneProps) {
     hasSessionForLeaf,
     sshShellReady,
     isSshSessionDisconnected,
+    onSshShellReady,
+    onSshShellFailed,
     onSshRetry,
   } = props;
   const totalPaneCount = props.totalPaneCount ?? getAllLeafIds(node).length;
@@ -473,6 +489,7 @@ export default function SplitPane(props: SplitPaneProps) {
         onBroadcastRecipientChange={onBroadcastRecipientChange}
         awareness={awarenessByTerminal?.[node.id]}
         transport={transportByTerminal?.[node.id]}
+        isActive={activeTerminalId === node.id}
         onSplitRight={() => onSplitPane(node.id, 'vertical')}
         onSplitDown={() => onSplitPane(node.id, 'horizontal')}
         onClose={() => onClosePane(node.id)}
@@ -493,6 +510,8 @@ export default function SplitPane(props: SplitPaneProps) {
         hasSessionForLeaf={hasSessionForLeaf}
         sshShellReady={sshShellReady}
         isSshSessionDisconnected={isSshSessionDisconnected}
+        onSshShellReady={onSshShellReady}
+        onSshShellFailed={onSshShellFailed}
         onSshRetry={onSshRetry}
         totalPaneCount={totalPaneCount}
       />
@@ -510,6 +529,7 @@ export default function SplitPane(props: SplitPaneProps) {
             node={maximizedBranch}
             tabId={tabId}
             tabType={tabType}
+            activeTerminalId={activeTerminalId}
             sshSessionId={sshSessionId}
             onTerminalReady={onTerminalReady}
             onTerminalRemoved={onTerminalRemoved}
@@ -542,6 +562,8 @@ export default function SplitPane(props: SplitPaneProps) {
             hasSessionForLeaf={hasSessionForLeaf}
             sshShellReady={sshShellReady}
             isSshSessionDisconnected={isSshSessionDisconnected}
+            onSshShellReady={onSshShellReady}
+            onSshShellFailed={onSshShellFailed}
             onSshRetry={onSshRetry}
             totalPaneCount={totalPaneCount}
           />
@@ -572,6 +594,7 @@ export default function SplitPane(props: SplitPaneProps) {
               node={child}
               tabId={tabId}
               tabType={tabType}
+              activeTerminalId={activeTerminalId}
               sshSessionId={sshSessionId}
               onTerminalReady={onTerminalReady}
               onTerminalRemoved={onTerminalRemoved}
@@ -604,6 +627,8 @@ export default function SplitPane(props: SplitPaneProps) {
               hasSessionForLeaf={hasSessionForLeaf}
               sshShellReady={sshShellReady}
               isSshSessionDisconnected={isSshSessionDisconnected}
+              onSshShellReady={onSshShellReady}
+              onSshShellFailed={onSshShellFailed}
               onSshRetry={onSshRetry}
               totalPaneCount={totalPaneCount}
             />

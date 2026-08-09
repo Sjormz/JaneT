@@ -59,8 +59,6 @@ export default function SSHConnectionNotice({
       className={`ssh-terminal-notice ${isError ? 'is-error' : ''} ${isStalled ? 'is-stalled' : ''}`}
       data-testid="ssh-terminal-notice"
       data-state={state.kind}
-      role={isError ? 'alert' : 'status'}
-      aria-live={isError ? 'assertive' : 'polite'}
     >
       <div className="ssh-terminal-notice-icon">
         {state.kind === 'closed'

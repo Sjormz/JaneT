@@ -237,6 +237,84 @@ export function removePane(tree: PaneNode, targetLeafId: string): PaneNode | nul
 
 export type PaneDropSide = 'top' | 'right' | 'bottom' | 'left';
 
+interface PaneRect {
+  id: string;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+function paneRects(
+  tree: PaneNode,
+  left = 0,
+  top = 0,
+  right = 1,
+  bottom = 1,
+): PaneRect[] {
+  if (tree.type === 'leaf') return [{ id: tree.id, left, top, right, bottom }];
+  const sizes = tree.sizes.length === tree.children.length
+    && tree.sizes.every((size) => Number.isFinite(size) && size > 0)
+    ? tree.sizes
+    : tree.children.map(() => 1);
+  const total = sizes.reduce((sum, size) => sum + size, 0);
+  let offset = tree.direction === 'vertical' ? left : top;
+  return tree.children.flatMap((child, index) => {
+    const fraction = sizes[index] / total;
+    if (tree.direction === 'vertical') {
+      const childRight = index === tree.children.length - 1
+        ? right
+        : offset + (right - left) * fraction;
+      const rects = paneRects(child, offset, top, childRight, bottom);
+      offset = childRight;
+      return rects;
+    }
+    const childBottom = index === tree.children.length - 1
+      ? bottom
+      : offset + (bottom - top) * fraction;
+    const rects = paneRects(child, left, offset, right, childBottom);
+    offset = childBottom;
+    return rects;
+  });
+}
+
+/** Selects the nearest pane in one visual direction, with tree order breaking ties. */
+export function directionalPaneTarget(
+  tree: PaneNode,
+  sourceLeafId: string,
+  side: PaneDropSide,
+): string | null {
+  const rects = paneRects(tree);
+  const source = rects.find((rect) => rect.id === sourceLeafId);
+  if (!source) return null;
+  const horizontal = side === 'left' || side === 'right';
+  const sourcePrimary = horizontal
+    ? (source.left + source.right) / 2
+    : (source.top + source.bottom) / 2;
+  const sourceOrthogonal = horizontal
+    ? (source.top + source.bottom) / 2
+    : (source.left + source.right) / 2;
+  const sign = side === 'right' || side === 'bottom' ? 1 : -1;
+  return rects
+    .map((rect, index) => {
+      const primary = horizontal
+        ? (rect.left + rect.right) / 2
+        : (rect.top + rect.bottom) / 2;
+      const orthogonalStart = horizontal ? rect.top : rect.left;
+      const orthogonalEnd = horizontal ? rect.bottom : rect.right;
+      const orthogonalGap = sourceOrthogonal < orthogonalStart
+        ? orthogonalStart - sourceOrthogonal
+        : sourceOrthogonal > orthogonalEnd ? sourceOrthogonal - orthogonalEnd : 0;
+      return { id: rect.id, index, primaryGap: sign * (primary - sourcePrimary), orthogonalGap };
+    })
+    .filter((candidate) => candidate.id !== sourceLeafId && candidate.primaryGap > 0)
+    .sort((leftCandidate, rightCandidate) => (
+      leftCandidate.primaryGap - rightCandidate.primaryGap
+      || leftCandidate.orthogonalGap - rightCandidate.orthogonalGap
+      || leftCandidate.index - rightCandidate.index
+    ))[0]?.id ?? null;
+}
+
 function insertPaneBeside(
   tree: PaneNode,
   targetLeafId: string,
@@ -271,11 +349,56 @@ function insertPaneBeside(
   return children.some((child, index) => child !== tree.children[index]) ? { ...tree, children } : tree;
 }
 
+function reorderSiblingPane(
+  tree: PaneNode,
+  draggedLeafId: string,
+  targetLeafId: string,
+  side: PaneDropSide,
+): PaneNode | null {
+  if (tree.type === 'leaf') return null;
+  const direction = side === 'left' || side === 'right' ? 'vertical' : 'horizontal';
+  if (tree.direction === direction) {
+    const draggedIndex = tree.children.findIndex(
+      (child) => child.type === 'leaf' && child.id === draggedLeafId,
+    );
+    const targetIndex = tree.children.findIndex(
+      (child) => child.type === 'leaf' && child.id === targetLeafId,
+    );
+    if (draggedIndex >= 0 && targetIndex >= 0) {
+      const entries = tree.children.map((child, index) => ({
+        child,
+        size: tree.sizes[index] ?? 1,
+      }));
+      const [dragged] = entries.splice(draggedIndex, 1);
+      const remainingTargetIndex = entries.findIndex(({ child }) => child.id === targetLeafId);
+      const before = side === 'left' || side === 'top';
+      entries.splice(before ? remainingTargetIndex : remainingTargetIndex + 1, 0, dragged);
+      if (entries.every(({ child }, index) => child === tree.children[index])) return tree;
+      return {
+        ...tree,
+        children: entries.map(({ child }) => child),
+        sizes: entries.map(({ size }) => size),
+      };
+    }
+  }
+  for (let index = 0; index < tree.children.length; index += 1) {
+    const moved = reorderSiblingPane(tree.children[index], draggedLeafId, targetLeafId, side);
+    if (moved) {
+      const children = [...tree.children];
+      children[index] = moved;
+      return { ...tree, children };
+    }
+  }
+  return null;
+}
+
 /** Moves an existing terminal leaf beside another leaf without replacing either terminal. */
 export function movePane(tree: PaneNode, draggedLeafId: string, targetLeafId: string, side: PaneDropSide): PaneNode {
   if (draggedLeafId === targetLeafId) return tree;
   const dragged = findLeaf(tree, draggedLeafId);
   if (!dragged || !findLeaf(tree, targetLeafId)) return tree;
+  const reordered = reorderSiblingPane(tree, draggedLeafId, targetLeafId, side);
+  if (reordered) return reordered;
   const withoutDragged = removePane(tree, draggedLeafId);
   return withoutDragged ? insertPaneBeside(withoutDragged, targetLeafId, dragged, side) : tree;
 }

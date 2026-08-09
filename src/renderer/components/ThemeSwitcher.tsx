@@ -35,6 +35,18 @@ export default function ThemeSwitcher({
   onNotificationsEnabledChange,
   onNotificationThresholdSecondsChange,
 }: ThemeSwitcherProps) {
+  const [diagnosticsFeedback, setDiagnosticsFeedback] = React.useState('');
+
+  const copyDiagnostics = async () => {
+    try {
+      setDiagnosticsFeedback(await window.janet.copyDiagnostics()
+        ? 'Diagnostics copied'
+        : 'Could not copy diagnostics');
+    } catch {
+      setDiagnosticsFeedback('Could not copy diagnostics');
+    }
+  };
+
   return (
     <div className="theme-switcher">
       <div className="settings-header">
@@ -107,6 +119,12 @@ export default function ThemeSwitcher({
         </label>
         <label className="notification-threshold-label" htmlFor="notification-threshold">Notification threshold (seconds)</label>
         <input id="notification-threshold" type="number" min={1} max={86_400} step={1} value={notificationThresholdSeconds} disabled={!notificationsEnabled} onChange={(event) => onNotificationThresholdSecondsChange(Number(event.currentTarget.value))} />
+      </div>
+      <div className="theme-section shortcut-settings-section">
+        <button type="button" className="shortcut-settings-button" onClick={() => { void copyDiagnostics(); }} aria-label="Copy diagnostics">
+          <span><strong>Copy diagnostics</strong><small>Copy privacy-safe app and system details</small></span>
+        </button>
+        <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{diagnosticsFeedback}</span>
       </div>
     </div>
   );

@@ -65,10 +65,6 @@ export default function UpdateBanner() {
     unsubs.push(window.janet.onUpdateError((error) => {
       requestEpochRef.current += 1;
       setUpdateState({ status: 'error', message: error.message });
-      dismissTimerRef.current = setTimeout(() => {
-        dismissTimerRef.current = null;
-        setState({ status: 'idle' });
-      }, 10000);
     }));
 
     return () => {
@@ -215,6 +211,15 @@ export default function UpdateBanner() {
         <aside className="update-banner is-error" role="alert">
           <AlertIcon size="md" className="update-banner-icon" />
           <span className="update-banner-message">Update failed: {state.message}</span>
+          <button
+            type="button"
+            className="update-banner-action"
+            onClick={() => {
+              void window.janet.openExternal('https://github.com/Sjormz/JaneT/releases/latest').catch(() => {});
+            }}
+          >
+            View JaneT releases
+          </button>
           <button type="button" className="update-banner-action" onClick={handleForceCheck}>
             <RefreshIcon size="xs" /> Retry
           </button>

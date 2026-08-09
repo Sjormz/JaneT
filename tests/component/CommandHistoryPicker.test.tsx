@@ -8,6 +8,38 @@ const entries = [
 ];
 
 describe('CommandHistoryPicker', () => {
+  it('explains an empty history without implying that selection runs a command', () => {
+    render(<CommandHistoryPicker visible entries={[]} onClose={() => {}} onSelect={() => {}} />);
+
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('No command history yet');
+    expect(status).toHaveTextContent('Commands you run appear here. Selecting one pastes it without running.');
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search command history' }), { target: { value: 'missing' } });
+    expect(status).toHaveTextContent('No command history yet');
+    expect(status).not.toHaveTextContent('No commands match');
+  });
+
+  it('distinguishes a search with no matches from empty history', () => {
+    render(<CommandHistoryPicker visible entries={entries} onClose={() => {}} onSelect={() => {}} />);
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search command history' }), { target: { value: 'missing' } });
+
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('No commands match “missing”');
+    expect(status).toHaveTextContent('Try another search. Selecting a command pastes it without running.');
+    expect(status).not.toHaveTextContent('No command history yet');
+  });
+
+  it('treats whitespace-only input as no search', () => {
+    render(<CommandHistoryPicker visible entries={entries} onClose={() => {}} onSelect={() => {}} />);
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search command history' }), { target: { value: '   ' } });
+
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')).toHaveLength(entries.length);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
   it('does not display or search local working-directory paths', () => {
     render(<CommandHistoryPicker visible entries={entries} onClose={() => {}} onSelect={() => {}} />);
     const dialog = screen.getByRole('dialog', { name: 'Command history' });

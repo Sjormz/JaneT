@@ -41,6 +41,7 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
     });
     const page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
+    await page.getByRole('button', { name: 'Dismiss get started' }).click();
 
     const terminals = page.locator('.terminal-container');
     await expect(terminals).toHaveCount(1);

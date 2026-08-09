@@ -27,6 +27,8 @@ export interface SavedTab {
   type: 'local' | 'ssh';
   cwd?: string;
   sshProfileId?: string;
+  selectedPanePath?: PanePath;
+  maximizedPanePath?: PanePath;
   root: SavedPaneNode;
 }
 
@@ -45,6 +47,29 @@ export const MAX_SAVED_TITLE_LENGTH = 256;
 const MAX_PANE_TREE_DEPTH = 64;
 const MAX_PANE_TREE_NODES = 128;
 const MAX_PANE_TREE_LEAVES = 64;
+
+export type PanePath = number[];
+
+export function panePathForLeaf(root: PaneNode, leafId: string): PanePath | null {
+  if (root.type === 'leaf') return root.id === leafId ? [] : null;
+  for (const [index, child] of root.children.entries()) {
+    const path = panePathForLeaf(child, leafId);
+    if (path) return [index, ...path];
+  }
+  return null;
+}
+
+export function leafIdAtPanePath(root: PaneNode, path: PanePath): string | null {
+  if (path.length > MAX_PANE_TREE_DEPTH) return null;
+  let node = root;
+  for (const index of path) {
+    if (node.type !== 'split' || !Number.isInteger(index) || index < 0 || index >= node.children.length) {
+      return null;
+    }
+    node = node.children[index];
+  }
+  return node.type === 'leaf' ? node.id : null;
+}
 
 function normalizeSizes(sizes: unknown, count: number): number[] {
   if (!Array.isArray(sizes) || sizes.length !== count || !sizes.every((size) => typeof size === 'number' && Number.isFinite(size) && size > 0)) {
@@ -213,7 +238,18 @@ export function normalizeSession(raw: unknown): SavedSession {
       const leaves = countSavedPaneLeaves(tab.root, MAX_RESTORED_TERMINALS - terminalCount);
       if (leaves === null) continue;
       terminalCount += leaves;
-      tabs.push(tab);
+      const selectedPanePath = normalizeSavedPanePath(tab.selectedPanePath, tab.root);
+      const maximizedPanePath = normalizeSavedPanePath(tab.maximizedPanePath, tab.root);
+      tabs.push({
+        id: tab.id,
+        title: tab.title,
+        type: tab.type,
+        ...(typeof tab.cwd === 'string' ? { cwd: tab.cwd } : {}),
+        ...(typeof tab.sshProfileId === 'string' ? { sshProfileId: tab.sshProfileId } : {}),
+        ...(selectedPanePath !== undefined ? { selectedPanePath } : {}),
+        ...(maximizedPanePath !== undefined ? { maximizedPanePath } : {}),
+        root: tab.root,
+      });
     }
   }
 
@@ -224,6 +260,17 @@ export function normalizeSession(raw: unknown): SavedSession {
     tabsOpen: obj.tabsOpen !== false,
     sidebarSection: section,
   };
+}
+
+function normalizeSavedPanePath(value: unknown, root: SavedPaneNode): PanePath | undefined {
+  if (!Array.isArray(value) || value.length > MAX_PANE_TREE_DEPTH
+    || !Array.from(value).every((index) => Number.isInteger(index) && index >= 0)) return undefined;
+  let node = root;
+  for (const index of value) {
+    if (node.type !== 'split' || index >= node.children.length) return undefined;
+    node = node.children[index];
+  }
+  return node.type === 'leaf' ? [...value] : undefined;
 }
 
 function countSavedPaneLeaves(root: unknown, limit: number): number | null {

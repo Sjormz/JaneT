@@ -24,7 +24,7 @@ export default function CommandHistoryPicker({ visible, entries, runningIds, onC
   useModalFocus({ open: visible, containerRef: panelRef, initialFocusSelector: '[aria-label="Search command history"]', onClose });
   const filtered = useMemo(() => entries.filter((entry) => {
     const text = `${entry.command} ${entry.context.kind === 'ssh' ? commandHistoryContextLabel(entry.context) : ''}`.toLocaleLowerCase();
-    return text.includes(query.toLocaleLowerCase());
+    return text.includes(query.trim().toLocaleLowerCase());
   }), [entries, query]);
   useEffect(() => setSelected(0), [query, entries]);
   if (!visible) return null;
@@ -56,7 +56,12 @@ export default function CommandHistoryPicker({ visible, entries, runningIds, onC
         <input className="command-history-search" ref={searchRef} role="combobox" aria-label="Search command history" aria-controls="command-history-list" aria-expanded="true" aria-activedescendant={filtered[selected] ? `command-history-${filtered[selected].id}` : undefined} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={keyDown} />
       </div>
       <div id="command-history-list" className="command-history-list" role="listbox">
-        {filtered.map((entry, index) => <div className="command-history-row" role="presentation" key={entry.id}>
+        {filtered.length === 0 ? <div className="snippet-empty" role="status">
+          <strong>{entries.length === 0 ? 'No command history yet' : `No commands match “${query.trim()}”`}</strong>
+          <span>{entries.length === 0
+            ? 'Commands you run appear here. Selecting one pastes it without running.'
+            : 'Try another search. Selecting a command pastes it without running.'}</span>
+        </div> : filtered.map((entry, index) => <div className="command-history-row" role="presentation" key={entry.id}>
           <button ref={(element) => { optionRefs.current[index] = element; }} className="command-history-item" id={`command-history-${entry.id}`} role="option" aria-selected={index === selected} tabIndex={index === selected ? 0 : -1} onFocus={() => setSelected(index)} onMouseEnter={() => setSelected(index)} onKeyDown={keyDown} onClick={() => choose(entry)}>
             <span>{entry.command}</span>
             {(entry.context.kind === 'ssh' || runningIds?.has(entry.id)) && <small>{[

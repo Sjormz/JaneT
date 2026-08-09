@@ -32,7 +32,7 @@ JaneT is for work that starts in a shell and quickly spreads across more shells,
 - **Reusable presets:** Save a live pane layout, working directories, SSH profiles, and ordered startup commands. Open the whole setup again in one step.
 - **Files and editing:** Browse the focused terminal's local directory or a remote machine over SFTP, then open supported text files in the built-in Monaco editor.
 - **Everyday Git tools:** Stage, unstage, commit, fetch, pull, push, switch branches, manage worktrees, and safely discard tracked unstaged changes.
-- **Durable sessions:** Keep active terminal and SSH work running when the window closes, or stop it before quitting.
+- **Restorable workspaces:** Closing JaneT ends its managed local and SSH terminal sessions. Restarting restores the saved workspace structure into fresh shells, and preset startup commands run again. Detached jobs may continue outside JaneT.
 - **Semantic command tools:** Jump between completed commands, copy a command or its output, and paste a command back without running it automatically.
 - **Safe broadcast input:** Explicitly select panes, confirm the recipient set, then send the same keyboard, paste, or binary input to every selected terminal.
 - **Contextual command history:** Search bounded local history by command text or SSH host without storing terminal output.
@@ -62,7 +62,7 @@ JaneT automatically adds semantic markers to new local Bash, zsh, fish, Windows 
 
 ## Find a command in contextual history
 
-Completed semantic commands are also available from **Search commands** (`Ctrl+K`) → **Open command history**.
+Completed semantic commands are also available from **Search commands** → **Open command history**.
 
 1. Search by command text or SSH label.
 2. Select an entry to paste it into the currently focused terminal.
@@ -100,6 +100,8 @@ JaneT checks the current focus state again immediately before showing a native n
 ## Know when your agent needs you
 
 JaneT can show live agent status in pane headers and tabs, including **Running**, **Needs input**, **Ready**, and completed turn outcomes. Status comes from explicit lifecycle events rather than transcript scraping, so no agent protocol text is added to the visible terminal.
+
+Agent lifecycle status is bounded metadata, not an authenticated security signal. Treat it as workspace guidance, not proof of which process produced the terminal output.
 
 Hermes Agent's classic terminal interface is supported through the included JaneT awareness plugin:
 
@@ -182,27 +184,35 @@ Installers and portable builds are published on the [latest release](https://git
 | macOS Apple silicon and Intel | `.dmg` and `.zip` |
 | Linux x64 | AppImage and Debian package |
 
-JaneT checks GitHub Releases for updates from inside the app.
+JaneT checks GitHub Releases for updates from inside the app. If an in-app update cannot complete, download and install the latest package from the release page.
 
-> [!NOTE]
-> JaneT is under active alpha development. Current macOS releases are ad-hoc signed and not notarized, so Gatekeeper may require you to open JaneT explicitly from Finder. See the [release documentation](docs/release.md#macos-release-signing) for details.
+### First launch
+
+- **Windows:** Windows builds are unsigned, so Microsoft Defender SmartScreen may warn before launch. Confirm that the download came from the JaneT GitHub release, then use SmartScreen's **More info** → **Run anyway** path if you choose to continue.
+- **macOS:** Current builds are ad-hoc signed and not notarized. After attempting to open JaneT, go to **System Settings** → **Privacy & Security** and choose **Open Anyway** for JaneT. See the [release documentation](docs/release.md#macos-release-signing) for the signing policy.
+- **Linux AppImage:** Make the downloaded file executable, then run it:
+
+  ```bash
+  chmod +x JaneT-<version>-linux-x64.AppImage
+  ./JaneT-<version>-linux-x64.AppImage
+  ```
 
 ## Default shortcuts
 
-| Action | Shortcut |
-| --- | --- |
-| Command palette | `Ctrl+K` |
-| New terminal tab | `Ctrl+N` |
-| Search terminal output | `Ctrl+F` |
-| Toggle workspace tools | `Ctrl+B` |
-| Open snippets | `Ctrl+Shift+P` |
-| Split pane right | `Ctrl+\` |
-| Split pane below | `Ctrl+Shift+\` |
-| Previous completed command | `Ctrl+Shift+ArrowUp` |
-| Next completed command | `Ctrl+Shift+ArrowDown` |
-| Copy completed command | `Ctrl+Alt+C` |
-| Copy completed command output | `Ctrl+Alt+O` |
-| Paste completed command for rerun | `Ctrl+Alt+R` |
+| Action | Windows / Linux | macOS |
+| --- | --- | --- |
+| Command palette | `Ctrl+Shift+P` | `Cmd+Shift+P` |
+| New terminal tab | `Ctrl+Shift+T` | `Cmd+T` |
+| Search terminal output | `Ctrl+F` | `Cmd+F` |
+| Toggle workspace tools | `Ctrl+B` | `Cmd+B` |
+| Open snippets | `Unbound` | `Unbound` |
+| Split pane right | `Ctrl+\` | `Cmd+\` |
+| Split pane below | `Ctrl+Shift+\` | `Cmd+Shift+\` |
+| Previous completed command | `Ctrl+Shift+ArrowUp` | `Ctrl+Shift+ArrowUp` |
+| Next completed command | `Ctrl+Shift+ArrowDown` | `Ctrl+Shift+ArrowDown` |
+| Copy completed command | `Ctrl+Alt+C` | `Ctrl+Alt+C` |
+| Copy completed command output | `Ctrl+Alt+O` | `Ctrl+Alt+O` |
+| Paste completed command for rerun | `Ctrl+Alt+R` | `Ctrl+Alt+R` |
 
 All shortcuts can be changed in Settings.
 
