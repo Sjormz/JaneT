@@ -18,17 +18,15 @@ When a `v*` tag is pushed, `.github/workflows/release.yml`:
 4. Builds release artifacts on Linux, macOS, and Windows.
 5. Verifies the exact installer/update-metadata set and starts a real PTY with
    each runner's packaged Electron runtime.
-6. Verifies both macOS architectures use ad-hoc code signatures.
+6. Verifies the Apple Silicon macOS build uses an ad-hoc code signature.
 7. Uploads installers and update metadata to the matching GitHub Release.
 
 The app uses `electron-updater` with GitHub Releases, so the generated `latest*.yml` assets must stay attached to the release.
 Temporary Actions artifacts used between the package and publish jobs expire
 after one day. Published GitHub Releases and tags are retained.
-The macOS ZIP blockmaps must also be published for differential updates. The
-release check executes the runner's native macOS PTY. It avoids translated
-cross-architecture execution because Rosetta startup on disposable hosted
-runners is nondeterministic, while always validating both architecture bundles'
-signatures, native module/helper layout, and executable permissions.
+The macOS ZIP blockmap must also be published for differential updates. DMG
+blockmap generation is disabled because JaneT does not publish or consume those
+files. The release check executes the Apple Silicon runner's packaged macOS PTY.
 
 ### macOS release signing
 
@@ -156,13 +154,17 @@ gh release view v0.2.1 --web
 Confirm the release includes the expected platform artifacts:
 
 - Windows installer and portable executable
-- macOS dmg/zip artifacts and both ZIP blockmaps
+- macOS Apple Silicon dmg/zip artifacts and the ZIP blockmap
 - Linux AppImage/deb artifacts
 - `latest*.yml` update metadata files
 
 ## Manual release workflow dispatch
 
-The release workflow also supports `workflow_dispatch` with a tag input. Use it only to rerun publishing for an existing tag after fixing workflow/infrastructure problems.
+The release workflow also supports `workflow_dispatch` with a tag input. Use it
+only to rerun publishing for an existing tag after fixing release-tooling or
+infrastructure problems. Dispatch from protected `main`; the recovery path
+authenticates that commit and applies only its release tooling while retaining
+the tagged application source and version.
 
 Do not use manual dispatch to publish a version that has not been committed and tagged.
 

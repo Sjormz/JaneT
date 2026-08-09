@@ -37,9 +37,6 @@ export function expectedReleaseArtifacts(platformValue, version) {
   }
   if (platform === 'macos') {
     return [
-      `JaneT-${version}-mac-x64.dmg`,
-      `JaneT-${version}-mac-x64.zip`,
-      `JaneT-${version}-mac-x64.zip.blockmap`,
       `JaneT-${version}-mac-arm64.dmg`,
       `JaneT-${version}-mac-arm64.zip`,
       `JaneT-${version}-mac-arm64.zip.blockmap`,
@@ -65,18 +62,12 @@ function releaseManifestPolicy(platformValue, version) {
     };
   }
   if (platform === 'macos') {
-    const x64Zip = `JaneT-${version}-mac-x64.zip`;
     const arm64Zip = `JaneT-${version}-mac-arm64.zip`;
     return {
       manifest: 'latest-mac.yml',
-      files: [
-        x64Zip,
-        arm64Zip,
-        `JaneT-${version}-mac-x64.dmg`,
-        `JaneT-${version}-mac-arm64.dmg`,
-      ],
-      primary: x64Zip,
-      blockmaps: [`${x64Zip}.blockmap`, `${arm64Zip}.blockmap`],
+      files: [arm64Zip],
+      primary: arm64Zip,
+      blockmaps: [`${arm64Zip}.blockmap`],
     };
   }
   const appImage = `JaneT-${version}-linux-x64.AppImage`;
@@ -172,7 +163,6 @@ export function packagedRuntime(platformValue, releaseRoot, hostArch = process.a
 
 export function macPackagedRuntimes(releaseRoot) {
   return [
-    { arch: 'x64', outputDir: 'mac' },
     { arch: 'arm64', outputDir: 'mac-arm64' },
   ].map(({ arch, outputDir }) => {
     const appRoot = path.join(releaseRoot, outputDir, 'JaneT.app', 'Contents');
@@ -256,7 +246,6 @@ export function findMissingArtifacts(platform, version, releaseRoot) {
 
 export async function verifyMacApplications(releaseRoot) {
   const appPaths = [
-    path.join(releaseRoot, 'mac', 'JaneT.app'),
     path.join(releaseRoot, 'mac-arm64', 'JaneT.app'),
   ];
 
@@ -287,14 +276,6 @@ export async function smokePackagedTerminal(platform, releaseRoot) {
 
     const hostRuntime = nativeMacRuntime(releaseRoot);
     await smokeTerminalRuntime(hostRuntime);
-
-    // Execute only the runner's native architecture. Rosetta startup on fresh
-    // hosted ARM runners is nondeterministic and can stall before verifier
-    // JavaScript starts. Both bundles still receive deterministic artifact,
-    // signature, native-module, helper, and executable-permission validation.
-    console.log(
-      `Executed the native ${hostRuntime.arch} macOS PTY; validated the non-host bundle without translated execution.`,
-    );
     return;
   }
 
