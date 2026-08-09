@@ -312,7 +312,8 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
           .toEqual(viewport);
         if (viewport.width === 800) {
           const showTabs = page.getByRole('button', { name: 'Show terminal tabs' });
-          if (await showTabs.isVisible()) await showTabs.click();
+          await expect(showTabs).toBeVisible();
+          await showTabs.click();
         }
         await expect(activeTerminals.nth(1).locator('.terminal-command-failed')).toHaveCount(1);
         await tab(page, 'Active workspace').focus();

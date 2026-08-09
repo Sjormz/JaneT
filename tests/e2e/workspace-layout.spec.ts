@@ -265,6 +265,7 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
     await preset.getByRole('button', { name: 'Edit preset Geometry preset' }).click();
     const presetDialog = page.getByRole('dialog', { name: 'Edit preset' });
     await expect(presetDialog).toBeVisible();
+    await expect(presetDialog.getByRole('button', { name: 'Remove terminal 1' })).toBeVisible();
     const presetReport = await measureCompactTargets(page, 'preset editor');
     expect(presetReport.measurements.some(({ target }) => target.includes('button.workspace-terminal-remove')))
       .toBe(true);

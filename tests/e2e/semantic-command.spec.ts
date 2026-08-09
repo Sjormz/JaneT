@@ -77,6 +77,12 @@ test('navigates, copies, and safely inserts a real semantic command', async () =
       { timeout: 15_000 },
     ).toBe('X');
     await expect.poll(() => page.locator('.xterm-rows').innerText(), { timeout: 15_000 }).toContain(OUTPUT);
+    await page.getByRole('button', { name: /Open command palette/ }).click();
+    await page.getByRole('option', { name: /Open command history/ }).click();
+    const history = page.getByRole('dialog', { name: 'Command history' });
+    await expect(history.getByRole('option', { name: command, exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await terminal.locator('.xterm-helper-textarea').focus();
 
     await app.evaluate(({ clipboard }) => clipboard.clear());
     await page.keyboard.press('Control+Shift+ArrowUp');

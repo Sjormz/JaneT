@@ -730,6 +730,7 @@ test('restores a mutated mixed workspace in a genuine second Electron process', 
     await expect(firstLocalTerminal).toBeVisible({ timeout: 15_000 });
     await expect(firstLocalTerminal.locator('.xterm-helper-textarea'))
       .toHaveAttribute('data-shell-ready', 'true', { timeout: 15_000 });
+    await firstPage.getByRole('button', { name: 'Dismiss get started' }).click();
     await firstLocalTerminal.locator('.xterm-helper-textarea').focus();
 
     const firstLocalMarker = '__JANET_RESUME_LOCAL_ONE__';
@@ -782,6 +783,7 @@ test('restores a mutated mixed workspace in a genuine second Electron process', 
     const buildPane = firstPage.locator('.terminal-leaf').filter({
       has: firstPage.locator('.leaf-title', { hasText: 'Build' }),
     });
+    await buildPane.hover();
     await buildPane.getByRole('button', { name: /^Maximize pane/ }).click();
     await expect(firstPage.locator('.terminal-leaf')).toHaveCount(1);
     await expect(buildPane).toHaveAttribute('aria-current', 'true');
