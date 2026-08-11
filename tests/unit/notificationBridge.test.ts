@@ -20,6 +20,7 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
   const handlers = new Map<string, Function>();
   const notificationOn = vi.fn();
   const notificationShow = vi.fn();
+  const notificationHandleActivation = vi.fn();
   const restore = vi.fn();
   const show = vi.fn();
   const focus = vi.fn();
@@ -39,6 +40,7 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
     this.show = notificationShow;
   });
   (Notification as any).isSupported = vi.fn(() => options.supported ?? true);
+  (Notification as any).handleActivation = notificationHandleActivation;
   class BrowserWindow { constructor() { return window; } }
   const showOpenDialog = vi.fn().mockResolvedValue(options.selectedDirectory
     ? { canceled: false, filePaths: [options.selectedDirectory] }
@@ -78,7 +80,7 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
     Promise.resolve().then(() => handlers.get(channel)!({ sender, senderFrame }, payload));
   return {
     invoke, invokeChannel, setSettings, writeFileSync, settingsGetSpy, settingsRecoveryStateSpy,
-    restorePreviousSpy, resetSettingsSpy, Notification, notificationOn, notificationShow,
+    restorePreviousSpy, resetSettingsSpy, Notification, notificationOn, notificationShow, notificationHandleActivation,
     restore, show, focus, setAppUserModelId, showOpenDialog, webContents, clipboardWriteText,
   };
 }
@@ -193,11 +195,12 @@ describe('main notification bridge', () => {
     await expect(bridge.invoke(validPayload)).resolves.toBe(false);
   });
 
-  it('restores, shows, and focuses the existing window on click', async () => {
+  it('restores, shows, and focuses the existing window on Windows notification activation', async () => {
     const bridge = await loadMain({ minimized: true });
     await bridge.invoke(validPayload);
-    const click = bridge.notificationOn.mock.calls.find(([name]) => name === 'click')?.[1];
-    click();
+    expect(bridge.notificationHandleActivation).toHaveBeenCalledOnce();
+    const activate = bridge.notificationHandleActivation.mock.calls[0]?.[0];
+    activate();
     expect(bridge.restore).toHaveBeenCalledOnce();
     expect(bridge.show).toHaveBeenCalled();
     expect(bridge.focus).toHaveBeenCalled();
