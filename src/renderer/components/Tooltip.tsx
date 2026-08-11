@@ -123,7 +123,11 @@ export default function Tooltip({
       onPointerLeave: (event: React.PointerEvent<HTMLElement>) => {
         childProps.onPointerLeave?.(event);
         hoveredRef.current = false;
-        if (!focusedRef.current) hide();
+        // A mouse can leave a control that still owns focus (notably the
+        // custom title-bar buttons). Do not leave its tooltip pinned while
+        // the user hovers another control; keyboard-focused help remains
+        // visible until that control blurs.
+        hide();
       },
       onPointerDown: (event: React.PointerEvent<HTMLElement>) => {
         childProps.onPointerDown?.(event);

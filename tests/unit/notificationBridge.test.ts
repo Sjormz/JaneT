@@ -195,12 +195,18 @@ describe('main notification bridge', () => {
     await expect(bridge.invoke(validPayload)).resolves.toBe(false);
   });
 
-  it('restores, shows, and focuses the existing window on Windows notification activation', async () => {
+  it('restores, shows, and focuses the existing window when a notification is activated', async () => {
     const bridge = await loadMain({ minimized: true });
     await bridge.invoke(validPayload);
-    expect(bridge.notificationHandleActivation).toHaveBeenCalledOnce();
-    const activate = bridge.notificationHandleActivation.mock.calls[0]?.[0];
-    activate();
+    if (process.platform === 'win32') {
+      expect(bridge.notificationHandleActivation).toHaveBeenCalledOnce();
+      const activate = bridge.notificationHandleActivation.mock.calls[0]?.[0];
+      activate();
+    } else {
+      const click = bridge.notificationOn.mock.calls.find(([name]) => name === 'click')?.[1];
+      expect(click).toBeTypeOf('function');
+      click();
+    }
     expect(bridge.restore).toHaveBeenCalledOnce();
     expect(bridge.show).toHaveBeenCalled();
     expect(bridge.focus).toHaveBeenCalled();

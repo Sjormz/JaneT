@@ -110,7 +110,7 @@ describe('Tooltip', () => {
     }
   });
 
-  it('keeps focused help visible when the pointer leaves, then hides it on blur', () => {
+  it('dismisses focused help when the pointer leaves, even before blur', () => {
     vi.useFakeTimers();
     try {
       render(<Tooltip label="Open Explorer"><button type="button">Explorer</button></Tooltip>);
@@ -122,9 +122,36 @@ describe('Tooltip', () => {
       expect(screen.getByRole('tooltip')).toBeInTheDocument();
 
       fireEvent.pointerLeave(button);
-      expect(screen.getByRole('tooltip')).toBeInTheDocument();
+      expect(screen.queryByRole('tooltip')).toBeNull();
       fireEvent.blur(button);
       expect(screen.queryByRole('tooltip')).toBeNull();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('replaces a focused control tooltip when the pointer moves to another control', () => {
+    vi.useFakeTimers();
+    try {
+      render(
+        <>
+          <Tooltip label="Minimize window"><button type="button">Minimize</button></Tooltip>
+          <Tooltip label="Show hidden files"><button type="button">Hidden files</button></Tooltip>
+        </>,
+      );
+      const minimize = screen.getByRole('button', { name: 'Minimize window' });
+      const hiddenFiles = screen.getByRole('button', { name: 'Show hidden files' });
+
+      fireEvent.focus(minimize);
+      act(() => vi.advanceTimersByTime(120));
+      expect(screen.getByRole('tooltip')).toHaveTextContent('Minimize window');
+
+      fireEvent.pointerLeave(minimize);
+      fireEvent.pointerEnter(hiddenFiles);
+      act(() => vi.advanceTimersByTime(360));
+      expect(screen.getByRole('tooltip')).toHaveTextContent('Show hidden files');
+      expect(screen.getAllByRole('tooltip')).toHaveLength(1);
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
