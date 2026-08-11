@@ -219,7 +219,10 @@ function deliverCommandNotification(value: unknown): boolean {
       title: payload.outcome === 'failure' ? 'Command failed' : payload.outcome === 'success' ? 'Command finished' : 'Command completed',
       body: `${payload.tabLabel} · ${payload.paneLabel}${where} (${seconds}s)`,
     });
-    notification.on('click', showOrCreateWindow);
+    // Windows can activate a toast after its Notification instance has been
+    // collected or after the app has restarted. Those activations are handled
+    // centrally below; keep the per-notification listener for other platforms.
+    if (process.platform !== 'win32') notification.on('click', showOrCreateWindow);
     notification.show();
     return true;
   } catch {
@@ -395,6 +398,13 @@ electron.app.whenReady().then(() => {
 
   registerIpcHandlers();
   createWindow();
+  // On Windows, instance-level notification click listeners are not reliable
+  // for notifications that outlive their JavaScript objects (or the process).
+  // This API also receives a queued activation when JaneT was launched by a
+  // notification click, so it must be registered after mainWindow exists.
+  if (process.platform === 'win32') {
+    electron.Notification.handleActivation(showOrCreateWindow);
+  }
   if (restoreRequestedBySecondInstance) {
     restoreRequestedBySecondInstance = false;
     showOrCreateWindow();
