@@ -89,8 +89,6 @@ type LocalSpawnState =
   | { kind: 'error'; message: string };
 type TerminalPathDropState = 'valid' | 'invalid' | null;
 
-const MIN_SSH_COLS = 120;
-const MIN_SSH_ROWS = 40;
 const INVALID_PATH_DROP_NOTICE_MS = 1_200;
 
 const SEARCH_OPTIONS: ISearchOptions = {
@@ -104,8 +102,8 @@ const SEARCH_OPTIONS: ISearchOptions = {
 
 function sshDimensions(dims: { cols: number; rows: number } | undefined | null) {
   return {
-    cols: Math.max(dims?.cols || 80, MIN_SSH_COLS),
-    rows: Math.max(dims?.rows || 24, MIN_SSH_ROWS),
+    cols: dims?.cols || 80,
+    rows: dims?.rows || 24,
   };
 }
 
