@@ -43,6 +43,14 @@ import {
   type SemanticCommandEvent,
   type SemanticCommandStartedEvent,
 } from '../semanticCommands';
+import {
+  DISABLE_TERMINAL_MOUSE_TRACKING,
+  inspectTerminalControlSequences,
+  logTerminalDiagnostic,
+  restoreTerminalMouseTracking,
+  suppressTerminalMouseTracking,
+  type TerminalMouseTrackingMode,
+} from '../terminalDiagnostics';
 import type { TerminalLeaf } from '../types';
 import '@xterm/xterm/css/xterm.css';
 
@@ -111,9 +119,12 @@ function usableDimensions(dims: { cols: number; rows: number } | undefined | nul
   return dims;
 }
 
-function copyTerminalSelection(term: Terminal): boolean {
-  const selection = term.getSelection();
-  return Boolean(selection) && window.janet.copyTerminalText(selection);
+function openTerminalExternalUrl(url: string): void {
+  void window.janet.openExternal(url).then((opened) => {
+    if (!opened) console.warn('[JaneT] external terminal URL was rejected');
+  }).catch((error) => {
+    console.warn('[JaneT] failed to open external terminal URL:', error);
+  });
 }
 
 interface CachedTerminalPane {
@@ -205,6 +216,10 @@ export default function TerminalPane({
   const [pathDropState, setPathDropState] = useState<TerminalPathDropState>(null);
   const componentMountedRef = useRef(false);
   const searchVisibleRef = useRef(false);
+  const selectionProtectionRef = useRef(false);
+  const protectedMouseTrackingRef = useRef<TerminalMouseTrackingMode>('none');
+  const protectedSelectionRef = useRef('');
+  const diagnosticsEnabled = window.janet.terminalDiagnosticsEnabled === true;
   searchVisibleRef.current = searchVisible;
   const cachedForAgentListener = terminalPaneCache.get(termId);
   if (cachedForAgentListener) {
@@ -372,22 +387,121 @@ export default function TerminalPane({
     const focusListener = () => onFocus?.(termId);
     container.addEventListener('focusin', focusListener);
     mountCleanup.push(() => container.removeEventListener('focusin', focusListener));
+    const diagnosticMouseListener = (event: MouseEvent) => {
+      if (event.type === 'mousemove' && event.buttons === 0 && !event.shiftKey) return;
+      logTerminalDiagnostic(diagnosticsEnabled, termId, event.type, {
+        button: event.button,
+        buttons: event.buttons,
+        shift: event.shiftKey,
+        ctrl: event.ctrlKey,
+        alt: event.altKey,
+        meta: event.metaKey,
+        selectionLength: term.getSelection().length,
+        buffer: term.buffer.active.type,
+        mouseTracking: term.modes.mouseTrackingMode,
+        selectionProtected: selectionProtectionRef.current,
+      });
+    };
+    let suspendMouseTrackingTimer: ReturnType<typeof setTimeout> | null = null;
+    const beginSelectionProtection = () => {
+      if (selectionProtectionRef.current || term.modes.mouseTrackingMode === 'none') return;
+      protectedMouseTrackingRef.current = term.modes.mouseTrackingMode;
+      protectedSelectionRef.current = '';
+      selectionProtectionRef.current = true;
+      // Let xterm's forced Shift-selection mousedown run while mouse tracking
+      // is still active, then suspend tracking before the first drag update.
+      suspendMouseTrackingTimer = setTimeout(() => {
+        suspendMouseTrackingTimer = null;
+        if (selectionProtectionRef.current) term.write(DISABLE_TERMINAL_MOUSE_TRACKING);
+      }, 0);
+      logTerminalDiagnostic(diagnosticsEnabled, termId, 'selection-protection-start', {
+        suspendedMouseTracking: protectedMouseTrackingRef.current,
+        buffer: term.buffer.active.type,
+      });
+    };
+    const selectionMouseDownListener = (event: MouseEvent) => {
+      if (event.button === 0 && (event.shiftKey || event.altKey)) beginSelectionProtection();
+    };
+    container.addEventListener('mousedown', selectionMouseDownListener, true);
+    mountCleanup.push(() => container.removeEventListener('mousedown', selectionMouseDownListener, true));
+    for (const type of ['mousedown', 'mousemove', 'mouseup'] as const) {
+      container.addEventListener(type, diagnosticMouseListener, true);
+      mountCleanup.push(() => container.removeEventListener(type, diagnosticMouseListener, true));
+    }
+    mountCleanup.push(term.onSelectionChange(() => {
+      const selection = term.getSelection();
+      if (selection) protectedSelectionRef.current = selection;
+      else if (!selectionProtectionRef.current) protectedSelectionRef.current = '';
+      logTerminalDiagnostic(diagnosticsEnabled, termId, 'selection-change', {
+        selectionLength: selection.length,
+        retainedSelectionLength: protectedSelectionRef.current.length,
+        buffer: term.buffer.active.type,
+        mouseTracking: term.modes.mouseTrackingMode,
+        selectionProtected: selectionProtectionRef.current,
+      });
+    }));
+    mountCleanup.push(term.onResize(({ cols, rows }) => {
+      logTerminalDiagnostic(diagnosticsEnabled, termId, 'xterm-resize', {
+        cols,
+        rows,
+        selectionLength: term.getSelection().length,
+        selectionProtected: selectionProtectionRef.current,
+      });
+    }));
+    const endSelectionProtection = (clearSelection: boolean) => {
+      if (!selectionProtectionRef.current) return;
+      if (suspendMouseTrackingTimer) {
+        clearTimeout(suspendMouseTrackingTimer);
+        suspendMouseTrackingTimer = null;
+      }
+      selectionProtectionRef.current = false;
+      const restore = restoreTerminalMouseTracking(protectedMouseTrackingRef.current);
+      if (restore) term.write(restore);
+      if (clearSelection) term.clearSelection();
+      protectedSelectionRef.current = '';
+      logTerminalDiagnostic(diagnosticsEnabled, termId, 'selection-protection-end', {
+        restoredMouseTracking: protectedMouseTrackingRef.current,
+      });
+      term.focus();
+    };
     const contextMenuListener = (event: MouseEvent) => {
-      if (!term.hasSelection()) return;
+      const selection = term.getSelection() || (selectionProtectionRef.current ? protectedSelectionRef.current : '');
+      if (!selection) return;
       event.preventDefault();
       event.stopPropagation();
-      copyTerminalSelection(term);
+      window.janet.copyTerminalText(selection);
+      endSelectionProtection(true);
     };
     container.addEventListener('contextmenu', contextMenuListener, true);
     mountCleanup.push(() => container.removeEventListener('contextmenu', contextMenuListener, true));
     term.attachCustomKeyEventHandler((e) => {
       const currentBindings = kbBindingsRef.current;
       if (e.type === 'keydown' && e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey) && !e.altKey) {
-        if (term.hasSelection()) {
+        const selection = term.getSelection() || (selectionProtectionRef.current ? protectedSelectionRef.current : '');
+        if (selection) {
           e.preventDefault();
-          copyTerminalSelection(term);
+          const copied = window.janet.copyTerminalText(selection);
+          logTerminalDiagnostic(diagnosticsEnabled, termId, 'copy-attempt', {
+            copied,
+            selectionLength: selection.length,
+            retainedSelection: !term.hasSelection(),
+            selectionProtected: selectionProtectionRef.current,
+          });
+          endSelectionProtection(true);
           return false;
         }
+      }
+      if (e.key === 'Escape' && selectionProtectionRef.current) {
+        e.preventDefault();
+        endSelectionProtection(true);
+        return false;
+      }
+      if (
+        e.type === 'keydown'
+        && selectionProtectionRef.current
+        && !['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)
+      ) {
+        endSelectionProtection(true);
       }
       if (matchesShortcut(e, currentBindings['search-toggle'])) {
         e.preventDefault();
@@ -439,6 +553,14 @@ export default function TerminalPane({
     // xterm keeps one handler for its full lifetime. Replace the component
     // closure while cached/detached so it cannot update an unmounted pane.
     mountCleanup.push(() => term.attachCustomKeyEventHandler(() => true));
+    mountCleanup.push(() => {
+      if (suspendMouseTrackingTimer) clearTimeout(suspendMouseTrackingTimer);
+      if (!selectionProtectionRef.current) return;
+      selectionProtectionRef.current = false;
+      const restore = restoreTerminalMouseTracking(protectedMouseTrackingRef.current);
+      if (restore) term.write(restore);
+      protectedSelectionRef.current = '';
+    });
     termRef.current = term;
     fitAddonRef.current = fitAddon;
     searchAddonRef.current = searchAddon;
@@ -523,6 +645,12 @@ export default function TerminalPane({
       fontSize: fontSize || 14,
       fontFamily: fontFamily || DEFAULT_TERMINAL_FONT_FAMILY,
       lineHeight: 1.2,
+      linkHandler: {
+        activate: (event, url) => {
+          event.preventDefault();
+          openTerminalExternalUrl(url);
+        },
+      },
       theme: resolvedTheme || {
         background: '#0f0f1a',
         foreground: '#c0caf5',
@@ -554,7 +682,7 @@ export default function TerminalPane({
     const unicode11Addon = new Unicode11Addon();
     const webLinksAddon = new WebLinksAddon((event, url) => {
       event.preventDefault();
-      window.janet.openExternal(url).catch(() => {});
+      openTerminalExternalUrl(url);
     });
     const searchAddon = new SearchAddon();
 
@@ -635,7 +763,17 @@ export default function TerminalPane({
         sshNoticeAttemptRef.current += 1;
         publishSshNoticeState({ kind: 'hidden' });
         kittyGraphics?.push(data);
-        term.write(data, () => {
+        const controls = diagnosticsEnabled ? inspectTerminalControlSequences(data) : [];
+        logTerminalDiagnostic(diagnosticsEnabled, termId, 'terminal-output', {
+          bytes: data.length,
+          controls,
+          selectionLength: term.getSelection().length,
+          buffer: term.buffer.active.type,
+          mouseTracking: term.modes.mouseTrackingMode,
+          selectionProtected: selectionProtectionRef.current,
+        });
+        const renderedData = selectionProtectionRef.current ? suppressTerminalMouseTracking(data) : data;
+        term.write(renderedData, () => {
           window.janet.terminalAcknowledgeOutput({ source, id, generation, sequence });
         });
       }

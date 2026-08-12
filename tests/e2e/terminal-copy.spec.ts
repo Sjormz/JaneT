@@ -66,6 +66,22 @@ async function markerPosition(page: Page): Promise<{ x: number; y: number }> {
   return { x: box!.x + 72, y: box!.y + box!.height / 2 };
 }
 
+async function shiftDragMarker(page: Page): Promise<void> {
+  const rows = page.locator('.xterm-rows > div');
+  const texts = await rows.allInnerTexts();
+  const index = texts.findIndex((line) => line.trim() === MARKER);
+  expect(index).toBeGreaterThanOrEqual(0);
+  const box = await rows.nth(index).boundingBox();
+  expect(box).not.toBeNull();
+  const y = box!.y + box!.height / 2;
+  await page.keyboard.down('Shift');
+  await page.mouse.move(box!.x + 1, y);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width - 2, y, { steps: 12 });
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+}
+
 async function selectMarker(page: Page, position: { x: number; y: number }): Promise<void> {
   await page.mouse.dblclick(position.x, position.y);
 }
@@ -112,6 +128,57 @@ test('copies selected xterm text with keyboard shortcuts and right-click', async
     await selectMarker(page, position);
     await page.mouse.click(position.x, position.y, { button: 'right' });
     await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toBe(MARKER);
+  } finally {
+    await forceClose(app);
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('copies from an alternate-screen TUI that owns all-motion mouse tracking', async () => {
+  test.setTimeout(60_000);
+  const userData = createUserData();
+  let app: ElectronApplication | undefined;
+
+  try {
+    app = await electron.launch({
+      args: ['.'],
+      cwd: root,
+      env: electronEnv({
+        NODE_ENV: 'test',
+        JANET_E2E_USER_DATA_DIR: userData,
+        JANET_TERMINAL_DIAGNOSTICS: '1',
+      }),
+    });
+    const page = await app.firstWindow();
+    const diagnosticEvents: unknown[] = [];
+    page.on('console', async (message) => {
+      if (!message.text().includes('[JaneT terminal diagnostics]')) return;
+      const value = await message.args()[1]?.jsonValue().catch(() => null);
+      if (value) diagnosticEvents.push(value);
+    });
+    await page.waitForLoadState('domcontentloaded');
+    await markerPosition(page);
+    const termId = await page.locator('.terminal-container').getAttribute('data-terminal-id');
+    expect(termId).toBeTruthy();
+    await app.evaluate(({ BrowserWindow }, id) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send('terminal:onData', {
+        source: 'local',
+        id,
+        data: '\u001b[?1049h\u001b[?1000h\u001b[?1003h\u001b[?1006hJANET_TERMINAL_COPY_MARKER\r\n',
+        generation: 999,
+        sequence: 999,
+      });
+    }, termId);
+    await markerPosition(page);
+
+    await app.evaluate(({ clipboard }) => clipboard.clear());
+    await shiftDragMarker(page);
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+C' : 'Control+C');
+
+    await expect.poll(
+      async () => (await app!.evaluate(({ clipboard }) => clipboard.readText())).trim(),
+      { message: JSON.stringify(diagnosticEvents) },
+    ).toBe(MARKER);
   } finally {
     await forceClose(app);
     fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
