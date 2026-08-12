@@ -30,7 +30,8 @@ class MockResizeObserver {
 
 class MockAddonFit {
   static instances: MockAddonFit[] = [];
-  proposeDimensions = vi.fn((): { cols: number; rows: number } | undefined => ({ cols: 80, rows: 24 }));
+  static proposedDimensions: { cols: number; rows: number } | undefined = { cols: 80, rows: 24 };
+  proposeDimensions = vi.fn(() => MockAddonFit.proposedDimensions);
   fit = vi.fn();
 
   constructor() {
@@ -223,6 +224,7 @@ beforeEach(() => {
   MockTerminal.nativePasteData = null;
   MockWebLinksAddon.handlers = [];
   MockAddonFit.instances = [];
+  MockAddonFit.proposedDimensions = { cols: 80, rows: 24 };
   MockAddonSearch.instances = [];
   MockResizeObserver.instances = [];
   searchOverlayProps = null;
@@ -658,8 +660,8 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(sshCreateShell).toHaveBeenCalledWith({
       id: 'ssh-17',
       termId: 'term-ssh',
-      cols: 120,
-      rows: 40,
+      cols: 80,
+      rows: 24,
     });
   });
 
@@ -1172,6 +1174,38 @@ describe('TerminalPane SSH reinitialization', () => {
       expect(fit.proposeDimensions).toHaveBeenCalledOnce();
       expect(term.resize).not.toHaveBeenCalled();
       expect(terminalResize).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('propagates measured container resizes unchanged to the SSH pty', async () => {
+    vi.useFakeTimers();
+    try {
+      const { default: TerminalPane } = await loadTerminalPane();
+      render(
+        <KeybindingsProvider>
+          <TerminalPane
+            termId="term-ssh-resize"
+            tabType="ssh"
+            sshSessionId="ssh-resize"
+            onReady={vi.fn()}
+            onRemoved={vi.fn()}
+            themeName="tokyo-night"
+          />
+        </KeybindingsProvider>,
+      );
+
+      await vi.runAllTimersAsync();
+      const term = MockTerminal.instances[0];
+      const fit = MockAddonFit.instances[0];
+      fit.proposeDimensions.mockReturnValue({ cols: 73, rows: 19 });
+      fit.fit.mockImplementation(() => term.resize(73, 19));
+      sshResizeShell.mockClear();
+      MockResizeObserver.instances[0].trigger();
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(sshResizeShell).toHaveBeenCalledWith({ termId: 'term-ssh-resize', cols: 73, rows: 19 });
     } finally {
       vi.useRealTimers();
     }
@@ -1892,7 +1926,7 @@ describe('TerminalPane SSH shell output', () => {
 
     fireEvent.click(screen.getByTestId('ssh-notice-retry'));
 
-    expect(onSshRetry).toHaveBeenCalledWith('term-ssh-3', { cols: 120, rows: 40 });
+    expect(onSshRetry).toHaveBeenCalledWith('term-ssh-3', { cols: 80, rows: 24 });
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'reconnecting');
 
     await act(async () => resolveRetry());
@@ -2356,8 +2390,9 @@ describe('TerminalPane SSH shell output', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('opens SSH shells with terminal-app friendly minimum dimensions', async () => {
+  it('opens SSH shells at the measured terminal dimensions', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
+    MockAddonFit.proposedDimensions = { cols: 73, rows: 19 };
 
     render(
       <KeybindingsProvider>
@@ -2374,8 +2409,8 @@ describe('TerminalPane SSH shell output', () => {
 
     await waitFor(() => expect(sshCreateShell).toHaveBeenCalledTimes(1));
     expect(sshCreateShell).toHaveBeenCalledWith(expect.objectContaining({
-      cols: 120,
-      rows: 40,
+      cols: 73,
+      rows: 19,
     }));
   });
 

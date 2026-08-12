@@ -2935,9 +2935,14 @@ describe('split panes in the app', () => {
       .mockResolvedValue({ connected: true });
 
     await act(async () => {
-      await expect(Promise.resolve(retry?.(shellArgs.termId, { cols: 120, rows: 40 })))
+      await expect(Promise.resolve(retry?.(shellArgs.termId, { cols: 73, rows: 19 })))
         .rejects.toThrow('host offline');
     });
+    expect(window.janet.sshCreateShell).toHaveBeenLastCalledWith(expect.objectContaining({
+      termId: shellArgs.termId,
+      cols: 73,
+      rows: 19,
+    }));
     expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
     expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
       connectionState: 'disconnected',
@@ -2948,9 +2953,14 @@ describe('split panes in the app', () => {
       .mockRejectedValueOnce(new Error('session not found'))
       .mockRejectedValueOnce(new Error('replacement shell unavailable'));
     await act(async () => {
-      await expect(retry!(shellArgs.termId, { cols: 120, rows: 40 }))
+      await expect(retry!(shellArgs.termId, { cols: 73, rows: 19 }))
         .rejects.toThrow('replacement shell unavailable');
     });
+    expect(window.janet.sshCreateShell).toHaveBeenLastCalledWith(expect.objectContaining({
+      termId: shellArgs.termId,
+      cols: 73,
+      rows: 19,
+    }));
     expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
       connectionState: 'disconnected',
       ready: false,
@@ -2974,7 +2984,7 @@ describe('split panes in the app', () => {
 
     (window.janet.sshCreateShell as any).mockRejectedValueOnce(new Error('session not found'));
     await act(async () => {
-      await retry?.(shellArgs.termId, { cols: 120, rows: 40 });
+      await retry?.(shellArgs.termId, { cols: 0, rows: 0 });
     });
     await waitFor(() => {
       expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(6);
@@ -2988,6 +2998,11 @@ describe('split panes in the app', () => {
         rendererMocks.verticalTabBarProps.activeTabId
       ]).toEqual({ kind: 'ready', label: 'Hermes · Ready' });
     });
+    expect(window.janet.sshCreateShell).toHaveBeenLastCalledWith(expect.objectContaining({
+      termId: shellArgs.termId,
+      cols: 80,
+      rows: 24,
+    }));
 
     act(() => {
       emitAgentEvent({

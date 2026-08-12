@@ -1772,8 +1772,8 @@ function AppInner({ initialSettings }: { initialSettings: any }) {
     }
 
     const dims = {
-      cols: Math.max(dimensions?.cols || 80, 120),
-      rows: Math.max(dimensions?.rows || 24, 40),
+      cols: dimensions?.cols || 80,
+      rows: dimensions?.rows || 24,
     };
     const profile = profileId
       ? sshProfiles.find((candidate) => candidate.id === profileId)
