@@ -60,6 +60,10 @@ Paste for rerun is deliberately safe: it inserts the command through JaneT's nor
 
 JaneT automatically adds semantic markers to new local Bash, zsh, fish, Windows PowerShell, and PowerShell 7 sessions while preserving existing prompt hooks. New remote Bash sessions receive the same session-only integration without modifying remote startup files. Unsupported shells continue to work as ordinary terminals.
 
+## Copy from full-screen terminal applications
+
+Terminal applications such as agent TUIs, Vim, and tmux can take ownership of mouse input. Hold Shift and drag on Windows/Linux, or Option-drag on macOS, then use the normal platform copy shortcut. JaneT automatically protects the selection from TUI mouse reporting and redraws, then restores the application immediately after copying or continuing to type.
+
 ## Find a command in contextual history
 
 Completed semantic commands are also available from **Search commands** → **Open command history**.
@@ -226,6 +230,23 @@ cd JaneT
 npm install
 npm run dev
 ```
+
+To investigate terminal selection or mouse-mode behavior without recording terminal contents, enable redacted terminal diagnostics before starting development mode.
+
+PowerShell:
+
+```powershell
+$env:JANET_TERMINAL_DIAGNOSTICS='1'
+npm.cmd run dev
+```
+
+Bash, zsh, or fish:
+
+```bash
+JANET_TERMINAL_DIAGNOSTICS=1 npm run dev
+```
+
+The renderer console records mouse modifiers, selection lengths, buffer and mouse-tracking modes, resizes, clipboard outcomes, and the names of relevant control sequences. It does not record terminal text, selected text, pasted text, or URLs.
 
 Create and start a production build with:
 

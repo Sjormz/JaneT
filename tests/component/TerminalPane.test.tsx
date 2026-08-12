@@ -91,6 +91,12 @@ class MockTerminal {
     return { dispose: vi.fn(() => { if (this.binaryHandler === handler) this.binaryHandler = null; }) };
   });
   onKey = vi.fn(() => ({ dispose: vi.fn() }));
+  selectionChangeHandler: (() => void) | null = null;
+  onSelectionChange = vi.fn((handler: () => void) => {
+    this.selectionChangeHandler = handler;
+    return { dispose: vi.fn(() => { if (this.selectionChangeHandler === handler) this.selectionChangeHandler = null; }) };
+  });
+  onResize = vi.fn(() => ({ dispose: vi.fn() }));
   loadAddon = vi.fn((addon: { activate?: (terminal: MockTerminal) => void }) => addon.activate?.(this));
   open = vi.fn();
   focus = vi.fn();
@@ -110,6 +116,7 @@ class MockTerminal {
   selection = '';
   hasSelection = vi.fn(() => Boolean(this.selection));
   getSelection = vi.fn(() => this.selection);
+  modes = { mouseTrackingMode: 'none' as 'none' | 'x10' | 'vt200' | 'drag' | 'any' };
   bufferLines = ['$ one', '$ two'];
   wrappedLines = new Set<number>();
   markerLine = 0;
@@ -249,6 +256,7 @@ beforeEach(() => {
       sshWriteShellBinary,
       openExternal,
       copyTerminalText,
+      terminalDiagnosticsEnabled: false,
     },
   });
 });
@@ -862,7 +870,7 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: '\u0003' }));
   });
 
-  it('keeps unselected Ctrl+C available for terminal interrupt', async () => {
+  it('keeps unselected Ctrl+C variants available for terminal interrupt', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     render(
       <KeybindingsProvider>
@@ -881,6 +889,55 @@ describe('TerminalPane SSH reinitialization', () => {
         type: 'keydown', key: 'c', altKey: false, ...modifiers, preventDefault: vi.fn(),
       })).toBe(true);
     }
+  });
+
+  it('automatically protects a Shift-drag selection and copies it after a TUI clears the highlight', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-protected-selection" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    const term = MockTerminal.instances.at(-1)!;
+    term.modes.mouseTrackingMode = 'any';
+    const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
+    fireEvent.mouseDown(document.querySelector('.terminal-container')!, {
+      button: 0,
+      buttons: 1,
+      shiftKey: true,
+    });
+    await waitFor(() => expect(term.write).toHaveBeenCalledWith('\u001b[?1000l\u001b[?1002l\u001b[?1003l'));
+
+    act(() => terminalDataHandler?.({
+      source: 'local',
+      id: 'term-protected-selection',
+      data: `redraw\u001b[?1003h\u001b[?1006h`,
+      generation: 1,
+      sequence: 1,
+    }));
+    expect(term.write).toHaveBeenLastCalledWith('redraw\u001b[?1006h', expect.any(Function));
+
+    term.selection = 'retained TUI text';
+    act(() => term.selectionChangeHandler?.());
+    term.selection = '';
+    act(() => term.selectionChangeHandler?.());
+
+    const preventDefault = vi.fn();
+    let handled: boolean | undefined;
+    act(() => {
+      keyHandler({
+        type: 'keydown', key: 'Control', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, preventDefault: vi.fn(),
+      });
+      handled = keyHandler({
+        type: 'keydown', key: 'c', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, preventDefault,
+      });
+    });
+    expect(handled).toBe(false);
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(copyTerminalText).toHaveBeenCalledWith('retained TUI text');
+    expect(term.write).toHaveBeenCalledWith('\u001b[?1003h');
+    expect(term.clearSelection).toHaveBeenCalled();
   });
 
   it('handles semantic command navigation and safe copy shortcuts without shell input', async () => {
@@ -1639,6 +1696,23 @@ describe('TerminalPane SSH shell output', () => {
 
     expect(event.preventDefault).toHaveBeenCalled();
     expect(window.janet.openExternal).toHaveBeenCalledWith('https://example.com/docs');
+  });
+
+  it('opens OSC 8 hyperlinks through the same default-browser bridge without xterm confirmation', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-osc-links" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+
+    const term = MockTerminal.instances.at(-1)!;
+    const linkHandler = term.options.linkHandler as { activate(event: MouseEvent, url: string): void };
+    const event = { preventDefault: vi.fn() } as unknown as MouseEvent;
+    linkHandler.activate(event, 'https://example.com/from-osc-8');
+
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(window.janet.openExternal).toHaveBeenCalledWith('https://example.com/from-osc-8');
   });
 
   it('does not allow remote OSC 7 output to change the local cwd', async () => {
