@@ -278,6 +278,18 @@ describe('SemanticCommandTimeline', () => {
     expect(term.scrollToBottom).toHaveBeenCalledOnce();
   });
 
+  it('shows a marker for the selected command while navigating', () => {
+    const term = terminalAt(['$ one'], 0, 2);
+    const timeline = new SemanticCommandTimeline(term as never);
+    timeline.handleOsc('A'); timeline.handleOsc('B');
+    term.cursorX = 5; timeline.handleOsc('C'); timeline.handleOsc('D;0');
+    term.viewportY = 1;
+
+    timeline.previous();
+
+    expect(term.registerDecoration).toHaveBeenCalledWith({ marker: term.markers[0], x: 0, width: 1 });
+  });
+
   it('preserves the selected command when an earlier marker is disposed', () => {
     const term = terminalAt(['$ one', '$ two', '$ tri'], 0, 2);
     const timeline = new SemanticCommandTimeline(term as never);

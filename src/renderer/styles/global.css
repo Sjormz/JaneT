@@ -95,6 +95,11 @@
   pointer-events: none;
 }
 
+.terminal-command-selected {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  pointer-events: none;
+}
+
 * {
   margin: 0;
   padding: 0;

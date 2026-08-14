@@ -34,6 +34,7 @@ export class SemanticCommandTimeline {
   private command = '';
   private startedAt = 0;
   private selectedCommand: SemanticCommand | null = null;
+  private selectedDecoration: IDecoration | null = null;
 
   constructor(
     private readonly terminal: Terminal,
@@ -96,6 +97,8 @@ export class SemanticCommandTimeline {
       while (this.commands.length > MAX_COMMANDS) this.disposeCommand(this.commands.shift()!);
       this.onComplete?.(event);
       this.resetPending(false, false);
+      this.selectedDecoration?.dispose();
+      this.selectedDecoration = null;
       this.selectedCommand = null;
     }
     return true;
@@ -113,6 +116,7 @@ export class SemanticCommandTimeline {
     } else if (selectedIndex > 0) {
       this.selectedCommand = available[selectedIndex - 1];
     }
+    this.decorateSelection();
     this.terminal.scrollToLine(this.selectedCommand!.marker.line);
     return true;
   }
@@ -123,9 +127,12 @@ export class SemanticCommandTimeline {
     if (!available.length || selectedIndex < 0) return false;
     if (selectedIndex < available.length - 1) {
       this.selectedCommand = available[selectedIndex + 1];
+      this.decorateSelection();
       this.terminal.scrollToLine(this.selectedCommand.marker.line);
     } else {
       this.selectedCommand = null;
+      this.selectedDecoration?.dispose();
+      this.selectedDecoration = null;
       this.terminal.scrollToBottom();
     }
     return true;
@@ -137,6 +144,8 @@ export class SemanticCommandTimeline {
 
   dispose(): void {
     this.resetPending();
+    this.selectedDecoration?.dispose();
+    this.selectedDecoration = null;
     for (const command of this.commands.splice(0)) this.disposeCommand(command);
   }
 
@@ -167,6 +176,15 @@ export class SemanticCommandTimeline {
 
   private liveCommands(): SemanticCommand[] {
     return this.commands.filter((entry) => !entry.marker.isDisposed);
+  }
+
+  private decorateSelection(): void {
+    this.selectedDecoration?.dispose();
+    this.selectedDecoration = this.terminal.registerDecoration({ marker: this.selectedCommand!.marker, x: 0, width: 1 }) ?? null;
+    this.selectedDecoration?.onRender((element) => {
+      element.classList.add('terminal-command-selected');
+      element.title = 'Selected completed command';
+    });
   }
 
   private resetPending(disposeMarker = true, cancelRunning = true): void {
