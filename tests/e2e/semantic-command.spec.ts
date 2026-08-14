@@ -86,6 +86,12 @@ test('navigates, copies, and safely inserts a real semantic command', async () =
 
     await app.evaluate(({ clipboard }) => clipboard.clear());
     await page.keyboard.press('Control+Shift+ArrowUp');
+    await expect(terminal.locator('.terminal-command-selected')).toBeVisible();
+    await expect.poll(() => terminal.locator('.terminal-command-selected').evaluate((element) => {
+      const selected = element.getBoundingClientRect();
+      const viewport = element.closest('.xterm')!.getBoundingClientRect();
+      return selected.left >= viewport.left;
+    })).toBe(true);
     await page.keyboard.press('Control+Alt+C');
     await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText()), { timeout: 10_000 }).toBe(command);
 
