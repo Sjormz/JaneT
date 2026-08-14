@@ -96,7 +96,9 @@
 }
 
 .terminal-command-selected {
-  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  width: 100% !important; /* xterm sets an inline one-cell width. */
+  background: color-mix(in srgb, var(--text-accent) 22%, transparent);
+  box-shadow: inset 3px 0 var(--text-accent), inset 0 0 0 1px color-mix(in srgb, var(--text-accent) 55%, transparent);
   pointer-events: none;
 }
 

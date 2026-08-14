@@ -90,8 +90,21 @@ test('navigates, copies, and safely inserts a real semantic command', async () =
     await expect.poll(() => terminal.locator('.terminal-command-selected').evaluate((element) => {
       const selected = element.getBoundingClientRect();
       const viewport = element.closest('.xterm')!.getBoundingClientRect();
-      return selected.left >= viewport.left;
-    })).toBe(true);
+      const style = getComputedStyle(element);
+      return {
+        coversRow: selected.width >= viewport.width * 0.9,
+        backgroundColor: style.backgroundColor,
+        boxShadow: style.boxShadow,
+      };
+    })).toMatchObject({
+      coversRow: true,
+      backgroundColor: expect.not.stringMatching(/^rgba?\(0, 0, 0(?:, 0)?\)$/),
+      boxShadow: expect.not.stringMatching(/^none$/),
+    });
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(900, 700));
+    await expect.poll(() => terminal.locator('.terminal-command-selected').evaluate((element) => (
+      element.getBoundingClientRect().width >= element.closest('.xterm')!.getBoundingClientRect().width * 0.9
+    ))).toBe(true);
     await page.keyboard.press('Control+Alt+C');
     await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText()), { timeout: 10_000 }).toBe(command);
 
