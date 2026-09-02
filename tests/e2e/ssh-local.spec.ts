@@ -229,7 +229,11 @@ function ignoreBenignSshFixtureError(error: unknown) {
 }
 
 function respondToShellCommand(stream: NodeJS.WritableStream & { exit?: (code: number) => void }, command: string) {
-  const normalized = command.replace(/\r/g, '\n');
+  if (command === '__JANET_ENABLE_STALE_MODES__') {
+    stream.write('__JANET_NORMAL_HISTORY__\x0d\x0a\x1b[?1049h\x1b[?1003h\x1b[?1006h__JANET_STALE_MODES_ENABLED__\x0d\x0a$ ');
+    return;
+  }
+  const normalized = command.replace(/\x0d/g, '\x0a');
   const markerMatches: RegExpExecArray[] = [];
   const markerPattern = /__JANET_([A-Z_]+?)_(START|DONE)__/g;
   let markerMatch: RegExpExecArray | null;
@@ -255,6 +259,7 @@ interface LocalSshServer {
   port: number;
   fingerprint: string;
   receivedCommands: string[];
+  receivedData: string[];
   disconnectClients: () => void;
   close: () => Promise<void>;
   restart: () => Promise<LocalSshServer>;
@@ -277,6 +282,7 @@ async function startLocalSshServer(options: { port?: number; privateKey?: string
   const clients = new Set<{ end: () => void }>();
   const sockets = new Set<net.Socket>();
   const receivedCommands: string[] = [];
+  const receivedData: string[] = [];
   const server = new Server({ hostKeys: [privateKey] }, (client) => {
     clients.add(client);
     client.on('close', () => clients.delete(client));
@@ -310,10 +316,12 @@ async function startLocalSshServer(options: { port?: number; privateKey?: string
         session.on('shell', (acceptShell) => {
           const stream = acceptShell();
           stream.on('error', ignoreBenignSshFixtureError);
-          stream.write('Welcome to JaneT local SSH fixture\r\n$ ');
+          stream.write('Welcome to JaneT local SSH fixture\x0d\x0a$ ');
           let buffer = '';
           stream.on('data', (chunk: Buffer) => {
-            buffer += chunk.toString('utf-8');
+            const data = chunk.toString('utf-8');
+            receivedData.push(data);
+            buffer += data;
             if (!/[\r\n]$/.test(buffer)) return;
             const command = buffer.trim();
             buffer = '';
@@ -344,6 +352,7 @@ async function startLocalSshServer(options: { port?: number; privateKey?: string
     port,
     fingerprint,
     receivedCommands,
+    receivedData,
     disconnectClients: () => {
       for (const client of clients) client.end();
     },
@@ -597,6 +606,54 @@ test('restores local SSH terminal after refresh and runs ls again', async () => 
   } finally {
     await closeApp(browser, electronProcess, userData);
     await ssh.close();
+  }
+});
+
+test('resets stale xterm mouse modes before reconnecting a cached SSH terminal', async () => {
+  const ssh = await startLocalSshServer();
+  const app = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
+  let restartedSsh: LocalSshServer | undefined;
+  try {
+    await waitForShellCreateCount(app.eventsPath, 1);
+    const terminal = app.page.locator('.terminal-container').first();
+    const rows = terminal.locator('.xterm-rows');
+    await expect.poll(() => rows.innerText(), { timeout: 20_000 })
+      .toContain('Welcome to JaneT local SSH fixture');
+
+    await terminal.click();
+    await app.page.keyboard.type('__JANET_ENABLE_STALE_MODES__');
+    await app.page.keyboard.press('Enter');
+    await expect.poll(() => rows.innerText(), { timeout: 20_000 })
+      .toContain('__JANET_STALE_MODES_ENABLED__');
+
+    const box = await terminal.boundingBox();
+    if (!box) throw new Error('SSH terminal has no bounding box');
+    await app.page.mouse.move(box.x + 20, box.y + 20);
+    await app.page.mouse.move(box.x + 40, box.y + 40, { steps: 2 });
+    await expect.poll(() => ssh.receivedData.join(''), { timeout: 5_000 })
+      .toContain('\x1b[<');
+
+    ssh.disconnectClients();
+    await ssh.close();
+    await expect(app.page.getByText('Connection closed')).toBeVisible({ timeout: 20_000 });
+    restartedSsh = await ssh.restart();
+    await app.page.getByRole('button', { name: 'Reconnect' }).click();
+    await expect(terminal.getByTestId('ssh-terminal-notice')).toHaveCount(0, { timeout: 20_000 });
+    await expect.poll(() => rows.innerText(), { timeout: 20_000 })
+      .toContain('__JANET_NORMAL_HISTORY__');
+    await expect(rows).not.toContainText('__JANET_STALE_MODES_ENABLED__');
+
+    await app.page.mouse.move(box.x + 60, box.y + 60);
+    await app.page.mouse.move(box.x + 80, box.y + 80, { steps: 2 });
+    await app.page.waitForTimeout(250);
+    expect(restartedSsh.receivedData.join('')).not.toContain('\x1b[<');
+    await runMarkedLs(app.page, 'AFTER_MODE_RESET');
+  } finally {
+    await closeApp(app.browser, app.electronProcess, app.userData);
+    restartedSsh?.disconnectClients();
+    await restartedSsh?.close().catch(() => {});
+    ssh.disconnectClients();
+    await ssh.close().catch(() => {});
   }
 });
 

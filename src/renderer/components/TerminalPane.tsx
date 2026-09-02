@@ -90,6 +90,8 @@ type LocalSpawnState =
 type TerminalPathDropState = 'valid' | 'invalid' | null;
 
 const INVALID_PATH_DROP_NOTICE_MS = 1_200;
+// ponytail: xterm 6 has no public non-erasing reset; replace this sequence when it adds one.
+const RESET_TERMINAL_FOR_NEW_SSH_SHELL = '\x18\x1b[?47l\x1b[!p\x1b[?9;1000;1002;1003;1006;1016;2026l';
 
 const SEARCH_OPTIONS: ISearchOptions = {
   decorations: {
@@ -217,6 +219,7 @@ export default function TerminalPane({
   const selectionProtectionRef = useRef(false);
   const protectedMouseTrackingRef = useRef<TerminalMouseTrackingMode>('none');
   const protectedSelectionRef = useRef('');
+  const suspendMouseTrackingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const diagnosticsEnabled = window.janet.terminalDiagnosticsEnabled === true;
   searchVisibleRef.current = searchVisible;
   const cachedForAgentListener = terminalPaneCache.get(termId);
@@ -400,16 +403,19 @@ export default function TerminalPane({
         selectionProtected: selectionProtectionRef.current,
       });
     };
-    let suspendMouseTrackingTimer: ReturnType<typeof setTimeout> | null = null;
     const beginSelectionProtection = () => {
-      if (selectionProtectionRef.current || term.modes.mouseTrackingMode === 'none') return;
+      if (
+        selectionProtectionRef.current
+        || term.modes.mouseTrackingMode === 'none'
+        || terminalPaneCache.get(termId)?.sshRetryPromise
+      ) return;
       protectedMouseTrackingRef.current = term.modes.mouseTrackingMode;
       protectedSelectionRef.current = '';
       selectionProtectionRef.current = true;
       // Let xterm's forced Shift-selection mousedown run while mouse tracking
       // is still active, then suspend tracking before the first drag update.
-      suspendMouseTrackingTimer = setTimeout(() => {
-        suspendMouseTrackingTimer = null;
+      suspendMouseTrackingTimerRef.current = setTimeout(() => {
+        suspendMouseTrackingTimerRef.current = null;
         if (selectionProtectionRef.current) term.write(DISABLE_TERMINAL_MOUSE_TRACKING);
       }, 0);
       logTerminalDiagnostic(diagnosticsEnabled, termId, 'selection-protection-start', {
@@ -448,9 +454,9 @@ export default function TerminalPane({
     }));
     const endSelectionProtection = (clearSelection: boolean) => {
       if (!selectionProtectionRef.current) return;
-      if (suspendMouseTrackingTimer) {
-        clearTimeout(suspendMouseTrackingTimer);
-        suspendMouseTrackingTimer = null;
+      if (suspendMouseTrackingTimerRef.current) {
+        clearTimeout(suspendMouseTrackingTimerRef.current);
+        suspendMouseTrackingTimerRef.current = null;
       }
       selectionProtectionRef.current = false;
       const restore = restoreTerminalMouseTracking(protectedMouseTrackingRef.current);
@@ -552,7 +558,10 @@ export default function TerminalPane({
     // closure while cached/detached so it cannot update an unmounted pane.
     mountCleanup.push(() => term.attachCustomKeyEventHandler(() => true));
     mountCleanup.push(() => {
-      if (suspendMouseTrackingTimer) clearTimeout(suspendMouseTrackingTimer);
+      if (suspendMouseTrackingTimerRef.current) {
+        clearTimeout(suspendMouseTrackingTimerRef.current);
+        suspendMouseTrackingTimerRef.current = null;
+      }
       if (!selectionProtectionRef.current) return;
       selectionProtectionRef.current = false;
       const restore = restoreTerminalMouseTracking(protectedMouseTrackingRef.current);
@@ -969,9 +978,30 @@ export default function TerminalPane({
     });
     cached.sshRetryPromise = retryPromise;
     cached.sshRetryOpenedShell = true;
+    const previousDisableStdin = term.options.disableStdin;
+    term.options.disableStdin = true;
+    cached.inputSource.userInput = false;
+    if (suspendMouseTrackingTimerRef.current) {
+      clearTimeout(suspendMouseTrackingTimerRef.current);
+      suspendMouseTrackingTimerRef.current = null;
+    }
+    selectionProtectionRef.current = false;
+    protectedMouseTrackingRef.current = 'none';
+    protectedSelectionRef.current = '';
     publishSshNoticeState({ kind: 'reconnecting' });
     try {
-      Promise.resolve(onSshRetry(termId, dimensions)).then(resolveRetry, rejectRetry);
+      term.write(RESET_TERMINAL_FOR_NEW_SSH_SHELL, () => {
+        const currentCache = terminalPaneCache.get(termId);
+        if (currentCache?.term !== term || currentCache.sshRetryPromise !== retryPromise) {
+          rejectRetry(new Error('Reconnect cancelled'));
+          return;
+        }
+        try {
+          Promise.resolve(onSshRetry(termId, dimensions)).then(resolveRetry, rejectRetry);
+        } catch (error) {
+          rejectRetry(error);
+        }
+      });
     } catch (error) {
       rejectRetry(error);
     }
@@ -996,6 +1026,8 @@ export default function TerminalPane({
         publishSshNoticeState({ kind: 'error', message: err?.message || 'Reconnect failed' });
       })
       .finally(() => {
+        cached.inputSource.userInput = false;
+        try { term.options.disableStdin = previousDisableStdin; } catch {}
         const currentCache = terminalPaneCache.get(termId);
         if (currentCache?.term === term && currentCache.sshRetryPromise === retryPromise) {
           currentCache.sshRetryPromise = null;

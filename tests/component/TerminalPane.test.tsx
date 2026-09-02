@@ -65,6 +65,7 @@ class MockUnicode11Addon {}
 class MockTerminal {
   static instances: MockTerminal[] = [];
   static nativePasteData: string | null = null;
+  static deferConnectionReset = false;
 
   options: Record<string, unknown> = {};
   element: HTMLElement | undefined;
@@ -91,6 +92,12 @@ class MockTerminal {
     this.binaryHandler = handler;
     return { dispose: vi.fn(() => { if (this.binaryHandler === handler) this.binaryHandler = null; }) };
   });
+  emitData(data: string) {
+    if (!this.options.disableStdin) this.dataHandler?.(data);
+  }
+  emitBinary(data: string) {
+    if (!this.options.disableStdin) this.binaryHandler?.(data);
+  }
   onKey = vi.fn(() => ({ dispose: vi.fn() }));
   selectionChangeHandler: (() => void) | null = null;
   onSelectionChange = vi.fn((handler: () => void) => {
@@ -108,8 +115,10 @@ class MockTerminal {
   });
   attachCustomKeyEventHandler = vi.fn();
   writeCallbacks: Array<() => void> = [];
-  write = vi.fn((_data: string, callback?: () => void) => {
-    if (callback) this.writeCallbacks.push(callback);
+  write = vi.fn((data: string, callback?: () => void) => {
+    if (!callback) return;
+    if (data.startsWith('\x18') && !MockTerminal.deferConnectionReset) callback();
+    else this.writeCallbacks.push(callback);
   });
   paste = vi.fn((data: string) => this.dataHandler?.(data));
   refresh = vi.fn();
@@ -222,6 +231,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   MockTerminal.instances = [];
   MockTerminal.nativePasteData = null;
+  MockTerminal.deferConnectionReset = false;
   MockWebLinksAddon.handlers = [];
   MockAddonFit.instances = [];
   MockAddonFit.proposedDimensions = { cols: 80, rows: 24 };
@@ -1959,6 +1969,8 @@ describe('TerminalPane SSH shell output', () => {
     );
 
     const retry = await screen.findByTestId('ssh-notice-retry');
+    const term = MockTerminal.instances.at(-1)!;
+    term.options.disableStdin = false;
     act(() => {
       fireEvent.click(retry);
       fireEvent.click(retry);
@@ -1969,6 +1981,7 @@ describe('TerminalPane SSH shell output', () => {
     expect(screen.getByTestId('ssh-terminal-notice')).toHaveAttribute('data-state', 'reconnecting');
 
     await act(async () => rejectRetry(new Error('Reconnect failed')));
+    expect(term.options.disableStdin).toBe(false);
     fireEvent.click(await screen.findByTestId('ssh-notice-retry'));
     expect(onSshRetry).toHaveBeenCalledTimes(2);
   });
@@ -2388,6 +2401,88 @@ describe('TerminalPane SSH shell output', () => {
     expect(screen.getByTestId('ssh-notice-retry')).toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('resets cached xterm state before retrying a disconnected SSH shell', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    let resolveRetry: () => void = () => {};
+    const onSshRetry = vi.fn(() => new Promise<void>((resolve) => { resolveRetry = resolve; }));
+    const props = {
+      termId: 'term-ssh-reset-before-retry',
+      tabType: 'ssh' as const,
+      sshSessionId: 'ssh-reset-before-retry',
+      onReady: vi.fn(),
+      onRemoved: vi.fn(),
+      onSshRetry,
+      themeName: 'tokyo-night',
+    };
+    const view = render(
+      <KeybindingsProvider>
+        <TerminalPane {...props} />
+      </KeybindingsProvider>,
+    );
+    await waitFor(() => expect(sshCreateShell).toHaveBeenCalledOnce());
+    const term = MockTerminal.instances.at(-1)!;
+    const history = [...term.bufferLines];
+
+    view.rerender(
+      <KeybindingsProvider>
+        <TerminalPane {...props} sshConnectionLost />
+      </KeybindingsProvider>,
+    );
+    const retry = await screen.findByTestId('ssh-notice-retry');
+
+    vi.useFakeTimers();
+    try {
+      MockTerminal.deferConnectionReset = true;
+      term.options.disableStdin = false;
+      term.modes.mouseTrackingMode = 'any';
+      fireEvent.mouseDown(document.querySelector('.terminal-container')!, {
+        button: 0,
+        buttons: 1,
+        shiftKey: true,
+      });
+      term.write.mockClear();
+      sshWriteShell.mockClear();
+      sshWriteShellBinary.mockClear();
+
+      fireEvent.click(retry);
+
+      const reset = '\u0018\u001b[?47l\u001b[!p\u001b[?9;1000;1002;1003;1006;1016;2026l';
+      expect(term.options.disableStdin).toBe(true);
+      expect(term.write).toHaveBeenCalledWith(reset, expect.any(Function));
+      expect(onSshRetry).not.toHaveBeenCalled();
+      term.emitData('\u001b[<35;1;29M');
+      term.emitBinary('\u001b[<35;1;29M');
+      expect(sshWriteShell).not.toHaveBeenCalled();
+      expect(sshWriteShellBinary).not.toHaveBeenCalled();
+
+      act(() => vi.runOnlyPendingTimers());
+      expect(term.write).not.toHaveBeenCalledWith('\u001b[?1000l\u001b[?1002l\u001b[?1003l');
+
+      const resetCallback = term.write.mock.calls.find(([data]) => data === reset)?.[1];
+      await act(async () => {
+        resetCallback?.();
+        await Promise.resolve();
+      });
+      expect(onSshRetry).toHaveBeenCalledWith(props.termId, { cols: 80, rows: 24 });
+      expect(term.options.disableStdin).toBe(true);
+
+      await act(async () => resolveRetry());
+      expect(term.options.disableStdin).toBe(false);
+      term.emitData('echo ready');
+      expect(sshWriteShell).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: props.sshSessionId,
+        termId: props.termId,
+        data: 'echo ready',
+      }));
+      expect(MockTerminal.instances).toHaveLength(1);
+      expect(term.bufferLines).toEqual(history);
+      expect(term.dispose).not.toHaveBeenCalled();
+    } finally {
+      MockTerminal.deferConnectionReset = false;
+      vi.useRealTimers();
+    }
   });
 
   it('opens SSH shells at the measured terminal dimensions', async () => {
