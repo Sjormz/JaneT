@@ -25,6 +25,7 @@ async function forceClose(app: ElectronApplication | undefined): Promise<void> {
 test('broadcasts to selected real terminals until Escape cancels it', async () => {
   test.setTimeout(60_000);
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-broadcast-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData }));
   const outputPath = path.join(userData, 'broadcast-lines.txt').replace(/\\/g, '/');
   const first = `broadcast_${Date.now()}_first`;
   const second = `broadcast_${Date.now()}_second`;

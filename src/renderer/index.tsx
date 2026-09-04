@@ -4,6 +4,7 @@ import App from './App';
 import '@fontsource-variable/inter/wght.css';
 import '@fontsource-variable/jetbrains-mono/wght.css';
 import './styles/global.css';
+import './styles/chrome.css';
 
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(

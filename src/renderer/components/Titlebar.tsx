@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  SettingsIconCmp,
+  SettingsIconCmp, SearchIcon,
   MinimizeIcon, MaximizeIcon, RestoreIcon, CloseIcon,
 } from '../icons';
 import BrandMark from './BrandMark';
@@ -104,26 +104,31 @@ export default function Titlebar({
   }, [settingsOpen]);
 
   return (
-    <div className={`titlebar ${platform === 'darwin' ? 'is-mac' : ''}`} role="banner">
+    <div className={`titlebar app-chrome ${platform === 'darwin' ? 'is-mac' : ''}`} role="banner">
       {/* Brand */}
       <div className="titlebar-brand">
-        <BrandMark size={28} className="titlebar-logo" />
-        <span className="titlebar-app-name">JaneT</span>
+        <div className="titlebar-brand-plate"><BrandMark size={28} className="titlebar-logo" /></div>
+        <div className="titlebar-brand-copy">
+          <span className="titlebar-app-name">JaneT</span>
+          <span className="titlebar-edition">TERMINAL WORKSPACE</span>
+        </div>
       </div>
 
-      {/* Right cluster: palette + settings + window controls */}
-      <div className="titlebar-right">
+      <div className="titlebar-command">
         <Tooltip label="Open command palette" shortcut={displayedPaletteShortcut} placement="bottom">
           <button
             className="titlebar-palette-btn"
             onClick={onOpenPalette}
             aria-label={`Open command palette (${displayedPaletteShortcut})`}
           >
+            <SearchIcon size="sm" />
             <span className="titlebar-palette-label">Search commands</span>
             <kbd className="titlebar-kbd" aria-hidden="true">{displayedPaletteShortcut}</kbd>
           </button>
         </Tooltip>
+      </div>
 
+      <div className="titlebar-right">
         <div className="titlebar-settings">
           <Tooltip label={settingsOpen ? 'Hide settings' : 'Open settings'} placement="bottom">
             <button

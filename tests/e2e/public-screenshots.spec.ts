@@ -261,7 +261,7 @@ async function capture(name: typeof screenshotNames[number], target: Page | Loca
 
 function writeSettings(userData: string, fingerprint: string): void {
   const localProfileId = `demo@127.0.0.1:${sshPort}:password`;
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'right',
@@ -363,9 +363,7 @@ test('recaptures the shipped public screenshot set from the real app', async () 
     await expect(tab(page, 'Demo workspace')).toHaveClass(/active/);
     await expect(page.locator('.terminal-container')).toHaveCount(2);
     await expect(page.getByRole('button', { name: 'Open folder src' })).toBeVisible({ timeout: 20_000 });
-    const presets = page.getByRole('button', { name: 'Presets' });
-    if (await presets.getAttribute('aria-expanded') === 'false') await presets.click();
-    await expect(page.getByRole('button', { name: 'Open preset Web project' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^My workspaces/, expanded: true })).toBeVisible();
 
     const terminals = page.locator('.terminal-container');
     const workspaceCommand = 'git status -sb';

@@ -7,6 +7,7 @@ import { isAllowedExternalUrl } from './externalUrls';
 import { FileSystemManager } from './filesystem';
 import { GitManager } from './git';
 import { SettingsManager } from './settings';
+import { requireDirectory, createWorkspaceDirectory } from './workspaceDirectories';
 import { sendRendererEvent } from './rendererEvents';
 import type { SSHListDirParams } from '../shared/files';
 import type {
@@ -481,6 +482,12 @@ function registerIpcHandlers() {
   });
 
   // === Terminal IPC ===
+  handle('app:readTerminalClipboard', () => {
+    const text = electron.clipboard.readText();
+    if (text.length > MAX_TERMINAL_CLIPBOARD_TEXT_LENGTH) throw new Error('Clipboard text exceeds the terminal paste limit');
+    return text;
+  });
+
   handle('terminal:create', (event, { id, cwd, shell, startupCommands }) => {
     const pty = terminalManager.create(id, cwd, shell, (data, output) => {
       return sendRendererEvent(mainWindow, 'terminal:onData', { source: 'local', id, data, ...output });
@@ -715,10 +722,16 @@ function registerIpcHandlers() {
   handle('app:selectLocalDirectory', async () => {
     if (!mainWindow) return null;
     const result = await electron.dialog.showOpenDialog(mainWindow, {
-      title: 'Open project',
-      properties: ['openDirectory'],
+      title: 'Choose folder',
+      properties: ['openDirectory', 'createDirectory'],
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
+  handle('workspace:directory', async (_event, request: unknown) => {
+    if (!request || typeof request !== 'object' || Array.isArray(request)) throw new Error('Invalid directory request');
+    const { parent, name } = request as { parent?: unknown; name?: unknown };
+    return name === undefined ? requireDirectory(parent) : createWorkspaceDirectory(parent, name);
   });
 
   handle('app:openExternal', async (event, url: unknown) => {

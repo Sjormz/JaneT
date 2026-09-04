@@ -2,10 +2,11 @@ import { test, expect, _electron as electron, type ElectronApplication, type Loc
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { getTheme, themeNames, type ThemeName } from '../../src/renderer/themes';
 
 const root = path.resolve(__dirname, '../..');
 const neutralCwd = process.env.SystemRoot ?? root;
-const themes = ['tokyo-night', 'solarized-light'] as const;
+const themes = themeNames;
 const viewports = [{ width: 1280, height: 800 }, { width: 800, height: 600 }] as const;
 
 function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
@@ -62,15 +63,14 @@ async function selectTab(page: Page, title: string): Promise<Locator> {
   return terminal;
 }
 
-async function switchTheme(page: Page, theme: typeof themes[number]): Promise<void> {
+async function switchTheme(page: Page, theme: ThemeName): Promise<void> {
   await page.getByRole('button', { name: 'Open settings' }).click();
-  const label = theme === 'tokyo-night' ? 'Tokyo Night' : 'Solarized Light';
+  const definition = getTheme(theme);
+  const label = definition.label;
   await page.getByRole('button', { name: label, exact: true }).click();
   await page.getByRole('button', { name: 'Hide settings' }).click();
-  const expected = theme === 'tokyo-night' ? 'rgb(15, 15, 26)' : 'rgb(253, 246, 227)';
   await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement)
-    .getPropertyValue('--bg-primary').trim())).toBe(theme === 'tokyo-night' ? '#0f0f1a' : '#fdf6e3');
-  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(expected);
+    .getPropertyValue('--bg-primary').trim())).toBe(definition.css['bg-primary']);
 }
 
 async function measureVisualState(page: Page, name: string) {
@@ -162,6 +162,17 @@ async function measureVisualState(page: Page, name: string) {
         activeTabBackground: effectiveBackground(activeTab).slice(0, 3).map(Math.round),
         inactiveTabBackground: effectiveBackground(inactiveTab).slice(0, 3).map(Math.round),
         failedMarkerBorder: getComputedStyle(failedMarker).borderLeftWidth,
+        workspaceToolsOverflowY: getComputedStyle(document.querySelector<HTMLElement>('.workspace-tools-panel')!).overflowY,
+        explorerOverflowY: getComputedStyle(document.querySelector<HTMLElement>('.explorer-tree')!).overflowY,
+        verticalDividerWidth: getComputedStyle(document.querySelector<HTMLElement>('.split-divider-vertical')!).width,
+        horizontalDividerHeight: getComputedStyle(document.querySelector<HTMLElement>('.split-divider-horizontal')!).height,
+        workspaceMainPadding: getComputedStyle(document.querySelector<HTMLElement>('.workspace-main')!).paddingTop,
+        terminalLeafBorderWidth: getComputedStyle(document.querySelector<HTMLElement>('.terminal-leaf')!).borderTopWidth,
+        terminalTracks: Array.from(document.querySelectorAll<HTMLElement>('.terminal-container')).map((container) => ({
+          track: getComputedStyle(container.querySelector<HTMLElement>('.xterm-scrollable-element')!).backgroundColor,
+          canvas: getComputedStyle(container).backgroundColor,
+          outerOverflow: getComputedStyle(container).overflowY,
+        })),
       },
       contrastPairs: [
         contrast('.workspace-tools-following'),
@@ -177,13 +188,13 @@ async function measureVisualState(page: Page, name: string) {
   }, name);
 }
 
-test('proves the final two-theme Electron visual matrix', async ({}, testInfo) => {
+test('checks every built-in theme in the Electron visual matrix', async ({}, testInfo) => {
   test.setTimeout(120_000);
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-final-visual-e2e-'));
   const pageErrors: string[] = [];
   let app: ElectronApplication | undefined;
 
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'left',
@@ -198,7 +209,13 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
             type: 'split', direction: 'vertical', sizes: [1, 1],
             children: [
               { type: 'leaf', title: 'Focused', terminalType: 'local', cwd: neutralCwd },
-              { type: 'leaf', title: 'Failed command', terminalType: 'local', cwd: neutralCwd },
+              {
+                type: 'split', direction: 'horizontal', sizes: [1, 1],
+                children: [
+                  { type: 'leaf', title: 'Failed command', terminalType: 'local', cwd: neutralCwd },
+                  { type: 'leaf', title: 'Stacked pane', terminalType: 'local', cwd: neutralCwd },
+                ],
+              },
             ],
           },
           selectedPanePath: [0],
@@ -278,7 +295,7 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
     await expect(tab(page, 'Finished agent').locator('.vtab-sub')).toHaveText('Hermes · Turn finished');
 
     const activeTerminals = page.locator('.terminal-container');
-    await expect(activeTerminals).toHaveCount(2);
+    await expect(activeTerminals).toHaveCount(3);
     await typeCommand(page, activeTerminals.nth(0), emitCommand({
       event: 'attention.request', sessionId: 'visual-active', turnId: 'turn-active',
     }));
@@ -322,6 +339,21 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
         await expect(tab(page, 'Active workspace')).toBeFocused();
 
         const report = await measureVisualState(page, `${theme}-${viewport.width}x${viewport.height}`);
+        const chrome = await page.evaluate(() => {
+          const brand = document.querySelector('.titlebar-brand')!.getBoundingClientRect();
+          const command = document.querySelector('.titlebar-palette-btn')!.getBoundingClientRect();
+          const controls = document.querySelector('.titlebar-right')!.getBoundingClientRect();
+          return {
+            separated: brand.right < command.left && command.right < controls.left,
+            height: document.querySelector('.titlebar')!.getBoundingClientRect().height,
+            commandDrag: getComputedStyle(document.querySelector('.titlebar-palette-btn')!).getPropertyValue('-webkit-app-region'),
+            footerHeight: document.querySelector('.status-bar')!.getBoundingClientRect().height,
+          };
+        });
+        expect(chrome.separated).toBe(true);
+        expect(chrome.height).toBe(54);
+        expect(chrome.footerHeight).toBe(28);
+        expect(chrome.commandDrag).toBe('no-drag');
         expect(report.document.bodyScrollWidth).toBeLessThanOrEqual(viewport.width);
         expect(report.document.rootScrollWidth).toBeLessThanOrEqual(viewport.width);
         expect(report.document.bodyScrollHeight).toBeLessThanOrEqual(viewport.height);
@@ -334,7 +366,17 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
         expect(parseFloat(report.distinctions.activeTabOutlineWidth)).toBeGreaterThanOrEqual(2);
         expect(report.distinctions.activeTabBackground).not.toEqual(report.distinctions.inactiveTabBackground);
         expect(report.distinctions.failedMarkerBorder).toBe('2px');
-        expect(report.contrastPairs.filter(({ ratio }) => ratio < 4.5)).toEqual([]);
+        expect(report.distinctions.workspaceToolsOverflowY).toBe('hidden');
+        expect(report.distinctions.explorerOverflowY).toBe('auto');
+        expect(parseFloat(report.distinctions.verticalDividerWidth)).toBeGreaterThanOrEqual(12);
+        expect(parseFloat(report.distinctions.horizontalDividerHeight)).toBeGreaterThanOrEqual(12);
+        expect(report.distinctions.workspaceMainPadding).toBe('0px');
+        expect(report.distinctions.terminalLeafBorderWidth).toBe('1px');
+        for (const track of report.distinctions.terminalTracks) {
+          expect(track.track).toBe(track.canvas);
+          expect(['auto', 'scroll']).not.toContain(track.outerOverflow);
+        }
+        expect(report.contrastPairs.filter(({ ratio }) => ratio < 7)).toEqual([]);
         reports.push(report);
 
         const screenshot = testInfo.outputPath(`final-visual-matrix-${theme}-${viewport.width}x${viewport.height}.png`);
@@ -360,7 +402,7 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
         expect(menuBox!.y).toBeGreaterThanOrEqual(0);
         expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(viewport.width + 1);
         expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(viewport.height + 1);
-        await expect(menu.getByRole('menuitem', { name: 'Rename tab' })).toBeFocused();
+        await expect(menu.getByRole('menuitem', { name: 'Rename workspace' })).toBeFocused();
         await page.evaluate(() => document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
         await expect(menu).toBeHidden();
         await expect(activeTab).toBeFocused();
@@ -373,7 +415,7 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
           clientX: point.x,
           clientY: point.y,
         })), { x: viewport.width - 1, y: viewport.height - 1 });
-        await expect(menu.getByRole('menuitem', { name: 'Rename tab' })).toBeFocused();
+        await expect(menu.getByRole('menuitem', { name: 'Rename workspace' })).toBeFocused();
         await page.keyboard.press('Escape');
         await expect(menu).toBeHidden();
         await expect(activeTab).toBeFocused();

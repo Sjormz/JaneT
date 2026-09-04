@@ -1,3 +1,4 @@
+import { createWorkspace } from './workspaces';
 import { test, expect, chromium, Browser, Page } from '@playwright/test';
 import { execFileSync, spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
@@ -80,7 +81,7 @@ async function launchApp(settings: unknown, prefix: string, existingUserData?: s
   const settingsPath = path.join(userData, 'settings.json');
   const remoteDebuggingPort = await getFreePort();
 
-  if (settings !== undefined) fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+  if (settings !== undefined) fs.writeFileSync(settingsPath, JSON.stringify({ mainDirectory: userData, ...(settings as object) }, null, 2), 'utf-8');
 
   // Spawn Electron directly so the tracked child is the app process itself.
   // A shell-wrapped `npx electron` can exit or be killed while leaving its
@@ -372,7 +373,7 @@ test('moves the active pane by configured keyboard and command palette without r
   }
 });
 
-test('runs ordered preset startup commands once per fresh terminal', async () => {
+test('runs ordered workspace startup commands once per fresh terminal', async () => {
   const markerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-startup-'));
   const markerPath = path.join(markerDir, 'ordered.txt');
   const failurePath = path.join(markerDir, 'failure.txt');
@@ -435,9 +436,7 @@ test('runs ordered preset startup commands once per fresh terminal', async () =>
     }, 'janet-e2e-startup-app-');
     userData = app.userData;
 
-    const presetsButton = app.page.getByRole('button', { name: 'Presets' });
-    if (await presetsButton.getAttribute('aria-expanded') !== 'true') await presetsButton.click();
-    await app.page.getByRole('button', { name: 'Open preset Ordered startup' }).click();
+    await createWorkspace(app.page, 'Ordered startup', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
 
     await expect.poll(
       () => fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf-8') : '',
@@ -463,11 +462,9 @@ test('runs ordered preset startup commands once per fresh terminal', async () =>
       { timeout: 10_000 },
     ).toBe('ABAB');
 
-    // Opening the preset explicitly creates a new pane instance, so its startup
+    // Creating another workspace explicitly creates a new pane instance, so its startup
     // sequence should run again from the beginning.
-    const reloadedPresetsButton = app.page.getByRole('button', { name: 'Presets' });
-    if (await reloadedPresetsButton.getAttribute('aria-expanded') !== 'true') await reloadedPresetsButton.click();
-    await app.page.getByRole('button', { name: 'Open preset Ordered startup' }).click();
+    await createWorkspace(app.page, 'Ordered startup second', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
     await expect.poll(
       () => fs.readFileSync(markerPath, 'utf-8'),
       { timeout: 10_000 },
@@ -476,7 +473,7 @@ test('runs ordered preset startup commands once per fresh terminal', async () =>
     // The first row writes a relative marker and exits non-zero. Finding the
     // marker in the saved cwd proves directory selection; never seeing `Y`
     // proves the compound sequence stops before the second row.
-    await app.page.getByRole('button', { name: 'Open preset Failure gate' }).click();
+    await createWorkspace(app.page, 'Failure gate', [{ title: 'failure gate', cwd: markerDir, commands: [failAfterRelativeMarker, mustNotRunAfterFailure] }]);
     await expect.poll(
       () => fs.existsSync(failurePath) ? fs.readFileSync(failurePath, 'utf-8') : '',
       { timeout: 10_000 },

@@ -1,6 +1,29 @@
 export type TerminalMouseTrackingMode = 'none' | 'x10' | 'vt200' | 'drag' | 'any';
 
-export const DISABLE_TERMINAL_MOUSE_TRACKING = '\u001b[?1000l\u001b[?1002l\u001b[?1003l';
+export const DISABLE_TERMINAL_MOUSE_TRACKING = '\u001b[?9l\u001b[?1000l\u001b[?1002l\u001b[?1003l';
+
+// PTY packets can split a control sequence anywhere, including after ESC.
+export function createMouseTrackingFilter() {
+  let pending = '';
+  const modes: Record<string, TerminalMouseTrackingMode> = { 9: 'x10', 1000: 'vt200', 1002: 'drag', 1003: 'any' };
+  return (data: string, protect: boolean, onMode: (mode: TerminalMouseTrackingMode) => void): string => {
+    const input = pending + data;
+    pending = '';
+    const tail = input.match(/\u001b(?:\[(?:\?[0-9;]*)?)?$/);
+    // Bound malformed/incomplete sequences instead of retaining arbitrary output.
+    if (tail && tail[0].length <= 64) pending = tail[0];
+    const complete = pending ? input.slice(0, -pending.length) : input;
+    return complete.replace(/\u001b\[\?([0-9;]+)([hl])/g, (sequence, parameters: string, operation: string) => {
+      if (!protect) return sequence;
+      const retained = parameters.split(';').filter((parameter) => {
+        if (!modes[parameter]) return true;
+        onMode(operation === 'h' ? modes[parameter] : 'none');
+        return false;
+      });
+      return retained.length ? `\u001b[?${retained.join(';')}${operation}` : '';
+    });
+  };
+}
 
 export function restoreTerminalMouseTracking(mode: TerminalMouseTrackingMode): string {
   switch (mode) {

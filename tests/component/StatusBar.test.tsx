@@ -27,6 +27,7 @@ describe('StatusBar', () => {
     render(<StatusBar {...defaultProps} cwd="C:/work/barrel-racer" />);
 
     expect(screen.getByText('C:/work/barrel-racer')).toBeInTheDocument();
+    expect(screen.getByText('LOCAL')).toBeInTheDocument();
     expect(screen.queryByText(/terminal/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/MacIntel|Win32/i)).not.toBeInTheDocument();
   });
@@ -42,6 +43,7 @@ describe('StatusBar', () => {
     );
 
     expect(screen.getByText('SSH · build.example.com')).toBeInTheDocument();
+    expect(screen.getByText('REMOTE')).toBeInTheDocument();
     expect(screen.queryByText('/Users/local-user')).toBeNull();
   });
 

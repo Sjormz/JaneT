@@ -33,7 +33,7 @@ function createFixture(): { directory: string; fileName: string; filePath: strin
 
 function createUserData(cwd: string): string {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), USER_DATA_PREFIX));
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'right',
@@ -105,6 +105,7 @@ test('edits a local file with Monaco under the packaged JaneT origin', async ({}
     const fixture = createFixture();
     fixtureDirectory = fixture.directory;
     userData = createUserData(fixture.directory);
+    const started = performance.now();
     app = await electron.launch({
       args: ['.'],
       cwd: root,
@@ -123,6 +124,7 @@ test('edits a local file with Monaco under the packaged JaneT origin', async ({}
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1280, 760));
 
     expect(page.url()).toBe('janet://app/index.html');
+    const editorStarted = performance.now();
     await page.getByRole('button', { name: `Open file ${fixture.fileName}` }).click();
     const editor = page.locator('.monaco-editor-host');
     const input = page.getByRole('textbox', { name: `Editing ${fixture.fileName}` });
@@ -132,6 +134,12 @@ test('edits a local file with Monaco under the packaged JaneT origin', async ({}
       () => page.workers().some((worker) => /(?:editor|ts)\.worker-.*\.js/.test(worker.url())),
       { timeout: 20_000 },
     ).toBe(true);
+    const baselinePath = testInfo.outputPath('editor-performance-baseline.json');
+    fs.writeFileSync(baselinePath, JSON.stringify({ platform: process.platform, launchToEditorMs: performance.now() - started, firstEditorOpenMs: performance.now() - editorStarted }));
+    await testInfo.attach('editor-performance-baseline', {
+      path: baselinePath,
+      contentType: 'application/json',
+    });
 
     const primaryContent = 'export const answer: number = 42;\n';
     const save = process.platform === 'darwin' ? 'Meta+S' : 'Control+S';

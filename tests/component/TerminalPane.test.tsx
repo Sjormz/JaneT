@@ -268,6 +268,7 @@ beforeEach(() => {
       sshWriteShellBinary,
       openExternal,
       copyTerminalText,
+      readTerminalClipboard: vi.fn().mockResolvedValue('clipboard text'),
       terminalDiagnosticsEnabled: false,
     },
   });
@@ -919,7 +920,7 @@ describe('TerminalPane SSH reinitialization', () => {
       buttons: 1,
       shiftKey: true,
     });
-    await waitFor(() => expect(term.write).toHaveBeenCalledWith('\u001b[?1000l\u001b[?1002l\u001b[?1003l'));
+    await waitFor(() => expect(term.write).toHaveBeenCalledWith('\u001b[?9l\u001b[?1000l\u001b[?1002l\u001b[?1003l'));
 
     act(() => terminalDataHandler?.({
       source: 'local',
@@ -950,6 +951,36 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(copyTerminalText).toHaveBeenCalledWith('retained TUI text');
     expect(term.write).toHaveBeenCalledWith('\u001b[?1003h');
     expect(term.clearSelection).toHaveBeenCalled();
+  });
+
+  it('protects TUI selection using the current pane after a cached remount', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const pane = <KeybindingsProvider><TerminalPane termId="protected-remount" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" /></KeybindingsProvider>;
+    const first = render(pane);
+    const term = MockTerminal.instances.at(-1)!;
+    first.unmount();
+    render(pane);
+    expect(MockTerminal.instances.at(-1)).toBe(term);
+    term.modes.mouseTrackingMode = 'any';
+    fireEvent.mouseDown(document.querySelector('.terminal-container')!, { button: 0, shiftKey: true });
+    await waitFor(() => expect(term.write).toHaveBeenCalledWith('\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l'));
+    act(() => terminalDataHandler?.({ source: 'local', id: 'protected-remount', data: 'redraw\x1b[?1003h', generation: 1, sequence: 1 }));
+    expect(term.write).toHaveBeenLastCalledWith('redraw', expect.any(Function));
+  });
+
+  it('cancels a link gesture released outside the pane or on window blur', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(<KeybindingsProvider><TerminalPane termId="cancel-link" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" /></KeybindingsProvider>);
+    const term = MockTerminal.instances.at(-1)!;
+    const handler = term.options.linkHandler as { hover(event: MouseEvent, url: string): void };
+    const container = document.querySelector('.terminal-container')!;
+    for (const release of [() => fireEvent.mouseUp(document.body), () => fireEvent.blur(window)]) {
+      handler.hover(new MouseEvent('mousemove'), 'https://example.com');
+      fireEvent.mouseDown(container, { button: 0 });
+      release();
+      fireEvent.mouseUp(container, { button: 0 });
+    }
+    expect(window.janet.openExternal).not.toHaveBeenCalled();
   });
 
   it('handles semantic command navigation and safe copy shortcuts without shell input', async () => {
@@ -1735,7 +1766,7 @@ describe('TerminalPane SSH shell output', () => {
       </KeybindingsProvider>,
     );
 
-    const event = { preventDefault: vi.fn() } as unknown as MouseEvent;
+    const event = { button: 0, preventDefault: vi.fn() } as unknown as MouseEvent;
     MockWebLinksAddon.handlers[0](event, 'https://example.com/docs');
 
     expect(event.preventDefault).toHaveBeenCalled();
@@ -1752,7 +1783,7 @@ describe('TerminalPane SSH shell output', () => {
 
     const term = MockTerminal.instances.at(-1)!;
     const linkHandler = term.options.linkHandler as { activate(event: MouseEvent, url: string): void };
-    const event = { preventDefault: vi.fn() } as unknown as MouseEvent;
+    const event = { button: 0, preventDefault: vi.fn() } as unknown as MouseEvent;
     linkHandler.activate(event, 'https://example.com/from-osc-8');
 
     expect(event.preventDefault).toHaveBeenCalledOnce();

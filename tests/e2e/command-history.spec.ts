@@ -44,7 +44,7 @@ test('persists real command metadata and history selection pastes without execut
     : "printf X >> history-rerun.txt; printf 'JANET_HISTORY_%s\\n' 'OUTPUT_9F2A'";
   let app: ElectronApplication | undefined;
 
-  fs.writeFileSync(settingsPath, JSON.stringify({
+  fs.writeFileSync(settingsPath, JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night', fontSize: 14, sidebarSide: 'left', keybindings: {}, workspaceTabs: [],
     session: {
       tabs: [{

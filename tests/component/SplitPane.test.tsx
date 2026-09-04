@@ -1500,6 +1500,22 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument());
   });
 
+  it('shows failed automatic workspace persistence and retries the current state', async () => {
+    let failSessionSave = true;
+    vi.mocked(window.janet.setSettings).mockImplementation(async (update) => {
+      if (update.session && failSessionSave) throw new Error('Disk unavailable');
+    });
+    render(<App />);
+    const retry = await screen.findByRole('button', { name: 'Retry workspace save' }, { timeout: 2_000 });
+    expect(screen.getByRole('alert')).toHaveTextContent('Workspace changes could not be saved');
+    failSessionSave = false;
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry workspace save' })).not.toBeInTheDocument());
+    expect(window.janet.setSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      session: expect.objectContaining({ groups: [{ id: 'default', name: 'My workspaces' }] }),
+    }));
+  });
+
   it('exposes unassigned optional actions in the palette', async () => {
     render(<App />);
     await screen.findByTestId(/terminal-/);
@@ -1520,7 +1536,7 @@ describe('split panes in the app', () => {
     ])));
   });
 
-  it('discovers core workflows and saves the current workspace from the palette', async () => {
+  it('discovers core workflows and opens workspace creation from the palette', async () => {
     render(<App />);
     await screen.findByTestId(/terminal-/);
 
@@ -1529,24 +1545,15 @@ describe('split panes in the app', () => {
       expect.objectContaining({ id: 'sidebar-ssh', keywords: ['connect', 'remote'] }),
       expect.objectContaining({ id: 'settings-toggle', keywords: ['preferences'] }),
       expect.objectContaining({
-        id: 'save-workspace',
-        label: 'Save current workspace',
-        keywords: ['preset', 'layout'],
+        id: 'new-workspace',
+        label: 'New workspace or group',
+        keywords: ['group', 'layout'],
       }),
     ])));
 
-    const activeTab = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { id: string }) => tab.id === rendererMocks.verticalTabBarProps.activeTabId,
-    );
-    vi.mocked(window.janet.setSettings).mockClear();
-    act(() => rendererMocks.paletteActions.find((action) => action.id === 'save-workspace')!.handler());
-
-    await waitFor(() => expect(window.janet.setSettings).toHaveBeenCalledWith({
-      workspaceTabs: [expect.objectContaining({
-        name: activeTab.title,
-        terminalCount: 1,
-      })],
-    }));
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-workspace')!.handler());
+    expect(rendererMocks.verticalTabBarProps.creatorOpen).toBe(true);
+    expect(rendererMocks.paletteActions.some((action) => action.id === 'save-workspace')).toBe(false);
   });
 
   it('keeps the starter terminal and shows bounded fresh-profile entry actions', async () => {
@@ -1560,7 +1567,7 @@ describe('split panes in the app', () => {
     )).toBeInTheDocument();
     expect(within(entry).getByRole('button', { name: 'Open project' })).toBeInTheDocument();
     expect(within(entry).getByRole('button', { name: 'Add SSH' })).toBeInTheDocument();
-    expect(within(entry).getByRole('button', { name: 'Save workspace' })).toBeInTheDocument();
+    expect(within(entry).getByRole('button', { name: 'New workspace' })).toBeInTheDocument();
     fireEvent.click(within(entry).getByRole('button', { name: 'Dismiss get started' }));
     expect(screen.queryByRole('region', { name: 'Get started' })).not.toBeInTheDocument();
     expect(screen.getByTestId(/terminal-/)).toBeInTheDocument();
@@ -1610,13 +1617,9 @@ describe('split panes in the app', () => {
       (tab: { id: string }) => tab.id === rendererMocks.verticalTabBarProps.activeTabId,
     );
     vi.mocked(window.janet.setSettings).mockClear();
-    fireEvent.click(within(entry).getByRole('button', { name: 'Save workspace' }));
-    await waitFor(() => expect(window.janet.setSettings).toHaveBeenCalledWith({
-      workspaceTabs: [expect.objectContaining({
-        name: activeTab.title,
-        terminalCount: 1,
-      })],
-    }));
+    fireEvent.click(within(entry).getByRole('button', { name: 'New workspace' }));
+    expect(rendererMocks.verticalTabBarProps.creatorOpen).toBe(true);
+    expect(rendererMocks.verticalTabBarProps.onSaveWorkspaceTab).toBeUndefined();
   });
 
   it('does not show first exposure when the original session restores a valid workspace', async () => {
@@ -2368,7 +2371,7 @@ describe('split panes in the app', () => {
     (window.janet.sshCreateShell as any).mockClear();
 
     await act(async () => {
-      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
     });
 
     await waitFor(() => {
@@ -2398,28 +2401,11 @@ describe('split panes in the app', () => {
     }, { timeout: 1_500 });
 
     const launchedTab = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+      (tab: { title: string }) => tab.title === preset.name,
     );
     expect(launchedTab).toBeTruthy();
-    (window.janet.setSettings as any).mockClear();
-    act(() => rendererMocks.verticalTabBarProps.onSaveWorkspaceTab(launchedTab));
-    expect(window.janet.setSettings).not.toHaveBeenCalled();
-    expect(screen.getByRole('alertdialog', { name: 'Update preset “Forge workspace”?' })).toHaveTextContent(
-      'Replace the saved preset with this tab’s current layout',
-    );
-    await confirmPendingAction(/^update preset$/i);
-    await waitFor(() => {
-      const workspaceUpdates = (window.janet.setSettings as any).mock.calls
-        .map((call: any[]) => call[0])
-        .filter((update: any) => Array.isArray(update?.workspaceTabs));
-      const savedPreset = workspaceUpdates.at(-1)?.workspaceTabs
-        .find((candidate: { id: string }) => candidate.id === preset.id);
-      expect(savedPreset?.root.children[0].startupCommands).toEqual(['npm install', 'npm run dev']);
-      expect(savedPreset?.root.children[1]).toMatchObject({
-        startupCommands: ['hermes doctor', 'hermes -p forge --tui'],
-        startupShellDialect: 'posix',
-      });
-    });
+    expect(launchedTab.groupId).toBe('default');
+    expect(rendererMocks.verticalTabBarProps.onSaveWorkspaceTab).toBeUndefined();
   });
 
   it('launches every terminal from a rootless legacy SSH preset', async () => {
@@ -2452,12 +2438,12 @@ describe('split panes in the app', () => {
     const shellCallStart = (window.janet.sshCreateShell as any).mock.calls.length;
 
     await act(async () => {
-      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
     });
 
     await waitFor(() => {
       const launchedTab = rendererMocks.verticalTabBarProps.tabs.find(
-        (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+        (tab: { title: string }) => tab.title === preset.name,
       );
       const sessionIds = launchedTab.root.children.map((leaf: { sshSessionId: string }) => leaf.sshSessionId);
       const connectionIds = (window.janet.sshConnect as any).mock.calls
@@ -2499,12 +2485,12 @@ describe('split panes in the app', () => {
     (window.janet.terminalCreate as any).mockClear();
 
     await act(async () => {
-      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
     });
 
     await waitFor(() => {
       const launched = rendererMocks.verticalTabBarProps.tabs.find(
-        (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+        (tab: { title: string }) => tab.title === preset.name,
       );
       expect(launched?.root).toMatchObject({
         terminalType: 'ssh',
@@ -2519,7 +2505,7 @@ describe('split panes in the app', () => {
     expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
     expect(window.janet.terminalCreate).not.toHaveBeenCalled();
     const launched = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+      (tab: { title: string }) => tab.title === preset.name,
     );
     expect(rendererMocks.sshRetryHandlers.get(launched.root.id)).toBeTypeOf('function');
   });
@@ -2558,12 +2544,12 @@ describe('split panes in the app', () => {
       (window.janet.terminalCreate as any).mockClear();
 
       await act(async () => {
-        await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+        await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
       });
 
       await waitFor(() => {
         const launched = rendererMocks.verticalTabBarProps.tabs.find(
-          (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+          (tab: { title: string }) => tab.title === preset.name,
         );
         expect(launched?.root).toMatchObject({
           terminalType: 'ssh', sshProfileId,
@@ -2575,7 +2561,7 @@ describe('split panes in the app', () => {
       expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
       expect(window.janet.terminalCreate).not.toHaveBeenCalled();
       const launched = rendererMocks.verticalTabBarProps.tabs.find(
-        (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+        (tab: { title: string }) => tab.title === preset.name,
       );
       expect(rendererMocks.sshRetryHandlers.get(launched.root.id)).toBeTypeOf('function');
     } finally {
@@ -4068,7 +4054,7 @@ describe('split panes in the app', () => {
 
     await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
     await act(async () => {
-      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
     });
 
     await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));

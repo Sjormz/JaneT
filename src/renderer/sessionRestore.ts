@@ -1,4 +1,5 @@
 import { PaneNode, TerminalLeaf, SplitNode, genId } from './types';
+import { normalizeWorkspaceGroups, type WorkspaceGroup } from '../shared/workspaceGroups';
 import type { StartupShellDialect } from '../shared/startupCommands';
 import { isStartupShellDialect, sanitizeStartupCommands } from '../shared/startupCommands';
 
@@ -22,6 +23,7 @@ export interface SavedPaneSplit {
 export type SavedPaneNode = SavedPaneLeaf | SavedPaneSplit;
 
 export interface SavedTab {
+  groupId?: string;
   id: string;
   title: string;
   type: 'local' | 'ssh';
@@ -33,6 +35,7 @@ export interface SavedTab {
 }
 
 export interface SavedSession {
+  groups?: WorkspaceGroup[];
   tabs: SavedTab[];
   activeTabId: string | null;
   sidebarOpen: boolean;
@@ -242,6 +245,7 @@ export function normalizeSession(raw: unknown): SavedSession {
       const maximizedPanePath = normalizeSavedPanePath(tab.maximizedPanePath, tab.root);
       tabs.push({
         id: tab.id,
+        ...(typeof tab.groupId === 'string' && tab.groupId.length <= 256 ? { groupId: tab.groupId } : {}),
         title: tab.title,
         type: tab.type,
         ...(typeof tab.cwd === 'string' ? { cwd: tab.cwd } : {}),
@@ -255,6 +259,7 @@ export function normalizeSession(raw: unknown): SavedSession {
 
   return {
     tabs,
+    ...(obj.groups !== undefined ? { groups: normalizeWorkspaceGroups(obj.groups) } : {}),
     activeTabId: typeof obj.activeTabId === 'string' ? obj.activeTabId : null,
     sidebarOpen: obj.sidebarOpen !== false,
     tabsOpen: obj.tabsOpen !== false,

@@ -33,7 +33,7 @@ test('navigates, copies, and safely inserts a real semantic command', async () =
     : `printf X >> semantic-rerun.txt; printf '${OUTPUT}\\n'`;
   let app: ElectronApplication | undefined;
 
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'left',

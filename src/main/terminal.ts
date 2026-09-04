@@ -227,6 +227,11 @@ export class TerminalManager {
       throw new Error(`Shell executable was not found: ${defaultShell}`);
     }
     const defaultCwd = resolveTerminalCwd(cwd);
+    try {
+      if (!fs.statSync(defaultCwd).isDirectory()) throw new Error('Not a directory');
+    } catch {
+      throw new Error('Starting directory is unavailable. Locate the folder and try again.');
+    }
     const startupDialect = inferStartupShellDialect(defaultShell);
     const startupExpression = startupDialect
       ? compileStartupCommands(startupCommands, startupDialect)

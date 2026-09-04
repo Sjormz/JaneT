@@ -66,7 +66,7 @@ export default function WorkspaceContent({
   if (documents.length === 0) return <>{terminal}</>;
 
   return (
-    <div className="workspace-content">
+    <div className="workspace-content workspace-feature-surface">
       <div className="document-tabbar">
         <div className="document-tabs" role="tablist" aria-label="Terminal and open files">
           <button

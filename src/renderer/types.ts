@@ -38,6 +38,7 @@ export interface TabInfo {
   title: string;
   type: 'local' | 'ssh';
   workspaceId?: string;
+  groupId?: string;
   sshSessionId?: string;
   sshProfileId?: string;
   sshShellReady?: boolean;

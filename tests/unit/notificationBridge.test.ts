@@ -300,8 +300,8 @@ describe('main notification bridge', () => {
     await expect(selected.invokeChannel('app:selectLocalDirectory'))
       .resolves.toBe('C:\\work\\sample-project');
     expect(selected.showOpenDialog).toHaveBeenCalledWith(expect.anything(), {
-      title: 'Open project',
-      properties: ['openDirectory'],
+      title: 'Choose folder',
+      properties: ['openDirectory', 'createDirectory'],
     });
     await expect(selected.invokeChannel(
       'app:selectLocalDirectory', undefined, selected.webContents, {},

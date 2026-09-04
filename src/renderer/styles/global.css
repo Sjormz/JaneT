@@ -47,14 +47,17 @@
   --overlay-scrim: rgba(6, 8, 14, 0.64);
 
   /* Compatibility aliases while older component rules migrate to semantics */
-  --glass-bg: var(--surface-panel);
-  --glass-bg-strong: var(--surface-overlay);
-  --glass-bg-light: var(--surface-raised);
-  --glass-border: var(--border-subtle);
-  --glass-border-active: var(--focus-ring);
-  --glass-shadow: 0 18px 54px rgba(0, 0, 0, 0.34), 0 1px 0 color-mix(in srgb, var(--text-primary) 5%, transparent) inset;
-  --glass-blur: 0px;
-  --glass-blur-heavy: 0px;
+  --glass-bg: rgba(15, 15, 26, 0.78);
+  --glass-bg-strong: rgba(15, 15, 26, 0.88);
+  --glass-bg-light: rgba(36, 37, 59, 0.66);
+  --glass-border: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  --glass-border-active: color-mix(in srgb, var(--text-accent) 62%, transparent);
+  --elevation-1: 0 1px 0 color-mix(in srgb, var(--text-primary) 10%, transparent) inset, 0 8px 20px rgba(0, 0, 0, 0.16);
+  --elevation-2: 0 1px 0 color-mix(in srgb, var(--text-primary) 12%, transparent) inset, 0 16px 36px rgba(0, 0, 0, 0.24);
+  --elevation-3: 0 1px 0 color-mix(in srgb, var(--text-primary) 14%, transparent) inset, 0 28px 72px rgba(0, 0, 0, 0.36);
+  --glass-shadow: var(--elevation-2);
+  --glass-blur: 20px;
+  --glass-blur-heavy: 24px;
 
   /* Glow effects */
   --glow-accent: 0 0 0 1px color-mix(in srgb, var(--brand-periwinkle) 28%, transparent);
@@ -63,9 +66,9 @@
 
   /* Layout */
   --sidebar-width: 300px;
-  --vertical-tab-bar-width: 260px;
+  --vertical-tab-bar-width: 236px;
   --status-bar-height: 28px;
-  --titlebar-height: 46px;
+  --titlebar-height: 54px;
 
   /* Icon sizing tokens (enforced everywhere) */
   --icon-xs: 12px;
@@ -79,14 +82,15 @@
   --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, Monaco, 'Cascadia Code', Consolas, monospace;
 
   /* Radii */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 10px;
-  --radius-xl: 14px;
+  --radius-sm: 10px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 26px;
+  --radius-workspace: 18px;
 
   /* Transitions */
   --transition-fast: 0.12s cubic-bezier(0.2, 0, 0, 1);
-  --transition-smooth: 0.22s cubic-bezier(0.2, 0, 0, 1);
+  --transition-smooth: 0.18s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .terminal-command-failed {
@@ -152,6 +156,21 @@ html, body, #root {
 ::-webkit-scrollbar-corner { background: transparent; }
 
 /* === App Layout === */
+#root { display: flex; flex-direction: column; }
+#root > .app { flex: 1; min-height: 0; height: auto; }
+.settings-save-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--yellow);
+  font-size: 13px;
+}
+.settings-save-notice button { flex-shrink: 0; min-height: 32px; }
 .app {
   display: flex;
   flex-direction: column;
@@ -592,6 +611,9 @@ html, body, #root {
   min-height: 0;
   min-width: 0;
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .workspace-tools-following {
   display: grid;
@@ -988,21 +1010,21 @@ html, body, #root {
   white-space: nowrap;
 }
 .vtab-sub.running,
-.leaf-awareness.running { color: var(--text-accent); }
+.leaf-awareness.running { color: color-mix(in srgb, var(--text-primary) 45%, var(--text-accent)); }
 .vtab-sub.needs-input,
 .vtab-sub.interrupted,
 .leaf-awareness.needs-input,
-.leaf-awareness.interrupted { color: var(--yellow); }
+.leaf-awareness.interrupted { color: color-mix(in srgb, var(--text-primary) 45%, var(--yellow)); }
 .vtab-sub.finished,
 .vtab-sub.ready,
 .leaf-awareness.finished,
-.leaf-awareness.ready { color: var(--green); }
+.leaf-awareness.ready { color: color-mix(in srgb, var(--text-primary) 45%, var(--green)); }
 .vtab-sub.failed,
 .vtab-sub.exited,
 .vtab-sub.disconnected,
 .leaf-awareness.failed,
 .leaf-awareness.exited,
-.leaf-awareness.disconnected { color: var(--red); }
+.leaf-awareness.disconnected { color: color-mix(in srgb, var(--text-primary) 65%, var(--red)); }
 .vtab-meta {
   display: flex;
   align-items: center;
@@ -1281,8 +1303,12 @@ html, body, #root {
   background: var(--bg-primary);
 }
 .terminal-container .xterm-screen,
+.terminal-container .xterm-scrollable-element,
 .terminal-container .xterm-viewport {
   background: var(--bg-primary) !important;
+}
+.terminal-container .xterm-scrollable-element > .scrollbar > .slider {
+  border-radius: 999px;
 }
 .terminal-container .xterm-viewport {
   scrollbar-color: color-mix(in srgb, var(--text-accent) 32%, transparent) transparent;
@@ -2772,25 +2798,34 @@ html, body, #root {
   min-height: 0;
 }
 .split-divider {
+  position: relative;
   flex-shrink: 0;
   z-index: 10;
-  transition: background var(--transition-fast);
+  background: transparent;
 }
 .split-divider-vertical {
-  width: 3px;
+  width: 12px;
   cursor: col-resize;
-  background: var(--control-hover);
-}
-.split-divider-vertical:hover {
-  background: var(--text-accent);
-  box-shadow: var(--glow-accent);
 }
 .split-divider-horizontal {
-  height: 3px;
+  height: 12px;
   cursor: row-resize;
-  background: var(--control-hover);
 }
-.split-divider-horizontal:hover {
+.split-divider::before {
+  position: absolute;
+  content: '';
+  border-radius: 999px;
+  background: transparent;
+  transition: background var(--transition-fast), box-shadow var(--transition-fast);
+}
+.split-divider-vertical::before {
+  inset: 14px 5px;
+}
+.split-divider-horizontal::before {
+  inset: 5px 14px;
+}
+.split-divider:hover::before,
+.split-divider:focus-visible::before {
   background: var(--text-accent);
   box-shadow: var(--glow-accent);
 }
@@ -2803,8 +2838,14 @@ html, body, #root {
   min-width: 0;
   min-height: 0;
   position: relative;
+  border-radius: var(--radius-workspace);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 18%, var(--border-subtle));
+  background: var(--surface-canvas);
+  box-shadow: var(--elevation-1);
 }
-.terminal-leaf[aria-current="true"] .terminal-leaf-header { box-shadow: inset 2px 0 0 var(--text-accent); }
+.terminal-leaf[aria-current="true"] .terminal-leaf-header {
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
 .terminal-leaf.pane-dragging { opacity: 0.45; }
 .terminal-leaf-header[draggable="true"] { cursor: grab; }
 .terminal-leaf-header[draggable="true"]:active { cursor: grabbing; }
@@ -2833,17 +2874,21 @@ html, body, #root {
   position: relative;
   z-index: 2;
   padding: 3px 10px;
-  background: var(--control-bg);
+  background: var(--surface-toolbar);
   border-bottom: 1px solid var(--glass-border);
   user-select: none;
   flex-shrink: 0;
-  height: 28px;
+  height: 34px;
+  min-height: 34px;
+  border-radius: 0;
 }
 .leaf-title {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-weight: 600;
   min-width: 0;
   gap: 6px;
 }
@@ -2865,8 +2910,8 @@ html, body, #root {
 }
 .leaf-actions {
   display: flex;
-  gap: 2px;
-  opacity: 0.4;
+  gap: 4px;
+  opacity: 0.65;
   position: relative;
   z-index: 3;
   transition: opacity var(--transition-fast);
@@ -3321,19 +3366,6 @@ button:disabled,
   color: var(--text-disabled);
   cursor: not-allowed;
 }
-
-.terminal-leaf-header {
-  min-height: 34px;
-  padding: 3px 8px 3px 10px;
-  background: var(--surface-subtle);
-  border-color: var(--border-subtle);
-}
-.leaf-title {
-  display: inline-flex;
-  align-items: center;
-  color: var(--text-tertiary);
-}
-.leaf-actions { gap: 3px; }
 
 .theme-section,
 .shortcut-editor {
@@ -3876,7 +3908,7 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
   gap: 12px;
   padding: 6px 12px;
   color: #fff;
-  background: #a33b20;
+  background: #71301d;
   border-bottom: 2px solid #ffb86c;
 }
 
@@ -3920,4 +3952,410 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
 
 .terminal-leaf.broadcast-selected .terminal-leaf-header :is(.leaf-title, .leaf-awareness) {
   color: #fff;
+}
+
+/* === 2026 glass workstation refinement ===
+   Content remains deliberately opaque; translucency is reserved for chrome,
+   toolbars, and transient layers so terminal text never competes with effects. */
+:root {
+  --surface-chrome: var(--glass-bg);
+  --surface-toolbar: var(--glass-bg-light);
+  --surface-floating: color-mix(in srgb, var(--bg-secondary) 97%, transparent);
+}
+
+.app {
+  background: var(--surface-canvas);
+}
+
+.app-layout,
+.workspace-main,
+.workspace-feature-surface {
+  background: var(--surface-canvas);
+}
+
+.app-startup {
+  background: var(--surface-canvas);
+}
+
+/* Navigation chrome: one restrained material, one inset highlight, no glow. */
+.titlebar,
+.app-chrome,
+.sidebar,
+.workspace-supporting-rail,
+.vtab-bar,
+.workspace-tabs-rail,
+.tabs-rail,
+.status-bar,
+.app-status {
+  background: var(--surface-chrome);
+  backdrop-filter: blur(var(--glass-blur)) saturate(135%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(135%);
+  border-color: var(--glass-border);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--text-primary) 12%, transparent) inset;
+}
+
+.titlebar {
+  background: var(--surface-floating);
+  backdrop-filter: blur(var(--glass-blur-heavy)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--glass-blur-heavy)) saturate(140%);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--text-primary) 14%, transparent) inset,
+    0 12px 28px color-mix(in srgb, var(--text-accent) 7%, transparent);
+}
+
+.document-tabbar,
+.document-tab-shell,
+.document-tab {
+  background: var(--surface-toolbar);
+  border-color: var(--glass-border);
+}
+
+.terminal-area,
+.terminal-leaf-body,
+.workspace-content,
+.workspace-content-surface,
+.terminal-container,
+.terminal-container .xterm,
+.terminal-container .xterm-screen,
+.terminal-container .xterm-viewport {
+  background: var(--surface-canvas) !important;
+}
+
+.search-overlay,
+.titlebar-settings-popover,
+.vtab-context-menu,
+.git-file-context-menu,
+.git-kebab-dropdown,
+.workspace-profile-menu,
+.command-palette,
+.snippet-picker,
+.workspace-modal,
+.confirmation-dialog,
+.git-dialog,
+.ssh-terminal-notice,
+.fresh-profile-entry,
+.tooltip-popover,
+.update-banner {
+  background: var(--surface-floating);
+  backdrop-filter: blur(var(--glass-blur-heavy)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--glass-blur-heavy)) saturate(140%);
+  border-color: var(--glass-border);
+  box-shadow: var(--elevation-3);
+}
+
+.command-palette,
+.snippet-picker,
+.workspace-modal,
+.confirmation-dialog,
+.git-dialog {
+  border-radius: var(--radius-xl);
+}
+
+.search-overlay,
+.titlebar-settings-popover,
+.vtab-context-menu,
+.git-file-context-menu,
+.git-kebab-dropdown,
+.workspace-profile-menu,
+.ssh-terminal-notice,
+.fresh-profile-entry,
+.tooltip-popover,
+.update-banner {
+  border-radius: var(--radius-lg);
+}
+
+.command-palette-overlay,
+.snippet-picker-overlay,
+.workspace-modal-overlay,
+.confirmation-dialog-overlay,
+.git-dialog-overlay {
+  background: var(--overlay-scrim);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* High-signal interaction states: elevation and shape accompany colour. */
+:where(button, [role="button"], .vtab-item, .document-tab, .explorer-item, .git-file-item, .ssh-session-item) {
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast), opacity var(--transition-fast);
+}
+
+:where(button, [role="button"], .vtab-item, .document-tab, .explorer-item, .git-file-item, .ssh-session-item):active:not(:disabled) {
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--text-primary) 10%, transparent) inset;
+}
+
+.vtab-item.active,
+.document-tab.active,
+.titlebar-nav-btn.active,
+.workspace-tool-button.active,
+.theme-option.active {
+  box-shadow: 0 0 0 1px var(--glass-border-active), 0 1px 0 color-mix(in srgb, var(--text-primary) 10%, transparent) inset;
+}
+
+/* Keep target size generous in forms and transient UI without diluting dense terminal controls. */
+:is(.workspace-modal, .confirmation-dialog, .git-dialog, .command-palette, .snippet-picker) :is(button, input, select, textarea) {
+  min-height: 44px;
+}
+
+/* Focus is a solid, non-colour-only 3px boundary and gets room in scrollports. */
+:where(button, a[href], input, select, textarea, [tabindex]):not(.xterm-helper-textarea):focus-visible {
+  position: relative;
+  z-index: 2;
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+  scroll-margin: 8px;
+}
+
+:where(.sidebar-content, .vtab-list, .vtab-ssh-connections, .workspace-section-content, .explorer-tree, .ssh-sessions, .git-tree, .command-palette-results, .snippet-results, .document-tabs, .titlebar-settings-popover, .workspace-modal, .git-dialog, .confirmation-dialog) {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-secondary) 44%, transparent) transparent;
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .titlebar,
+  .sidebar,
+  .vtab-bar,
+  .tabs-rail,
+  .status-bar,
+  .document-tabbar,
+  .document-tab-shell,
+  .document-tab,
+  .terminal-leaf-header,
+  .search-overlay,
+  .titlebar-settings-popover,
+  .vtab-context-menu,
+  .git-file-context-menu,
+  .git-kebab-dropdown,
+  .workspace-profile-menu,
+  .command-palette,
+  .snippet-picker,
+  .workspace-modal,
+  .confirmation-dialog,
+  .git-dialog,
+  .ssh-terminal-notice,
+  .fresh-profile-entry,
+  .tooltip-popover,
+  .update-banner {
+    background: var(--surface-panel);
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --surface-chrome: var(--surface-panel);
+    --surface-toolbar: var(--surface-raised);
+    --surface-floating: var(--surface-overlay);
+    --glass-border: color-mix(in srgb, var(--text-primary) 42%, var(--border-subtle));
+  }
+
+  .titlebar,
+  .sidebar,
+  .vtab-bar,
+  .tabs-rail,
+  .status-bar,
+  .document-tabbar,
+  .document-tab-shell,
+  .document-tab,
+  .terminal-leaf-header,
+  .search-overlay,
+  .titlebar-settings-popover,
+  .vtab-context-menu,
+  .git-file-context-menu,
+  .git-kebab-dropdown,
+  .workspace-profile-menu,
+  .command-palette,
+  .snippet-picker,
+  .workspace-modal,
+  .confirmation-dialog,
+  .git-dialog,
+  .ssh-terminal-notice,
+  .fresh-profile-entry,
+  .tooltip-popover,
+  .update-banner {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: 0 0 0 1px var(--glass-border);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(button, [role="button"], .vtab-item, .document-tab, .explorer-item, .git-file-item, .ssh-session-item) {
+    transition: none;
+  }
+}
+
+/* === Workspace hierarchy: supporting glass surrounds one focused canvas === */
+.app {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+.workspace-tools-panel[hidden] { display: none; }
+.workspace-tools-panel > :is(.file-explorer, .git-tree) {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+.workspace-tools-following,
+.explorer-header,
+.explorer-breadcrumb { flex-shrink: 0; }
+
+/* A bounded, static cool aura only has room to show through the chrome gutters. */
+.app::before {
+  position: absolute;
+  z-index: -1;
+  top: 6px;
+  left: 18%;
+  width: 48%;
+  height: 1px;
+  content: '';
+  background: transparent;
+  box-shadow: 0 18px 88px 28px color-mix(in srgb, var(--text-accent) 13%, transparent);
+  opacity: 0.72;
+  pointer-events: none;
+}
+
+.app-chrome {
+  width: auto;
+  margin: 10px 10px 0;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+}
+
+/* Shared desktop rhythm: clear controls, quiet surfaces, readable navigation. */
+.titlebar-app-name { font-size: 15px; letter-spacing: -0.035em; }
+.titlebar-palette-btn {
+  min-width: clamp(180px, 28vw, 380px);
+  height: 36px;
+  padding: 0 12px;
+  justify-content: space-between;
+  border-radius: 12px;
+}
+.titlebar-settings-btn { width: 36px; height: 36px; }
+.titlebar-controls { gap: 4px; margin-left: 8px; }
+.titlebar-control-btn { border-radius: 10px; }
+.workspace-tools-header, .vtab-header {
+  min-height: 52px;
+  padding: 10px 14px;
+}
+.workspace-tools-title, .vtab-title { color: var(--text-primary); font-size: 13px; }
+.vtab-list { padding: 8px; gap: 4px; }
+.vtab-item { min-height: 52px; padding: 8px 12px; border-radius: 9px; }
+.vtab-name { font-size: 13px; line-height: 1.5; }
+.vtab-sub { line-height: 1.5; }
+.vtab-item.active {
+  background: color-mix(in srgb, var(--text-primary) 12%, var(--bg-primary));
+  border-color: transparent;
+  box-shadow: none;
+}
+.workspace-tools-rail { gap: 8px; padding-top: 10px; }
+.workspace-tool-button { height: 38px; }
+.workspace-tools-following { padding: 10px 12px; line-height: 1.5; }
+.explorer-header, .git-header { padding: 10px 12px; }
+.explorer-tree { padding: 6px; }
+.explorer-item, .git-file-item { min-height: 34px; border-radius: 8px; }
+.explorer-item { padding-left: 8px; font-size: 12px; }
+.explorer-item:hover { background: var(--control-bg); }
+.explorer-breadcrumb { margin: 0 8px 4px; border-radius: 8px; border-bottom: 0; }
+.terminal-leaf[aria-current="true"] {
+  border-color: color-mix(in srgb, var(--border-active) 65%, var(--border-subtle));
+}
+.terminal-leaf[aria-current="true"]:not(.broadcast-selected) .terminal-leaf-header {
+  background: color-mix(in srgb, var(--text-primary) 7%, var(--bg-secondary));
+}
+.terminal-leaf[aria-current="true"] .leaf-title { color: var(--text-primary); }
+.titlebar-settings-popover { width: min(420px, calc(100vw - 40px)); padding: 6px; border-radius: 22px; }
+.titlebar-settings-popover .settings-header { border-radius: 16px 16px 8px 8px; background: var(--surface-panel); }
+.theme-section { padding: 16px; }
+.theme-option { min-height: 42px; border-radius: 12px; }
+.theme-label { color: var(--text-primary); font-size: 13px; }
+.theme-options { gap: 8px; }
+.command-palette { width: min(640px, calc(100vw - 32px)); }
+.command-palette-input-wrapper { min-height: 66px; padding: 16px 20px; }
+.command-palette-input { font-size: 16px; }
+.command-palette-results { padding: 8px; }
+.command-category-label { padding: 12px 12px 6px; letter-spacing: 0.06em; }
+.command-item { min-height: 46px; padding: 10px 12px; border-radius: 10px; }
+.command-item.selected { box-shadow: inset 3px 0 var(--text-accent); }
+.vtab-context-menu, .git-file-context-menu, .git-kebab-dropdown { padding: 6px; }
+:is(.vtab-context-menu, .git-file-context-menu, .git-kebab-dropdown) button { min-height: 34px; border-radius: 8px; }
+.workspace-modal-header { padding: 20px 22px; }
+.workspace-modal-header h2, .confirmation-dialog-title { font-size: 18px; letter-spacing: -0.025em; }
+.confirmation-dialog-description { line-height: 1.65; }
+.form-input { border-radius: 10px; }
+.status-bar { font-size: 11px; }
+
+@media (max-width: 1000px) {
+  .titlebar-palette-btn { min-width: 172px; }
+  .vtab-item { min-height: 54px; padding: 8px; }
+  .terminal-leaf-header { padding-inline: 6px; }
+  .leaf-actions { gap: 2px; }
+}
+
+.app-layout {
+  gap: 10px;
+  padding: 10px;
+  background: transparent;
+}
+
+.workspace-supporting-rail,
+.workspace-tabs-rail,
+.workspace-tabs-rail-toggle {
+  align-self: stretch;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-1);
+}
+
+.workspace-supporting-rail,
+.workspace-tabs-rail {
+  overflow: hidden;
+}
+
+.workspace-tabs-rail-toggle {
+  align-self: auto;
+  background: var(--surface-chrome);
+  color: var(--text-tertiary);
+  writing-mode: vertical-rl;
+}
+
+.workspace-main {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none;
+}
+
+.workspace-main > .split-container,
+.workspace-main > .workspace-content {
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspace-feature-surface {
+  border-radius: inherit;
+}
+
+.app-status {
+  width: auto;
+  min-height: var(--status-bar-height);
+  margin: 0 10px 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--text-primary) 10%, transparent) inset;
+}
+
+@media (max-width: 1000px) {
+  .app-chrome { margin: 8px 8px 0; }
+  .app-layout { gap: 8px; padding: 8px; }
+  .app-status { margin: 0 8px 8px; }
+}
+
+@media (max-width: 620px) {
+  .app-chrome { margin: 6px 6px 0; }
+  .app-layout { gap: 6px; padding: 6px; }
+  .app-status { margin: 0 6px 6px; }
 }

@@ -164,7 +164,7 @@ export default function Sidebar({
 
   return (
     <aside
-      className={`sidebar workspace-tools workspace-tools-side-${side} ${expanded ? 'is-expanded' : 'is-collapsed'}`}
+      className={`sidebar workspace-tools workspace-supporting-rail workspace-tools-side-${side} ${expanded ? 'is-expanded' : 'is-collapsed'}`}
       aria-label="Workspace tools"
     >
       <div className="workspace-tools-header">

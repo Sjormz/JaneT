@@ -156,7 +156,7 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
   });
   fs.writeFileSync(path.join(repoPath, 'first.txt'), 'changed\n', 'utf8');
   fs.writeFileSync(path.join(repoPath, 'second.txt'), 'changed\n', 'utf8');
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'left',
@@ -259,14 +259,12 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
     reports.push(await measureCompactTargets(page, 'settings'));
     await page.getByRole('button', { name: 'Hide settings' }).click();
 
-    const presets = page.getByRole('button', { name: 'Presets' });
-    if (await presets.getAttribute('aria-expanded') === 'false') await presets.click();
-    const preset = page.locator('.workspace-item').filter({ hasText: 'Geometry preset' });
-    await preset.getByRole('button', { name: 'Edit preset Geometry preset' }).click();
-    const presetDialog = page.getByRole('dialog', { name: 'Edit preset' });
+    await page.getByRole('button', { name: 'New workspace or group' }).click();
+    const presetDialog = page.getByRole('dialog', { name: 'Create workspace' });
     await expect(presetDialog).toBeVisible();
+    await presetDialog.getByRole('combobox', { name: 'Initial terminals' }).selectOption('2');
     await expect(presetDialog.getByRole('button', { name: 'Remove terminal 1' })).toBeVisible();
-    const presetReport = await measureCompactTargets(page, 'preset editor');
+    const presetReport = await measureCompactTargets(page, 'workspace creator');
     expect(presetReport.measurements.some(({ target }) => target.includes('button.workspace-terminal-remove')))
       .toBe(true);
     reports.push(presetReport);
@@ -288,6 +286,7 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
 test('keeps workspace views in their dedicated regions at desktop and minimum size', async ({}, testInfo) => {
   test.setTimeout(60_000);
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-workspace-layout-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData }));
   let app: ElectronApplication | undefined;
 
   try {
@@ -483,6 +482,7 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
 
 test('consumes Hermes plugin lifecycle output through the local PTY', async ({}, testInfo) => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-awareness-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData }));
   const pluginDir = path.join(root, 'integrations', 'hermes-agent-awareness');
   const probePath = path.join(userData, 'emit-hermes-awareness.py');
   const sessionReadyPath = path.join(userData, 'session-ready');
@@ -569,8 +569,9 @@ print("TUI_AWARENESS_OK")
     }).not.toBe('');
 
     await firstTerminal.click();
+    const python = process.env.JANET_TEST_PYTHON ?? 'python';
     await page.keyboard.type(
-      `python "${probePath.replace(/\\/g, '/')}" "${pluginDir.replace(/\\/g, '/')}" "${sessionReadyPath.replace(/\\/g, '/')}" "${turnGatePath.replace(/\\/g, '/')}" "${turnStartedPath.replace(/\\/g, '/')}" "${turnEndGatePath.replace(/\\/g, '/')}" "${staleTurnGatePath.replace(/\\/g, '/')}" "${exitGatePath.replace(/\\/g, '/')}"; exit`,
+      `${process.platform === 'win32' ? '& ' : ''}"${python.replace(/\\/g, '/')}" "${probePath.replace(/\\/g, '/')}" "${pluginDir.replace(/\\/g, '/')}" "${sessionReadyPath.replace(/\\/g, '/')}" "${turnGatePath.replace(/\\/g, '/')}" "${turnStartedPath.replace(/\\/g, '/')}" "${turnEndGatePath.replace(/\\/g, '/')}" "${staleTurnGatePath.replace(/\\/g, '/')}" "${exitGatePath.replace(/\\/g, '/')}"; exit`,
     );
     await page.keyboard.press('Enter');
 

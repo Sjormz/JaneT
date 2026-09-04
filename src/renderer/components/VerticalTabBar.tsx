@@ -1,17 +1,15 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { SessionInfo, TabInfo, SavedSSHProfile, WorkspaceTabPreset } from '../types';
+import { SessionInfo, TabInfo, SavedSSHProfile, WorkspaceTabPreset, countLeaves, genId, type PaneNode, type TerminalLeaf } from '../types';
 import {
-  TerminalTabIcon, LockIcon, XCloseIcon, PencilIcon, TrashIcon, CheckIcon,
-  ChevronsLeftIcon, ListIcon, PlusIcon, ChevronRightIcon, ChevronDownIcon, ArrowRightIcon,
+  TerminalTabIcon, LockIcon, XCloseIcon, PencilIcon, CheckIcon,
+  ChevronsLeftIcon, PlusIcon, ChevronRightIcon, ChevronDownIcon,
 } from '../icons';
-import WorkspaceTabPresetForm, { sshProfileLabel } from './WorkspaceTabPresetForm';
-import { useRefreshTask } from '../refreshCoordinator';
+import WorkspaceForm, { sshProfileLabel } from './WorkspaceForm';
 import { useModalFocus } from '../useModalFocus';
 import Tooltip from './Tooltip';
-import ConfirmationDialog from './ConfirmationDialog';
 import SSHManager from './SSHManager';
-import { sanitizeStartupCommands } from '../../shared/startupCommands';
+import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, type WorkspaceGroup } from '../../shared/workspaceGroups';
 import type { AgentStatus } from '../terminalAwareness';
 import type { SSHLocalForwardStatus } from '../../main/ssh';
 
@@ -19,7 +17,12 @@ interface VerticalTabBarProps {
   tabs: TabInfo[];
   activeTabId: string;
   sshProfiles: SavedSSHProfile[];
-  workspaceTabs: WorkspaceTabPreset[];
+  groups?: WorkspaceGroup[];
+  mainDirectory?: string | null;
+  onGroupsChange: (groups: WorkspaceGroup[]) => void;
+  onMoveWorkspace: (id: string, groupId: string) => void;
+  creatorOpen: boolean;
+  onCreatorOpenChange: (open: boolean) => void;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onNewTab: () => void;
@@ -28,26 +31,13 @@ interface VerticalTabBarProps {
   canConnectSSH?: () => boolean;
   onSSHConnected: (session: SessionInfo) => void;
   onSSHProfilesChange: (profiles: SavedSSHProfile[]) => void;
-  onWorkspaceTabsChange: (presets: WorkspaceTabPreset[]) => void;
-  onWorkspaceTabLaunch: (preset: WorkspaceTabPreset) => void;
-  onSaveWorkspaceTab: (tab: TabInfo) => void;
+  onWorkspaceTabLaunch: (workspace: WorkspaceTabPreset, group: WorkspaceGroup) => Promise<void>;
   onRenameTab: (id: string, title: string) => void;
   onCollapse: () => void;
   dirtyTabIds?: ReadonlySet<string>;
   awarenessByTab?: Record<string, AgentStatus>;
 }
 
-function formatRelativeTime(date: Date): string {
-  const diff = Date.now() - date.getTime();
-  const seconds = Math.floor(diff / 1000);
-  if (seconds < 30) return 'just now';
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
 
 function compactLocalTabLabel(cwd?: string): string {
   if (!cwd) return 'Home';
@@ -57,17 +47,21 @@ function compactLocalTabLabel(cwd?: string): string {
   return parts[parts.length - 1] || trimmed;
 }
 
-function countPresetStartupCommands(node: WorkspaceTabPreset['root']): number {
-  if (!node) return 0;
-  if (node.type === 'leaf') return sanitizeStartupCommands(node.startupCommands).length;
-  return node.children.reduce((total, child) => total + countPresetStartupCommands(child), 0);
+function workspaceLeaves(root: PaneNode): TerminalLeaf[] {
+  return root.type === 'leaf' ? [root] : root.children.flatMap(workspaceLeaves);
 }
+
 
 export default function VerticalTabBar({
   tabs,
   activeTabId,
   sshProfiles,
-  workspaceTabs,
+  groups = [DEFAULT_WORKSPACE_GROUP],
+  mainDirectory,
+  onGroupsChange,
+  onMoveWorkspace,
+  creatorOpen,
+  onCreatorOpenChange,
   onSelectTab,
   onCloseTab,
   onNewTab,
@@ -76,20 +70,36 @@ export default function VerticalTabBar({
   canConnectSSH = () => true,
   onSSHConnected,
   onSSHProfilesChange,
-  onWorkspaceTabsChange,
   onWorkspaceTabLaunch,
-  onSaveWorkspaceTab,
   onRenameTab,
   onCollapse,
   dirtyTabIds = new Set<string>(),
   awarenessByTab = {},
 }: VerticalTabBarProps) {
-  const [, setNow] = useState(Date.now());
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
-  const [workspacesExpanded, setWorkspacesExpanded] = useState(false);
-  const [showWorkspaceForm, setShowWorkspaceForm] = useState(false);
-  const [editingPreset, setEditingPreset] = useState<WorkspaceTabPreset | null>(null);
-  const [presetPendingDeletion, setPresetPendingDeletion] = useState<WorkspaceTabPreset | null>(null);
+  const [creationKind, setCreationKind] = useState<'workspace' | 'group'>('group');
+  const [groupName, setGroupName] = useState('');
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [creationError, setCreationError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [folderTarget, setFolderTarget] = useState<WorkspaceGroup | undefined>();
+  const [projectParentId, setProjectParentId] = useState<string | undefined>();
+  const [folderError, setFolderError] = useState('');
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [missingDirectories, setMissingDirectories] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      const missing = await Promise.all(groups.filter((group) => group.directory).map(async (group) => {
+        try { await window.janet.workspaceDirectory({ parent: group.directory! }); return null; }
+        catch { return group.id; }
+      }));
+      if (!cancelled) setMissingDirectories(new Set(missing.filter((id): id is string => id !== null)));
+    };
+    void check();
+    window.addEventListener('focus', check);
+    return () => { cancelled = true; window.removeEventListener('focus', check); };
+  }, [groups]);
   const [draftTitle, setDraftTitle] = useState('');
   const [tabMenu, setTabMenu] = useState<{
     tab: TabInfo;
@@ -117,26 +127,6 @@ export default function VerticalTabBar({
   tabsRef.current = tabs;
   const workspaceModalRef = useRef<HTMLDivElement>(null);
   const workspaceAddButtonRef = useRef<HTMLButtonElement>(null);
-  const [tabTimestamps, setTabTimestamps] = useState<Record<string, Date>>(() => {
-    const map: Record<string, Date> = {};
-    for (const tab of tabs) map[tab.id] = new Date();
-    return map;
-  });
-
-  useRefreshTask({
-    key: 'ui:relative-time',
-    intervalMs: 30_000,
-    run: () => setNow(Date.now()),
-  });
-
-  useEffect(() => {
-    setTabTimestamps((prev) => {
-      const next: Record<string, Date> = {};
-      for (const tab of tabs) next[tab.id] = prev[tab.id] ?? new Date();
-      return next;
-    });
-  }, [tabs]);
-
   useLayoutEffect(() => {
     if (!tabMenu || !tabMenuRef.current) return;
     const rect = tabMenuRef.current.getBoundingClientRect();
@@ -190,39 +180,51 @@ export default function VerticalTabBar({
   };
 
   const openWorkspaceForm = () => {
-    setEditingPreset(null);
-    setShowWorkspaceForm((visible) => !visible);
+    setFolderTarget(undefined);
+    setCreationError('');
+    setCreationKind('group');
+    onCreatorOpenChange(true);
   };
-
   const closeWorkspaceForm = () => {
-    setShowWorkspaceForm(false);
-    setEditingPreset(null);
+    if (creating) return;
+    onCreatorOpenChange(false);
+    setCreationError('');
   };
-
-  const editPreset = (preset: WorkspaceTabPreset) => {
-    setShowWorkspaceForm(false);
-    setEditingPreset(preset);
+  const createGroup = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const name = groupName.trim();
+    if (!name) return;
+    if (groups.length >= MAX_WORKSPACE_GROUPS) return setCreationError('The 64-group limit has been reached.');
+    setCreating(true); setCreationError('');
+    try {
+      const directory = mainDirectory ? await window.janet.workspaceDirectory({ parent: mainDirectory, name }) : undefined;
+      onGroupsChange([...groups, { id: genId('group'), name, ...(directory ? { directory } : {}) }]);
+      setGroupName(''); onCreatorOpenChange(false);
+    } catch (error) { setCreationError(error instanceof Error ? error.message : String(error)); }
+    finally { setCreating(false); }
   };
-
-  const closePresetEditor = () => {
-    setEditingPreset(null);
+  const linkFolder = async (existing?: WorkspaceGroup) => {
+    setFolderBusy(true); setFolderError('');
+    try {
+      if (!existing && groups.length >= MAX_WORKSPACE_GROUPS) throw new Error('The 64-group/folder limit has been reached.');
+      const selected = await window.janet.selectLocalDirectory();
+      if (!selected) return;
+      const directory = await window.janet.workspaceDirectory({ parent: selected });
+      if (groups.some((item) => item.id !== existing?.id && item.kind === 'folder' && item.directory === directory)) throw new Error('This folder is already linked. Start another session beneath it.');
+      if (existing) onGroupsChange(groups.map((item) => item.id === existing.id ? { ...item, directory } : item));
+      else onGroupsChange([...groups, { id: genId('folder'), name: directory.split(/[\\/]/).filter(Boolean).pop() || directory, directory, kind: 'folder' }]);
+    } catch (error) { setFolderError(error instanceof Error ? error.message : String(error)); }
+    finally { setFolderBusy(false); }
   };
-
-  const savePreset = (preset: WorkspaceTabPreset) => {
-    if (editingPreset) {
-      onWorkspaceTabsChange(workspaceTabs.map((existing) => (existing.id === editingPreset.id ? preset : existing)));
-    } else {
-      onWorkspaceTabsChange([...workspaceTabs, preset]);
-    }
-    if (!editingPreset) onWorkspaceTabLaunch(preset);
-    closeWorkspaceForm();
-    closePresetEditor();
-  };
-
-  const confirmDeletePreset = () => {
-    if (!presetPendingDeletion) return;
-    onWorkspaceTabsChange(workspaceTabs.filter((preset) => preset.id !== presetPendingDeletion.id));
-    setPresetPendingDeletion(null);
+  const createWorkspace = async (workspace: WorkspaceTabPreset, group: WorkspaceGroup) => {
+    setCreating(true);
+    setCreationError('');
+    try {
+      await onWorkspaceTabLaunch(workspace, group);
+      onCreatorOpenChange(false);
+    } catch (error) {
+      setCreationError(error instanceof Error ? error.message : String(error));
+    } finally { setCreating(false); }
   };
 
   const closeForwardDialog = () => {
@@ -278,7 +280,7 @@ export default function VerticalTabBar({
     } catch (error) { if (forwardDialogRef.current === dialog && isCurrentForwardTarget(target)) setForwardError(error instanceof Error ? error.message : String(error)); }
   };
 
-  const workspaceModalOpen = showWorkspaceForm || editingPreset !== null;
+  const workspaceModalOpen = creatorOpen;
   useModalFocus({
     open: workspaceModalOpen,
     containerRef: workspaceModalRef,
@@ -287,13 +289,14 @@ export default function VerticalTabBar({
   });
 
   return (
-    <div className="vtab-bar" role="group" aria-label="Terminal tabs">
+    <div className="vtab-bar workspace-tabs-rail" role="group" aria-label="Workspaces">
       <div className="vtab-header">
         <div className="vtab-heading">
-          <span className="vtab-title">Tabs</span>
-          <span className="vtab-count">{tabs.length}</span>
+          <span className="vtab-title">Workspaces</span>
+          <span className="vtab-count">{groups.filter((group) => !group.kind).length}</span>
         </div>
         <div className="vtab-header-actions">
+          <Tooltip label="New workspace or project" placement="bottom"><button ref={workspaceAddButtonRef} className="vtab-header-btn" onClick={openWorkspaceForm} aria-label="New workspace or project"><PlusIcon size="sm" /></button></Tooltip>
           <Tooltip label="Collapse terminal tabs" placement="bottom">
             <button className="vtab-header-btn" onClick={onCollapse} aria-label="Collapse terminal tabs">
               <ChevronsLeftIcon size="sm" />
@@ -336,21 +339,53 @@ export default function VerticalTabBar({
         </div>
       )}
 
-      <div className="vtab-list">
-        {tabs.map((tab) => {
+      <div className="vtab-list workspace-group-list">
+        {folderError && <p className="form-error" role="alert">{folderError}</p>}
+        {(['workspaces', 'folders'] as const).map((section) => <React.Fragment key={section}>
+        {section === 'folders' && <div className="folder-section-header"><h2>Folders</h2><button className="vtab-header-btn" aria-label="Add folder" disabled={folderBusy} onClick={() => void linkFolder()}><PlusIcon size="sm" /></button></div>}
+        {section === 'folders' && !groups.some((group) => group.kind === 'folder') && <p className="workspace-group-empty">Link a project folder to start sessions here.</p>}
+        {groups.filter((group) => (group.kind === 'folder') === (section === 'folders')).map((group) => {
+          const children = tabs.filter((tab) => (tab.groupId ?? groups[0]?.id) === group.id);
+          const terminalCount = children.reduce((sum, tab) => sum + countLeaves(tab.root), 0);
+          return <section className="workspace-group" key={group.id} aria-label={group.name}>
+            <div className={`workspace-group-heading ${children.some((tab) => tab.id === activeTabId) ? 'active' : ''}`}>
+              {editingGroupId === group.id ? <input className="vtab-name-input" aria-label="Group name" maxLength={256} autoFocus value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} onKeyDown={(event) => {
+                if (event.key === 'Escape') setEditingGroupId(null);
+                if (event.key === 'Enter' && draftTitle.trim()) { onGroupsChange(groups.map((item) => item.id === group.id ? { ...item, name: draftTitle.trim() } : item)); setEditingGroupId(null); }
+              }} onBlur={() => { if (draftTitle.trim()) onGroupsChange(groups.map((item) => item.id === group.id ? { ...item, name: draftTitle.trim() } : item)); setEditingGroupId(null); }} /> :
+              <button className="workspace-group-toggle" aria-expanded={!group.collapsed} aria-controls={`group-${group.id}`} onClick={() => onGroupsChange(groups.map((item) => item.id === group.id ? { ...item, collapsed: !item.collapsed } : item))}>
+                {group.collapsed ? <ChevronRightIcon size="xs" /> : <ChevronDownIcon size="xs" />}
+                <span className="workspace-group-name" title={group.directory || group.name}>{group.name}</span>
+                <span className="workspace-group-count" aria-label={`${terminalCount} terminals`}>{terminalCount}</span>
+              </button>}
+              <button className="vtab-action group-edit" aria-label={`Rename workspace ${group.name}`} onClick={() => { setEditingGroupId(group.id); setDraftTitle(group.name); }}><PencilIcon size="xs" /></button>
+              {group.kind === 'folder' && <button className="vtab-action folder-session-add" aria-label={`Start new session in ${group.name}`} onClick={() => { setFolderTarget(group); setCreationKind('workspace'); setCreationError(''); onCreatorOpenChange(true); }}><PlusIcon size="xs" /></button>}
+              {!group.kind && <button className="vtab-action folder-session-add" aria-label={`New project in ${group.name}`} onClick={() => { setFolderTarget(undefined); setProjectParentId(group.id); setCreationKind('workspace'); setCreationError(''); onCreatorOpenChange(true); }}><PlusIcon size="xs" /></button>}
+              {children.length === 0 && <button className="vtab-action" title="Remove from JaneT only; files are kept" aria-label={group.kind === 'folder' ? `Remove folder ${group.name}` : `Remove empty workspace ${group.name}`} onClick={() => onGroupsChange(groups.filter((item) => item.id !== group.id))}><XCloseIcon size="xs" /></button>}
+            </div>
+            <div id={`group-${group.id}`} className="workspace-group-children" hidden={group.collapsed}>
+            {missingDirectories.has(group.id) && <div className="folder-missing"><span>Folder unavailable</span><button className="folder-locate" disabled={folderBusy} title={group.directory} onClick={() => void linkFolder(group)}>Locate folder<span className="sr-only"> for {group.name}</span></button></div>}
+            {children.length === 0 && <p className="workspace-group-empty">No projects yet</p>}
+        {children.map((tab) => {
           const isActive = tab.id === activeTabId;
-          const isSSH = tab.type === 'ssh';
+          const leaves = workspaceLeaves(tab.root);
+          const sshCount = leaves.filter((leaf) => (leaf.terminalType ?? tab.type) === 'ssh').length;
+          const isSSH = sshCount === leaves.length;
           const TabIcon = isSSH ? LockIcon : TerminalTabIcon;
-          const relTime = tabTimestamps[tab.id] ? formatRelativeTime(tabTimestamps[tab.id]) : 'now';
           const editing = editingTabId === tab.id;
           const dirty = dirtyTabIds.has(tab.id);
           const awareness = awarenessByTab[tab.id];
-          const sshProfile = tab.sshProfileId
-            ? sshProfiles.find((profile) => profile.id === tab.sshProfileId)
+          const profileId = tab.sshProfileId ?? leaves[0]?.sshProfileId;
+          const sshProfile = profileId
+            ? sshProfiles.find((profile) => profile.id === profileId)
             : undefined;
-          const locationLabel = isSSH
+          const locationLabel = sshCount > 0 && !isSSH
+            ? `Local + SSH · ${leaves.length} terminals`
+            : leaves.length > 1
+              ? `${isSSH ? 'SSH' : 'Local'} · ${leaves.length} terminals`
+              : isSSH
             ? `SSH · ${sshProfile ? sshProfileLabel(sshProfile) : 'Saved session'}`
-            : `Local · ${compactLocalTabLabel(tab.cwd)}`;
+            : `Local · ${compactLocalTabLabel(tab.cwd ?? leaves[0]?.cwd)}`;
           const locationTitle = isSSH
             ? sshProfile ? sshProfileLabel(sshProfile) : tab.sshSessionId || 'SSH session'
             : tab.cwd || 'Home directory';
@@ -411,7 +446,7 @@ export default function VerticalTabBar({
                 </div>
               </div>
               <div className="vtab-meta">
-                <span className="vtab-time">{relTime}</span>
+                <span className="workspace-group-count" aria-label={`${countLeaves(tab.root)} terminals`}>{countLeaves(tab.root)}</span>
                 {editing && (
                   <Tooltip label="Save tab name" placement="left">
                     <button
@@ -436,114 +471,11 @@ export default function VerticalTabBar({
             </div>
           );
         })}
+            </div>
+          </section>;
+        })}</React.Fragment>)}
       </div>
 
-      <div className="workspace-section">
-        <Tooltip label={workspacesExpanded ? 'Collapse presets' : 'Expand presets'} placement="right">
-          <button
-            className="workspace-section-header"
-            onClick={() => setWorkspacesExpanded((expanded) => !expanded)}
-            aria-expanded={workspacesExpanded}
-            aria-label="Presets"
-          >
-            <span className="workspace-section-chevron">
-              {workspacesExpanded ? <ChevronDownIcon size="xs" /> : <ChevronRightIcon size="xs" />}
-            </span>
-            <span className="workspace-section-title">
-              <ListIcon size="xs" /> Presets
-            </span>
-            <span className="workspace-section-count">{workspaceTabs.length}</span>
-          </button>
-        </Tooltip>
-
-        {workspacesExpanded && (
-          <div className="workspace-section-content">
-            <button
-              ref={workspaceAddButtonRef}
-              className="workspace-add-btn"
-              onClick={openWorkspaceForm}
-              aria-label="New preset"
-            >
-              <PlusIcon size="xs" /> New preset
-            </button>
-
-            {workspaceTabs.length === 0 ? (
-              <div className="workspace-empty">
-                <span>No presets saved</span>
-                <button
-                  type="button"
-                  className="workspace-add-btn"
-                  onClick={() => {
-                    const activeTab = tabs.find((tab) => tab.id === activeTabId);
-                    if (activeTab) onSaveWorkspaceTab(activeTab);
-                  }}
-                >
-                  Save current workspace
-                </button>
-              </div>
-            ) : (
-              <div className="workspace-list">
-                {workspaceTabs.map((preset) => {
-                  const sshProfile = sshProfiles.find((profile) => profile.id === preset.sshProfileId);
-                  const subtitle = preset.type === 'ssh'
-                    ? sshProfile ? sshProfileLabel(sshProfile) : 'Missing SSH profile'
-                    : preset.cwd || 'Home directory';
-                  const startupCommandCount = countPresetStartupCommands(preset.root);
-
-                  return (
-                    <div className="workspace-item" key={preset.id}>
-                      <div className="workspace-item-main">
-                        <TerminalTabIcon size="md" className="workspace-item-icon" />
-                        <div className="workspace-item-text">
-                          <span className="workspace-item-name">{preset.name}</span>
-                          <span className="workspace-item-sub">
-                            {preset.terminalCount} terminal{preset.terminalCount === 1 ? '' : 's'}
-                            {startupCommandCount > 0 && ` · ${startupCommandCount} startup command${startupCommandCount === 1 ? '' : 's'}`}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="session-actions">
-                        <Tooltip label={`Open preset ${preset.name}`} placement="top">
-                          <button
-                            type="button"
-                            className="session-action-btn"
-                            onClick={() => onWorkspaceTabLaunch(preset)}
-                            aria-label={`Open preset ${preset.name}`}
-                          >
-                            <ArrowRightIcon size="sm" />
-                          </button>
-                        </Tooltip>
-
-                        <Tooltip label={`Edit preset ${preset.name}`} placement="top">
-                          <button
-                            type="button"
-                            className="session-action-btn"
-                            onClick={() => editPreset(preset)}
-                            aria-label={`Edit preset ${preset.name}`}
-                          >
-                            <PencilIcon size="sm" />
-                          </button>
-                        </Tooltip>
-
-                        <Tooltip label={`Delete preset ${preset.name}`} placement="top">
-                          <button
-                            type="button"
-                            className="session-action-btn danger"
-                            onClick={() => setPresetPendingDeletion(preset)}
-                            aria-label={`Delete preset ${preset.name}`}
-                          >
-                            <TrashIcon size="sm" />
-                          </button>
-                        </Tooltip>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
       {tabMenu && createPortal(
         <div
           ref={tabMenuRef}
@@ -560,19 +492,14 @@ export default function VerticalTabBar({
           }}
         >
           <button role="menuitem" onClick={() => { startRename(tabMenu.tab); closeTabMenu(); }}>
-            Rename tab
+            Rename workspace
           </button>
           {tabMenu.tab.type === 'ssh' && tabMenu.tab.sshSessionId && tabMenu.tab.sshShellReady === true && (
             <button role="menuitem" onClick={() => { openForwardDialog(tabMenu.tab); closeTabMenu(); }}>Manage local forwards</button>
           )}
-          {tabMenu.tab.workspaceId && workspaceTabs.find((preset) => preset.id === tabMenu.tab.workspaceId) && (
-            <button role="menuitem" onClick={() => { editPreset(workspaceTabs.find((preset) => preset.id === tabMenu.tab.workspaceId)!); closeTabMenu(); }}>
-              Edit preset
-            </button>
-          )}
-          <button role="menuitem" onClick={() => { onSaveWorkspaceTab(tabMenu.tab); closeTabMenu(); }}>
-            {tabMenu.tab.workspaceId ? 'Update saved preset' : 'Save as preset'}
-          </button>
+          {groups.filter((group) => !group.kind && !groups.find((item) => item.id === tabMenu.tab.groupId)?.kind && group.id !== (tabMenu.tab.groupId ?? groups[0]?.id)).map((group) => (
+            <button key={group.id} role="menuitem" onClick={() => { onMoveWorkspace(tabMenu.tab.id, group.id); onGroupsChange(groups.map((item) => item.id === group.id ? { ...item, collapsed: false } : item)); closeTabMenu(); }}>Move to {group.name}</button>
+          ))}
         </div>,
         document.body,
       )}
@@ -609,32 +536,35 @@ export default function VerticalTabBar({
             aria-labelledby="workspace-modal-title"
           >
             <div className="workspace-modal-header">
-              <h2 id="workspace-modal-title">{editingPreset ? 'Edit preset' : 'Create preset'}</h2>
-              <Tooltip label="Close preset dialog" placement="left">
-                <button onClick={closeWorkspaceForm} aria-label="Close preset dialog">
+              <h2 id="workspace-modal-title">{folderTarget ? `New session in ${folderTarget.name}` : creationKind === 'group' ? 'Create workspace' : 'Create project'}</h2>
+              <Tooltip label="Close creation dialog" placement="left">
+                <button onClick={closeWorkspaceForm} aria-label="Close creation dialog">
                   <XCloseIcon size="sm" />
                 </button>
               </Tooltip>
             </div>
-            <WorkspaceTabPresetForm
+            {!folderTarget && <div className="workspace-create-kind" role="group" aria-label="Create type">
+              <button type="button" aria-pressed={creationKind === 'group'} onClick={() => setCreationKind('group')} disabled={creating}>Workspace</button>
+              <button type="button" aria-pressed={creationKind === 'workspace'} onClick={() => setCreationKind('workspace')} disabled={creating || !groups.some((group) => !group.kind)}>Project</button>
+            </div>}
+            {creationError && <p role="alert" className="form-error">{creationError}</p>}
+            {creationKind === 'group' ? <form className="workspace-form" onSubmit={createGroup}>
+              <label className="form-field"><span>Workspace name</span><input className="form-input" aria-label="Workspace name" required maxLength={128} value={groupName} onChange={(event) => setGroupName(event.target.value)} placeholder="e.g. Personal" /></label>
+              <p className="workspace-form-help">Creates a folder in your main directory. Add projects inside this workspace when you are ready.</p>
+              <button className="connect-btn" disabled={creating || !groupName.trim()} type="submit">{creating ? 'Creating…' : 'Create workspace'}</button>
+            </form> : <WorkspaceForm
               sshProfiles={sshProfiles}
-              preset={editingPreset ?? undefined}
-              submitLabel={editingPreset ? 'Save changes' : 'Create preset'}
-              onSubmit={savePreset}
-            />
+              groups={groups.filter((group) => !group.kind)}
+              folder={folderTarget}
+              defaultGroupId={projectParentId ?? groups.find((group) => !group.kind && group.id === tabs.find((tab) => tab.id === activeTabId)?.groupId)?.id ?? groups.find((group) => !group.kind)?.id}
+              submitting={creating}
+              submitLabel={creating ? 'Opening terminals…' : folderTarget ? 'Start session' : 'Create project'}
+              onSubmit={createWorkspace}
+            />}
           </div>
         </div>,
         document.body,
       )}
-      <ConfirmationDialog
-        open={presetPendingDeletion !== null}
-        title={presetPendingDeletion ? `Delete preset “${presetPendingDeletion.name}”?` : 'Delete preset?'}
-        description="This permanently deletes the saved preset. Existing terminal tabs will stay open."
-        confirmLabel="Delete preset"
-        fallbackFocus={() => workspaceAddButtonRef.current}
-        onConfirm={confirmDeletePreset}
-        onCancel={() => setPresetPendingDeletion(null)}
-      />
     </div>
   );
 }

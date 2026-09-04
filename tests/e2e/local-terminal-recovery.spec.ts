@@ -32,6 +32,7 @@ async function forceClose(app: ElectronApplication | undefined): Promise<void> {
 
 test('recovers a failed local terminal in the same pane only after explicit retry', async () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-local-recovery-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData }));
   let app: ElectronApplication | undefined;
 
   try {

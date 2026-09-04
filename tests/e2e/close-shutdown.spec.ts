@@ -64,7 +64,7 @@ function createEditorFixture(userData: string): { directory: string; fileName: s
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-close-editor-'));
   const fileName = 'dirty-close.ts';
   fs.writeFileSync(path.join(directory, fileName), 'export const clean = true;\n', 'utf8');
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'right',

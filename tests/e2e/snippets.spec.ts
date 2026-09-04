@@ -24,6 +24,7 @@ async function forceClose(app: ElectronApplication | undefined): Promise<void> {
 
 test('keeps the empty picker compact and deletes a snippet with a mouse click', async () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-snippets-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData }));
   let app: ElectronApplication | undefined;
 
   try {

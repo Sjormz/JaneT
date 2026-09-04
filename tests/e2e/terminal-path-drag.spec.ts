@@ -49,7 +49,7 @@ function createRepositoryFixture(): { repoPath: string; fileName: string; filePa
 function createUserData(repoPath: string): string {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), USER_DATA_PREFIX));
   try {
-    fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+    fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
       theme: 'tokyo-night',
       fontSize: 14,
       sidebarSide: 'left',

@@ -22,6 +22,7 @@ async function forceClose(app: ElectronApplication | undefined): Promise<void> {
 
 test('shows the current JaneT version and checks for updates when clicked', async () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-version-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData }));
   let app: ElectronApplication | undefined;
 
   try {
@@ -74,6 +75,7 @@ test('copies exact privacy-safe diagnostics from the packaged runtime', async ()
   const executablePath = process.env.JANET_PACKAGED_EXECUTABLE;
   test.skip(!executablePath, 'Set JANET_PACKAGED_EXECUTABLE to a freshly built unpacked application');
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-diagnostics-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData }));
   let app: ElectronApplication | undefined;
 
   try {
@@ -124,6 +126,7 @@ test('keeps a packaged updater failure actionable with the fixed releases fallba
   const executablePath = process.env.JANET_PACKAGED_EXECUTABLE;
   test.skip(!executablePath, 'Set JANET_PACKAGED_EXECUTABLE to a freshly built unpacked application');
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-updater-failure-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData }));
   let app: ElectronApplication | undefined;
 
   try {

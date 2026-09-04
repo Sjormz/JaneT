@@ -30,7 +30,7 @@ test('records focused and unfocused notification decisions without command or ou
   test.setTimeout(60_000);
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-focus-notifications-e2e-'));
   const eventsPath = path.join(userData, 'events.jsonl');
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     notificationsEnabled: true,
     notificationThresholdSeconds: 1,
     workspaceTabs: [],

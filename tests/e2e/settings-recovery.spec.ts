@@ -35,7 +35,7 @@ test('restores a validated previous generation without overwriting corrupt setti
   const settingsPath = path.join(userData, 'settings.json');
   const corruptBytes = '{"theme":';
   fs.writeFileSync(settingsPath, corruptBytes, 'utf8');
-  fs.writeFileSync(`${settingsPath}.previous`, JSON.stringify({ theme: 'dracula', fontSize: 16 }), 'utf8');
+  fs.writeFileSync(`${settingsPath}.previous`, JSON.stringify({ mainDirectory: userData, theme: 'dracula', fontSize: 16 }), 'utf8');
   let app: ElectronApplication | undefined;
 
   try {
@@ -76,7 +76,7 @@ test('replaces corrupt settings with defaults only after confirmation', async ()
     expect(fs.readFileSync(settingsPath, 'utf8')).toBe(corruptBytes);
 
     await dialog.getByRole('button', { name: 'Use defaults' }).click();
-    await expect(page.locator('.terminal-container').first()).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'A home for your work' })).toBeVisible();
     expect(JSON.parse(fs.readFileSync(settingsPath, 'utf8'))).toMatchObject({
       theme: 'tokyo-night',
       fontSize: 14,

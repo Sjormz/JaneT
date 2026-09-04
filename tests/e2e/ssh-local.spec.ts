@@ -1,3 +1,4 @@
+import { createWorkspace } from './workspaces';
 import { test, expect, chromium, Browser, Page } from '@playwright/test';
 import { spawn, ChildProcess } from 'child_process';
 import { createHash, generateKeyPairSync } from 'crypto';
@@ -390,7 +391,7 @@ async function launchAppWithLocalSsh(
     auth: 'password' as const,
   };
 
-  if (ownsUserData) fs.writeFileSync(settingsPath, JSON.stringify({
+  if (ownsUserData) fs.writeFileSync(settingsPath, JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'left',
@@ -465,11 +466,19 @@ async function launchAppWithLocalSsh(
 
 async function closeApp(browser: Browser, electronProcess: ChildProcess, userData?: string) {
   try {
+    // Let JaneT release its PTYs/profile before the forced fallback on Windows.
+    const exited = new Promise<void>((resolve) => {
+      if (!electronProcess.pid || electronProcess.exitCode !== null || electronProcess.signalCode !== null) return resolve();
+      const done = () => { clearTimeout(timer); electronProcess.off('exit', done); resolve(); };
+      const timer = setTimeout(done, 1_500);
+      electronProcess.once('exit', done);
+    });
     for (const context of browser.contexts()) {
       for (const page of context.pages()) {
         void page.evaluate(() => window.close()).catch(() => {});
       }
     }
+    await exited;
     void browser.close().catch(() => {});
   } finally {
     await killProcessTree(electronProcess);
@@ -690,7 +699,7 @@ test('preserves SSH identity after a failed second-process restore and reconnect
   }
 });
 
-test('reruns startup commands when restoring a saved SSH preset terminal', async () => {
+test('reruns startup commands when restoring a SSH workspace terminal', async () => {
   const ssh = await startLocalSshServer();
   const { browser, electronProcess, page, eventsPath, settingsPath, userData } = await launchAppWithLocalSsh(
     ssh.port,
@@ -698,9 +707,7 @@ test('reruns startup commands when restoring a saved SSH preset terminal', async
     { seedSession: false, seedStartupPreset: true },
   );
   try {
-    const presetsButton = page.getByRole('button', { name: 'Presets' });
-    if (await presetsButton.getAttribute('aria-expanded') !== 'true') await presetsButton.click();
-    await page.getByRole('button', { name: 'Open preset Remote startup' }).click();
+    await createWorkspace(page, 'Remote startup', [{ sshLabel: `${testUsername}@127.0.0.1:${ssh.port}`, commands: ['printf __JANET_REMOTE_ONE__', 'printf __JANET_REMOTE_TWO__'] }]);
 
     const expectedExpression = "eval 'printf __JANET_REMOTE_ONE__' && eval 'printf __JANET_REMOTE_TWO__'";
     await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 }).toEqual([expectedExpression]);
@@ -711,10 +718,11 @@ test('reruns startup commands when restoring a saved SSH preset terminal', async
       const session = readSettings(settingsPath).session;
       const savedTab = session?.tabs?.find((tab: Record<string, any>) => tab.title === 'Remote startup');
       if (!savedTab) return null;
+      const root = savedTab.root?.type === 'split' ? savedTab.root.children[0] : savedTab.root;
       return {
-        terminalType: savedTab.root?.terminalType,
-        startupCommands: savedTab.root?.startupCommands,
-        startupShellDialect: savedTab.root?.startupShellDialect,
+        terminalType: root?.terminalType,
+        startupCommands: root?.startupCommands,
+        startupShellDialect: root?.startupShellDialect,
       };
     }, { timeout: 10_000 }).toEqual({
       terminalType: 'ssh',
@@ -726,12 +734,8 @@ test('reruns startup commands when restoring a saved SSH preset terminal', async
     await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 })
       .toEqual([expectedExpression, expectedExpression]);
 
-    // An explicit second preset launch creates a new pane and runs it again.
-    const reloadedPresetsButton = page.getByRole('button', { name: 'Presets' });
-    if (await reloadedPresetsButton.getAttribute('aria-expanded') !== 'true') {
-      await reloadedPresetsButton.click();
-    }
-    await page.getByRole('button', { name: 'Open preset Remote startup' }).click();
+    // An explicit second workspace creation creates a new pane and runs it again.
+    await createWorkspace(page, 'Remote startup second', [{ sshLabel: `${testUsername}@127.0.0.1:${ssh.port}`, commands: ['printf __JANET_REMOTE_ONE__', 'printf __JANET_REMOTE_TWO__'] }]);
     await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 })
       .toEqual([expectedExpression, expectedExpression, expectedExpression]);
   } finally {

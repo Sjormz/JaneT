@@ -29,7 +29,11 @@ export default function StatusBar({
   }, []);
 
   return (
-    <div className="status-bar">
+    <footer className="status-bar app-status" aria-label="Workspace status">
+      <span className={`status-context ${isRemote ? 'is-remote' : ''}`}>
+        <span className="status-context-mark" aria-hidden="true" />
+        {isRemote ? 'REMOTE' : 'LOCAL'}
+      </span>
       <div className="status-left">
         {sshSessions.length > 0 && (
           <span className="status-item">
@@ -56,7 +60,7 @@ export default function StatusBar({
           <Tooltip label={formatGitStatusTitle(gitStatus)} placement="top">
             <span className="status-item status-git" aria-label={formatGitStatusTitle(gitStatus)}>
               <SourceControlIcon size="xs" />
-              <span>{gitStatus.branch}</span>
+              <span className="status-git-branch">{gitStatus.branch}</span>
               {gitStatus.changed > 0 && <span className="status-git-dirty"><CircleIcon size={6} /> {gitStatus.changed}</span>}
               {gitStatus.ahead > 0 && <span className="status-git-ahead"><ArrowUpIcon size="xs" />{gitStatus.ahead}</span>}
               {gitStatus.behind > 0 && <span className="status-git-behind"><ArrowDownIcon size="xs" />{gitStatus.behind}</span>}
@@ -72,10 +76,11 @@ export default function StatusBar({
             aria-label={`JaneT version ${version}. Check for updates`}
             onClick={() => { window.janet.checkForUpdates().catch(() => {}); }}
           >
-            v{version}
+            <span className="status-build-label" aria-hidden="true">BUILD</span>
+            <span>v{version}</span>
           </button>
         </Tooltip>
       )}
-    </div>
+    </footer>
   );
 }
