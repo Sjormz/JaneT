@@ -77,6 +77,8 @@ async function switchTheme(page: Page, theme: ThemeName): Promise<void> {
 
 async function measureVisualState(page: Page, name: string) {
   return page.evaluate((stateName) => {
+    const visibleElement = (selector: string) => Array.from(document.querySelectorAll<HTMLElement>(selector))
+      .find((element) => element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }))!;
     type Rgba = [number, number, number, number];
     const parseColor = (value: string): Rgba => {
       if (value === 'transparent') return [0, 0, 0, 0];
@@ -111,7 +113,7 @@ async function measureVisualState(page: Page, name: string) {
       return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
     };
     const contrast = (selector: string) => {
-      const element = document.querySelector<HTMLElement>(selector)!;
+      const element = visibleElement(selector);
       const background = effectiveBackground(element);
       const foreground = composite(parseColor(getComputedStyle(element).color), background);
       const lighter = Math.max(luminance(foreground), luminance(background));
@@ -130,7 +132,7 @@ async function measureVisualState(page: Page, name: string) {
       '.terminal-command-failed',
     ];
     const regions = keySelectors.map((selector) => {
-      const element = document.querySelector<HTMLElement>(selector)!;
+      const element = visibleElement(selector);
       const rect = element.getBoundingClientRect();
       return {
         selector,
@@ -144,7 +146,7 @@ async function measureVisualState(page: Page, name: string) {
     const broadcastLeaf = document.querySelector<HTMLElement>('.terminal-leaf.broadcast-selected')!;
     const activeTab = document.querySelector<HTMLElement>('.vtab-item.active')!;
     const inactiveTab = document.querySelector<HTMLElement>('.vtab-item:not(.active)')!;
-    const failedMarker = document.querySelector<HTMLElement>('.terminal-command-failed')!;
+    const failedMarker = visibleElement('.terminal-command-failed');
     return {
       name: stateName,
       viewport: { width: innerWidth, height: innerHeight },
@@ -332,14 +334,19 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
         }
         // Bash redraws its prompt on resize; repeated reflows can scroll the old
         // command marker out of view. Keep this visual fixture in the viewport.
+        const markerSuffix = `${themes.indexOf(theme)}-${viewport.width}`;
+        const marker = `V${markerSuffix}`;
         await page.evaluate(({ id, command }) => window.janet.terminalWrite({
           id, data: `${command}\r`, userInput: true,
         }), {
           id: (await activeTerminals.nth(1).getAttribute('data-terminal-id'))!,
-          command: `${clearCommand}; ${failingCommand}`,
+          command: process.platform === 'win32'
+            ? `Write-Output ('V' + '${markerSuffix}'); ${failingCommand}`
+            : `printf 'V%s\\n' '${markerSuffix}'; ${failingCommand}`,
         });
+        await expect(activeTerminals.nth(1).locator('.xterm-rows')).toContainText(marker);
         await expect(page.locator('.terminal-leaf').nth(1).locator('.leaf-awareness')).toHaveText('Shell · Ready');
-        await expect(activeTerminals.nth(1).locator('.terminal-command-failed').first()).toBeVisible();
+        await expect(activeTerminals.nth(1).locator('.terminal-command-failed:visible').first()).toBeVisible();
         await tab(page, 'Active workspace').focus();
         await page.keyboard.press('Tab');
         await page.keyboard.press('Shift+Tab');
