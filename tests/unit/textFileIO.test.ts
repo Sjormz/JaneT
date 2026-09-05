@@ -12,7 +12,7 @@ import {
 const tempDirectories: string[] = [];
 
 async function makeTempDirectory(): Promise<string> {
-  const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'janet-text-file-'));
+  const directory = await fs.promises.mkdtemp(path.join(await fs.promises.realpath(os.tmpdir()), 'janet-text-file-'));
   tempDirectories.push(directory);
   return directory;
 }
@@ -253,9 +253,12 @@ describe('bounded local text-file IO', () => {
       return realRename(from, to);
     });
 
+    const queuedWrites = vi.spyOn(manager as any, 'withSerializedTextFileWrite');
     const first = manager.writeTextFile(writeRequest(opened.value, 'first'));
     await renameStarted;
     const second = manager.writeTextFile(writeRequest(opened.value, 'second'));
+    // Test the write queue, not Windows realpath's temporary file handle racing rename.
+    await vi.waitFor(() => expect(queuedWrites).toHaveBeenCalledTimes(2));
     releaseRename();
     const [firstResult, secondResult] = await Promise.all([first, second]);
 

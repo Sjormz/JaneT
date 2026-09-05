@@ -92,7 +92,7 @@ async function forceClose(app: ElectronApplication | undefined): Promise<void> {
 function removeFixture(directory: string | undefined, prefix: string): void {
   if (!directory) return;
   const resolved = path.resolve(directory);
-  const tempRoot = path.resolve(os.tmpdir());
+  const tempRoot = fs.realpathSync(os.tmpdir());
   if (path.dirname(resolved) !== tempRoot || !path.basename(resolved).startsWith(prefix)) {
     throw new Error(`Refusing to remove non-fixture path: ${resolved}`);
   }

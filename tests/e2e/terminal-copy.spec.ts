@@ -74,12 +74,13 @@ async function dragMarker(page: Page, forceSelection = true): Promise<void> {
   const box = await rows.nth(index).boundingBox();
   expect(box).not.toBeNull();
   const y = box!.y + box!.height / 2;
-  if (forceSelection) await page.keyboard.down('Shift');
+  const modifier = process.platform === 'darwin' ? 'Alt' : 'Shift';
+  if (forceSelection) await page.keyboard.down(modifier);
   await page.mouse.move(box!.x + 1, y);
   await page.mouse.down();
   await page.mouse.move(box!.x + box!.width - 2, y, { steps: 12 });
   await page.mouse.up();
-  if (forceSelection) await page.keyboard.up('Shift');
+  if (forceSelection) await page.keyboard.up(modifier);
 }
 
 async function selectMarker(page: Page, position: { x: number; y: number }): Promise<void> {

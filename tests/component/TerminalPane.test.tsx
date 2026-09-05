@@ -323,6 +323,7 @@ describe('TerminalPane SSH reinitialization', () => {
       'aria-label',
       'Tests — Local terminal pane',
     );
+    expect(MockTerminal.instances[0].options.macOptionClickForcesSelection).toBe(true);
   });
 
   it('updates the helper input name without recreating xterm', async () => {

@@ -44,6 +44,12 @@ export function mainSourceDirectories(projectRoot = root) {
   return [path.join(projectRoot, 'src/main'), path.join(projectRoot, 'src/shared')];
 }
 
+export function devElectronArgs(platform = process.platform, env = process.env) {
+  // Hosted Linux CI does not allow Chromium's user-namespace sandbox. Keep this
+  // exception confined to disposable acceptance profiles, never normal dev runs.
+  return ['.', ...(platform === 'linux' && env.CI && env.JANET_E2E_USER_DATA_DIR ? ['--no-sandbox'] : [])];
+}
+
 export function devExecutables() {
   const require = createRequire(import.meta.url);
   return {
@@ -154,7 +160,7 @@ function launchElectron() {
   const env = { ...process.env, NODE_ENV: 'development', JANET_DEV_SERVER_URL: devServer.url };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  electronProcess = spawn(devExecutables().electron, ['.'], {
+  electronProcess = spawn(devExecutables().electron, devElectronArgs(), {
     cwd: root,
     stdio: ['ignore', openElectronLog(), electronLog],
     shell: false,

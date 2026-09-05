@@ -69,6 +69,13 @@ function writeReleaseManifestFixture(
 }
 
 describe('development tooling', () => {
+  it('limits the Linux sandbox exception to disposable CI profiles', async () => {
+    const { devElectronArgs } = await loadScript('dev.mjs');
+    expect(devElectronArgs('linux', { CI: 'true', JANET_E2E_USER_DATA_DIR: '/tmp/test-profile' })).toEqual(['.', '--no-sandbox']);
+    expect(devElectronArgs('linux', { CI: 'true' })).toEqual(['.']);
+    expect(devElectronArgs('linux', { JANET_E2E_USER_DATA_DIR: '/tmp/test-profile' })).toEqual(['.']);
+    expect(devElectronArgs('win32', { CI: 'true', JANET_E2E_USER_DATA_DIR: '/tmp/test-profile' })).toEqual(['.']);
+  });
   it('derives the Vite bind host and port from the configured renderer URL', async () => {
     const { devExecutables, parseDevServerUrl } = await loadScript('dev.mjs');
 

@@ -258,7 +258,7 @@ describe('GitManager working tree actions', { timeout: 30_000 }, () => {
     const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (target: any, flags: any) => {
       return open.call(
         fs.promises,
-        path.resolve(String(target)) === canonicalTracked ? outside : target,
+        path.relative(canonicalTracked, fs.realpathSync(String(target))) === '' ? outside : target,
         flags,
       );
     }) as any);
@@ -266,7 +266,7 @@ describe('GitManager working tree actions', { timeout: 30_000 }, () => {
     const realpathSpy = vi.spyOn(fs.promises, 'realpath').mockImplementation((async (target: any, options?: any) => (
       realpath.call(
         fs.promises,
-        path.resolve(String(target)) === canonicalTracked && trackedRealpaths++ > 0 ? outside : target,
+        path.relative(canonicalTracked, fs.realpathSync(String(target))) === '' && trackedRealpaths++ > 0 ? outside : target,
         options,
       )
     )) as any);
@@ -276,6 +276,7 @@ describe('GitManager working tree actions', { timeout: 30_000 }, () => {
         ok: false,
         error: { code: 'INVALID_REQUEST' },
       });
+      expect(trackedRealpaths).toBeGreaterThanOrEqual(2);
     } finally {
       openSpy.mockRestore();
       realpathSpy.mockRestore();

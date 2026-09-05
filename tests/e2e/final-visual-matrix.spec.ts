@@ -5,6 +5,7 @@ import * as path from 'path';
 import { getTheme, themeNames, type ThemeName } from '../../src/renderer/themes';
 
 const root = path.resolve(__dirname, '../..');
+const agentHarness = path.join(root, 'tests/e2e/helpers/visual-agent.cjs');
 const neutralCwd = process.env.SystemRoot ?? root;
 const themes = themeNames;
 const viewports = [{ width: 1280, height: 800 }, { width: 800, height: 600 }] as const;
@@ -37,13 +38,13 @@ function agentSequence(event: Record<string, unknown>): string {
 
 function emitCommand(event: Record<string, unknown>): string {
   const encoded = Buffer.from(agentSequence(event)).toString('base64');
-  return `node -e "process.stdout.write(Buffer.from('${encoded}','base64'));setInterval(()=>{},1000)"`;
+  return `node "${agentHarness}" ${encoded}`;
 }
 
 function gatedEmitCommand(event: Record<string, unknown>): string {
   const encoded = Buffer.from(agentSequence(event)).toString('base64');
   const started = Buffer.from(agentSequence({ event: 'turn.start', sessionId: event.sessionId, turnId: event.turnId })).toString('base64');
-  return `node -e "process.stdout.write(Buffer.from('${started}','base64'));process.stdin.once('data',()=>process.stdout.write(Buffer.from('${encoded}','base64')));setInterval(()=>{},1000)"`;
+  return `node "${agentHarness}" ${started} ${encoded}`;
 }
 
 async function typeCommand(page: Page, terminal: Locator, command: string): Promise<void> {

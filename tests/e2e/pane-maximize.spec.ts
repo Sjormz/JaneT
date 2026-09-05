@@ -197,7 +197,7 @@ test('maximizes and restores a terminal pane in Electron', async () => {
 
     // Maximizing a pane also makes it the action target. After restoring the
     // layout, pane shortcuts must still act on the pane the user just chose.
-    await page.keyboard.press('Control+Shift+W');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+W' : 'Control+Shift+W');
     const closePaneDialog = page.getByRole('alertdialog', { name: 'Close right?' });
     await expect(closePaneDialog).toBeVisible();
     await closePaneDialog.getByRole('button', { name: 'Close pane' }).click();
@@ -258,7 +258,7 @@ test('focuses the first terminal after clicking a terminal tab', async () => {
 
   try {
     await expect(page.locator('.terminal-container')).toHaveCount(2);
-    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+T' : 'Control+Shift+T');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+T' : 'Control+Shift+T');
     await expect(page.locator('.terminal-container')).toHaveCount(1);
     await page.locator('.vtab-item').filter({ hasText: 'two panes' }).click();
     await expect(page.locator('.terminal-container')).toHaveCount(2);

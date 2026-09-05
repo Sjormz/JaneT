@@ -569,7 +569,7 @@ print("TUI_AWARENESS_OK")
     const firstTab = page.locator('.vtab-item').first();
     await expect.poll(() => fs.existsSync(sessionReadyPath)).toBe(true);
     await expect(firstTab).toHaveAttribute('aria-label', /Hermes · Ready/);
-    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+T' : 'Control+Shift+T');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+T' : 'Control+Shift+T');
     await expect(page.locator('.vtab-item')).toHaveCount(2);
 
     await page.locator('.vtab-item').nth(1).click({ button: 'right' });

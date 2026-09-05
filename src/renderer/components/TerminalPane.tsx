@@ -794,6 +794,7 @@ export default function TerminalPane({
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: 'block',
+      macOptionClickForcesSelection: true,
       fontSize: fontSize || 14,
       fontFamily: fontFamily || DEFAULT_TERMINAL_FONT_FAMILY,
       lineHeight: 1.2,
