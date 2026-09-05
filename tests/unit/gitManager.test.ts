@@ -252,13 +252,15 @@ describe('GitManager working tree actions', { timeout: 30_000 }, () => {
     const outside = path.join(temporaryDirectory('janet-git-outside-'), 'secret.txt');
     fs.writeFileSync(tracked, 'working\n');
     fs.writeFileSync(outside, 'outside secret\n');
-    const canonicalTracked = fs.realpathSync(tracked);
+    // This fixture has one base.txt. Match its basename so Windows namespace
+    // and short-path spellings cannot silently bypass the injected redirection.
+    const isTracked = (target: unknown) => path.basename(String(target)) === 'base.txt';
     const open = fs.promises.open;
     const realpath = fs.promises.realpath;
     const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (target: any, flags: any) => {
       return open.call(
         fs.promises,
-        path.relative(canonicalTracked, fs.realpathSync(String(target))) === '' ? outside : target,
+        isTracked(target) ? outside : target,
         flags,
       );
     }) as any);
@@ -266,17 +268,18 @@ describe('GitManager working tree actions', { timeout: 30_000 }, () => {
     const realpathSpy = vi.spyOn(fs.promises, 'realpath').mockImplementation((async (target: any, options?: any) => (
       realpath.call(
         fs.promises,
-        path.relative(canonicalTracked, fs.realpathSync(String(target))) === '' && trackedRealpaths++ > 0 ? outside : target,
+        isTracked(target) && trackedRealpaths++ > 0 ? outside : target,
         options,
       )
     )) as any);
 
     try {
-      await expect(manager.diff(repository, 'base.txt', 'unstaged')).resolves.toMatchObject({
+      const result = await manager.diff(repository, 'base.txt', 'unstaged');
+      expect(trackedRealpaths, JSON.stringify(realpathSpy.mock.calls)).toBeGreaterThanOrEqual(2);
+      expect(result).toMatchObject({
         ok: false,
         error: { code: 'INVALID_REQUEST' },
       });
-      expect(trackedRealpaths).toBeGreaterThanOrEqual(2);
     } finally {
       openSpy.mockRestore();
       realpathSpy.mockRestore();

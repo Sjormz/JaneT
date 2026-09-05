@@ -330,7 +330,16 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
           await expect(showTabs).toBeVisible();
           await showTabs.click();
         }
-        await expect(activeTerminals.nth(1).locator('.terminal-command-failed')).toHaveCount(1);
+        // Bash redraws its prompt on resize; repeated reflows can scroll the old
+        // command marker out of view. Keep this visual fixture in the viewport.
+        await page.evaluate(({ id, command }) => window.janet.terminalWrite({
+          id, data: `${command}\r`, userInput: true,
+        }), {
+          id: (await activeTerminals.nth(1).getAttribute('data-terminal-id'))!,
+          command: `${clearCommand}; ${failingCommand}`,
+        });
+        await expect(page.locator('.terminal-leaf').nth(1).locator('.leaf-awareness')).toHaveText('Shell · Ready');
+        await expect(activeTerminals.nth(1).locator('.terminal-command-failed').first()).toBeVisible();
         await tab(page, 'Active workspace').focus();
         await page.keyboard.press('Tab');
         await page.keyboard.press('Shift+Tab');
