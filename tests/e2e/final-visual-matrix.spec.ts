@@ -175,7 +175,6 @@ async function measureVisualState(page: Page, name: string) {
         })),
       },
       contrastPairs: [
-        contrast('.workspace-tools-following'),
         contrast('.vtab-sub.running'),
         contrast('.vtab-sub.finished'),
         contrast('.vtab-sub.exited'),

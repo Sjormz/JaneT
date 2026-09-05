@@ -28,7 +28,7 @@ export const STARTUP_READY_MARKER = '\x1b]777;janet-ready\x1b\\';
  *   - PowerShell prompt override:
  *     https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_prompts
  */
-export function buildShellInit(shell: string): string {
+export function buildShellInit(shell: string, agentHelper?: string): string {
   const base = path.basename(shell).toLowerCase();
 
   // PowerShell (any version — both 5.1 and 7+). The trick: capture the
@@ -104,7 +104,19 @@ export function buildShellInit(shell: string): string {
       "  [string]$promptText + $e + ']133;B' + $e + [char]92",
       "}",
     ].join('\n');
-    return ps;
+    if (!agentHelper) return ps;
+    const helper = agentHelper.replace(/['\u2018\u2019]/g, quote => quote + quote);
+    return ps + '\n' + ['codex', 'hermes'].map(agent => [
+      `$__jt_cli = Get-Command ${agent} -ErrorAction SilentlyContinue`,
+      `if ($__jt_cli -and $__jt_cli.CommandType -in @('Application', 'ExternalScript') -and (Get-Command node -CommandType Application -ErrorAction SilentlyContinue)) {`,
+      `  $global:__jt_${agent}_path = $__jt_cli.Source`,
+      `  function global:${agent} {`,
+      `    & node '${helper}' --setup-${agent} @args`,
+      `    $global:__jt_state.UseNativeExitCode = $true`,
+      `    if ($MyInvocation.ExpectingInput) { $input | & $global:__jt_${agent}_path @args } else { & $global:__jt_${agent}_path @args }`,
+      `  }`,
+      `}`,
+    ].join('\n')).join('\n');
   }
 
   // Bash. The canonical PROMPT_COMMAND snippet — also used by VS Code.
@@ -148,6 +160,7 @@ export function buildShellInit(shell: string): string {
       // The `function name` form prevents an existing alias from expanding
       // the name while the shell parses this skipped conditional branch.
       "  function hermes {",
+      setupAgent(agentHelper, 'hermes', 'bash'),
       "    if [ -n \"${TMUX:-}${STY:-}\" ]; then JANET_KITTY_GRAPHICS= KITTY_WINDOW_ID= WEZTERM_PANE= ITERM_SESSION_ID= TERM_PROGRAM=JaneT command hermes \"$@\"; else JANET_KITTY_GRAPHICS=1 command hermes \"$@\"; fi",
       "  }",
       "fi",
@@ -164,7 +177,7 @@ export function buildShellInit(shell: string): string {
       "__jt_debug_guard=0",
       "trap '__jt_debug' DEBUG",
       "fi",
-    ].join('\n');
+    ].join('\n') + agentWrapper(agentHelper, 'bash');
   }
 
   // Zsh. The zsh-native way: a precmd hook.
@@ -185,13 +198,14 @@ export function buildShellInit(shell: string): string {
       "PS1=$'%{\\e]133;A\\e\\\\%}'${PS1}$'%{\\e]133;B\\e\\\\%}'",
       "if (( $+commands[hermes] && ! $+aliases[hermes] && ! $+galiases[hermes] && ! $+functions[hermes] )); then",
       "  function hermes {",
+      setupAgent(agentHelper, 'hermes', 'zsh'),
       // Quote the external command name so a zsh global alias cannot expand
       // it while this compound statement is parsed.
       "    if [[ -n \"${TMUX:-}${STY:-}\" ]]; then JANET_KITTY_GRAPHICS= KITTY_WINDOW_ID= WEZTERM_PANE= ITERM_SESSION_ID= TERM_PROGRAM=JaneT command 'hermes' \"$@\"; else JANET_KITTY_GRAPHICS=1 command 'hermes' \"$@\"; fi",
       "  }",
       "fi",
       "fi",
-    ].join('\n');
+    ].join('\n') + agentWrapper(agentHelper, 'zsh');
   }
 
   // Fish. The fish-prompt event handler.
@@ -232,6 +246,7 @@ export function buildShellInit(shell: string): string {
       "end",
       "if type -q hermes; and test (type -t hermes) = file",
       "  function hermes --description 'Hermes with JaneT graphics'",
+      setupAgent(agentHelper, 'hermes', 'fish'),
       "    if test -n \"$TMUX$STY\"",
       "      set -lx JANET_KITTY_GRAPHICS ''",
       "      set -lx KITTY_WINDOW_ID ''",
@@ -245,7 +260,7 @@ export function buildShellInit(shell: string): string {
       "  end",
       "end",
       "end",
-    ].join('\n');
+    ].join('\n') + agentWrapper(agentHelper, 'fish');
   }
 
   // cmd.exe has no scripting facility for per-prompt hooks. We could
@@ -253,4 +268,22 @@ export function buildShellInit(shell: string): string {
   // a timer) but that's out of scope for this fix. For now, return
   // empty so cmd.exe gets no init.
   return '';
+}
+
+function setupAgent(helper: string | undefined, agent: string, shell: string): string {
+  if (!helper) return '';
+  const quoted = shell === 'fish' ? helper.replace(/\\/g, '\\\\').replace(/'/g, "\\'") : helper.replace(/'/g, "'\\''");
+  return shell === 'fish'
+    ? `if command -sq node; command node '${quoted}' --setup-${agent} $argv; end`
+    : `if command -v node >/dev/null 2>&1; then command node '${quoted}' --setup-${agent} "$@"; fi`;
+}
+
+function agentWrapper(helper: string | undefined, shell: string): string {
+  if (!helper) return '';
+  const setup = setupAgent(helper, 'codex', shell);
+  if (shell === 'fish') return `\nif type -q codex; and test (type -t codex) = file\nfunction codex\n${setup}\ncommand codex $argv\nend\nend\n`;
+  const condition = shell === 'zsh'
+    ? '(( $+commands[codex] && ! $+aliases[codex] && ! $+galiases[codex] && ! $+functions[codex] ))'
+    : '[ "$(type -t codex 2>/dev/null)" = file ]';
+  return `\nif ${condition}; then\nfunction codex {\n${setup}\ncommand 'codex' "$@"\n}\nfi\n`;
 }

@@ -617,7 +617,7 @@ describe('split panes in the app', () => {
     try {
       render(<App />);
       const terminal = await screen.findByTestId(/terminal-/);
-      await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+      await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
       const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
       act(() => { emit(semanticEvent('printf first', 'FIRST OUTPUT')); emit(semanticEvent('printf second', 'SECOND OUTPUT')); });
 
@@ -642,7 +642,7 @@ describe('split panes in the app', () => {
   it('persists a submitted command immediately and updates it when execution finishes', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const termId = terminal.dataset.terminalId!;
 
     act(() => rendererMocks.semanticCommandStartedHandlers.get(termId)!({
@@ -674,7 +674,7 @@ describe('split panes in the app', () => {
   it('keeps an accepted command but clears Running when the lifecycle is cancelled', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const termId = terminal.dataset.terminalId!;
     const event = { command: 'exit', startedAt: 10 };
 
@@ -693,7 +693,7 @@ describe('split panes in the app', () => {
   it('clears Running when the owning local terminal exits without D', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const termId = terminal.dataset.terminalId!;
 
     act(() => rendererMocks.semanticCommandStartedHandlers.get(termId)!({ command: 'exit', startedAt: 10 }));
@@ -714,7 +714,7 @@ describe('split panes in the app', () => {
     ));
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const termId = terminal.dataset.terminalId!;
 
     act(() => rendererMocks.semanticCommandStartedHandlers.get(termId)!({ command: 'exit', startedAt: 10 }));
@@ -739,7 +739,7 @@ describe('split panes in the app', () => {
     ));
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
     act(() => { emit(semanticEvent('first')); emit(semanticEvent('second')); });
     await waitFor(() => expect(historyUpdates()).toHaveLength(1));
@@ -753,7 +753,7 @@ describe('split panes in the app', () => {
   it('replaces an older duplicate command instead of adding another row', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
 
     act(() => emit({ ...semanticEvent('repeat'), startedAt: 10 }));
@@ -770,7 +770,7 @@ describe('split panes in the app', () => {
     fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
     const [firstId, secondId] = (await screen.findAllByTestId(/terminal-/))
       .map((terminal) => terminal.dataset.terminalId!);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
 
     act(() => rendererMocks.semanticCommandStartedHandlers.get(firstId)!({ command: 'repeat', startedAt: 10 }));
     await waitFor(() => expect(historyUpdates()).toHaveLength(1));
@@ -789,7 +789,7 @@ describe('split panes in the app', () => {
   it('removes a command-history entry from settings and the picker', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
     act(() => emit(semanticEvent('remove me')));
     await waitFor(() => expect(historyUpdates()).toHaveLength(1));
@@ -808,7 +808,7 @@ describe('split panes in the app', () => {
     try {
       render(<App />);
       const terminal = await screen.findByTestId(/terminal-/);
-      await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+      await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
       const termId = terminal.dataset.terminalId!;
       act(() => rendererMocks.semanticCommandStartedHandlers.get(termId)!({ command: 'still running', startedAt: 10 }));
       await waitFor(() => expect(historyUpdates()).toHaveLength(1));
@@ -841,7 +841,7 @@ describe('split panes in the app', () => {
     ));
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const termId = terminal.dataset.terminalId!;
     const emit = rendererMocks.semanticCommandHandlers.get(termId)!;
     act(() => { emit(semanticEvent('first')); emit(semanticEvent('second')); });
@@ -862,7 +862,7 @@ describe('split panes in the app', () => {
     ));
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
     act(() => { emit(semanticEvent('first')); emit(semanticEvent('stale')); });
     await waitFor(() => expect(historyUpdates()).toHaveLength(1));
@@ -2721,9 +2721,9 @@ describe('split panes in the app', () => {
   it('describes the terminal and cwd driving workspace tools', async () => {
     render(<App />);
 
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget).toEqual({
-      label: 'Terminal',
-      path: '/home/test',
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource).toMatchObject({
+      kind: 'local',
+      cwd: '/home/test',
     }));
   });
 

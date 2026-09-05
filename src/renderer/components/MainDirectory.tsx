@@ -26,7 +26,7 @@ export default function MainDirectory({ directory, onboarding = false, onChange 
   const content = <>
     {onboarding && <div className="directory-onboarding-brand"><BrandMark size={40} /><span>Welcome to JaneT</span></div>}
     <Heading>{onboarding ? 'A home for your work' : 'Main directory'}</Heading>
-    <p>{onboarding ? 'Choose where JaneT should create your workspaces and projects. You can change this later in Settings.' : 'New workspaces are created here. Existing workspaces and linked folders stay where they are; no files are moved.'}</p>
+    <p>{onboarding ? 'Choose a home for temporary workspaces and projects. Keep work in Library when you want to save it elsewhere. You can change this location from the Workspaces heading.' : 'New temporary workspaces are created here. Existing workspaces and Library locations stay where they are; no files are moved.'}</p>
     {directory && <p className="main-directory-path">{directory}</p>}
     {error && <p role="alert" className="form-error">{error}</p>}
     <button type="button" className="connect-btn" disabled={busy} onClick={() => void choose()}>{busy ? 'Setting up…' : directory ? 'Change main directory' : 'Choose main directory'}</button>

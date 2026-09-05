@@ -9,6 +9,8 @@ import WorkspaceForm, { sshProfileLabel } from './WorkspaceForm';
 import { useModalFocus } from '../useModalFocus';
 import Tooltip from './Tooltip';
 import SSHManager from './SSHManager';
+import MainDirectory from './MainDirectory';
+import RenameDialog from './RenameDialog';
 import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, type WorkspaceGroup } from '../../shared/workspaceGroups';
 import type { AgentStatus } from '../terminalAwareness';
 import type { SSHLocalForwardStatus } from '../../main/ssh';
@@ -19,9 +21,15 @@ interface VerticalTabBarProps {
   sshProfiles: SavedSSHProfile[];
   groups?: WorkspaceGroup[];
   mainDirectory?: string | null;
+  onMainDirectoryChange?: (directory: string) => Promise<void>;
+  onRenameGroup?: (id: string, name: string) => Promise<void>;
+  onLocalAt?: (groupId: string, tabId?: string) => Promise<void>;
+  onWorkspaceAction?: (action: 'delete' | 'keep' | 'unlink', groupId: string, projectId?: string) => void;
   onGroupsChange: (groups: WorkspaceGroup[]) => void;
   onMoveWorkspace: (id: string, groupId: string) => void;
   creatorOpen: boolean;
+  entryRequest?: import('./EmptyWorkspace').WorkspaceEntryRequest;
+  onEntryRequestHandled?: () => void;
   onCreatorOpenChange: (open: boolean) => void;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
@@ -29,10 +37,10 @@ interface VerticalTabBarProps {
   sshConnectionsOpen: boolean;
   onSSHConnectionsOpenChange: (open: boolean) => void;
   canConnectSSH?: () => boolean;
-  onSSHConnected: (session: SessionInfo) => void;
+  onSSHConnected: (session: SessionInfo, groupId?: string, tabId?: string) => void;
   onSSHProfilesChange: (profiles: SavedSSHProfile[]) => void;
   onWorkspaceTabLaunch: (workspace: WorkspaceTabPreset, group: WorkspaceGroup) => Promise<void>;
-  onRenameTab: (id: string, title: string) => void;
+  onRenameTab: (id: string, title: string) => void | Promise<void>;
   onCollapse: () => void;
   dirtyTabIds?: ReadonlySet<string>;
   awarenessByTab?: Record<string, AgentStatus>;
@@ -58,9 +66,15 @@ export default function VerticalTabBar({
   sshProfiles,
   groups = [DEFAULT_WORKSPACE_GROUP],
   mainDirectory,
+  onMainDirectoryChange,
+  onRenameGroup,
+  onLocalAt,
+  onWorkspaceAction,
   onGroupsChange,
   onMoveWorkspace,
   creatorOpen,
+  entryRequest,
+  onEntryRequestHandled,
   onCreatorOpenChange,
   onSelectTab,
   onCloseTab,
@@ -85,6 +99,11 @@ export default function VerticalTabBar({
   const [folderTarget, setFolderTarget] = useState<WorkspaceGroup | undefined>();
   const [projectParentId, setProjectParentId] = useState<string | undefined>();
   const [folderError, setFolderError] = useState('');
+  const [directoryOpen, setDirectoryOpen] = useState(false);
+  const [sshTarget, setSshTarget] = useState<{ groupId: string; tabId?: string } | null>(null);
+  const directoryDialogRef = useRef<HTMLDivElement>(null);
+  const directoryButtonRef = useRef<HTMLButtonElement>(null);
+  useModalFocus({ open: directoryOpen, containerRef: directoryDialogRef, onClose: () => setDirectoryOpen(false), fallbackFocus: () => directoryButtonRef.current });
   const [folderBusy, setFolderBusy] = useState(false);
   const [missingDirectories, setMissingDirectories] = useState<Set<string>>(new Set());
   useEffect(() => {
@@ -102,7 +121,8 @@ export default function VerticalTabBar({
   }, [groups]);
   const [draftTitle, setDraftTitle] = useState('');
   const [tabMenu, setTabMenu] = useState<{
-    tab: TabInfo;
+    tab?: TabInfo;
+    group?: WorkspaceGroup;
     x: number;
     y: number;
     opener: HTMLElement;
@@ -168,11 +188,12 @@ export default function VerticalTabBar({
     setDraftTitle(tab.title);
   };
 
-  const saveRename = () => {
+  const saveRename = async () => {
     if (!editingTabId) return;
-    onRenameTab(editingTabId, draftTitle.trim());
-    setEditingTabId(null);
-    setDraftTitle('');
+    try {
+      await onRenameTab(editingTabId, draftTitle);
+      setEditingTabId(null); setDraftTitle(''); setFolderError('');
+    } catch (error) { setFolderError(error instanceof Error ? error.message : String(error)); }
   };
 
   const openTabMenu = (tab: TabInfo, opener: HTMLElement, x: number, y: number) => {
@@ -216,6 +237,19 @@ export default function VerticalTabBar({
     } catch (error) { setFolderError(error instanceof Error ? error.message : String(error)); }
     finally { setFolderBusy(false); }
   };
+  const handledEntryRequest = useRef<typeof entryRequest>(undefined);
+  useEffect(() => {
+    if (!entryRequest || handledEntryRequest.current === entryRequest) return;
+    handledEntryRequest.current = entryRequest;
+    onEntryRequestHandled?.();
+    if (entryRequest.action === 'link') { void linkFolder(); return; }
+    const target = groups.find(group => group.id === entryRequest.groupId);
+    setFolderTarget(target?.kind === 'folder' ? target : undefined);
+    setProjectParentId(target?.kind !== 'folder' ? target?.id : undefined);
+    setCreationKind(target ? 'workspace' : 'group');
+    setCreationError('');
+    onCreatorOpenChange(true);
+  }, [entryRequest]);
   const createWorkspace = async (workspace: WorkspaceTabPreset, group: WorkspaceGroup) => {
     setCreating(true);
     setCreationError('');
@@ -292,7 +326,7 @@ export default function VerticalTabBar({
     <div className="vtab-bar workspace-tabs-rail" role="group" aria-label="Workspaces">
       <div className="vtab-header">
         <div className="vtab-heading">
-          <span className="vtab-title">Workspaces</span>
+          <button ref={directoryButtonRef} className="workspace-directory-heading" title={mainDirectory ?? 'Choose main directory'} aria-label="Main directory settings" onClick={() => setDirectoryOpen(true)}>Workspaces</button>
           <span className="vtab-count">{groups.filter((group) => !group.kind).length}</span>
         </div>
         <div className="vtab-header-actions">
@@ -305,67 +339,47 @@ export default function VerticalTabBar({
         </div>
       </div>
 
-      <div className="vtab-create-actions" role="group" aria-label="Create terminal">
-        <button
-          type="button"
-          className="vtab-create-btn"
-          onClick={onNewTab}
-          aria-label="New local terminal tab"
-        >
-          <TerminalTabIcon size="sm" />
-          <span>Local</span>
-        </button>
-        <button
-          type="button"
-          className={`vtab-create-btn ${sshConnectionsOpen ? 'active' : ''}`}
-          onClick={() => onSSHConnectionsOpenChange(!sshConnectionsOpen)}
-          aria-label="SSH connections"
-          aria-expanded={sshConnectionsOpen}
-          aria-controls="vtab-ssh-connections"
-        >
-          <LockIcon size="sm" />
-          <span>SSH</span>
-        </button>
-      </div>
 
+      {/* TODO: Review sidebar SSH entry points later. Keep the connection panel implementation for that review.
       {sshConnectionsOpen && (
         <div id="vtab-ssh-connections" className="vtab-ssh-connections">
           <SSHManager
             sshProfiles={sshProfiles}
             canConnect={canConnectSSH}
-            onConnected={onSSHConnected}
+            onConnected={(session) => sshTarget ? onSSHConnected(session, sshTarget.groupId, sshTarget.tabId) : onSSHConnected(session)}
             onProfilesChange={onSSHProfilesChange}
           />
         </div>
       )}
+      */}
 
       <div className="vtab-list workspace-group-list">
         {folderError && <p className="form-error" role="alert">{folderError}</p>}
         {(['workspaces', 'folders'] as const).map((section) => <React.Fragment key={section}>
-        {section === 'folders' && <div className="folder-section-header"><h2>Folders</h2><button className="vtab-header-btn" aria-label="Add folder" disabled={folderBusy} onClick={() => void linkFolder()}><PlusIcon size="sm" /></button></div>}
-        {section === 'folders' && !groups.some((group) => group.kind === 'folder') && <p className="workspace-group-empty">Link a project folder to start sessions here.</p>}
+        {section === 'folders' && <div className="folder-section-header"><h2>Library</h2><button className="vtab-header-btn" aria-label="Add to Library" disabled={folderBusy} onClick={() => void linkFolder()}><PlusIcon size="sm" /></button></div>}
+        {section === 'folders' && !groups.some((group) => group.kind === 'folder') && <p className="workspace-group-empty">Link a repo or keep a project here. Library files stay yours.</p>}
         {groups.filter((group) => (group.kind === 'folder') === (section === 'folders')).map((group) => {
           const children = tabs.filter((tab) => (tab.groupId ?? groups[0]?.id) === group.id);
           const terminalCount = children.reduce((sum, tab) => sum + countLeaves(tab.root), 0);
           return <section className="workspace-group" key={group.id} aria-label={group.name}>
-            <div className={`workspace-group-heading ${children.some((tab) => tab.id === activeTabId) ? 'active' : ''}`}>
-              {editingGroupId === group.id ? <input className="vtab-name-input" aria-label="Group name" maxLength={256} autoFocus value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} onKeyDown={(event) => {
-                if (event.key === 'Escape') setEditingGroupId(null);
-                if (event.key === 'Enter' && draftTitle.trim()) { onGroupsChange(groups.map((item) => item.id === group.id ? { ...item, name: draftTitle.trim() } : item)); setEditingGroupId(null); }
-              }} onBlur={() => { if (draftTitle.trim()) onGroupsChange(groups.map((item) => item.id === group.id ? { ...item, name: draftTitle.trim() } : item)); setEditingGroupId(null); }} /> :
-              <button className="workspace-group-toggle" aria-expanded={!group.collapsed} aria-controls={`group-${group.id}`} onClick={() => onGroupsChange(groups.map((item) => item.id === group.id ? { ...item, collapsed: !item.collapsed } : item))}>
+            <div className={`workspace-group-heading ${children.some((tab) => tab.id === activeTabId) ? 'active' : ''}`} onContextMenu={(event) => { event.preventDefault(); setTabMenu({ group, opener: event.currentTarget.querySelector('button')!, x: event.clientX, y: event.clientY }); }}>
+              <button className="workspace-group-toggle" aria-expanded={!group.collapsed} aria-controls={`group-${group.id}`} onKeyDown={(event) => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setTabMenu({ group, opener: event.currentTarget, x: rect.left + 12, y: rect.bottom }); } }} onClick={() => onGroupsChange(groups.map((item) => item.id === group.id ? { ...item, collapsed: !item.collapsed } : item))}>
                 {group.collapsed ? <ChevronRightIcon size="xs" /> : <ChevronDownIcon size="xs" />}
                 <span className="workspace-group-name" title={group.directory || group.name}>{group.name}</span>
                 <span className="workspace-group-count" aria-label={`${terminalCount} terminals`}>{terminalCount}</span>
-              </button>}
-              <button className="vtab-action group-edit" aria-label={`Rename workspace ${group.name}`} onClick={() => { setEditingGroupId(group.id); setDraftTitle(group.name); }}><PencilIcon size="xs" /></button>
+              </button>
+              <Tooltip label="Open terminal here" placement="right">
+                <button className="directory-terminal-launch" onClick={() => void onLocalAt?.(group.id).catch((error) => setFolderError(String(error)))} aria-label={`Local terminal in ${group.name}`}><TerminalTabIcon size="sm" /></button>
+              </Tooltip>
               {group.kind === 'folder' && <button className="vtab-action folder-session-add" aria-label={`Start new session in ${group.name}`} onClick={() => { setFolderTarget(group); setCreationKind('workspace'); setCreationError(''); onCreatorOpenChange(true); }}><PlusIcon size="xs" /></button>}
               {!group.kind && <button className="vtab-action folder-session-add" aria-label={`New project in ${group.name}`} onClick={() => { setFolderTarget(undefined); setProjectParentId(group.id); setCreationKind('workspace'); setCreationError(''); onCreatorOpenChange(true); }}><PlusIcon size="xs" /></button>}
-              {children.length === 0 && <button className="vtab-action" title="Remove from JaneT only; files are kept" aria-label={group.kind === 'folder' ? `Remove folder ${group.name}` : `Remove empty workspace ${group.name}`} onClick={() => onGroupsChange(groups.filter((item) => item.id !== group.id))}><XCloseIcon size="xs" /></button>}
             </div>
             <div id={`group-${group.id}`} className="workspace-group-children" hidden={group.collapsed}>
+              {/* TODO: Review workspace SSH action later; retained but not shown.
+              <button aria-expanded={sshConnectionsOpen && sshTarget?.groupId === group.id && !sshTarget.tabId} onClick={() => { const closing = sshConnectionsOpen && sshTarget?.groupId === group.id && !sshTarget.tabId; setSshTarget({ groupId: group.id }); onSSHConnectionsOpenChange(!closing); }} aria-label={`SSH terminal in ${group.name}`}><LockIcon size="xs" />SSH</button>
+              */}
             {missingDirectories.has(group.id) && <div className="folder-missing"><span>Folder unavailable</span><button className="folder-locate" disabled={folderBusy} title={group.directory} onClick={() => void linkFolder(group)}>Locate folder<span className="sr-only"> for {group.name}</span></button></div>}
-            {children.length === 0 && <p className="workspace-group-empty">No projects yet</p>}
+            {children.length === 0 && <p className="workspace-group-empty">{group.kind === 'folder' ? 'No sessions yet' : 'No projects yet'}</p>}
         {children.map((tab) => {
           const isActive = tab.id === activeTabId;
           const leaves = workspaceLeaves(tab.root);
@@ -386,17 +400,14 @@ export default function VerticalTabBar({
               : isSSH
             ? `SSH · ${sshProfile ? sshProfileLabel(sshProfile) : 'Saved session'}`
             : `Local · ${compactLocalTabLabel(tab.cwd ?? leaves[0]?.cwd)}`;
-          const locationTitle = isSSH
-            ? sshProfile ? sshProfileLabel(sshProfile) : tab.sshSessionId || 'SSH session'
-            : tab.cwd || 'Home directory';
           const subLabel = awareness?.label ?? locationLabel;
-          const subTitle = awareness?.label ?? locationTitle;
 
           return (
+            <div key={tab.id} className="project-entry">
             <div
-              key={tab.id}
               role="button"
               aria-pressed={isActive}
+              data-tab-id={tab.id}
               aria-label={`${tab.title} ${subLabel}${dirty ? ', unsaved editor changes' : ''}`}
               tabIndex={0}
               className={`vtab-item ${isActive ? 'active' : ''} ${isSSH ? 'ssh' : ''}`}
@@ -437,15 +448,15 @@ export default function VerticalTabBar({
                   />
                 ) : (
                   <div className="vtab-name" title={tab.title}>
+                    <span className={`activity-dot ${awareness?.kind ?? 'unknown'}`} title={awareness?.label ?? 'Activity detection unavailable'} aria-label={awareness?.label ?? 'Activity detection unavailable'} />
                     {tab.title}
                     {dirty && <span className="vtab-dirty-marker" aria-hidden="true">●</span>}
                   </div>
                 )}
-                <div className={`vtab-sub ${awareness?.kind ?? ''}`} title={subTitle}>
-                  {subLabel}
-                </div>
               </div>
               <div className="vtab-meta">
+                {!!awareness?.busyCount && <span className="activity-count running" title="Busy terminals">{awareness.busyCount} busy</span>}
+                {!!awareness?.unseenCount && <span className="activity-count finished" aria-label={`${awareness.unseenCount} unread results`}>{awareness.unseenCount} new</span>}
                 <span className="workspace-group-count" aria-label={`${countLeaves(tab.root)} terminals`}>{countLeaves(tab.root)}</span>
                 {editing && (
                   <Tooltip label="Save tab name" placement="left">
@@ -458,16 +469,14 @@ export default function VerticalTabBar({
                     </button>
                   </Tooltip>
                 )}
-                <Tooltip label={`Close ${tab.title}`} placement="left">
-                  <button
-                    className="vtab-close"
-                    onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
-                    aria-label={`Close ${tab.title}`}
-                  >
-                    <XCloseIcon size="xs" />
-                  </button>
-                </Tooltip>
               </div>
+            </div>
+              <Tooltip label="Add terminal here" placement="right">
+                <button className="directory-terminal-launch" aria-label={`Local terminal in project ${tab.title}`} onClick={() => void onLocalAt?.(group.id, tab.id).catch((error) => setFolderError(String(error)))}><TerminalTabIcon size="sm" /></button>
+              </Tooltip>
+                {/* TODO: Review project SSH action later; retained but not shown.
+                <button aria-label={`SSH terminal in project ${tab.title}`} onClick={() => { setSshTarget({ groupId: group.id, tabId: tab.id }); onSSHConnectionsOpenChange(true); }}><LockIcon size="xs" />SSH</button>
+                */}
             </div>
           );
         })}
@@ -481,7 +490,7 @@ export default function VerticalTabBar({
           ref={tabMenuRef}
           className="vtab-context-menu"
           role="menu"
-          aria-label={`Actions for ${tabMenu.tab.title}`}
+          aria-label={`Actions for ${tabMenu.tab?.title ?? tabMenu.group?.name}`}
           style={{ left: tabMenu.x, top: tabMenu.y }}
           onKeyDown={(event) => {
             if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
@@ -491,15 +500,23 @@ export default function VerticalTabBar({
             items[(current + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus();
           }}
         >
-          <button role="menuitem" onClick={() => { startRename(tabMenu.tab); closeTabMenu(); }}>
-            Rename workspace
+          {tabMenu.group && <>
+            <button role="menuitem" onClick={() => { setEditingGroupId(tabMenu.group!.id); setDraftTitle(tabMenu.group!.name); closeTabMenu(); }}>{tabMenu.group.kind === 'folder' ? 'Rename Library entry' : 'Rename workspace'}</button>
+            <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const group = tabMenu.group!; closeTabMenu(); onWorkspaceAction?.(group.kind === 'folder' ? 'unlink' : 'delete', group.id); }}>{tabMenu.group.kind === 'folder' ? 'Remove from Library…' : 'Delete workspace…'}</button>
+          </>}
+          {tabMenu.tab && <>
+          <button role="menuitem" onClick={() => { startRename(tabMenu.tab!); closeTabMenu(); }}>
+            {groups.some(group => group.id === tabMenu.tab!.groupId && group.kind === 'folder') ? 'Rename session' : 'Rename project'}
           </button>
           {tabMenu.tab.type === 'ssh' && tabMenu.tab.sshSessionId && tabMenu.tab.sshShellReady === true && (
-            <button role="menuitem" onClick={() => { openForwardDialog(tabMenu.tab); closeTabMenu(); }}>Manage local forwards</button>
+            <button role="menuitem" onClick={() => { openForwardDialog(tabMenu.tab!); closeTabMenu(); }}>Manage local forwards</button>
           )}
-          {groups.filter((group) => !group.kind && !groups.find((item) => item.id === tabMenu.tab.groupId)?.kind && group.id !== (tabMenu.tab.groupId ?? groups[0]?.id)).map((group) => (
-            <button key={group.id} role="menuitem" onClick={() => { onMoveWorkspace(tabMenu.tab.id, group.id); onGroupsChange(groups.map((item) => item.id === group.id ? { ...item, collapsed: false } : item)); closeTabMenu(); }}>Move to {group.name}</button>
-          ))}
+          {groups.some((group) => group.id === tabMenu.tab!.groupId && !group.kind && group.directory && tabMenu.tab!.cwd && tabMenu.tab!.cwd !== group.directory) && <>
+            <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const tab = tabMenu.tab!; closeTabMenu(); onWorkspaceAction?.('keep', tab.groupId!, tab.id); }}>Keep in Library…</button>
+            <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const tab = tabMenu.tab!; closeTabMenu(); onWorkspaceAction?.('delete', tab.groupId!, tab.id); }}>Delete project…</button>
+          </>}
+          <button role="menuitem" disabled={countLeaves(tabMenu.tab.root) === 0} onClick={() => { const id = tabMenu.tab!.id; closeTabMenu(); onCloseTab(id); }}>{groups.some(group => group.id === tabMenu.tab!.groupId && group.kind !== 'folder') ? 'Close all terminals…' : 'Close session'}</button>
+          </>}
         </div>,
         document.body,
       )}
@@ -520,6 +537,13 @@ export default function VerticalTabBar({
           </div>
         </div>, document.body,
       )}
+      <RenameDialog open={editingGroupId !== null} title={groups.find(group => group.id === editingGroupId)?.kind === 'folder' ? 'Rename Library entry' : 'Rename workspace'} inputLabel={groups.find(group => group.id === editingGroupId)?.kind === 'folder' ? 'Library entry name' : 'Workspace name'} initialValue={draftTitle}
+        fallbackFocus={() => workspaceAddButtonRef.current} onCancel={() => setEditingGroupId(null)}
+        onSave={async (name) => { if (editingGroupId) { if (onRenameGroup) await onRenameGroup(editingGroupId, name); else onGroupsChange(groups.map((item) => item.id === editingGroupId ? { ...item, name } : item)); } setEditingGroupId(null); }} />
+      {directoryOpen && createPortal(<div className="workspace-modal-overlay"><div ref={directoryDialogRef} className="workspace-modal" role="dialog" aria-modal="true" aria-label="Main directory settings">
+        <div className="workspace-modal-header"><h2>Workspace location</h2><button aria-label="Close main directory settings" onClick={() => setDirectoryOpen(false)}><XCloseIcon size="sm" /></button></div>
+        <MainDirectory directory={mainDirectory ?? null} onChange={async (directory) => { await onMainDirectoryChange?.(directory); setDirectoryOpen(false); }} />
+      </div></div>, document.body)}
       {workspaceModalOpen && createPortal(
         <div
           className="workspace-modal-overlay"

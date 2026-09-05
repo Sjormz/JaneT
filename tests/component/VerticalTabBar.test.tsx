@@ -52,41 +52,99 @@ function renderTabs(overrides?: Partial<React.ComponentProps<typeof VerticalTabB
 }
 
 describe('VerticalTabBar', () => {
+  it('opens the project form for an empty-state destination request', async () => {
+    const handled = vi.fn();
+    renderTabs({ creatorOpen: true, entryRequest: { action: 'create', groupId: 'clients' }, onEntryRequestHandled: handled });
+    expect(await screen.findByRole('heading', { name: 'Create project' })).toBeInTheDocument();
+    expect(handled).toHaveBeenCalled();
+  });
+  it('opens a Library session form for an empty-state destination request', async () => {
+    renderTabs({ groups: [{ id: 'repo', name: 'JaneT', kind: 'folder', directory: 'C:/repo' }], creatorOpen: true,
+      entryRequest: { action: 'create', groupId: 'repo' }, onEntryRequestHandled: vi.fn() });
+    expect(await screen.findByRole('heading', { name: 'New session in JaneT' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeInTheDocument();
+  });
+  it('separates temporary delete/keep actions from non-destructive Library removal', () => {
+    const action = vi.fn();
+    const view = renderTabs({ groups: [{ id: 'default', name: 'Work', directory: 'C:/temp/Work' }],
+      tabs: [{ ...tabs[0], groupId: 'default', cwd: 'C:/temp/Work/App' }], onWorkspaceAction: action });
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^Main app Local/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Keep in Library…' }));
+    expect(action).toHaveBeenCalledWith('keep', 'default', 'tab-1');
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^Main app Local/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete project…' }));
+    expect(action).toHaveBeenCalledWith('delete', 'default', 'tab-1');
+    view.unmount();
+    renderTabs({ groups: [{ id: 'linked', name: 'Repo', kind: 'folder', directory: 'C:/repo' }], tabs: [], onWorkspaceAction: action });
+    expect(screen.getByRole('heading', { name: 'Library' })).toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^Repo/, expanded: true }));
+    expect(screen.queryByRole('menuitem', { name: 'Delete workspace…' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Remove from Library…' }));
+    expect(action).toHaveBeenCalledWith('unlink', 'linked');
+  });
   it('renames a parent group and cancels edits with Escape', () => {
     renderTabs();
-    fireEvent.click(screen.getByRole('button', { name: 'Rename workspace Clients' }));
-    const input = screen.getByRole('textbox', { name: 'Group name' });
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^Clients/, expanded: true }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename workspace' }));
+    const input = screen.getByRole('textbox', { name: 'Workspace name' });
     fireEvent.change(input, { target: { value: 'Cancelled' } });
     fireEvent.keyDown(input, { key: 'Escape' });
     expect(screen.getByRole('button', { name: /^Clients/, expanded: true })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Rename workspace Clients' }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Group name' }), { target: { value: 'Team' } });
-    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Group name' }), { key: 'Enter' });
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^Clients/, expanded: true }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename workspace' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Workspace name' }), { target: { value: 'Team' } });
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Workspace name' }), { key: 'Enter' });
     expect(screen.getByRole('button', { name: /^Team/, expanded: true })).toBeInTheDocument();
   });
   it('labels mixed workspaces by their actual terminal types', () => {
     renderTabs({ tabs: [{ ...tabs[0], root: { id: 'mix', type: 'split', direction: 'vertical', sizes: [1, 1], children: [
       { id: 'local', type: 'leaf', terminalType: 'local' }, { id: 'remote', type: 'leaf', terminalType: 'ssh' },
     ] } }] });
-    expect(screen.getByText('Local + SSH · 2 terminals')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Local \+ SSH · 2 terminals/ })).toBeInTheDocument();
+    expect(document.querySelector('.vtab-sub')).toBeNull();
   });
-  it('shows a close action even when there is only one tab', () => {
-    renderTabs({ tabs: [tabs[0]] });
-
-    expect(screen.getByRole('button', { name: /close main app/i })).toBeInTheDocument();
+  it('offers close deliberately through the keyboard context menu', () => {
+    const onCloseTab = vi.fn();
+    renderTabs({ tabs: [tabs[0]], onCloseTab });
+    expect(screen.queryByRole('button', { name: /close main app/i })).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('button', { name: /^Main app Local/ }), { key: 'F10', shiftKey: true });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Close session' }));
+    expect(onCloseTab).toHaveBeenCalledWith(tabs[0].id);
   });
 
   it('labels the section as Tabs and creates a local terminal from its visible action', () => {
-    const onNewTab = vi.fn();
-    renderTabs({ onNewTab });
+    const onLocalAt = vi.fn().mockResolvedValue(undefined);
+    renderTabs({ onLocalAt });
 
     expect(screen.getByText('Workspaces')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'SSH connections' })).toHaveAttribute('aria-expanded', 'false');
-    fireEvent.click(screen.getByRole('button', { name: /^new local terminal tab$/i }));
-    expect(onNewTab).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('button', { name: 'New local terminal tab' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Local terminal in My workspaces' }));
+    expect(onLocalAt).toHaveBeenCalledWith('default');
   });
 
-  it('opens and closes SSH connection management from the Tabs section', () => {
+  it('hides sidebar SSH entry points pending review while retaining Local actions', () => {
+    renderTabs({ sshConnectionsOpen: true });
+    expect(screen.queryByRole('button', { name: /^SSH terminal in/ })).not.toBeInTheDocument();
+    expect(document.getElementById('vtab-ssh-connections')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Local terminal in My workspaces' })).toBeInTheDocument();
+  });
+
+  it('keeps compact project launch controls separate from row selection', () => {
+    const onLocalAt = vi.fn().mockResolvedValue(undefined);
+    const onSelectTab = vi.fn();
+    renderTabs({ onLocalAt, onSelectTab });
+    const launch = screen.getByRole('button', { name: `Local terminal in project ${tabs[0].title}` });
+    expect(launch).toHaveClass('directory-terminal-launch');
+    expect(launch).toHaveAttribute('data-tooltip-label', 'Add terminal here');
+    expect(launch.closest('.vtab-item')).toBeNull();
+    expect(launch.textContent).toBe('');
+    fireEvent.click(launch);
+    expect(onLocalAt).toHaveBeenCalledWith('default', tabs[0].id);
+    expect(onSelectTab).not.toHaveBeenCalled();
+  });
+
+  // TODO: Restore these integration checks when sidebar SSH entry points are reviewed.
+  it.skip('opens and closes SSH connection management from the Tabs section', () => {
     const onSSHConnectionsOpenChange = vi.fn();
 
     function Harness() {
@@ -117,7 +175,7 @@ describe('VerticalTabBar', () => {
     }
 
     render(<Harness />);
-    const toggle = screen.getByRole('button', { name: 'SSH connections' });
+    const toggle = screen.getByRole('button', { name: 'SSH terminal in My workspaces' });
     fireEvent.click(toggle);
 
     expect(onSSHConnectionsOpenChange).toHaveBeenLastCalledWith(true);
@@ -130,7 +188,7 @@ describe('VerticalTabBar', () => {
     expect(screen.queryByText('Saved connections')).not.toBeInTheDocument();
   });
 
-  it('forwards SSH sessions and saved-profile changes from the embedded manager', async () => {
+  it.skip('forwards SSH sessions and saved-profile changes from the embedded manager', async () => {
     const sshConnect = vi.fn().mockResolvedValue({ connected: true });
     Object.defineProperty(window, 'janet', {
       configurable: true,
@@ -328,10 +386,10 @@ describe('VerticalTabBar', () => {
         renderTabs({ onRenameTab });
     const opener = screen.getByRole('button', { name: /Main app Local/i });
 
-    expect(screen.queryByRole('button', { name: /^rename workspace$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^rename project$/i })).not.toBeInTheDocument();
     fireEvent.contextMenu(opener);
     expect(screen.getByRole('menu').parentElement).toBe(document.body);
-    fireEvent.click(screen.getByRole('menuitem', { name: /rename workspace/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /rename project/i }));
     const nameInput = screen.getByRole('textbox', { name: /^tab name$/i });
     expect(nameInput).toHaveAttribute('maxlength', '256');
     fireEvent.change(nameInput, { target: { value: 'Renamed' } });
@@ -352,8 +410,8 @@ describe('VerticalTabBar', () => {
     fireEvent.keyDown(opener, { key: 'ContextMenu' });
 
     const menu = screen.getByRole('menu', { name: 'Actions for Main app' });
-    const rename = screen.getByRole('menuitem', { name: 'Rename workspace' });
-    const save = screen.getByRole('menuitem', { name: 'Move to Clients' });
+    const rename = screen.getByRole('menuitem', { name: 'Rename project' });
+    const save = screen.getByRole('menuitem', { name: 'Close session' });
     await waitFor(() => expect(rename).toHaveFocus());
     fireEvent.keyDown(menu, { key: 'ArrowUp' });
     expect(save).toHaveFocus();
@@ -364,7 +422,7 @@ describe('VerticalTabBar', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 
     fireEvent.keyDown(opener, { key: 'F10', shiftKey: true });
-    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Rename workspace' })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Rename project' })).toHaveFocus());
   });
 
   it('closes the tab context menu when clicking outside it', () => {
@@ -419,7 +477,7 @@ describe('VerticalTabBar', () => {
     });
     renderTabs({ tabs: [{ ...tabs[1], sshShellReady: true }], activeTabId: 'tab-2' });
 
-    fireEvent.contextMenu(screen.getByRole('button', { name: /close ssh box/i }).closest('.vtab-item')!);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^SSH box SSH/i }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Manage local forwards' }));
     const dialog = await screen.findByRole('dialog', { name: 'SSH local forwards' });
     expect(dialog.parentElement?.parentElement).toBe(document.body);
@@ -454,7 +512,7 @@ describe('VerticalTabBar', () => {
       value: { sshListLocalForwards: vi.fn().mockResolvedValue(running), sshStartLocalForward: vi.fn(), sshStopLocalForward },
     });
     renderTabs({ tabs: [{ ...tabs[1], sshShellReady: true }], activeTabId: 'tab-2' });
-    fireEvent.contextMenu(screen.getByRole('button', { name: /close ssh box/i }).closest('.vtab-item')!);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^SSH box SSH/i }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Manage local forwards' }));
     await screen.findByText('127.0.0.1:43123');
     await screen.findByText('127.0.0.1:43124');
@@ -477,7 +535,7 @@ describe('VerticalTabBar', () => {
     });
     const readyTab = { ...tabs[1], sshShellReady: true };
     const view = renderTabs({ tabs: [readyTab], activeTabId: 'tab-2' });
-    fireEvent.contextMenu(screen.getByRole('button', { name: /close ssh box/i }).closest('.vtab-item')!);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^SSH box SSH/i }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Manage local forwards' }));
     expect(await screen.findByRole('dialog', { name: 'SSH local forwards' })).toBeInTheDocument();
 
@@ -508,7 +566,7 @@ describe('VerticalTabBar', () => {
     });
     const readyTab = { ...tabs[1], sshShellReady: true };
     const view = renderTabs({ tabs: [readyTab], activeTabId: 'tab-2' });
-    fireEvent.contextMenu(screen.getByRole('button', { name: /close ssh box/i }).closest('.vtab-item')!);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^SSH box SSH/i }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Manage local forwards' }));
     fireEvent.change(await screen.findByRole('textbox', { name: 'Destination host' }), { target: { value: '127.0.0.1' } });
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Destination port' }), { target: { value: '9000' } });
@@ -543,7 +601,7 @@ describe('VerticalTabBar', () => {
       value: { sshListLocalForwards: vi.fn().mockResolvedValue([]), sshStartLocalForward, sshStopLocalForward },
     });
     const view = renderTabs({ tabs: [{ ...tabs[1], sshShellReady: true }], activeTabId: 'tab-2' });
-    fireEvent.contextMenu(screen.getByRole('button', { name: /close ssh box/i }).closest('.vtab-item')!);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^SSH box SSH/i }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Manage local forwards' }));
     fireEvent.change(await screen.findByRole('textbox', { name: 'Destination host' }), { target: { value: '127.0.0.1' } });
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Destination port' }), { target: { value: '9000' } });
@@ -558,11 +616,11 @@ describe('VerticalTabBar', () => {
     }));
   });
 
-  it('shows scan-friendly subtitles for local and SSH tabs', () => {
+  it('uses single-line rows without local or SSH subtitles', () => {
     renderTabs();
 
-    expect(screen.getByText('Local · repo')).toBeInTheDocument();
-    expect(screen.getByText('SSH · pckpr@box.local:22')).toBeInTheDocument();
+    expect(screen.queryByText('Local · repo')).not.toBeInTheDocument();
+    expect(screen.queryByText('SSH · pckpr@box.local:22')).not.toBeInTheDocument();
   });
 
   it('exposes the active terminal tab to assistive technology', () => {
@@ -577,7 +635,7 @@ describe('VerticalTabBar', () => {
     const status: AgentStatus = { kind: 'finished', label: 'Hermes · Turn finished' };
     renderTabs({ awarenessByTab: { 'tab-2': status } });
 
-    expect(screen.getByText('Hermes · Turn finished')).toHaveClass('vtab-sub', 'finished');
+    expect(screen.queryByText('Hermes · Turn finished')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /SSH box Hermes · Turn finished/i })).toBeInTheDocument();
   });
 
@@ -609,7 +667,7 @@ describe('VerticalTabBar', () => {
     expect(group).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('button', { name: /Main app Local/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'New workspace or project' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Workspace', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Workspace name' }), { target: { value: 'Research' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
     expect(screen.getByRole('button', { name: /^Research/ })).toBeInTheDocument();
@@ -622,7 +680,7 @@ describe('VerticalTabBar', () => {
     renderTabs({ onWorkspaceTabLaunch: launch });
     fireEvent.click(screen.getByRole('button', { name: 'New workspace or project' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Workspace name' }), { target: { value: 'Research' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create workspace', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
     fireEvent.click(screen.getByRole('button', { name: 'New project in Research' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Experiment' } });
     fireEvent.change(screen.getByRole('combobox', { name: 'Initial terminals' }), { target: { value: '3' } });
@@ -636,7 +694,7 @@ describe('VerticalTabBar', () => {
   it('requires confirmation before reducing the configured terminal count', () => {
     renderTabs();
     fireEvent.click(screen.getByRole('button', { name: 'New workspace or project' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Project', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Project' }));
     fireEvent.change(screen.getByRole('combobox', { name: 'Initial terminals' }), { target: { value: '3' } });
     fireEvent.change(screen.getByRole('combobox', { name: 'Initial terminals' }), { target: { value: '1' } });
     expect(screen.getAllByRole('button', { name: 'Local terminal' })).toHaveLength(3);
@@ -644,12 +702,14 @@ describe('VerticalTabBar', () => {
     expect(screen.getAllByRole('button', { name: 'Local terminal' })).toHaveLength(1);
   });
 
-  it('moves a workspace through an accessible menu without closing it', () => {
+  it('keeps project actions correctly named without workspace move destinations', () => {
     const move = vi.fn(), close = vi.fn();
     renderTabs({ onMoveWorkspace: move, onCloseTab: close });
     fireEvent.contextMenu(screen.getByRole('button', { name: /Main app Local/ }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Move to Clients' }));
-    expect(move).toHaveBeenCalledWith('tab-1', 'clients');
+    expect(screen.getByRole('menuitem', { name: 'Rename project' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Rename workspace' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /^Move to / })).not.toBeInTheDocument();
+    expect(move).not.toHaveBeenCalled();
     expect(close).not.toHaveBeenCalled();
   });
 

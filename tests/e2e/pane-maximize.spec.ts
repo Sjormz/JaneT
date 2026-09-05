@@ -698,9 +698,7 @@ test('stages and commits changes from Source Control', async ({}, testInfo) => {
 
     await app.page.bringToFront();
     const sourceControl = app.page.locator('.git-tree');
-    await expect(app.page.locator('.workspace-tools-following')).toContainText(
-      `Followingrepo${repoPath.replace(/\\/g, '/')}`,
-    );
+    await expect(app.page.locator('.workspace-tools-following')).toHaveCount(0);
     await expect(sourceControl.getByRole('button', { name: 'Add worktree with new branch' })).toBeVisible({ timeout: 10_000 });
     await expect(sourceControl.locator('.git-worktree-item.current[aria-current="location"]')).toBeVisible();
     const currentWorktree = sourceControl.getByRole('button', {

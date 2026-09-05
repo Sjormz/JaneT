@@ -34,7 +34,7 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
     on: vi.fn(), once: vi.fn(), loadURL: vi.fn(),
   };
   const setAppUserModelId = vi.fn();
-  const Notification = vi.fn(function (this: any) {
+  const Notification = vi.fn(function (this: any, _options?: any) {
     if (options.constructorFails) throw new Error('constructor failed');
     this.on = notificationOn;
     this.show = notificationShow;
@@ -86,6 +86,18 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
 }
 
 describe('main notification bridge', () => {
+  it('routes activation to the originating pane and reports asynchronous delivery failure', async () => {
+    const bridge = await loadMain();
+    const target = { tabId: 'project', termId: 'pane' };
+    await bridge.invoke({ ...validPayload, target });
+    if (process.platform === 'win32') {
+      const xml = bridge.Notification.mock.calls[0][0].toastXml;
+      bridge.notificationHandleActivation.mock.calls[0][0]({ arguments: /launch="([^"]+)"/.exec(xml)![1] });
+    } else bridge.notificationOn.mock.calls.find(([name]) => name === 'click')![1]();
+    expect(bridge.webContents.send).toHaveBeenCalledWith('notifications:target', target);
+    bridge.notificationOn.mock.calls.find(([name]) => name === 'failed')![1]();
+    await expect(bridge.invokeChannel('notifications:status')).resolves.toMatch(/delivery failed/i);
+  });
   it('shows one notification only when every delivery gate passes', async () => {
     const bridge = await loadMain();
     await expect(bridge.invoke(validPayload)).resolves.toBe(true);

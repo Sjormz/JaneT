@@ -188,7 +188,9 @@ function restorePaneTreeWithinBudget(
 
   if (node.type === 'split') {
     const direction = node.direction === 'horizontal' ? 'horizontal' : 'vertical';
-    if (!Array.isArray(node.children) || node.children.length === 0) return null;
+    if (!Array.isArray(node.children)) return null;
+    if (node.children.length === 0) return depth === 0 && Array.isArray(node.sizes) && node.sizes.length === 0
+      ? { id: genId('split'), type: 'split', direction, children: [], sizes: [] } : null;
 
     const restoredChildren: Array<{ node: PaneNode; index: number }> = [];
     for (const [index, child] of node.children.entries()) {
@@ -291,7 +293,7 @@ function countSavedPaneLeaves(root: unknown, limit: number): number | null {
     if (candidate.type === 'leaf') {
       leaves += 1;
       if (leaves > limit) return null;
-    } else if (candidate.type === 'split' && Array.isArray(candidate.children) && candidate.children.length > 0) {
+    } else if (candidate.type === 'split' && Array.isArray(candidate.children) && (candidate.children.length > 0 || depth === 0)) {
       if (candidate.children.length > MAX_PANE_TREE_NODES - nodes) return null;
       for (const child of candidate.children) pending.push({ node: child, depth: depth + 1 });
     } else {

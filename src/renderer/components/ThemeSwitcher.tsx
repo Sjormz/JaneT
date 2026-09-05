@@ -113,6 +113,9 @@ export default function ThemeSwitcher({
         </div>
       </div>
       <div className="theme-section notification-settings">
+        <button type="button" className="shortcut-settings-button" onClick={() => {
+          void window.janet.getNotificationStatus().then(message => setDiagnosticsFeedback(message ?? 'Notifications supported. OS Do Not Disturb and permissions can still suppress them.')).catch(() => setDiagnosticsFeedback('Could not check notification status.'));
+        }}>Check notification delivery</button>
         <label className="notification-toggle">
           <input type="checkbox" checked={notificationsEnabled} onChange={(event) => onNotificationsEnabledChange(event.currentTarget.checked)} />
           Notify when long commands finish while JaneT is unfocused

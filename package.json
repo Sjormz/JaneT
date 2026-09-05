@@ -1,6 +1,6 @@
 {
   "name": "janet",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "description": "A focused cross-platform terminal workspace with SSH, file browsing, and Git tools",
   "desktopName": "janet",
   "main": "dist/main/index.js",
@@ -180,8 +180,10 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "simple-git": "^3.36.0",
+    "smol-toml": "1.7.2",
     "ssh2": "^1.17.0",
-    "ssh2-sftp-client": "^12.1.1"
+    "ssh2-sftp-client": "^12.1.1",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@fontsource-variable/inter": "^5.3.0",

@@ -95,6 +95,70 @@ async function replaceEditorContent(page: Page, editor: Locator, content: string
   await expect.poll(() => renderedEditorLines(editor)).toEqual(content.split('\n'));
 }
 
+test('project remains discoverable with zero terminals after close and restart', async () => {
+  test.setTimeout(60000);
+  const fixture = createFixture();
+  const userData = createUserData(fixture.directory);
+  const settingsPath = path.join(userData, 'settings.json');
+  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  settings.session.groups = [{ id: 'work', name: 'Work', directory: fixture.directory }];
+  settings.session.tabs[0].groupId = 'work';
+  fs.writeFileSync(settingsPath, JSON.stringify(settings));
+  let app: ElectronApplication | undefined;
+  const launch = () => electron.launch({ args: ['.'], cwd: root,
+    env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }) });
+  try {
+    app = await launch();
+    let page = await app.firstWindow();
+    await page.getByRole('button', { name: /^Close terminal —/ }).click();
+    await page.getByRole('button', { name: 'Close pane', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Project has no terminals' })).toBeVisible();
+    await expect(page.locator('.vtab-item').filter({ hasText: 'Editor fixture' })).toBeVisible();
+    await expect(page.locator('[data-terminal-id]')).toHaveCount(0);
+    await expect.poll(() => JSON.parse(fs.readFileSync(settingsPath, 'utf8')).session.tabs[0].root.children).toEqual([]);
+    expect(fs.readFileSync(fixture.filePath, 'utf8')).toContain('answer = 41');
+    await forceClose(app);
+    app = await launch();
+    page = await app.firstWindow();
+    await expect(page.getByRole('region', { name: 'Project has no terminals' })).toBeVisible();
+    await expect(page.locator('.vtab-item').filter({ hasText: 'Editor fixture' })).toBeVisible();
+    await expect(page.locator('[data-terminal-id]')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Open terminal', exact: true }).click();
+    await expect(page.locator('[data-terminal-id]')).toHaveCount(1);
+    await expect(page.locator('textarea[data-shell-ready="true"]')).toBeAttached();
+  } finally {
+    await forceClose(app);
+    removeFixture(userData, USER_DATA_PREFIX);
+    removeFixture(fixture.directory, FIXTURE_PREFIX);
+  }
+});
+
+test('text-size slider resizes an open editor without reopening the file', async () => {
+  const fixture = createFixture();
+  const userData = createUserData(fixture.directory);
+  let app: ElectronApplication | undefined;
+  try {
+    app = await electron.launch({ args: ['.'], cwd: root,
+      env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }) });
+    const page = await app.firstWindow();
+    await page.getByRole('button', { name: `Open file ${fixture.fileName}` }).click();
+    const lines = page.locator('.monaco-editor-host .view-lines').first();
+    await expect(lines).toHaveCSS('font-size', '14px');
+    await page.getByRole('button', { name: 'Open settings', exact: true }).click();
+    const slider = page.getByRole('slider', { name: 'Terminal and editor text size' });
+    await slider.focus();
+    await slider.press('Home');
+    await expect(lines).toHaveCSS('font-size', '10px');
+    await slider.press('End');
+    await expect(lines).toHaveCSS('font-size', '24px');
+    await expect.poll(async () => JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')).fontSize).toBe(24);
+  } finally {
+    await forceClose(app);
+    removeFixture(userData, USER_DATA_PREFIX);
+    removeFixture(fixture.directory, FIXTURE_PREFIX);
+  }
+});
+
 test('edits a local file with Monaco under the packaged JaneT origin', async ({}, testInfo) => {
   test.setTimeout(90_000);
   let app: ElectronApplication | undefined;

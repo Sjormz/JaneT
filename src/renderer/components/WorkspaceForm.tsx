@@ -205,7 +205,7 @@ export default function WorkspaceForm({ sshProfiles, groups, defaultGroupId, fol
         if (count < terminals.length) setPendingRemoval({ kind: 'count', count });
         else setTerminals((current) => [...current, ...Array.from({ length: count - current.length }, (): WorkspaceTerminal => ({ type: 'local' }))]);
       }}>{Array.from({ length: 16 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1} {index === 0 ? 'terminal' : 'terminals'}</option>)}</select></label>
-      <p className="workspace-form-help">Choose local or SSH for each terminal. Your project and layout restore automatically when JaneT reopens.</p>
+      <p className="workspace-form-help">Choose local or SSH for each terminal. Your {folder ? 'session' : 'project'} and layout restore automatically when JaneT reopens.</p>
       <div className="workspace-terminal-list">
         {terminals.map((terminal, index) => (
           <div className="workspace-terminal-entry" key={index} role="group" aria-label={`Terminal ${index + 1} configuration`}>

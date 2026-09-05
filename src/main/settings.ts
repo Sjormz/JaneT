@@ -888,7 +888,7 @@ function validateRuntimePaneTree(root: unknown, leafLimit: number): number | nul
       || Object.keys(candidate).some((key) => !SAVED_PANE_SPLIT_KEYS.has(key))
       || (candidate.direction !== 'horizontal' && candidate.direction !== 'vertical')
       || !Array.isArray(candidate.children)
-      || candidate.children.length === 0
+      || (candidate.children.length === 0 && depth !== 0)
       || candidate.children.length > MAX_SAVED_PANE_NODES - nodes
       || !Array.isArray(candidate.sizes)
       || candidate.sizes.length !== candidate.children.length
@@ -918,6 +918,10 @@ function cloneSavedPaneNodeWithinBudget(
   budget.nodesRemaining -= 1;
   const candidate = node as Record<string, unknown>;
   if (candidate.type === 'split') {
+    if (depth === 0 && Array.isArray(candidate.children) && candidate.children.length === 0
+      && Array.isArray(candidate.sizes) && candidate.sizes.length === 0) {
+      return { type: 'split', direction: candidate.direction === 'horizontal' ? 'horizontal' : 'vertical', children: [], sizes: [] };
+    }
     const children: SavedPaneNode[] = [];
     for (const child of Array.isArray(candidate.children) ? candidate.children : []) {
       const cloned = cloneSavedPaneNodeWithinBudget(child, depth + 1, budget);

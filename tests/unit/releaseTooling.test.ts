@@ -166,6 +166,14 @@ describe('release tooling', () => {
     expect(builds).toEqual([
       expect.objectContaining({
         absWorkingDir: projectRoot,
+        entryPoints: ['src/main/agent-cli.ts'],
+        outfile: 'dist/main/agent-cli.cjs',
+        bundle: true,
+        platform: 'node',
+        external: ['electron', 'node-pty', 'ssh2', 'ssh2-sftp-client', 'simple-git'],
+      }),
+      expect.objectContaining({
+        absWorkingDir: projectRoot,
         entryPoints: ['src/main/index.ts'],
         outfile: 'dist/main/index.js',
         bundle: true,

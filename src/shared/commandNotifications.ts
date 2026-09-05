@@ -1,4 +1,5 @@
 export interface CommandNotificationPayload {
+  target?: { tabId: string; termId: string };
   durationMs: number;
   outcome: 'success' | 'failure' | 'unknown';
   tabLabel: string;
@@ -29,7 +30,7 @@ const boundedLabel = (value: unknown, maximum: number) => typeof value === 'stri
 
 export function parseCommandNotificationPayload(value: unknown): CommandNotificationPayload | null {
   try {
-    const payload = ownDataValues(value, PAYLOAD_KEYS);
+    const payload = ownDataValues(value, PAYLOAD_KEYS) ?? ownDataValues(value, [...PAYLOAD_KEYS, 'target']);
     if (!payload
       || !Number.isSafeInteger(payload.durationMs) || Number(payload.durationMs) < 0
       || !['success', 'failure', 'unknown'].includes(payload.outcome as string)
@@ -45,7 +46,15 @@ export function parseCommandNotificationPayload(value: unknown): CommandNotifica
       context = { kind: 'ssh', hostLabel: sshContext.hostLabel as string };
     }
 
+    let target: CommandNotificationPayload['target'];
+    if (payload.target !== undefined) {
+      const ids = ownDataValues(payload.target, ['tabId', 'termId']);
+      if (!ids || !boundedLabel(ids.tabId, 256) || !boundedLabel(ids.termId, 256)
+        || /[\u0000-\u001f\u007f]/.test(String(ids.tabId) + String(ids.termId))) return null;
+      target = { tabId: ids.tabId as string, termId: ids.termId as string };
+    }
     return {
+      ...(target ? { target } : {}),
       durationMs: payload.durationMs as number,
       outcome: payload.outcome as CommandNotificationPayload['outcome'],
       tabLabel: payload.tabLabel as string,

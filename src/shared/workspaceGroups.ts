@@ -9,6 +9,18 @@ export interface WorkspaceGroup {
 export const DEFAULT_WORKSPACE_GROUP: WorkspaceGroup = { id: 'default', name: 'My workspaces' };
 export const MAX_WORKSPACE_GROUPS = 64;
 
+/** Rebase only local path descendants, not similarly prefixed siblings. */
+export function rebaseDirectory(value: string | undefined, source: string, target: string): string | undefined {
+  if (!value) return value;
+  const normalized = value.replaceAll('\\', '/');
+  const base = source.replaceAll('\\', '/').replace(/\/$/, '');
+  const windows = /^[a-z]:|^\/\//i.test(base);
+  const candidate = windows ? normalized.toLowerCase() : normalized;
+  const prefix = windows ? base.toLowerCase() : base;
+  if (candidate !== prefix && !candidate.startsWith(`${prefix}/`)) return value;
+  return target.replace(/[\\/]$/, '') + normalized.slice(base.length).replaceAll('/', target.includes('\\') ? '\\' : '/');
+}
+
 export function isWorkspaceGroup(value: unknown): value is WorkspaceGroup {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const group = value as WorkspaceGroup;

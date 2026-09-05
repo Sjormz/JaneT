@@ -1,9 +1,10 @@
 import React, { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
-import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, type WorkspaceGroup } from '../shared/workspaceGroups';
+import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, rebaseDirectory, type WorkspaceGroup } from '../shared/workspaceGroups';
+import EmptyWorkspace, { type WorkspaceEntryRequest } from './components/EmptyWorkspace';
 import Titlebar from './components/Titlebar';
 import VerticalTabBar from './components/VerticalTabBar';
 import SplitPane from './components/SplitPane';
-import { disposeCachedTerminal } from './components/TerminalPane';
+import { disposeCachedTerminal, updateTerminalStartingDirectory } from './components/TerminalPane';
 import Sidebar, { WorkspaceToolSection } from './components/Sidebar';
 import StatusBar from './components/StatusBar';
 import CommandPalette, { CommandAction } from './components/CommandPalette';
@@ -321,6 +322,7 @@ function AppInner({ initialSettings, persistSettings }: {
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
   const [workspaceCreatorOpen, setWorkspaceCreatorOpen] = useState(false);
+  const [workspaceEntryRequest, setWorkspaceEntryRequest] = useState<WorkspaceEntryRequest>();
   const [sessionSaveFailed, setSessionSaveFailed] = useState(false);
   const [maximizedLeafByTab, setMaximizedLeafByTabState] = useState<Record<string, string | null>>(
     initialState.maximizedLeafByTab,
@@ -542,6 +544,9 @@ function AppInner({ initialSettings, persistSettings }: {
     setFocusedTerminalIdState(value);
   }, []);
   const [awarenessByTerminal, setAwarenessByTerminal] = useState<Record<string, AgentAwareness>>({});
+  const agentRunsRef = useRef(new Map<string, { sessionId: string; turnId: string; started: number }>());
+  const agentOwnedTerminalsRef = useRef(new Set<string>());
+  const nativeWindowFocusedRef = useRef(document.hasFocus());
   const [localTransportByTerminal, setLocalTransportByTerminal] = useState<Record<string, TerminalTransportStatus>>({});
   const [terminalStatusAnnouncement, setTerminalStatusAnnouncement] = useState({ sequence: 0, text: '' });
   const announcedTerminalStatusByIdRef = useRef(new Map<string, string>());
@@ -698,6 +703,7 @@ function AppInner({ initialSettings, persistSettings }: {
   }, [markSshSessionDisconnected, sshProfiles]);
 
   const persistSession = useCallback(async (): Promise<boolean> => {
+    if (directoryRenameBusy.current) return false;
     const currentActiveTabId = activeTabIdRef.current;
     const currentFocusedTerminalId = focusedTerminalIdRef.current;
     const currentMaximizedLeafByTab = maximizedLeafByTabRef.current;
@@ -858,9 +864,28 @@ function AppInner({ initialSettings, persistSettings }: {
   const handleAgentEvent = useCallback((termId: string, event: AgentLifecycleEvent) => {
     const owner = tabsRef.current.find((tab) => getAllLeafIds(tab.root).includes(termId));
     if (!owner) return;
+    if (event.provider !== 'shell') {
+      agentOwnedTerminalsRef.current.add(termId);
+      const run = agentRunsRef.current.get(termId);
+      if (event.event === 'turn.start' && event.turnId && (!run || run.turnId !== event.turnId || run.sessionId !== event.sessionId)) {
+        agentRunsRef.current.set(termId, { sessionId: event.sessionId, turnId: event.turnId, started: performance.now() });
+      }
+      if (event.event === 'turn.end' && run?.sessionId === event.sessionId && run.turnId === event.turnId) {
+        agentRunsRef.current.delete(termId);
+        const leaf = findLeaf(owner.root, termId)!;
+        void window.janet.notifyCommandCompleted({
+          target: { tabId: owner.id, termId }, durationMs: Math.max(0, Math.round(performance.now() - run.started)),
+          outcome: event.outcome === 'failed' ? 'failure' : event.outcome === 'succeeded' ? 'success' : 'unknown',
+          tabLabel: owner.title.slice(0, 256) || 'Project', paneLabel: `${event.provider} · ${displayPaneTitle(leaf, owner.type)}`.slice(0, 256),
+          context: (leaf.terminalType ?? owner.type) === 'ssh' ? { kind: 'ssh', hostLabel: 'SSH' } : { kind: 'local' },
+        }).catch(() => {});
+      }
+      if (event.event === 'session.end' && run?.sessionId === event.sessionId) agentRunsRef.current.delete(termId);
+    }
+    const seen = owner.id === activeTabIdRef.current && nativeWindowFocusedRef.current;
     setAwarenessByTerminal((current) => {
       const nextAwareness = applyAgentEvent(
-        current[termId], event, Date.now(), owner.id === activeTabIdRef.current,
+        current[termId], event, Date.now(), seen,
       );
       if (nextAwareness === current[termId]) return current;
       terminalStatusAnnouncementEligibleIdsRef.current.add(termId);
@@ -869,6 +894,23 @@ function AppInner({ initialSettings, persistSettings }: {
       const { [termId]: _removed, ...next } = current;
       return next;
     });
+  }, []);
+
+  useEffect(() => window.janet.onAgentActivity?.(({ id, event }) => handleAgentEvent(id, event)), [handleAgentEvent]);
+
+  useEffect(() => {
+    const acknowledge = (focused: boolean) => {
+      nativeWindowFocusedRef.current = focused;
+      const tab = tabsRef.current.find(tab => tab.id === activeTabIdRef.current);
+      if (!tab || !focused) return;
+      const ids = new Set(getAllLeafIds(tab.root));
+      setAwarenessByTerminal(current => Object.fromEntries(Object.entries(current).map(([id, state]) => [id, ids.has(id) ? acknowledgeAgentAwareness(state) : state])));
+    };
+    let live = true;
+    let received = false;
+    const unsubscribe = window.janet.onWindowFocus?.(focused => { received = true; acknowledge(focused); });
+    void window.janet.isWindowFocused?.().then(focused => { if (live && !received) acknowledge(focused); });
+    return () => { live = false; unsubscribe?.(); };
   }, []);
 
   const resolveCommandHistoryContext = useCallback((tabId: string, termId: string): CommandHistoryEntry['context'] | null => {
@@ -891,6 +933,8 @@ function AppInner({ initialSettings, persistSettings }: {
   const handleSemanticCommandStarted = useCallback((
     tabId: string, termId: string, event: SemanticCommandStartedEvent,
   ) => {
+    handleAgentEvent(termId, { version: 1, provider: 'shell', event: 'turn.start', sessionId: termId, turnId: String(event.startedAt) });
+    if (!event.command) return;
     const key = `${tabId}\u0000${termId}\u0000${event.startedAt}\u0000${event.command}`;
     if (pendingCommandHistoryRunsRef.current.has(key)) return;
     const run: { id: string; termId: string; removed?: boolean } = { id: crypto.randomUUID(), termId };
@@ -918,11 +962,12 @@ function AppInner({ initialSettings, persistSettings }: {
         console.error('Failed to save command history:', error);
       }
     });
-  }, [resolveCommandHistoryContext]);
+  }, [resolveCommandHistoryContext, handleAgentEvent]);
 
   const handleSemanticCommandCancelled = useCallback((
     tabId: string, termId: string, event: SemanticCommandStartedEvent,
   ) => {
+    handleAgentEvent(termId, { version: 1, provider: 'shell', event: 'turn.end', sessionId: termId, turnId: String(event.startedAt), outcome: 'interrupted' });
     const key = `${tabId}\u0000${termId}\u0000${event.startedAt}\u0000${event.command}`;
     const run = pendingCommandHistoryRunsRef.current.get(key);
     if (!run) return;
@@ -933,7 +978,7 @@ function AppInner({ initialSettings, persistSettings }: {
       next.delete(run.id);
       return next;
     });
-  }, []);
+  }, [handleAgentEvent]);
 
   const handleSemanticCommand = useCallback((tabId: string, termId: string, event: SemanticCommandEvent) => {
     const owners = tabsRef.current.filter((tab) => (
@@ -944,7 +989,9 @@ function AppInner({ initialSettings, persistSettings }: {
     const leaf = findLeaf(owner.root, termId);
     if (!leaf) return;
     const leafType = leaf.terminalType ?? owner.type;
+    handleAgentEvent(termId, { version: 1, provider: 'shell', event: 'turn.end', sessionId: termId, turnId: String(event.startedAt), outcome: event.exitCode === 0 ? 'succeeded' : event.exitCode === undefined ? 'interrupted' : 'failed' });
     const payload: CommandNotificationPayload = {
+      target: { tabId, termId },
       durationMs: event.durationMs,
       outcome: event.exitCode === undefined ? 'unknown' : event.exitCode === 0 ? 'success' : 'failure',
       tabLabel: owner.title.trim().slice(0, 256) || 'Terminal',
@@ -953,7 +1000,10 @@ function AppInner({ initialSettings, persistSettings }: {
         ? { kind: 'ssh', hostLabel: (sshProfiles.find((profile) => profile.id === (leaf.sshProfileId ?? owner.sshProfileId))?.host ?? 'SSH').slice(0, 512) }
         : { kind: 'local' },
     };
-    window.janet.notifyCommandCompleted(payload).catch(() => {});
+    if (!agentOwnedTerminalsRef.current.delete(termId)) window.janet.notifyCommandCompleted(payload).catch(() => {});
+    agentRunsRef.current.delete(termId);
+
+    if (!event.command) return;
 
     const key = `${tabId}\u0000${termId}\u0000${event.startedAt}\u0000${event.command}`;
     const run = pendingCommandHistoryRunsRef.current.get(key);
@@ -1013,7 +1063,7 @@ function AppInner({ initialSettings, persistSettings }: {
         console.error('Failed to save command history:', error);
       }
     });
-  }, [resolveCommandHistoryContext, sshProfiles]);
+  }, [resolveCommandHistoryContext, sshProfiles, handleAgentEvent]);
 
   const removeCommandHistoryEntry = useCallback((entry: CommandHistoryEntry) => {
     historySaveQueueRef.current = historySaveQueueRef.current.then(async () => {
@@ -1141,10 +1191,21 @@ function AppInner({ initialSettings, persistSettings }: {
     setTerminalFocusRequest((request) => request + 1);
   }, [editorDocuments.selectSurface]);
 
+  useEffect(() => window.janet.onNotificationTarget?.(({ tabId, termId }) => {
+    const tab = tabsRef.current.find(candidate => candidate.id === tabId && getAllLeafIds(candidate.root).includes(termId));
+    if (!tab) return;
+    selectTerminalTab(tabId);
+    terminalFocusTargetIdRef.current = termId;
+    setFocusedTerminalId(termId);
+    setMaximizedLeafByTab(current => { const next = { ...current }; delete next[tabId]; return next; });
+    requestAnimationFrame(() => terminalFocusTarget(termId)?.focus());
+  }), [selectTerminalTab]);
+
   const teardownTerminalOwners = useCallback((owners: TerminalOwner[], remainingTabs: TabInfo[]) => {
     if (owners.length === 0) return;
 
     const removedTerminals = new Set(owners.map((owner) => owner.termId));
+    for (const id of removedTerminals) { agentRunsRef.current.delete(id); agentOwnedTerminalsRef.current.delete(id); }
     clearPendingCommandHistoryRuns(removedTerminals);
     setBroadcastRecipientIds((current) => (
       [...current].some((termId) => removedTerminals.has(termId)) ? new Set() : current
@@ -1466,11 +1527,53 @@ function AppInner({ initialSettings, persistSettings }: {
     });
   }, [editorDocuments.closeDocument, editorDocuments.documents, saveEditorDocument]);
 
-  const renameTab = useCallback((tabId: string, title: string) => {
-    const normalized = title.trim();
-    if (!normalized) return;
-    updateTab(tabId, (tab) => ({ ...tab, title: normalized }));
-  }, [updateTab]);
+  const directoryRenameBusy = useRef(false);
+  const renameDirectory = async (source: string, name: string) => {
+    if (directoryRenameBusy.current) throw new Error('Another folder rename is still in progress.');
+    if (editorDocuments.documents.some((document) => document.resource.kind !== 'ssh'
+      && rebaseDirectory(document.resolvedPath, source, '__renamed__') !== document.resolvedPath)) {
+      throw new Error('Close editor files in this folder before renaming it. Your changes have not been touched.');
+    }
+    directoryRenameBusy.current = true;
+    try {
+      const target = await window.janet.renameWorkspaceDirectory({ source, name });
+      const rebase = (value: string | undefined) => rebaseDirectory(value, source, target);
+      groupsRef.current = groupsRef.current.map((group) => ({ ...group, directory: rebase(group.directory) }));
+      setGroups(groupsRef.current);
+      const localIds = new Set<string>();
+      tabsRef.current = tabsRef.current.map((tab) => ({ ...tab, cwd: tab.type === 'ssh' ? tab.cwd : rebase(tab.cwd), root: mapLeaves(tab.root, (leaf) => {
+        if ((leaf.terminalType ?? tab.type) === 'ssh') return leaf;
+        localIds.add(leaf.id);
+        const cwd = rebase(leaf.cwd);
+        updateTerminalStartingDirectory(leaf.id, cwd ?? rebase(tab.cwd));
+        return { ...leaf, cwd };
+      }) }));
+      setTabs(tabsRef.current);
+      cwdByTerminalRef.current = Object.fromEntries(Object.entries(cwdByTerminalRef.current).map(([id, cwd]) => [id, localIds.has(id) ? rebase(cwd)! : cwd]));
+      setCwdByTerminal(cwdByTerminalRef.current);
+    } finally { directoryRenameBusy.current = false; }
+  };
+  const renameGroup = async (id: string, name: string) => {
+    const group = groupsRef.current.find((item) => item.id === id);
+    if (!group) return;
+    if (!name.trim()) throw new Error('Enter a folder name.');
+    if (!group.kind && group.directory) await renameDirectory(group.directory, name);
+    groupsRef.current = groupsRef.current.map((item) => item.id === id ? { ...item, name } : item);
+    setGroups(groupsRef.current);
+    await persistSession();
+  };
+  const renameTab = async (tabId: string, title: string) => {
+    const tab = tabsRef.current.find((item) => item.id === tabId);
+    if (!tab) return;
+    if (!title.trim()) throw new Error('Enter a project name.');
+    const group = groupsRef.current.find((item) => item.id === tab.groupId);
+    if (group && !group.kind && tab.cwd && group.directory) {
+      const relative = rebaseDirectory(tab.cwd, group.directory, '__workspace__');
+      if (relative?.startsWith('__workspace__/') || relative?.startsWith('__workspace__\\')) await renameDirectory(tab.cwd, title);
+    }
+    updateTab(tabId, (item) => ({ ...item, title }));
+    await persistSession();
+  };
 
   // === Split / close pane ===
 
@@ -1577,11 +1680,12 @@ function AppInner({ initialSettings, persistSettings }: {
       if (owners.length === 0) return;
 
       const newRoot = removePane(tab.root, leafId);
-      if (!newRoot) {
+      const isProject = groupsRef.current.some(group => group.id === tab.groupId && group.kind !== 'folder');
+      if (!newRoot && !isProject) {
         closeTab(tabId);
         return;
       }
-      const nextRoot = ensureSplitRoot(newRoot);
+      const nextRoot = newRoot ? ensureSplitRoot(newRoot) : { id: genId('split'), type: 'split' as const, direction: 'vertical' as const, children: [], sizes: [] };
       const next = current.map((candidate) => candidate.id === tabId ? { ...candidate, root: nextRoot } : candidate);
       teardownTerminalOwners(owners, next);
       tabsRef.current = next;
@@ -1603,6 +1707,17 @@ function AppInner({ initialSettings, persistSettings }: {
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
     if (!tab) return;
     const paneCount = getAllLeafIds(tab.root).length;
+    if (groupsRef.current.some(group => group.id === tab.groupId && group.kind !== 'folder')) {
+      if (!paneCount) return;
+      setPendingDestructiveAction({
+        title: `Close all terminals in ${tab.title}?`,
+        description: 'Running terminal processes will end. The project, its files and open editors will stay available.',
+        confirmLabel: 'Close all terminals',
+        run: () => { for (const leafId of getAllLeafIds(tab.root)) handleClosePane(tabId, leafId); },
+        fallbackFocus: firstTerminalFocusTarget,
+      });
+      return;
+    }
     const dirtyDocuments = (editorDocuments.documentsByTab[tabId] ?? []).filter(isEditorDocumentDirty);
     if (dirtyDocuments.length > 0) {
       const dirtyKeys = dirtyDocuments.map((document) => document.key);
@@ -1624,7 +1739,7 @@ function AppInner({ initialSettings, persistSettings }: {
       run: () => closeTab(tabId),
       fallbackFocus: firstTerminalFocusTarget,
     });
-  }, [closeTab, editorDocuments.documentsByTab, saveEditorDocumentSequence]);
+  }, [closeTab, handleClosePane, editorDocuments.documentsByTab, saveEditorDocumentSequence]);
 
   useEffect(() => {
     if (!window.janet.onPrepareForClose || !window.janet.resolvePrepareForClose) return undefined;
@@ -1688,7 +1803,7 @@ function AppInner({ initialSettings, persistSettings }: {
   const requestClosePane = useCallback((tabId: string, leafId: string) => {
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
     if (!tab) return;
-    if (getAllLeafIds(tab.root).length === 1) {
+    if (getAllLeafIds(tab.root).length === 1 && !groupsRef.current.some(group => group.id === tab.groupId && group.kind !== 'folder')) {
       requestCloseTab(tabId);
       return;
     }
@@ -1702,6 +1817,13 @@ function AppInner({ initialSettings, persistSettings }: {
       fallbackFocus: firstTerminalFocusTarget,
     });
   }, [handleClosePane, requestCloseTab]);
+
+  const requestCloseActiveTerminal = useCallback(() => {
+    const tab = tabsRef.current.find(tab => tab.id === activeTabIdRef.current);
+    if (!tab) return;
+    const leafId = preferredLeafId(tab, focusedTerminalIdRef.current, maximizedLeafByTabRef.current[tab.id]);
+    if (leafId) requestClosePane(tab.id, leafId);
+  }, [requestClosePane]);
 
   const handleResizePane = useCallback(
     (tabId: string, splitId: string, dividerIndex: number, leftFraction: number) => {
@@ -1742,9 +1864,109 @@ function AppInner({ initialSettings, persistSettings }: {
 
   // === SSH session management ===
 
+  const openContextTerminal = async (groupId: string, tabId?: string, session?: SessionInfo) => {
+    if (directoryRenameBusy.current) throw new Error('Wait for the folder rename to finish.');
+    const group = groupsRef.current.find((item) => item.id === groupId);
+    const tab = tabId ? tabsRef.current.find((item) => item.id === tabId && item.groupId === groupId) : undefined;
+    if (!group || (tabId && !tab) || !group.directory) throw new Error('Select an available workspace or project folder first.');
+    const cwd = await window.janet.workspaceDirectory({ parent: tab?.cwd || group.directory });
+    if (directoryRenameBusy.current) throw new Error('The folder is being renamed. Try again afterward.');
+    if (terminalCount() >= MAX_RESTORED_TERMINALS || (!tabId && tabsRef.current.length >= MAX_RESTORED_TABS)) throw new Error('Terminal or project limit reached. Close a terminal first.');
+    if (!groupsRef.current.some((item) => item.id === groupId) || (tabId && !tabsRef.current.some((item) => item.id === tabId))) throw new Error('The selected folder was closed. Select it again.');
+    const leaf: TerminalLeaf = { type: 'leaf', id: genId('term'), terminalType: session ? 'ssh' : 'local',
+      ...(session ? { sshSessionId: session.id, sshProfileId: session.sshProfileId, sshShellReady: true } : { cwd }) };
+    const id = tabId ?? genId('tab');
+    const next = tabId ? tabsRef.current.map((item): TabInfo => item.id !== tabId ? item : { ...item, root: getAllLeafIds(item.root).length === 0 ? leaf : {
+      type: 'split', id: genId('split'), direction: 'vertical', sizes: [0.5, 0.5], children: [item.root, leaf],
+    } }) : [...tabsRef.current, { id, title: session ? 'SSH session' : 'Local session', groupId, type: 'local' as const, cwd, root: leaf }];
+    tabsRef.current = next; setTabs(next); setActiveTabId(id); setFocusedTerminalId(leaf.id);
+    setMaximizedLeafByTab((current) => ({ ...current, [id]: null }));
+    groupsRef.current = groupsRef.current.map((item) => item.id === groupId ? { ...item, collapsed: false } : item);
+    setGroups(groupsRef.current);
+  };
+  const [directoryActionError, setDirectoryActionError] = useState('');
+  const requestWorkspaceAction = async (action: 'delete' | 'keep' | 'unlink', groupId: string, projectId?: string) => {
+    if (directoryRenameBusy.current || pendingDestructiveBusyRef.current) return;
+    const group = groupsRef.current.find((entry) => entry.id === groupId);
+    const project = projectId ? tabsRef.current.find((tab) => tab.id === projectId && tab.groupId === groupId) : undefined;
+    if (!group || (projectId && !project)) return;
+    const affected = tabsRef.current.filter((tab) => project ? tab.id === project.id : tab.groupId === group.id);
+    if (affected.some((tab) => (editorDocuments.documentsByTab[tab.id] ?? []).some(isEditorDocumentDirty))) {
+      setDirectoryActionError('Save or close changed editor files before deleting, keeping, or removing this entry.');
+      return;
+    }
+    if (action !== 'unlink' && group.kind === 'folder') return;
+    const destinationParent = action === 'keep' ? await window.janet.selectLocalDirectory() : undefined;
+    if (action === 'keep' && !destinationParent) return;
+    const source = project?.cwd ?? group.directory;
+    if (action !== 'unlink' && source && editorDocuments.documents.some((document) => document.resource.kind !== 'ssh'
+      && rebaseDirectory(document.resolvedPath, source, '__removed__') !== document.resolvedPath)) {
+      setDirectoryActionError('Close editor files in this directory before deleting or keeping it. Your files have not been touched.');
+      return;
+    }
+    const name = project?.title ?? group.name;
+    const count = affected.reduce((sum, tab) => sum + countLeaves(tab.root), 0);
+    setDirectoryActionError('');
+    setPendingDestructiveAction({
+      title: action === 'keep' ? `Keep ${name} in Library?` : action === 'unlink' ? `Remove ${name} from Library?` : `Delete ${name}?`,
+      description: action === 'keep'
+        ? `Copy and verify ${source} inside ${destinationParent}, then send the temporary original to the Recycle Bin. Its ${count} terminals will stop and reopen at the saved location. Close external programs using these files first. Large projects may take a while.`
+        : action === 'unlink'
+          ? `Remove this Library entry and stop its ${count} terminals? Files at ${source} will not be deleted.`
+          : `Send ${source} and ALL files and subfolders inside it to the Recycle Bin? This closes ${affected.length} project/session entries and stops ${count} terminals. Detached jobs may continue; close external programs using these files first.`,
+      confirmLabel: action === 'keep' ? 'Keep in Library' : action === 'unlink' ? 'Remove from Library' : 'Delete to Recycle Bin',
+      destructive: action !== 'keep',
+      fallbackFocus: firstTerminalFocusTarget,
+      run: async () => {
+        if (groupsRef.current.find((entry) => entry.id === groupId) !== group
+          || affected.some((tab) => tabsRef.current.find((entry) => entry.id === tab.id) !== tab)) {
+          setDirectoryActionError('The selected entry changed. Review the action again.');
+          return true;
+        }
+        if (!await persistSession()) return false;
+        directoryRenameBusy.current = true;
+        try {
+          // Confirmation explicitly authorizes stopping only these sessions. Await native teardown before filesystem work.
+          for (const tab of affected) {
+            for (const owner of collectTerminalOwners(tab)) {
+              if (owner.type === 'local') await window.janet.terminalDestroy({ id: owner.termId });
+              else if (owner.sshSessionId) await window.janet.sshDestroyShell({ sessionId: owner.sshSessionId, termId: owner.termId });
+            }
+          }
+          const result = action === 'unlink' ? null : await window.janet.workspaceLifecycle({ action, groupId, projectId, destinationParent: destinationParent ?? undefined, expectedDirectory: source });
+          for (const tab of affected) closeTab(tab.id);
+          if (result) {
+            groupsRef.current = result.session.groups ?? [];
+            if (action === 'keep' && project) {
+              const saved = result.session.tabs.find((tab) => tab.id === project.id);
+              if (saved) {
+                const restored = createInitialAppState({ session: { ...result.session, tabs: [saved], activeTabId: saved.id } });
+                tabsRef.current = [...tabsRef.current, ...restored.tabs];
+                setTabs(tabsRef.current);
+                setActiveTabId(restored.activeTabId);
+                setFocusedTerminalId(restored.focusedTerminalId);
+              }
+            }
+            if (result.warning) setDirectoryActionError(result.warning);
+          } else groupsRef.current = groupsRef.current.filter((entry) => entry.id !== groupId);
+          setGroups(groupsRef.current);
+        } catch (error) {
+          setDirectoryActionError(`${error instanceof Error ? error.message : String(error)} Any terminals stopped for this operation can be reopened.`);
+          return true; // Close confirmation so the retained-file error is visible, not hidden behind the modal.
+        } finally { directoryRenameBusy.current = false; }
+        await persistSession();
+        return true;
+      },
+    });
+  };
   const handleSSHConnected = useCallback(
-    (session: SessionInfo) => {
-      if (!addTab('ssh', session.id, true, session.sshProfileId)) {
+    async (session: SessionInfo, groupId?: string, tabId?: string) => {
+      let opened = false;
+      try {
+        if (groupId) { await openContextTerminal(groupId, tabId, session); opened = true; }
+        else opened = addTab('ssh', session.id, true, session.sshProfileId);
+      } catch (error) { setDirectoryActionError(error instanceof Error ? error.message : String(error)); }
+      if (!opened) {
         window.janet.sshDisconnect({ id: session.id }).catch(() => {});
         return;
       }
@@ -1754,7 +1976,7 @@ function AppInner({ initialSettings, persistSettings }: {
       ));
       setSshConnectionsOpen(false);
     },
-    [addTab],
+    [addTab, openContextTerminal],
   );
 
   // Re-open the SSH shell for a single term. Triggered by the
@@ -2020,12 +2242,12 @@ function AppInner({ initialSettings, persistSettings }: {
     });
   }, [(activeTab?.id ?? ""), (activeTab?.title ?? "Main directory"), sidebarTerminalId]);
 
-  const saveRename = useCallback((value: string) => {
+  const saveRename = useCallback(async (value: string) => {
     if (!renameTarget) return;
     const normalized = value.trim();
     if (renameTarget.kind === 'tab') {
       if (!normalized) return;
-      renameTab(renameTarget.tabId, normalized);
+      await renameTab(renameTarget.tabId, value);
     } else {
       updateTab(renameTarget.tabId, (tab) => ({
         ...tab,
@@ -2073,10 +2295,6 @@ function AppInner({ initialSettings, persistSettings }: {
     }
     return sidebarLeaf?.cwd || activeTab?.cwd || mainDirectory || homeDir;
   }, [activeTab?.cwd, mainDirectory, sidebarIsRemote, sidebarLeaf?.cwd, sidebarTerminalId, cwdByTerminal, homeDir]);
-  const followingTarget = useMemo(() => ({
-    label: sidebarLeaf ? displayPaneTitle(sidebarLeaf, (activeTab?.type ?? "local")) : (activeTab?.title ?? "Main directory"),
-    path: sidebarIsRemote ? sidebarRemoteLabel : effectiveCwd,
-  }), [(activeTab?.title ?? "Main directory"), (activeTab?.type ?? "local"), effectiveCwd, sidebarIsRemote, sidebarLeaf, sidebarRemoteLabel]);
   const explorerSource = useMemo<FileExplorerSource>(() => {
     if (sidebarIsRemote) {
       const sessionId = sidebarSshSessionId ?? '';
@@ -2198,7 +2416,7 @@ function AppInner({ initialSettings, persistSettings }: {
       setPaletteVisible((v) => !v);
     });
     const unsub2 = on('new-terminal', () => addTab('local'));
-    const unsub3 = on('close-tab', () => requestCloseTab(activeTabId));
+    const unsub3 = on('close-tab', requestCloseActiveTerminal);
     const unsub4 = on('toggle-sidebar', toggleWorkspaceTools);
     const unsub5 = on('font-increase', () => persistFontSize(Math.min(24, fontSize + 1)));
     const unsub6 = on('font-decrease', () => persistFontSize(Math.max(10, fontSize - 1)));
@@ -2222,7 +2440,7 @@ function AppInner({ initialSettings, persistSettings }: {
       unsub8(); unsub9(); unsub10(); unsub11(); unsub12(); unsub13(); unsub14();
     };
   }, [
-    on, addTab, requestCloseTab, activeTabId, toggleWorkspaceTools, persistFontSize, fontSize,
+    on, addTab, requestCloseActiveTerminal, activeTabId, toggleWorkspaceTools, persistFontSize, fontSize,
     cycleTerminalTab, activeDocumentKey, saveEditorDocument, requestCloseEditorDocument,
     documentCloseFallbackFocus,
   ]);
@@ -2278,8 +2496,8 @@ function AppInner({ initialSettings, persistSettings }: {
         shortcut: bindings['new-terminal'], handler: () => addTab('local'),
       },
       {
-        id: 'close-tab', label: 'Close current tab', category: 'Tabs',
-        shortcut: bindings['close-tab'], handler: () => requestCloseTab(activeTabId),
+        id: 'close-tab', label: 'Close current terminal', category: 'Terminals',
+        shortcut: bindings['close-tab'], handler: requestCloseActiveTerminal,
       },
       {
         id: 'previous-tab', label: 'Previous terminal tab', category: 'Tabs',
@@ -2453,7 +2671,7 @@ function AppInner({ initialSettings, persistSettings }: {
 
     return actions;
   }, [
-    activeTab, activeTabId, sidebarTerminalId, activeDocumentKey, addTab, requestCloseTab,
+    activeTab, activeTabId, sidebarTerminalId, activeDocumentKey, addTab, requestCloseActiveTerminal,
     handleSplitPane, requestClosePane, handleToggleMaximizePane, cycleTerminalPane, cycleTerminalTab, moveActivePane,
     requestRenamePane, requestRenameTab, saveEditorDocument, requestCloseEditorDocument,
     documentCloseFallbackFocus,
@@ -2472,7 +2690,6 @@ function AppInner({ initialSettings, persistSettings }: {
       cwdReady={Boolean(effectiveCwd)}
       isRemote={sidebarIsRemote}
       gitRepository={gitRepository}
-      followingTarget={followingTarget}
       openLocalTerminals={openLocalTerminals}
       onOpenTerminal={openTerminal}
       onOpenLocalTabAt={openLocalTabAt}
@@ -2516,10 +2733,6 @@ function AppInner({ initialSettings, persistSettings }: {
         onSettingsClose={() => setSettingsOpen(false)}
         settingsContent={(
           <div className="titlebar-settings-content">
-            <MainDirectory directory={mainDirectory} onChange={async (directory) => {
-              await window.janet.setSettings({ mainDirectory: directory });
-              setMainDirectory(directory);
-            }} />
             <ThemeSwitcher
               currentTheme={currentTheme}
               onThemeChange={persistTheme}
@@ -2564,9 +2777,15 @@ function AppInner({ initialSettings, persistSettings }: {
             onSSHProfilesChange={handleSSHProfilesChange}
             groups={groups}
             mainDirectory={mainDirectory}
+            onMainDirectoryChange={async (directory) => { await window.janet.setSettings({ mainDirectory: directory }); setMainDirectory(directory); }}
+            onRenameGroup={renameGroup}
+            onLocalAt={openContextTerminal}
+            onWorkspaceAction={(action, groupId, projectId) => { void requestWorkspaceAction(action, groupId, projectId).catch((error) => setDirectoryActionError(String(error))); }}
             onGroupsChange={setGroups}
             onMoveWorkspace={(id, groupId) => updateTab(id, (tab) => ({ ...tab, groupId }))}
             creatorOpen={workspaceCreatorOpen}
+            entryRequest={workspaceEntryRequest}
+            onEntryRequestHandled={() => setWorkspaceEntryRequest(undefined)}
             onCreatorOpenChange={setWorkspaceCreatorOpen}
             onSelectTab={selectTerminalTab}
             onCloseTab={requestCloseTab}
@@ -2589,23 +2808,12 @@ function AppInner({ initialSettings, persistSettings }: {
           </Tooltip>
         )}
         <main key="terminal" className="terminal-area workspace-main" aria-label="Terminal workspace">
-          {!activeTab && (
-            <section className="fresh-profile-entry" aria-labelledby="fresh-profile-entry-title">
-              <strong id="fresh-profile-entry-title">Your workspace, your starting point</strong>
-              <p>Create a workspace and project under your main directory, or link an existing project with Folders → +.</p>
-              <p className="main-directory-path">{mainDirectory}</p>
-              <div className="fresh-profile-entry-actions">
-                <button type="button" onClick={() => {
-                  responsiveTabsCollapsedRef.current = false;
-                  setTabsOpen(true);
-                  setSshConnectionsOpen(true);
-                }}>Add SSH</button>
-                <button type="button" onClick={() => { setTabsOpen(true); setWorkspaceCreatorOpen(true); }}>
-                  New workspace
-                </button>
-              </div>
-            </section>
-          )}
+          {directoryActionError && <div role="alert" className="settings-save-notice">{directoryActionError}<button onClick={() => setDirectoryActionError('')}>Dismiss</button></div>}
+          {!activeTab && <EmptyWorkspace groups={groups} onRequest={request => {
+            responsiveTabsCollapsedRef.current = false;
+            setTabsOpen(true);
+            setWorkspaceEntryRequest(request);
+          }} />}
           <div
             className="sr-only"
             role="status"
@@ -2635,7 +2843,13 @@ function AppInner({ initialSettings, persistSettings }: {
             onSaveDocument={(key) => { void saveEditorDocument(key); }}
             onRetryDocument={(key) => { void editorDocuments.retryDocument(key); }}
             onCloseDocument={requestCloseEditorDocument}
-            terminal={(
+            terminal={getAllLeafIds(activeTab.root).length === 0 ? (
+              <section className="editor-state" aria-label="Project has no terminals">
+                <strong>No terminals open</strong>
+                <span>{activeTab.title} is still available. Open a terminal to continue working in its folder.</span>
+                <button onClick={() => { if (activeTab.groupId) void openContextTerminal(activeTab.groupId, activeTab.id).catch(error => setDirectoryActionError(String(error))); }}>Open terminal</button>
+              </section>
+            ) : (
               <SplitPane
                 node={activeTab.root}
                 tabId={(activeTab?.id ?? "")}

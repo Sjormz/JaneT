@@ -173,7 +173,7 @@ function TerminalPaneLeaf({
   const status = terminalStatus(awareness, transport);
   const closeLabel = hasMultiplePanes
     ? `Close pane — ${paneActionContext}`
-    : `Close terminal tab — ${paneActionContext}`;
+    : `Close terminal — ${paneActionContext}`;
   const effectiveSshSessionId = leaf.sshSessionId ?? sshSessionId;
   const dropSideAt = (event: React.DragEvent): PaneDropSide => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -230,6 +230,7 @@ function TerminalPaneLeaf({
       >
         <Tooltip label={paneLabel} placement="bottom">
           <span className="leaf-title" aria-label={paneLabel}>
+            <span className={`activity-dot ${status?.kind ?? 'unknown'}`} title={status?.label ?? 'Activity detection unavailable'} aria-label={status?.label ?? 'Activity detection unavailable'} />
             <PaneTypeIcon size="sm" />
             <span className="leaf-title-text">{paneTitle}</span>
           </span>

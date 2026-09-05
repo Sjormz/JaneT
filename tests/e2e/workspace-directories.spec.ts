@@ -19,12 +19,24 @@ class FolderSessions {
     await this.page.getByRole('button', { name: 'Start session', exact: true }).click();
   }
   async close(name: string) {
-    await this.page.getByRole('button', { name: `Close ${name}`, exact: true }).click();
+    await this.page.locator('.vtab-name').getByText(name, { exact: true }).click({ button: 'right' });
+    await this.page.getByRole('menuitem', { name: 'Close session', exact: true }).click();
     const confirmation = this.page.getByRole('alertdialog', { name: `Close ${name}?`, exact: true });
     if (await confirmation.waitFor({ state: 'visible', timeout: 1000 }).then(() => true, () => false)) {
       await confirmation.getByRole('button', { name: 'Close tab', exact: true }).click();
     }
-    await expect(this.page.getByRole('button', { name: `Close ${name}`, exact: true })).toHaveCount(0);
+    await expect(this.page.locator('.vtab-name').getByText(name, { exact: true })).toHaveCount(0);
+  }
+  async projectAction(name: string, action: string, destination?: string) {
+    if (destination) await this.app.evaluate(({ dialog }, selected) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] });
+    }, destination);
+    await this.page.locator('.vtab-name').getByText(name, { exact: true }).click({ button: 'right' });
+    await this.page.getByRole('menuitem', { name: action, exact: true }).click();
+  }
+  async workspaceAction(name: string, action: string) {
+    await this.page.locator('.workspace-group-name').getByText(name, { exact: true }).click({ button: 'right' });
+    await this.page.getByRole('menuitem', { name: action, exact: true }).click();
   }
 }
 
@@ -60,7 +72,32 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await expect(page.locator('.terminal-container')).toHaveCount(0);
     expect(fs.readdirSync(main)).toEqual([]);
     await createWorkspace(page, 'Temporary', [{}], 'First group');
-    await folders.close('Temporary');
+    await page.getByRole('button', { name: 'Local terminal in project Temporary', exact: true }).click();
+    await expect(page.locator('.terminal-container')).toHaveCount(2);
+    fs.writeFileSync(path.join(main, 'First group', 'Temporary', 'keep.txt'), 'keep');
+    await page.locator('[data-terminal-id]').evaluateAll(async (nodes) => {
+      for (const node of nodes) await (window as any).janet.terminalDestroy({ id: node.getAttribute('data-terminal-id') });
+    });
+    await page.getByRole('button', { name: /^Temporary Local/ }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Rename project', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Tab name', exact: true }).fill('Renamed project');
+    await page.getByRole('textbox', { name: 'Tab name', exact: true }).press('Enter');
+    await expect.poll(() => fs.existsSync(path.join(main, 'First group', 'Renamed project', 'keep.txt'))).toBe(true);
+    await expect.poll(() => settings().session.tabs[0]?.cwd).toBe(path.join(main, 'First group', 'Renamed project'));
+    await folders.close('Renamed project');
+    await page.locator('.workspace-group-name').getByText('First group', { exact: true }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Rename workspace', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Workspace name', exact: true }).fill('CON');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('folder name');
+    await page.getByRole('textbox', { name: 'Workspace name', exact: true }).fill('Renamed workspace');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0).catch(async () => { throw new Error(await page.getByRole('dialog').innerText()); });
+    expect(fs.readFileSync(path.join(main, 'Renamed workspace', 'Renamed project', 'keep.txt'), 'utf8')).toBe('keep');
+    await page.getByRole('button', { name: 'Local terminal in Renamed workspace', exact: true }).click();
+    await expect(page.locator('.terminal-container')).toHaveCount(1);
+    await expect.poll(() => settings().session.tabs[0]?.cwd).toBe(path.join(main, 'Renamed workspace'));
+    await folders.close('Local session');
     await expect(page.getByText('Your workspace, your starting point')).toBeVisible();
     await expect(page.locator('.terminal-container')).toHaveCount(0);
     const emptyClosed = app.waitForEvent('close');
@@ -72,30 +109,51 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await createWorkspace(page, 'Experiment A', [{}, {}], 'Research');
     await expect(page.getByRole('dialog')).toHaveCount(0);
     expect(fs.existsSync(path.join(main, 'Research', 'Experiment A'))).toBe(true);
-    await folders.choose(project, 'Add folder');
+    fs.writeFileSync(path.join(main, 'Research', 'Experiment A', 'keep.txt'), 'promoted data');
+    await folders.projectAction('Experiment A', 'Keep in Library…', root);
+    await page.getByRole('button', { name: 'Keep in Library', exact: true }).click();
+    await expect(page.getByRole('alertdialog')).toHaveCount(0);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    expect(fs.readFileSync(path.join(root, 'Experiment A', 'keep.txt'), 'utf8')).toBe('promoted data');
+    expect(fs.existsSync(path.join(main, 'Research', 'Experiment A'))).toBe(false);
+    await expect.poll(() => settings().session.groups.some((group: any) => group.kind === 'folder' && group.directory === path.join(root, 'Experiment A'))).toBe(true);
+    await folders.workspaceAction('Renamed workspace', 'Delete workspace…');
+    await page.getByRole('button', { name: 'Delete to Recycle Bin', exact: true }).click();
+    await expect(page.getByRole('alertdialog')).toHaveCount(0);
+    expect(fs.existsSync(path.join(main, 'Renamed workspace'))).toBe(false);
+    await folders.choose(project, 'Add to Library');
     await folders.start('Project X', 'Development', 3);
     await expect(page.locator('.terminal-container')).toHaveCount(3);
     await folders.start('Project X', 'Testing', 2);
     await expect(page.locator('.terminal-container')).toHaveCount(2);
     await expect.poll(() => settings().session.tabs.length).toBe(3);
-    const projectGroup = settings().session.groups.find((item: any) => item.kind === 'folder');
+    const projectGroup = settings().session.groups.find((item: any) => item.directory === project);
     const sessions = settings().session.tabs.filter((item: any) => item.groupId === projectGroup.id);
     expect(sessions.map((item: any) => item.cwd)).toEqual([project, project]);
     expect(fs.readdirSync(project)).toEqual(['keep.txt']);
     await page.screenshot({ path: testInfo.outputPath('linked-folder-sessions.png') });
-    await page.getByRole('button', { name: 'Open settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Main directory settings', exact: true }).click();
     await folders.choose(nextMain, 'Change main directory');
     await expect.poll(() => settings().mainDirectory).toBe(nextMain);
     await page.keyboard.press('Escape');
     await createWorkspace(page, 'Second', [{}], 'New research');
     await expect(page.getByRole('dialog')).toHaveCount(0);
     expect(fs.existsSync(path.join(nextMain, 'New research', 'Second'))).toBe(true);
-    expect(fs.existsSync(path.join(main, 'Research', 'Experiment A'))).toBe(true);
+    await folders.projectAction('Second', 'Delete project…');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    expect(fs.existsSync(path.join(nextMain, 'New research', 'Second'))).toBe(true);
+    await folders.projectAction('Second', 'Delete project…');
+    await page.getByRole('button', { name: 'Delete to Recycle Bin', exact: true }).click();
+    await expect(page.getByRole('alertdialog')).toHaveCount(0);
+    expect(fs.existsSync(path.join(nextMain, 'New research', 'Second'))).toBe(false);
     const closed = app.waitForEvent('close');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
     await closed; app = undefined;
     app = await launch(); page = await app.firstWindow(); folders = new FolderSessions(page, app);
     await expect(page.getByRole('heading', { name: 'A home for your work' })).toHaveCount(0);
+    await page.getByRole('button', { name: /^Experiment A Local/ }).click();
+    await expect(page.locator('.terminal-container')).toHaveCount(2);
+    expect(fs.readFileSync(path.join(root, 'Experiment A', 'keep.txt'), 'utf8')).toBe('promoted data');
     await page.getByRole('button', { name: /^Development Local/ }).click();
     await expect(page.locator('.terminal-container')).toHaveCount(3);
     await page.getByRole('button', { name: /^Testing Local/ }).click();
@@ -103,12 +161,15 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await expect(page.getByRole('alert')).toHaveCount(0);
     await folders.close('Development');
     await folders.close('Testing');
-    await page.getByRole('button', { name: 'Remove folder Project X', exact: true }).click();
+    await page.locator('.workspace-group-name').getByText('Project X', { exact: true }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Remove from Library…', exact: true }).click();
+    await page.getByRole('button', { name: 'Remove from Library', exact: true }).click();
+    await expect(page.getByRole('alertdialog')).toHaveCount(0);
     expect(fs.readFileSync(path.join(project, 'keep.txt'), 'utf8')).toBe('Project data');
     await expect(page.getByRole('button', { name: 'Start new session in Project X' })).toHaveCount(0);
     const missing = path.join(root, 'Missing');
     fs.mkdirSync(missing);
-    await folders.choose(missing, 'Add folder');
+    await folders.choose(missing, 'Add to Library');
     fs.rmdirSync(missing);
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
     await expect(page.getByText('Folder unavailable', { exact: true })).toBeVisible();

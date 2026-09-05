@@ -237,12 +237,31 @@ const api = {
   setSettings: (updates: Record<string, unknown>) => ipcRenderer.invoke('settings:set', updates),
   notifyCommandCompleted: (payload: CommandNotificationPayload): Promise<boolean> =>
     ipcRenderer.invoke('notifications:command-completed', payload),
+  getNotificationStatus: (): Promise<string | null> => ipcRenderer.invoke('notifications:status'),
+  onNotificationTarget: (callback: (target: { tabId: string; termId: string }) => void) => {
+    const listener = (_event: unknown, target: { tabId: string; termId: string }) => callback(target);
+    ipcRenderer.on('notifications:target', listener);
+    return () => { ipcRenderer.removeListener('notifications:target', listener); };
+  },
 
   // App
+  isWindowFocused: (): Promise<boolean> => ipcRenderer.invoke('app:isWindowFocused'),
+  onWindowFocus: (callback: (focused: boolean) => void) => {
+    const listener = (_event: unknown, focused: boolean) => callback(focused);
+    ipcRenderer.on('app:windowFocus', listener);
+    return () => { ipcRenderer.removeListener('app:windowFocus', listener); };
+  },
+  onAgentActivity: (callback: (payload: { id: string; event: import('../renderer/terminalAwareness').AgentLifecycleEvent }) => void) => {
+    const listener = (_event: unknown, payload: { id: string; event: import('../renderer/terminalAwareness').AgentLifecycleEvent }) => callback(payload);
+    ipcRenderer.on('terminal:agentActivity', listener);
+    return () => { ipcRenderer.removeListener('terminal:agentActivity', listener); };
+  },
   getPlatform: () => ipcRenderer.invoke('app:getPlatform'),
   getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
   selectLocalDirectory: (): Promise<string | null> => ipcRenderer.invoke('app:selectLocalDirectory'),
   workspaceDirectory: (request: { parent: string; name?: string }): Promise<string> => ipcRenderer.invoke('workspace:directory', request),
+  renameWorkspaceDirectory: (request: { source: string; name: string }): Promise<string> => ipcRenderer.invoke('workspace:renameDirectory', request),
+  workspaceLifecycle: (request: import('./workspaceFileOperations').WorkspaceLifecycleRequest): Promise<{ session: import('./settings').SavedSession; warning?: string }> => ipcRenderer.invoke('workspace:lifecycle', request),
   openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
   copyText: (text: string): Promise<boolean> => ipcRenderer.invoke('app:copyText', text),
   copyDiagnostics: (): Promise<boolean> => ipcRenderer.invoke('app:copyDiagnostics'),

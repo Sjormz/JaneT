@@ -159,6 +159,11 @@ interface CachedTerminalPane {
 
 const terminalPaneCache = new Map<string, CachedTerminalPane>();
 
+export function updateTerminalStartingDirectory(id: string, cwd: string | undefined): void {
+  const cached = terminalPaneCache.get(id);
+  if (cached?.localSpawnRequest && cwd) cached.localSpawnRequest = { ...cached.localSpawnRequest, cwd };
+}
+
 function createTerminalInteraction() {
   return {
     selectionProtectionRef: { current: false },
@@ -860,6 +865,10 @@ export default function TerminalPane({
       Date.now,
       (event) => terminalPaneCache.get(termId)?.semanticCommandStartedListener.current?.(termId, event),
       (event) => terminalPaneCache.get(termId)?.semanticCommandCancelledListener.current?.(termId, event),
+      () => performance.now(),
+      () => terminalPaneCache.get(termId)?.agentEventListener?.(termId, {
+        version: 1, provider: 'shell', event: 'session.start', sessionId: termId,
+      }),
     );
     let startupMarked = false;
     let promptMarked = false;

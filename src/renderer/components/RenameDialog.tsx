@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalFocus } from '../useModalFocus';
 
@@ -7,7 +7,7 @@ interface RenameDialogProps {
   title: string;
   inputLabel: string;
   initialValue: string;
-  onSave: (value: string) => void;
+  onSave: (value: string) => void | Promise<void>;
   onCancel: () => void;
   fallbackFocus: () => HTMLElement | null;
 }
@@ -24,11 +24,21 @@ export default function RenameDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const save = async (value: string) => {
+    if (busy) return;
+    setBusy(true); setError('');
+    try { await onSave(value); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
+  useEffect(() => { setError(''); }, [open, initialValue]);
 
   useModalFocus({
     open,
     containerRef: dialogRef,
-    onClose: onCancel,
+    onClose: () => { if (!busy) onCancel(); },
     initialFocusSelector: 'input',
     fallbackFocus,
   });
@@ -62,13 +72,14 @@ export default function RenameDialog({
             onKeyDown={(event) => {
               if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
               event.preventDefault();
-              onSave(event.currentTarget.value);
+              void save(event.currentTarget.value);
             }}
           />
         </label>
+        {error && <p className="form-error" role="alert">{error}</p>}
         <div className="confirmation-dialog-actions">
-          <button type="button" className="confirmation-dialog-button cancel" onClick={onCancel}>Cancel</button>
-          <button type="button" className="confirmation-dialog-button confirm" onClick={() => onSave(inputRef.current?.value ?? '')}>Save</button>
+          <button type="button" disabled={busy} className="confirmation-dialog-button cancel" onClick={onCancel}>Cancel</button>
+          <button type="button" disabled={busy} className="confirmation-dialog-button confirm" onClick={() => void save(inputRef.current?.value ?? '')}>{busy ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
     </div>,
