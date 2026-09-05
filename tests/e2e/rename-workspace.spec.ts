@@ -17,7 +17,7 @@ function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 function createUserData(): string {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-rename-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-rename-e2e-'));
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,

@@ -1,3 +1,4 @@
+import { terminalSettings } from './workspaces';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'fs';
@@ -143,7 +144,7 @@ async function measureCompactTargets(page: Page, state: string) {
 
 test('proves compact controls meet WCAG target size or center spacing at minimum size', async ({}, testInfo) => {
   test.setTimeout(60_000);
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-target-geometry-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-target-geometry-e2e-'));
   const repoPath = path.join(userData, 'repo');
   fs.mkdirSync(repoPath);
   fs.writeFileSync(path.join(repoPath, 'first.txt'), 'base\n', 'utf8');
@@ -237,12 +238,14 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
     await page.getByRole('button', { name: 'Show terminal tabs' }).click();
     const activeTab = page.locator('.vtab-item.active');
     await activeTab.hover();
-    const tabClose = activeTab.locator('.vtab-close');
+    await activeTab.click({ button: 'right' });
+    const tabClose = page.getByRole('menuitem', { name: 'Close all terminals…' });
     await expect(tabClose).toBeVisible();
     const tabCloseBox = await tabClose.boundingBox();
     expect(tabCloseBox).not.toBeNull();
     expect(tabCloseBox!.width).toBeGreaterThanOrEqual(24);
     expect(tabCloseBox!.height).toBeGreaterThanOrEqual(24);
+    await page.keyboard.press('Escape');
     reports.push(await measureCompactTargets(page, 'expanded tabs'));
 
     await page.getByRole('tab', { name: 'Source Control' }).click();
@@ -259,8 +262,9 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
     reports.push(await measureCompactTargets(page, 'settings'));
     await page.getByRole('button', { name: 'Hide settings' }).click();
 
-    await page.getByRole('button', { name: 'New workspace or group' }).click();
-    const presetDialog = page.getByRole('dialog', { name: 'Create workspace' });
+    await page.getByRole('button', { name: 'New workspace or project' }).click();
+    await page.getByRole('button', { name: 'Project', exact: true }).click();
+    const presetDialog = page.getByRole('dialog', { name: 'Create project' });
     await expect(presetDialog).toBeVisible();
     await presetDialog.getByRole('combobox', { name: 'Initial terminals' }).selectOption('2');
     await expect(presetDialog.getByRole('button', { name: 'Remove terminal 1' })).toBeVisible();
@@ -285,8 +289,8 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
 
 test('keeps workspace views in their dedicated regions at desktop and minimum size', async ({}, testInfo) => {
   test.setTimeout(60_000);
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-workspace-layout-e2e-'));
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData }));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-workspace-layout-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(terminalSettings(userData)));
   let app: ElectronApplication | undefined;
 
   try {
@@ -385,19 +389,9 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     await expect(workspaceTools.getByRole('tab', { name: 'Source Control' })).toHaveAttribute('aria-selected', 'true');
 
     await page.getByRole('button', { name: 'Hide settings' }).click();
-    await tabsPanel.getByRole('button', { name: 'SSH connections' }).click();
-    await expect(page.locator('#vtab-ssh-connections')).toBeVisible();
-    const newSshButton = page.getByRole('button', { name: 'New SSH connection' });
-    await newSshButton.click();
-    const sshDialog = page.getByRole('dialog', { name: 'New SSH connection' });
-    await expect(sshDialog).toBeVisible();
-    await expect(sshDialog.getByRole('textbox', { name: 'Host' })).toBeFocused();
-    const sshScreenshot = testInfo.outputPath('new-ssh-connection-modal.png');
-    await page.screenshot({ path: sshScreenshot });
-    await testInfo.attach('new-ssh-connection-modal', { path: sshScreenshot, contentType: 'image/png' });
-    await page.keyboard.press('Escape');
-    await expect(sshDialog).toBeHidden();
-    await expect(newSshButton).toBeFocused();
+    // Sidebar SSH entry points are intentionally deferred; project creation still supports SSH.
+    await expect(tabsPanel.getByRole('button', { name: 'SSH connections' })).toHaveCount(0);
+    await expect(page.locator('#vtab-ssh-connections')).toHaveCount(0);
 
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(800, 600));
     await expect.poll(() => page.evaluate(() => innerWidth)).toBeLessThanOrEqual(800);
@@ -425,7 +419,7 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
 
     await compactTabs.click();
     await expect(tabsPanel).toBeVisible();
-    await expect(page.locator('#vtab-ssh-connections')).toBeVisible();
+    await expect(page.locator('#vtab-ssh-connections')).toHaveCount(0);
     const narrow = await panelBoxes(page);
     const narrowViewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
     expect(narrow.tools.x + narrow.tools.width).toBeLessThanOrEqual(narrow.tabs.x + 1);
@@ -433,9 +427,6 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     expect(narrow.terminal.x + narrow.terminal.width).toBeLessThanOrEqual(narrowViewport.width + 1);
     expect(narrow.terminal.width).toBeGreaterThanOrEqual(300);
 
-    const sshConnections = await page.locator('#vtab-ssh-connections').boundingBox();
-    expect(sshConnections).not.toBeNull();
-    expect(sshConnections!.y + sshConnections!.height).toBeLessThanOrEqual(narrow.tabs.y + narrow.tabs.height + 1);
 
     const tabOpener = tabsPanel.locator('.vtab-item.active');
     const tabTitle = (await tabOpener.locator('.vtab-name').textContent())!.trim();
@@ -471,9 +462,9 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     await expect(tabMenu).toBeHidden();
     await expect(tabOpener).toBeFocused();
 
-    const narrowScreenshot = testInfo.outputPath('workspace-left-narrow-ssh.png');
+    const narrowScreenshot = testInfo.outputPath('workspace-left-narrow.png');
     await page.screenshot({ path: narrowScreenshot });
-    await testInfo.attach('workspace-left-narrow-ssh', { path: narrowScreenshot, contentType: 'image/png' });
+    await testInfo.attach('workspace-left-narrow', { path: narrowScreenshot, contentType: 'image/png' });
   } finally {
     await forceClose(app);
     fs.rmSync(userData, { recursive: true, force: true });
@@ -481,8 +472,8 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
 });
 
 test('consumes Hermes plugin lifecycle output through the local PTY', async ({}, testInfo) => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-awareness-e2e-'));
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData }));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-awareness-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(terminalSettings(userData)));
   const pluginDir = path.join(root, 'integrations', 'hermes-agent-awareness');
   const probePath = path.join(userData, 'emit-hermes-awareness.py');
   const sessionReadyPath = path.join(userData, 'session-ready');
@@ -577,19 +568,20 @@ print("TUI_AWARENESS_OK")
 
     const firstTab = page.locator('.vtab-item').first();
     await expect.poll(() => fs.existsSync(sessionReadyPath)).toBe(true);
-    await expect(firstTab.locator('.vtab-sub')).toHaveText('Hermes · Ready');
-    await page.getByRole('button', { name: 'New local terminal tab' }).click();
+    await expect(firstTab).toHaveAttribute('aria-label', /Hermes · Ready/);
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+T' : 'Control+Shift+T');
     await expect(page.locator('.vtab-item')).toHaveCount(2);
 
-    await page.locator('.vtab-item').nth(1).locator('.vtab-close').click();
+    await page.locator('.vtab-item').nth(1).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Close session', exact: true }).click();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Close tab' }).click();
     await expect(page.locator('.vtab-item')).toHaveCount(1);
 
     fs.writeFileSync(turnGatePath, '');
     await expect.poll(() => fs.existsSync(turnStartedPath)).toBe(true);
-    await expect(firstTab.locator('.vtab-sub')).toHaveText('Hermes · Running');
+    await expect(firstTab).toHaveAttribute('aria-label', /Hermes · Running/);
     fs.writeFileSync(turnEndGatePath, '');
-    await expect(firstTab.locator('.vtab-sub')).toHaveText('Hermes · Ready');
+    await expect(firstTab).toHaveAttribute('aria-label', /Hermes · Ready/);
     await expect(page.locator('.terminal-leaf').first().locator('.leaf-awareness'))
       .toHaveText('Hermes · Ready');
     expect(await page.locator('.terminal-leaf-header').first().evaluate((element) => (
@@ -605,9 +597,9 @@ print("TUI_AWARENESS_OK")
     fs.rmSync(turnStartedPath, { force: true });
     fs.writeFileSync(staleTurnGatePath, '');
     await expect.poll(() => fs.existsSync(turnStartedPath)).toBe(true);
-    await expect(firstTab.locator('.vtab-sub')).toHaveText('Hermes · Running');
+    await expect(firstTab).toHaveAttribute('aria-label', /Hermes · Running/);
     fs.writeFileSync(exitGatePath, '');
-    await expect(firstTab.locator('.vtab-sub')).toHaveText('Exited');
+    await expect(firstTab).toHaveAttribute('aria-label', /Exited/);
     await expect(page.locator('.terminal-leaf').first().locator('.leaf-awareness')).toHaveText('Exited');
     await expect.poll(async () => page.locator('.xterm-rows').first().innerText())
       .not.toContain('janet-agent');

@@ -5,7 +5,7 @@ import * as path from 'node:path';
 
 test('records startup, loaded-terminal input and pane lifecycle memory baselines', async ({}, testInfo) => {
   test.setTimeout(90_000);
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-performance-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-performance-'));
   const command = `node -e "process.stdin.setRawMode(true);let n=0;setInterval(()=>process.stdout.write('LOAD_'+(++n)+'\\r\\n'.repeat(20)),20).unref();process.stdin.on('data',()=>{console.log('JANET_INPUT_OBSERVED');process.exit(0)})"`;
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'one-dark', fontSize: 14, sidebarSide: 'right', keybindings: {}, workspaceTabs: [],

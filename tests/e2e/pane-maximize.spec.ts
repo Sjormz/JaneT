@@ -77,7 +77,7 @@ async function connectCdp(port: number): Promise<Browser> {
 }
 
 async function launchApp(settings: unknown, prefix: string, existingUserData?: string): Promise<{ browser: Browser; electronProcess: ChildProcess; page: Page; userData: string }> {
-  const userData = existingUserData ?? fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const userData = existingUserData ?? fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), prefix));
   const settingsPath = path.join(userData, 'settings.json');
   const remoteDebuggingPort = await getFreePort();
 
@@ -158,7 +158,7 @@ async function closeApp(browser: Browser, electronProcess: ChildProcess, userDat
     void browser.close().catch(() => {});
   } finally {
     await killProcessTree(electronProcess);
-    if (userData) fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    if (userData) await fs.promises.rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 }
 
@@ -258,7 +258,7 @@ test('focuses the first terminal after clicking a terminal tab', async () => {
 
   try {
     await expect(page.locator('.terminal-container')).toHaveCount(2);
-    await page.getByRole('button', { name: 'New local terminal tab' }).click();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+T' : 'Control+Shift+T');
     await expect(page.locator('.terminal-container')).toHaveCount(1);
     await page.locator('.vtab-item').filter({ hasText: 'two panes' }).click();
     await expect(page.locator('.terminal-container')).toHaveCount(2);
@@ -374,7 +374,7 @@ test('moves the active pane by configured keyboard and command palette without r
 });
 
 test('runs ordered workspace startup commands once per fresh terminal', async () => {
-  const markerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-startup-'));
+  const markerDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-e2e-startup-'));
   const markerPath = path.join(markerDir, 'ordered.txt');
   const failurePath = path.join(markerDir, 'failure.txt');
   const encodedMarkerPath = Buffer.from(markerPath, 'utf-8').toString('base64');
@@ -488,7 +488,7 @@ test('runs ordered workspace startup commands once per fresh terminal', async ()
 });
 
 test('refreshes external branch and file changes without a manual reload', async () => {
-  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-heartbeat-repo-'));
+  const repoPath = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-e2e-heartbeat-repo-'));
   let app: Awaited<ReturnType<typeof launchApp>> | undefined;
   try {
     execFileSync('git', ['init', '-b', 'main'], { cwd: repoPath });
@@ -541,7 +541,7 @@ test('refreshes external branch and file changes without a manual reload', async
 
 test('focuses the exact worktree MRU across tabs and a maximized layout without creating terminals', async () => {
   test.setTimeout(60_000);
-  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-worktree-focus-repo-'));
+  const repoPath = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-e2e-worktree-focus-repo-'));
   const nestedPath = path.join(repoPath, 'nested');
   const olderCwd = path.join(repoPath, 'older');
   const targetCwd = path.join(repoPath, 'target');
@@ -662,7 +662,7 @@ test('focuses the exact worktree MRU across tabs and a maximized layout without 
 });
 
 test('stages and commits changes from Source Control', async ({}, testInfo) => {
-  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-source-control-'));
+  const repoPath = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-e2e-source-control-'));
   let app: Awaited<ReturnType<typeof launchApp>> | undefined;
   try {
     execFileSync('git', ['init', '-b', 'main'], { cwd: repoPath });

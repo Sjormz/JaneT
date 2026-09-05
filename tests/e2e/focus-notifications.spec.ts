@@ -30,7 +30,7 @@ async function forceClose(app: ElectronApplication | undefined): Promise<void> {
 
 test('records focus decisions and project busy/unread activity without command or output', async ({}, testInfo) => {
   test.setTimeout(60_000);
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-focus-notifications-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-focus-notifications-e2e-'));
   const eventsPath = path.join(userData, 'events.jsonl');
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     notificationsEnabled: true,
@@ -84,20 +84,18 @@ test('records focus decisions and project busy/unread activity without command o
     // Exercise the real Codex hook helper inside a live PTY, without a model request.
     const helper = path.join(userData, 'agent-activity', 'agent-cli.cjs');
     const control = path.join(userData, 'event.json');
-    const harness = path.join(userData, 'harness.cjs');
+    const harness = path.join(root, 'tests/e2e/helpers/activity-harness.cjs');
     const codexHome = path.join(userData, 'codex-home'); fs.mkdirSync(codexHome);
     const forwarded = path.join(userData, 'forwarded.json');
-    const notifier = path.join(userData, 'original-notifier.cjs');
-    fs.writeFileSync(notifier, `require('fs').writeFileSync(${JSON.stringify(forwarded)},process.argv[2]);`);
-    fs.writeFileSync(path.join(codexHome, 'config.toml'), 'notify=' + JSON.stringify(['node', notifier]));
+    fs.writeFileSync(path.join(codexHome, 'config.toml'), 'notify=' + JSON.stringify(['node', harness, '--notify', forwarded]));
     installCodexActivity(codexHome, helper);
     const notify = parse(fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8')).notify as string[];
-    fs.writeFileSync(harness, `const fs=require('fs'),cp=require('child_process'),notify=${JSON.stringify(notify)}; let previous=''; setInterval(()=>{try{const input=fs.readFileSync(${JSON.stringify(control)},'utf8'); if(input!==previous){previous=input;const data=JSON.parse(input);cp.execFileSync(data.type?notify[0]:process.execPath,data.type?[...notify.slice(1),input]:[${JSON.stringify(helper)},...(data.setup?['--setup-codex','-c','notify=[]']:['--codex-hook'])],{input:data.type||data.setup?'':input,env:{...process.env,CODEX_HOME:${JSON.stringify(codexHome)}},timeout:3000,windowsHide:true});}}catch(error){process.stderr.write(String(error));}},100);`);
+    fs.writeFileSync(path.join(userData, 'harness.json'), JSON.stringify({ helper, notify, codexHome }));
     const sendHook = (hook: string) => fs.writeFileSync(control, JSON.stringify(hook === 'agent-turn-complete'
       ? { type: hook, 'thread-id': 'codex-test', 'turn-id': 'turn' }
       : { hook_event_name: hook, session_id: 'codex-test', turn_id: 'turn' }));
     sendHook('SessionStart');
-    await page.evaluate(({ id, text }) => window.janet.terminalWrite({ id, data: `${text}\r`, userInput: true }), { id: termId!, text: `node "${harness}"` });
+    await page.evaluate(({ id, text }) => window.janet.terminalWrite({ id, data: `${text}\r`, userInput: true }), { id: termId!, text: `node "${harness}" "${userData}"` });
     const work = page.locator('.vtab-item').filter({ hasText: 'Work' });
     await expect(work).toHaveAttribute('aria-label', /Codex · Ready/);
     await page.locator('.vtab-item').filter({ hasText: 'Other' }).click();

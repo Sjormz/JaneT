@@ -8,7 +8,7 @@ import type { AppSettings, SavedSession } from '../../src/main/settings';
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 async function fixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'janet-library-unit-')); roots.push(root);
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'janet-library-unit-')); roots.push(root);
   const main = path.join(root, 'Temporary');
   const workspace = path.join(main, 'Work');
   const project = path.join(workspace, 'Experiment');

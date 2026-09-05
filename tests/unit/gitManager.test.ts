@@ -13,7 +13,7 @@ import {
 const temporaryDirectories: string[] = [];
 
 function temporaryDirectory(name: string): string {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), name));
+  const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), name));
   temporaryDirectories.push(directory);
   return directory;
 }

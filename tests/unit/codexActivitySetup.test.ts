@@ -9,7 +9,7 @@ vi.mock('node:fs', async importOriginal => ({ ...await importOriginal<typeof imp
 
 const directories: string[] = [];
 function fixture(config = '# preserve comments\n[features]\nhooks = true\n') {
-  const directory = fs.mkdtempSync(join(tmpdir(), 'janet-codex-setup-'));
+  const directory = fs.mkdtempSync(join(fs.realpathSync(tmpdir()), 'janet-codex-setup-'));
   directories.push(directory);
   fs.writeFileSync(join(directory, 'config.toml'), config);
   return { directory, helper: join(directory, 'activity helper.cjs'), configPath: join(directory, 'config.toml'), hooksPath: join(directory, 'hooks.json') };

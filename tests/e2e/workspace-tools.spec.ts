@@ -14,7 +14,7 @@ class WorkspaceTools {
 }
 
 test('keeps tools compact and follows the selected local pane', async ({}, testInfo) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-tools-e2e-'));
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-tools-e2e-'));
   const first = path.join(root, 'first');
   const second = path.join(root, 'second');
   fs.mkdirSync(first); fs.mkdirSync(second);

@@ -1,12 +1,21 @@
 import type { Page } from '@playwright/test';
 
+export function terminalSettings(directory: string) {
+  return { mainDirectory: directory, session: {
+    groups: [{ id: 'fixture-library', name: 'Test library', kind: 'folder', directory }],
+    tabs: [{ id: 'fixture-session', groupId: 'fixture-library', title: 'Terminal', type: 'local', cwd: directory,
+      root: { type: 'leaf', cwd: directory } }],
+    activeTabId: 'fixture-session', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+  } };
+}
+
 export async function createWorkspace(page: Page, name: string, terminals: Array<{
   title?: string; cwd?: string; sshLabel?: string; commands?: string[];
 }>, newGroup?: string) {
   await page.getByRole('button', { name: 'New workspace or project' }).click();
   if (newGroup) {
     await page.getByRole('textbox', { name: 'Workspace name' }).fill(newGroup);
-    await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Create workspace', exact: true }).getByRole('button', { name: 'Create workspace', exact: true }).click();
     await page.getByRole('button', { name: `New project in ${newGroup}`, exact: true }).click();
   } else {
     await page.getByRole('button', { name: 'Project', exact: true }).click();
@@ -30,5 +39,5 @@ export async function createWorkspace(page: Page, name: string, terminals: Array
       }
     }
   }
-  await page.getByRole('button', { name: 'Create project', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Create project', exact: true }).getByRole('button', { name: 'Create project', exact: true }).click();
 }

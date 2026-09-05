@@ -6,7 +6,7 @@ import * as path from 'node:path';
 test('copies an ordinary drag selection from the installed Hermes TUI', async ({}, testInfo) => {
   test.skip(!process.env.JANET_TEST_HERMES, 'Requires an installed Hermes executable');
   test.setTimeout(90_000);
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-hermes-copy-'));
+  const profile = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-hermes-copy-'));
   const hermesHome = path.join(profile, 'hermes');
   fs.mkdirSync(hermesHome);
   fs.writeFileSync(path.join(profile, 'settings.json'), JSON.stringify({ mainDirectory: profile,

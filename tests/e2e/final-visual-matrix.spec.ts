@@ -37,12 +37,13 @@ function agentSequence(event: Record<string, unknown>): string {
 
 function emitCommand(event: Record<string, unknown>): string {
   const encoded = Buffer.from(agentSequence(event)).toString('base64');
-  return `node -e "process.stdout.write(Buffer.from('${encoded}','base64'))"`;
+  return `node -e "process.stdout.write(Buffer.from('${encoded}','base64'));setInterval(()=>{},1000)"`;
 }
 
 function gatedEmitCommand(event: Record<string, unknown>): string {
   const encoded = Buffer.from(agentSequence(event)).toString('base64');
-  return `node -e "process.stdin.once('data',()=>process.stdout.write(Buffer.from('${encoded}','base64')))"`;
+  const started = Buffer.from(agentSequence({ event: 'turn.start', sessionId: event.sessionId, turnId: event.turnId })).toString('base64');
+  return `node -e "process.stdout.write(Buffer.from('${started}','base64'));process.stdin.once('data',()=>process.stdout.write(Buffer.from('${encoded}','base64')));setInterval(()=>{},1000)"`;
 }
 
 async function typeCommand(page: Page, terminal: Locator, command: string): Promise<void> {
@@ -123,8 +124,8 @@ async function measureVisualState(page: Page, name: string) {
     };
     const keySelectors = [
       '.app', '.titlebar', '.app-body', '.workspace-tools', '.vtab-bar', '.terminal-area',
-      '.status-bar', '.broadcast-input-banner', '.vtab-sub.running', '.vtab-sub.finished',
-      '.vtab-sub.exited', '.vtab-sub.disconnected', '.leaf-awareness.needs-input',
+      '.status-bar', '.broadcast-input-banner', '.activity-count.running', '.activity-count.finished',
+      '.vtab-item:has(.activity-dot.exited) .vtab-name', '.vtab-item:has(.activity-dot.disconnected) .vtab-name', '.leaf-awareness.needs-input',
       '.terminal-command-failed',
     ];
     const regions = keySelectors.map((selector) => {
@@ -175,10 +176,10 @@ async function measureVisualState(page: Page, name: string) {
         })),
       },
       contrastPairs: [
-        contrast('.vtab-sub.running'),
-        contrast('.vtab-sub.finished'),
-        contrast('.vtab-sub.exited'),
-        contrast('.vtab-sub.disconnected'),
+        contrast('.activity-count.running'),
+        contrast('.activity-count.finished'),
+        contrast('.vtab-item:has(.activity-dot.exited) .vtab-name'),
+        contrast('.vtab-item:has(.activity-dot.disconnected) .vtab-name'),
         contrast('.leaf-awareness.needs-input'),
         contrast('.terminal-leaf.broadcast-selected .leaf-title'),
         contrast('.broadcast-input-banner strong'),
@@ -189,7 +190,7 @@ async function measureVisualState(page: Page, name: string) {
 
 test('checks every built-in theme in the Electron visual matrix', async ({}, testInfo) => {
   test.setTimeout(120_000);
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-final-visual-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-final-visual-e2e-'));
   const pageErrors: string[] = [];
   let app: ElectronApplication | undefined;
 
@@ -263,44 +264,41 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
     await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
       .toEqual({ width: 1280, height: 800 });
     await expect(page.locator('.vtab-item')).toHaveCount(5);
-    await expect(tab(page, 'Disconnected SSH').locator('.vtab-sub')).toHaveText('SSH disconnected');
+    await expect(tab(page, 'Disconnected SSH')).toHaveAttribute('aria-label', /SSH disconnected/);
 
     const runningTerminal = await selectTab(page, 'Running agent');
     await typeCommand(page, runningTerminal, emitCommand({
       event: 'turn.start', sessionId: 'visual-running', turnId: 'turn-running',
     }));
-    await expect(tab(page, 'Running agent').locator('.vtab-sub')).toHaveText('Hermes · Running');
+    await expect(tab(page, 'Running agent')).toHaveAttribute('aria-label', /Hermes · Running/);
 
     const finishedTerminal = await selectTab(page, 'Finished agent');
-    await typeCommand(page, finishedTerminal, emitCommand({
-      event: 'turn.start', sessionId: 'visual-finished', turnId: 'turn-finished',
-    }));
-    await expect(tab(page, 'Finished agent').locator('.vtab-sub')).toHaveText('Hermes · Running');
     const finishedId = await finishedTerminal.getAttribute('data-terminal-id');
     expect(finishedId).toBeTruthy();
     await typeCommand(page, finishedTerminal, gatedEmitCommand({
       event: 'turn.end', sessionId: 'visual-finished',
       turnId: 'turn-finished', outcome: 'succeeded',
     }));
+    await expect(tab(page, 'Finished agent')).toHaveAttribute('aria-label', /Hermes · Running/);
 
     const exitedTerminal = await selectTab(page, 'Exited shell');
     await typeCommand(page, exitedTerminal, 'exit');
-    await expect(tab(page, 'Exited shell').locator('.vtab-sub')).toHaveText('Exited', { timeout: 15_000 });
+    await expect(tab(page, 'Exited shell')).toHaveAttribute('aria-label', /Exited/, { timeout: 15_000 });
 
     await selectTab(page, 'Active workspace');
     await page.evaluate(({ id }) => window.janet.terminalWrite({ id, data: 'x\r', userInput: true }), {
       id: finishedId!,
     });
-    await expect(tab(page, 'Finished agent').locator('.vtab-sub')).toHaveText('Hermes · Turn finished');
+    await expect(tab(page, 'Finished agent')).toHaveAttribute('aria-label', /Hermes · Turn finished/);
 
     const activeTerminals = page.locator('.terminal-container');
     await expect(activeTerminals).toHaveCount(3);
+    const clearCommand = process.platform === 'win32' ? 'cls' : 'clear';
+    await typeCommand(page, activeTerminals.nth(0), clearCommand);
     await typeCommand(page, activeTerminals.nth(0), emitCommand({
       event: 'attention.request', sessionId: 'visual-active', turnId: 'turn-active',
     }));
     await expect(page.locator('.leaf-awareness.needs-input')).toHaveText('Hermes · Needs input');
-    const clearCommand = process.platform === 'win32' ? 'cls' : 'clear';
-    await typeCommand(page, activeTerminals.nth(0), clearCommand);
     await typeCommand(page, activeTerminals.nth(1), clearCommand);
     const failingCommand = process.platform === 'win32' ? 'test' : 'false';
     await typeCommand(page, activeTerminals.nth(1), failingCommand);
@@ -401,7 +399,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
         expect(menuBox!.y).toBeGreaterThanOrEqual(0);
         expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(viewport.width + 1);
         expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(viewport.height + 1);
-        await expect(menu.getByRole('menuitem', { name: 'Rename workspace' })).toBeFocused();
+        await expect(menu.getByRole('menuitem', { name: 'Rename project' })).toBeFocused();
         await page.evaluate(() => document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
         await expect(menu).toBeHidden();
         await expect(activeTab).toBeFocused();
@@ -414,7 +412,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
           clientX: point.x,
           clientY: point.y,
         })), { x: viewport.width - 1, y: viewport.height - 1 });
-        await expect(menu.getByRole('menuitem', { name: 'Rename workspace' })).toBeFocused();
+        await expect(menu.getByRole('menuitem', { name: 'Rename project' })).toBeFocused();
         await page.keyboard.press('Escape');
         await expect(menu).toBeHidden();
         await expect(activeTab).toBeFocused();

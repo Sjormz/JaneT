@@ -6,7 +6,7 @@ import { parse as load } from 'yaml';
 import { hermesActivityHome, installHermesActivity, mapHermesActivity } from '../../src/main/hermesActivitySetup';
 
 function fixture(run: (root: string, env: NodeJS.ProcessEnv) => void): void {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-hermes-'));
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-hermes-'));
   try { run(root, { HERMES_HOME: root }); }
   finally { fs.rmSync(root, { recursive: true, force: true }); }
 }

@@ -41,13 +41,13 @@ describe('ShortcutEditor', () => {
     renderEditor(onSave);
     await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
 
-    fireEvent.click(screen.getByRole('button', { name: /close current tab \(currently Alt\+X\)/i }));
-    const capture = screen.getByRole('textbox', { name: /press a shortcut for close current tab/i });
+    fireEvent.click(screen.getByRole('button', { name: /close current terminal \(currently Alt\+X\)/i }));
+    const capture = screen.getByRole('textbox', { name: /press a shortcut for close current terminal/i });
     fireEvent.keyDown(capture, { key: 'Backspace' });
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
     expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({ 'close-tab': '' }));
-    expect(screen.getByRole('button', { name: /close current tab \(currently unassigned\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /close current terminal \(currently unassigned\)/i })).toBeInTheDocument();
   });
 
   it('captures standalone function keys but rejects unmodified printable keys', async () => {
@@ -96,7 +96,7 @@ describe('ShortcutEditor', () => {
     expect(onSave).toHaveBeenCalledOnce();
     expect(screen.getByRole('alertdialog', { name: /reset all keyboard shortcuts/i })).toBeInTheDocument();
     expect(screen.getByText(/replaces every custom keyboard shortcut with JaneT’s defaults/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /close current tab \(currently Alt\+X\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /close current terminal \(currently Alt\+X\)/i })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
     expect(onSave).toHaveBeenCalledOnce();
@@ -107,7 +107,7 @@ describe('ShortcutEditor', () => {
 
     expect(onSave).toHaveBeenCalledOnce();
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /close current tab \(currently Alt\+X\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /close current terminal \(currently Alt\+X\)/i })).toBeInTheDocument();
   });
 
   it('resets shortcuts exactly once after explicit confirmation', async () => {
@@ -122,7 +122,7 @@ describe('ShortcutEditor', () => {
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
     expect(onSave).toHaveBeenLastCalledWith(DEFAULT_KEYBINDINGS);
-    expect(screen.getByRole('button', { name: /close current tab \(currently Ctrl\+W\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /close current terminal \(currently Ctrl\+W\)/i })).toBeInTheDocument();
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 });

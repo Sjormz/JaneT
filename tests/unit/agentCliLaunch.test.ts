@@ -26,7 +26,7 @@ function run(executable: string, args: string[], env: NodeJS.ProcessEnv, input =
 
 describe('automatic agent launch runtime', () => {
   it('returns to Ready through the configured notifier while preserving the existing handler inside and outside JaneT', async () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-codex-forward-'));
+    const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-codex-forward-'));
     const helper = path.join(directory, 'agent-cli.cjs');
     const outputPath = path.join(directory, 'forwarded.json');
     const originalScript = path.join(directory, 'original.cjs');
@@ -67,7 +67,7 @@ describe('automatic agent launch runtime', () => {
     } finally { bridge.close(); fs.rmSync(directory, { recursive: true, force: true }); }
   }, 25000);
   it('sets up once and routes real bundled Codex and Hermes helpers without private payload fields', async () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-cli-runtime-'));
+    const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-cli-runtime-'));
     const helper = path.join(directory, 'agent helper.cjs');
     const events: any[] = [];
     const bridge = new AgentActivityBridge((id, event) => events.push({ id, ...event }));
@@ -92,7 +92,7 @@ describe('automatic agent launch runtime', () => {
   }, 25000);
 
   it.skipIf(process.platform !== 'win32')('ordinary PowerShell codex invocation installs before launch and preserves arguments and exit status', async () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "janet launch's "));
+    const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "janet launch's "));
     const bridge = new AgentActivityBridge(() => {});
     try {
       const helper = path.join(directory, 'helper.cjs');

@@ -24,7 +24,7 @@ function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 function createFixture(): { directory: string; fileName: string; filePath: string } {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), FIXTURE_PREFIX));
+  const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), FIXTURE_PREFIX));
   const fileName = 'editor-fixture.ts';
   const filePath = path.join(directory, fileName);
   fs.writeFileSync(filePath, 'export const answer = 41;\n', 'utf8');
@@ -32,7 +32,7 @@ function createFixture(): { directory: string; fileName: string; filePath: strin
 }
 
 function createUserData(cwd: string): string {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), USER_DATA_PREFIX));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), USER_DATA_PREFIX));
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,

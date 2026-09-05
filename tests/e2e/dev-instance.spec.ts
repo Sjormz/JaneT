@@ -15,7 +15,7 @@ async function freePort(): Promise<number> {
 
 test('starts the real dev launcher and cleans up its owned processes', async ({}, testInfo) => {
   test.setTimeout(60_000);
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-dev-smoke-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-dev-smoke-'));
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData }));
   const port = await freePort();
   const debugPort = await freePort();
@@ -34,7 +34,8 @@ test('starts the real dev launcher and cleans up its owned processes', async ({}
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`);
     const page = browser.contexts()[0].pages().find((page) => !page.url().startsWith('devtools:'))!;
     await expect(page).toHaveURL(url);
-    await expect(page.locator('.terminal-container')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Create your first workspace' })).toBeVisible();
+    await expect(page.locator('.terminal-container')).toHaveCount(0);
     await page.evaluate(() => window.janet.windowClose());
     await expect.poll(() => child.exitCode, { timeout: 10_000 }).toBe(0);
     await expect.poll(() => fetch(url).then(() => true).catch(() => false)).toBe(false);

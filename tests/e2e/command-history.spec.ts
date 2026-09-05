@@ -31,8 +31,8 @@ function containsKeyOrText(value: unknown, text: string): boolean {
 
 test('persists real command metadata and history selection pastes without execution', async () => {
   test.setTimeout(60_000);
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-history-e2e-'));
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-history-profile-'));
+  const cwd = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-history-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-history-profile-'));
   const settingsPath = path.join(userData, 'settings.json');
   const markerPath = path.join(cwd, 'history-rerun.txt');
   const releasePath = path.join(cwd, 'history-release.txt');

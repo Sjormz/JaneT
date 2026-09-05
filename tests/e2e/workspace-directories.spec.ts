@@ -27,6 +27,12 @@ class FolderSessions {
     }
     await expect(this.page.locator('.vtab-name').getByText(name, { exact: true })).toHaveCount(0);
   }
+  async closeProjectTerminals(name: string) {
+    await this.projectAction(name, 'Close all terminals…');
+    await this.page.getByRole('alertdialog').getByRole('button', { name: 'Close all terminals', exact: true }).click();
+    await expect(this.page.locator('.vtab-name').getByText(name, { exact: true })).toBeVisible();
+    await expect(this.page.locator('.terminal-container')).toHaveCount(0);
+  }
   async projectAction(name: string, action: string, destination?: string) {
     if (destination) await this.app.evaluate(({ dialog }, selected) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] });
@@ -42,7 +48,7 @@ class FolderSessions {
 
 test('sets up a main directory and restores independent linked-folder sessions', async ({}, testInfo) => {
   test.setTimeout(90_000);
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-folder-e2e-'));
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-folder-e2e-'));
   const profile = path.join(root, 'profile');
   const main = path.join(root, 'JaneT');
   const project = path.join(root, 'Project X');
@@ -68,7 +74,7 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await expect(page.getByRole('heading', { name: 'A home for your work' })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('main-directory-onboarding.png') });
     await folders.choose(main, 'Choose main directory');
-    await expect(page.getByText('Your workspace, your starting point')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Create your first workspace' })).toBeVisible();
     await expect(page.locator('.terminal-container')).toHaveCount(0);
     expect(fs.readdirSync(main)).toEqual([]);
     await createWorkspace(page, 'Temporary', [{}], 'First group');
@@ -78,13 +84,13 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await page.locator('[data-terminal-id]').evaluateAll(async (nodes) => {
       for (const node of nodes) await (window as any).janet.terminalDestroy({ id: node.getAttribute('data-terminal-id') });
     });
-    await page.getByRole('button', { name: /^Temporary Local/ }).click({ button: 'right' });
+    await page.locator('.vtab-name').getByText('Temporary', { exact: true }).click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Rename project', exact: true }).click();
     await page.getByRole('textbox', { name: 'Tab name', exact: true }).fill('Renamed project');
     await page.getByRole('textbox', { name: 'Tab name', exact: true }).press('Enter');
     await expect.poll(() => fs.existsSync(path.join(main, 'First group', 'Renamed project', 'keep.txt'))).toBe(true);
     await expect.poll(() => settings().session.tabs[0]?.cwd).toBe(path.join(main, 'First group', 'Renamed project'));
-    await folders.close('Renamed project');
+    await folders.closeProjectTerminals('Renamed project');
     await page.locator('.workspace-group-name').getByText('First group', { exact: true }).click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Rename workspace', exact: true }).click();
     await page.getByRole('textbox', { name: 'Workspace name', exact: true }).fill('CON');
@@ -96,15 +102,15 @@ test('sets up a main directory and restores independent linked-folder sessions',
     expect(fs.readFileSync(path.join(main, 'Renamed workspace', 'Renamed project', 'keep.txt'), 'utf8')).toBe('keep');
     await page.getByRole('button', { name: 'Local terminal in Renamed workspace', exact: true }).click();
     await expect(page.locator('.terminal-container')).toHaveCount(1);
-    await expect.poll(() => settings().session.tabs[0]?.cwd).toBe(path.join(main, 'Renamed workspace'));
-    await folders.close('Local session');
-    await expect(page.getByText('Your workspace, your starting point')).toBeVisible();
+    await expect.poll(() => settings().session.tabs.find((tab: any) => tab.title === 'Local session')?.cwd).toBe(path.join(main, 'Renamed workspace'));
+    await folders.closeProjectTerminals('Local session');
+    await expect(page.getByText('No terminals open', { exact: true })).toBeVisible();
     await expect(page.locator('.terminal-container')).toHaveCount(0);
     const emptyClosed = app.waitForEvent('close');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
     await emptyClosed; app = undefined;
     app = await launch(); page = await app.firstWindow(); folders = new FolderSessions(page, app);
-    await expect(page.getByText('Your workspace, your starting point')).toBeVisible();
+    await expect(page.getByText('No terminals open', { exact: true })).toBeVisible();
     await expect(page.locator('.terminal-container')).toHaveCount(0);
     await createWorkspace(page, 'Experiment A', [{}, {}], 'Research');
     await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -151,12 +157,12 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await closed; app = undefined;
     app = await launch(); page = await app.firstWindow(); folders = new FolderSessions(page, app);
     await expect(page.getByRole('heading', { name: 'A home for your work' })).toHaveCount(0);
-    await page.getByRole('button', { name: /^Experiment A Local/ }).click();
+    await page.locator('.vtab-name').getByText('Experiment A', { exact: true }).click();
     await expect(page.locator('.terminal-container')).toHaveCount(2);
     expect(fs.readFileSync(path.join(root, 'Experiment A', 'keep.txt'), 'utf8')).toBe('promoted data');
-    await page.getByRole('button', { name: /^Development Local/ }).click();
+    await page.locator('.vtab-name').getByText('Development', { exact: true }).click();
     await expect(page.locator('.terminal-container')).toHaveCount(3);
-    await page.getByRole('button', { name: /^Testing Local/ }).click();
+    await page.locator('.vtab-name').getByText('Testing', { exact: true }).click();
     await expect(page.locator('.terminal-container')).toHaveCount(2);
     await expect(page.getByRole('alert')).toHaveCount(0);
     await folders.close('Development');

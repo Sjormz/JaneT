@@ -7,7 +7,7 @@ import { rebaseDirectory } from '../../src/shared/workspaceGroups';
 
 const roots: string[] = [];
 it('renames real folders, keeps descendants, and rejects invalid names, collisions, and links', async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'janet-rename-')); roots.push(root);
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'janet-rename-')); roots.push(root);
   const source = await createWorkspaceDirectory(root, 'Before');
   await fs.mkdir(path.join(source, 'Project'));
   await fs.writeFile(path.join(source, 'Project', 'keep.txt'), 'keep');

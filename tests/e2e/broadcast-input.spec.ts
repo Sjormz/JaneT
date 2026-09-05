@@ -1,3 +1,4 @@
+import { terminalSettings } from './workspaces';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -24,8 +25,8 @@ async function forceClose(app: ElectronApplication | undefined): Promise<void> {
 
 test('broadcasts to selected real terminals until Escape cancels it', async () => {
   test.setTimeout(60_000);
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-broadcast-e2e-'));
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData }));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-broadcast-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(terminalSettings(userData)));
   const outputPath = path.join(userData, 'broadcast-lines.txt').replace(/\\/g, '/');
   const first = `broadcast_${Date.now()}_first`;
   const second = `broadcast_${Date.now()}_second`;
@@ -42,7 +43,6 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
     });
     const page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
-    await page.getByRole('button', { name: 'Dismiss get started' }).click();
 
     const terminals = page.locator('.terminal-container');
     await expect(terminals).toHaveCount(1);
@@ -62,7 +62,7 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
     const status = page.getByRole('status', { name: /broadcast input active/i });
     await expect(status).toContainText('Broadcast input active · 2 panes');
     await expect(page.locator('.terminal-leaf.broadcast-selected')).toHaveCount(2);
-    const terminalAreaBox = await page.locator('.terminal-area').boundingBox();
+    const terminalAreaBox = await page.locator('.terminal-area > .split-container').boundingBox();
     const statusBox = await status.boundingBox();
     expect(terminalAreaBox).not.toBeNull();
     expect(statusBox).not.toBeNull();
