@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
-import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, rebaseDirectory, type WorkspaceGroup } from '../shared/workspaceGroups';
+import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, isWorkspaceProject, rebaseDirectory, type WorkspaceGroup } from '../shared/workspaceGroups';
 import EmptyWorkspace, { type WorkspaceEntryRequest } from './components/EmptyWorkspace';
 import Titlebar from './components/Titlebar';
 import VerticalTabBar from './components/VerticalTabBar';
@@ -1680,7 +1680,7 @@ function AppInner({ initialSettings, persistSettings }: {
       if (owners.length === 0) return;
 
       const newRoot = removePane(tab.root, leafId);
-      const isProject = groupsRef.current.some(group => group.id === tab.groupId && group.kind !== 'folder');
+      const isProject = isWorkspaceProject(tab, groupsRef.current);
       if (!newRoot && !isProject) {
         closeTab(tabId);
         return;
@@ -1707,7 +1707,7 @@ function AppInner({ initialSettings, persistSettings }: {
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
     if (!tab) return;
     const paneCount = getAllLeafIds(tab.root).length;
-    if (groupsRef.current.some(group => group.id === tab.groupId && group.kind !== 'folder')) {
+    if (isWorkspaceProject(tab, groupsRef.current)) {
       if (!paneCount) return;
       setPendingDestructiveAction({
         title: `Close all terminals in ${tab.title}?`,
@@ -1803,7 +1803,7 @@ function AppInner({ initialSettings, persistSettings }: {
   const requestClosePane = useCallback((tabId: string, leafId: string) => {
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
     if (!tab) return;
-    if (getAllLeafIds(tab.root).length === 1 && !groupsRef.current.some(group => group.id === tab.groupId && group.kind !== 'folder')) {
+    if (getAllLeafIds(tab.root).length === 1 && !isWorkspaceProject(tab, groupsRef.current)) {
       requestCloseTab(tabId);
       return;
     }
@@ -1890,6 +1890,7 @@ function AppInner({ initialSettings, persistSettings }: {
     const group = groupsRef.current.find((entry) => entry.id === groupId);
     const project = projectId ? tabsRef.current.find((tab) => tab.id === projectId && tab.groupId === groupId) : undefined;
     if (!group || (projectId && !project)) return;
+    if (!project && !group.directory) action = 'unlink';
     const affected = tabsRef.current.filter((tab) => project ? tab.id === project.id : tab.groupId === group.id);
     if (affected.some((tab) => (editorDocuments.documentsByTab[tab.id] ?? []).some(isEditorDocumentDirty))) {
       setDirectoryActionError('Save or close changed editor files before deleting, keeping, or removing this entry.');
@@ -1908,13 +1909,13 @@ function AppInner({ initialSettings, persistSettings }: {
     const count = affected.reduce((sum, tab) => sum + countLeaves(tab.root), 0);
     setDirectoryActionError('');
     setPendingDestructiveAction({
-      title: action === 'keep' ? `Keep ${name} in Library?` : action === 'unlink' ? `Remove ${name} from Library?` : `Delete ${name}?`,
+      title: action === 'keep' ? `Keep ${name} in Library?` : action === 'unlink' ? `Remove ${name}${group.kind === 'folder' ? ' from Library' : ''}?` : `Delete ${name}?`,
       description: action === 'keep'
         ? `Copy and verify ${source} inside ${destinationParent}, then send the temporary original to the Recycle Bin. Its ${count} terminals will stop and reopen at the saved location. Close external programs using these files first. Large projects may take a while.`
         : action === 'unlink'
-          ? `Remove this Library entry and stop its ${count} terminals? Files at ${source} will not be deleted.`
+          ? `Remove this ${group.kind === 'folder' ? 'Library entry' : 'workspace'} and stop its ${count} terminals? Files will not be deleted.`
           : `Send ${source} and ALL files and subfolders inside it to the Recycle Bin? This closes ${affected.length} project/session entries and stops ${count} terminals. Detached jobs may continue; close external programs using these files first.`,
-      confirmLabel: action === 'keep' ? 'Keep in Library' : action === 'unlink' ? 'Remove from Library' : 'Delete to Recycle Bin',
+      confirmLabel: action === 'keep' ? 'Keep in Library' : action === 'unlink' ? (group.kind === 'folder' ? 'Remove from Library' : 'Remove workspace') : 'Delete to Recycle Bin',
       destructive: action !== 'keep',
       fallbackFocus: firstTerminalFocusTarget,
       run: async () => {
@@ -2844,10 +2845,12 @@ function AppInner({ initialSettings, persistSettings }: {
             onRetryDocument={(key) => { void editorDocuments.retryDocument(key); }}
             onCloseDocument={requestCloseEditorDocument}
             terminal={getAllLeafIds(activeTab.root).length === 0 ? (
-              <section className="editor-state" aria-label="Project has no terminals">
+              <section className="editor-state" aria-label="No terminals open">
                 <strong>No terminals open</strong>
+                {isWorkspaceProject(activeTab, groups) ? <>
                 <span>{activeTab.title} is still available. Open a terminal to continue working in its folder.</span>
                 <button onClick={() => { if (activeTab.groupId) void openContextTerminal(activeTab.groupId, activeTab.id).catch(error => setDirectoryActionError(String(error))); }}>Open terminal</button>
+                </> : <button onClick={() => requestCloseTab(activeTab.id)}>Close session</button>}
               </section>
             ) : (
               <SplitPane

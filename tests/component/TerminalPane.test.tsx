@@ -1590,6 +1590,23 @@ describe('TerminalPane', () => {
     expect(callbackB).toHaveBeenNthCalledWith(2, 'term-broadcast-remount', '\u0000', true);
   });
 
+  it('pastes clipboard images and native file drops through xterm without submitting', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    vi.mocked(window.janet.readTerminalClipboard).mockResolvedValue({ imagePath: 'C:/Temp/screen shot.png' });
+    window.janet.getPathForFile = vi.fn(() => 'C:/Images/drop image.png');
+    render(<KeybindingsProvider><TerminalPane termId="image" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" /></KeybindingsProvider>);
+    const terminal = MockTerminal.instances.at(-1)!;
+    const handler = terminal.attachCustomKeyEventHandler.mock.calls.at(-1)![0];
+    act(() => { handler({ type: 'keydown', key: 'v', ctrlKey: true, preventDefault: vi.fn() }); });
+    await waitFor(() => expect(terminal.paste).toHaveBeenCalledWith("'C:/Temp/screen shot.png' "));
+    const dataTransfer = { types: ['Files'], files: [new File(['image'], 'drop image.png')], dropEffect: 'none' };
+    fireEvent.dragOver(document.querySelector('.terminal-container')!, { dataTransfer });
+    expect(dataTransfer.dropEffect).toBe('copy');
+    fireEvent.drop(document.querySelector('.terminal-container')!, { dataTransfer });
+    expect(terminalWrite).toHaveBeenCalledWith({ id: 'image', data: "'C:/Images/drop image.png' ", userInput: true });
+    expect(terminal.paste).toHaveBeenCalledTimes(2);
+  });
+
   it('pastes a compatible local path through xterm and marks it as user input', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     render(

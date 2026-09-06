@@ -103,7 +103,8 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await page.getByRole('button', { name: 'Local terminal in Renamed workspace', exact: true }).click();
     await expect(page.locator('.terminal-container')).toHaveCount(1);
     await expect.poll(() => settings().session.tabs.find((tab: any) => tab.title === 'Local session')?.cwd).toBe(path.join(main, 'Renamed workspace'));
-    await folders.closeProjectTerminals('Local session');
+    await folders.close('Local session');
+    await page.locator('.vtab-name').getByText('Renamed project', { exact: true }).click();
     await expect(page.getByText('No terminals open', { exact: true })).toBeVisible();
     await expect(page.locator('.terminal-container')).toHaveCount(0);
     const emptyClosed = app.waitForEvent('close');

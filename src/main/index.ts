@@ -1,4 +1,5 @@
 import * as electron from 'electron';
+import { readTerminalClipboard, clearTerminalClipboardImages } from './terminalClipboard';
 import * as path from 'path';
 import packageMetadata from '../../package.json';
 import { TerminalManager } from './terminal';
@@ -528,10 +529,9 @@ function registerIpcHandlers() {
   });
 
   // === Terminal IPC ===
-  handle('app:readTerminalClipboard', () => {
-    const text = electron.clipboard.readText();
-    if (text.length > MAX_TERMINAL_CLIPBOARD_TEXT_LENGTH) throw new Error('Clipboard text exceeds the terminal paste limit');
-    return text;
+  handle('app:readTerminalClipboard', readTerminalClipboard);
+  electron.app.on('will-quit', () => {
+    try { clearTerminalClipboardImages(); } catch { /* OS temp cleanup can remove files still in use. */ }
   });
 
   handle('terminal:create', async (event, { id, cwd, shell, startupCommands }) => {
