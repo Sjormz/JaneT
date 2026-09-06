@@ -53,7 +53,21 @@ let quittingAfterWorkspaceStop = false;
 const closePreparation = new WorkspaceClosePreparationCoordinator();
 
 electron.protocol.registerSchemesAsPrivileged([RENDERER_SCHEME_REGISTRATION]);
-electron.app.setAppUserModelId('com.sjorm.janet');
+const developmentApp = electron.app.isPackaged === false;
+const notificationProtocol = developmentApp ? 'janet-dev' : 'janet';
+if (process.platform === 'win32' && developmentApp) {
+  // Electron creates notification shortcuts by app name. Keep development
+  // registration separate without moving the existing settings profile.
+  const userData = electron.app.getPath('userData');
+  electron.app.setName('JaneT Development');
+  electron.app.setPath('userData', userData);
+}
+electron.app.setAppUserModelId(developmentApp ? 'com.sjorm.janet.dev' : 'com.sjorm.janet');
+
+export function notificationActivationKey(argv: string[]): string | undefined {
+  const prefix = `${notificationProtocol}://notification/`;
+  return argv.find((arg) => arg.startsWith(prefix) && /^[0-9]+-[a-z0-9]+$/.test(arg.slice(prefix.length)))?.slice(prefix.length);
+}
 
 const e2eEventsPath = process.env.JANET_E2E_EVENTS_PATH;
 const e2eRemoteDebuggingPort = process.env.JANET_E2E_REMOTE_DEBUGGING_PORT;
@@ -68,14 +82,17 @@ if (process.env.JANET_E2E_USER_DATA_DIR) {
 
 const hasSingleInstanceLock = electron.app.requestSingleInstanceLock();
 let restoreRequestedBySecondInstance = false;
+let pendingNotificationKey: string | undefined;
 if (!hasSingleInstanceLock) {
   electron.app.quit();
 } else {
-  electron.app.on('second-instance', () => {
+  electron.app.on('second-instance', (_event, argv: string[]) => {
     restoreRequestedBySecondInstance = true;
+    pendingNotificationKey = notificationActivationKey(argv);
     if (!electron.app.isReady() || !workspaceLifecycle) return;
     restoreRequestedBySecondInstance = false;
-    showOrCreateWindow();
+    activateCommandNotification(pendingNotificationKey);
+    pendingNotificationKey = undefined;
   });
 }
 
@@ -210,6 +227,7 @@ function notificationDecision(payload: CommandNotificationPayload): 'disabled' |
 
 const notificationTargets = new Map<string, NonNullable<CommandNotificationPayload['target']>>();
 let notificationDeliveryError: string | null = null;
+let notificationProtocolRegistered = false;
 const agentActivityBridge = new AgentActivityBridge((id, event) => sendRendererEvent(mainWindow, 'terminal:agentActivity', { id, event }));
 function activateCommandNotification(key?: string): void {
   showOrCreateWindow();
@@ -228,6 +246,13 @@ function deliverCommandNotification(value: unknown): boolean {
   }
   if (decision !== 'would-show') return false;
   try {
+    if (process.platform === 'win32' && !notificationProtocolRegistered) {
+      // COM toast activation registers only electron.exe in development.
+      // Protocol activation preserves the app argument and reaches our single instance.
+      notificationProtocolRegistered = electron.app.setAsDefaultProtocolClient(notificationProtocol, process.execPath,
+        developmentApp ? [path.resolve(electron.app.getAppPath())] : []);
+      if (!notificationProtocolRegistered) throw new Error('Could not register notification activation');
+    }
     const seconds = Math.round(payload.durationMs / 1000);
     const where = payload.context.kind === 'ssh' ? ` on ${payload.context.hostLabel}` : '';
     const title = payload.outcome === 'failure' ? 'Command failed' : payload.outcome === 'success' ? 'Command finished' : 'Command completed';
@@ -236,7 +261,7 @@ function deliverCommandNotification(value: unknown): boolean {
     if (payload.target) notificationTargets.set(key, payload.target);
     while (notificationTargets.size > 128) notificationTargets.delete(notificationTargets.keys().next().value!);
     const notification = new electron.Notification({ title, body,
-      ...(process.platform === 'win32' ? { toastXml: `<toast launch="${key}"><visual><binding template="ToastGeneric"><text>${xmlText(title)}</text><text>${xmlText(body)}</text></binding></visual></toast>` } : {}),
+      ...(process.platform === 'win32' ? { toastXml: `<toast activationType="protocol" launch="${notificationProtocol}://notification/${key}"><visual><binding template="ToastGeneric"><text>${xmlText(title)}</text><text>${xmlText(body)}</text></binding></visual></toast>` } : {}),
     });
     notification.on('failed', () => {
       notificationTargets.delete(key);
@@ -447,7 +472,8 @@ electron.app.whenReady().then(() => {
   }
   if (restoreRequestedBySecondInstance) {
     restoreRequestedBySecondInstance = false;
-    showOrCreateWindow();
+    activateCommandNotification(pendingNotificationKey);
+    pendingNotificationKey = undefined;
   }
 
   // Initialize auto-updater. Keep this lazy so physical e2e launches can run

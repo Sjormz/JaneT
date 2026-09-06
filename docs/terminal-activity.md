@@ -58,7 +58,7 @@ Primary research: [Claude CLI](https://code.claude.com/docs/en/cli-reference), [
 
 Settings still control the threshold and unfocused-only desktop notification policy. Timing uses a monotonic clock; signed Windows exit codes are accepted. Missing command text no longer prevents completion tracking. A TUI's alternate-screen markers do not cancel the outer shell command. Notification contents exclude command/output text.
 
-Clicking a current-session toast opens its project and terminal. Stale targets are ignored; after an application restart an old toast opens JaneT but cannot resurrect an ended terminal. Windows activation uses the native activation callback. **Check notification delivery** in Settings reports native failures; `show()` returning is not proof the OS displayed a toast. OS permissions and Do Not Disturb remain authoritative.
+Clicking a current-session toast opens its project and terminal. Stale targets are ignored; after an application restart an old toast opens JaneT but cannot resurrect an ended terminal. Windows toasts use `janet://notification/` protocol activation (`janet-dev://` in development), with only an opaque session key accepted. Development registration includes the app entry path and uses a separate notification identity while preserving the existing settings location. The native activation callback remains for older toasts. **Check notification delivery** in Settings reports native failures; `show()` returning is not proof the OS displayed a toast. OS permissions and Do Not Disturb remain authoritative.
 
 ## Honest boundaries
 

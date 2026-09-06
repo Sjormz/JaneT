@@ -34,6 +34,9 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
     on: vi.fn(), once: vi.fn(), loadURL: vi.fn(),
   };
   const setAppUserModelId = vi.fn();
+  const appOn = vi.fn();
+  const setName = vi.fn();
+  const setAsDefaultProtocolClient = vi.fn(() => true);
   const Notification = vi.fn(function (this: any, _options?: any) {
     if (options.constructorFails) throw new Error('constructor failed');
     this.on = notificationOn;
@@ -60,7 +63,7 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
     writeFileSync,
   }));
   vi.doMock('electron', () => ({
-    app: { commandLine: { appendSwitch: vi.fn() }, getAppPath: vi.fn(() => '.'), getPath: vi.fn(() => '/tmp/janet-test'), getVersion: vi.fn(() => packageMetadata.version), isPackaged: options.packaged ?? false, requestSingleInstanceLock: vi.fn(() => true), quit: vi.fn(), on: vi.fn(), whenReady: vi.fn(() => Promise.resolve()), setPath: vi.fn(), setAppUserModelId },
+    app: { commandLine: { appendSwitch: vi.fn() }, getAppPath: vi.fn(() => '.'), getPath: vi.fn(() => '/tmp/janet-test'), getVersion: vi.fn(() => packageMetadata.version), isPackaged: options.packaged ?? false, requestSingleInstanceLock: vi.fn(() => true), quit: vi.fn(), on: appOn, isReady: () => true, setName, setAsDefaultProtocolClient, whenReady: vi.fn(() => Promise.resolve()), setPath: vi.fn(), setAppUserModelId },
     protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() }, net: { fetch: vi.fn() }, Menu: { setApplicationMenu: vi.fn() },
     BrowserWindow, Notification, clipboard: { writeText: clipboardWriteText }, dialog: { showMessageBox: vi.fn(), showOpenDialog, showErrorBox: vi.fn() }, shell: { openExternal: vi.fn() }, autoUpdater: { on: vi.fn() },
     ipcMain: { handle: vi.fn((channel: string, listener: Function) => handlers.set(channel, listener)), on: vi.fn() },
@@ -70,7 +73,7 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
   const settingsRecoveryStateSpy = vi.spyOn(settings.SettingsManager.prototype, 'getRecoveryState').mockReturnValue({ previousAvailable: true });
   const restorePreviousSpy = vi.spyOn(settings.SettingsManager.prototype, 'restorePrevious').mockReturnValue({ theme: 'dracula' } as any);
   const resetSettingsSpy = vi.spyOn(settings.SettingsManager.prototype, 'reset').mockReturnValue({ theme: 'tokyo-night' } as any);
-  await import('../../src/main/index');
+  const { notificationActivationKey } = await import('../../src/main/index');
   await vi.waitFor(() => expect(handlers.has('notifications:command-completed')).toBe(true));
   const invoke = (payload: unknown, sender: unknown = webContents, senderFrame: unknown = webContents.mainFrame) =>
     Promise.resolve().then(() => handlers.get('notifications:command-completed')!({ sender, senderFrame }, payload));
@@ -81,18 +84,38 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
   return {
     invoke, invokeChannel, setSettings, writeFileSync, settingsGetSpy, settingsRecoveryStateSpy,
     restorePreviousSpy, resetSettingsSpy, Notification, notificationOn, notificationShow, notificationHandleActivation,
-    restore, show, focus, setAppUserModelId, showOpenDialog, webContents, clipboardWriteText,
+    restore, show, focus, appOn, setName, setAsDefaultProtocolClient, notificationActivationKey, setAppUserModelId, showOpenDialog, webContents, clipboardWriteText,
   };
 }
 
 describe('main notification bridge', () => {
+  it.each([false, true])('accepts only notification activation keys for packaged=%s', async (packaged) => {
+    const bridge = await loadMain({ packaged });
+    const scheme = packaged ? 'janet' : 'janet-dev';
+    expect(bridge.notificationActivationKey(['electron.exe', `${scheme}://notification/123-abc`])).toBe('123-abc');
+    for (const url of ['https://notification/123-abc', `${scheme}://other/123-abc`, `${scheme}://notification/123-abc?command=run`, `${scheme}://notification/../path`]) {
+      expect(bridge.notificationActivationKey([url])).toBeUndefined();
+    }
+    if (process.platform === 'win32') {
+      await bridge.invoke(validPayload);
+      expect(bridge.setAsDefaultProtocolClient).toHaveBeenCalledWith(scheme, process.execPath, packaged ? [] : [process.cwd()]);
+      expect(bridge.Notification.mock.calls[0][0].toastXml).toContain('activationType="protocol"');
+      expect(bridge.setName).toHaveBeenCalledTimes(packaged ? 0 : 1);
+    }
+  });
+  it.skipIf(process.platform !== 'win32')('contains protocol registration failures without showing a broken notification', async () => {
+    const bridge = await loadMain();
+    bridge.setAsDefaultProtocolClient.mockReturnValue(false);
+    await expect(bridge.invoke(validPayload)).resolves.toBe(false);
+    expect(bridge.Notification).not.toHaveBeenCalled();
+  });
   it('routes activation to the originating pane and reports asynchronous delivery failure', async () => {
     const bridge = await loadMain();
     const target = { tabId: 'project', termId: 'pane' };
     await bridge.invoke({ ...validPayload, target });
     if (process.platform === 'win32') {
       const xml = bridge.Notification.mock.calls[0][0].toastXml;
-      bridge.notificationHandleActivation.mock.calls[0][0]({ arguments: /launch="([^"]+)"/.exec(xml)![1] });
+      bridge.appOn.mock.calls.find(([name]) => name === 'second-instance')![1]({}, ['electron.exe', '.', /launch="([^"]+)"/.exec(xml)![1]]);
     } else bridge.notificationOn.mock.calls.find(([name]) => name === 'click')![1]();
     expect(bridge.webContents.send).toHaveBeenCalledWith('notifications:target', target);
     bridge.notificationOn.mock.calls.find(([name]) => name === 'failed')![1]();
@@ -228,7 +251,7 @@ describe('main notification bridge', () => {
     const bridge = await loadMain();
     await expect(bridge.invoke(validPayload, {})).rejects.toThrow(/untrusted/i);
     await expect(bridge.invoke(validPayload, bridge.webContents, {})).rejects.toThrow(/untrusted/i);
-    expect(bridge.setAppUserModelId).toHaveBeenCalledWith('com.sjorm.janet');
+    expect(bridge.setAppUserModelId).toHaveBeenCalledWith('com.sjorm.janet.dev');
   });
 
   it('guards zero-payload settings recovery operations with the trusted sender boundary', async () => {
