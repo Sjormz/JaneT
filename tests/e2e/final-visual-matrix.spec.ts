@@ -416,7 +416,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
         expect(menuBox!.y).toBeGreaterThanOrEqual(0);
         expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(viewport.width + 1);
         expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(viewport.height + 1);
-        await expect(menu.getByRole('menuitem', { name: 'Rename project' })).toBeFocused();
+        await expect(menu.getByRole('menuitem', { name: 'Rename session' })).toBeFocused();
         await page.evaluate(() => document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
         await expect(menu).toBeHidden();
         await expect(activeTab).toBeFocused();
@@ -429,7 +429,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
           clientX: point.x,
           clientY: point.y,
         })), { x: viewport.width - 1, y: viewport.height - 1 });
-        await expect(menu.getByRole('menuitem', { name: 'Rename project' })).toBeFocused();
+        await expect(menu.getByRole('menuitem', { name: 'Rename session' })).toBeFocused();
         await page.keyboard.press('Escape');
         await expect(menu).toBeHidden();
         await expect(activeTab).toBeFocused();
