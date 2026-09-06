@@ -580,8 +580,14 @@ export default function TerminalPane({
     };
     const pasteClipboard = async () => {
       try {
-        const text = await window.janet.readTerminalClipboard();
+        const contents = await window.janet.readTerminalClipboard();
         if (termRef.current !== term || term.options.disableStdin) return;
+        if (typeof contents !== 'string' && tabType !== 'local') {
+          setClipboardError('Upload the image to the SSH host before pasting its remote path.');
+          return;
+        }
+        const text = typeof contents === 'string' ? contents : formatTerminalPathForPaste(contents.imagePath, startupShellDialect);
+        if (text === null) throw new Error('Invalid clipboard image path');
         dragSelectionRef.current = '';
         endSelectionProtection(true);
         inputSource.userInput = true;
@@ -590,7 +596,7 @@ export default function TerminalPane({
         term.focus();
         setClipboardError(null);
       } catch {
-        setClipboardError('Couldn’t paste clipboard text. Try copying it again.');
+        setClipboardError('Couldn’t paste the clipboard. Try copying it again.');
       }
     };
     const copySelection = (selection: string) => {
@@ -1252,6 +1258,14 @@ export default function TerminalPane({
   };
 
   const inspectTerminalPathDrag = (event: React.DragEvent<HTMLDivElement>) => {
+    if (Array.from(event.dataTransfer.types).includes('Files')) {
+      event.preventDefault();
+      event.stopPropagation();
+      const valid = tabType === 'local';
+      event.dataTransfer.dropEffect = valid ? 'copy' : 'none';
+      setPathDropState(valid ? 'valid' : 'invalid');
+      return;
+    }
     if (!hasTerminalPathDrag(event.dataTransfer)) return;
     const payload = getActiveTerminalPathDrag();
     if (!payload) return;
@@ -1265,6 +1279,32 @@ export default function TerminalPane({
   };
 
   const handleTerminalPathDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    if (Array.from(event.dataTransfer.types).includes('Files')) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearPathDropNoticeTimer();
+      setPathDropState(null);
+      if (tabType !== 'local') {
+        setClipboardError('Upload files to the SSH host before pasting their remote paths.');
+        return;
+      }
+      const cached = terminalPaneCache.get(termId);
+      if (!cached || cached.term.options.disableStdin) return;
+      try {
+        const paths = Array.from(event.dataTransfer.files).map((file) =>
+          formatTerminalPathForPaste(window.janet.getPathForFile(file), startupShellDialect));
+        if (!paths.length || paths.some((value) => value === null)) throw new Error('Invalid file path');
+        cached.inputSource.userInput = true;
+        cached.term.paste(paths.join(''));
+        cached.term.focus();
+        setClipboardError(null);
+      } catch {
+        setClipboardError('Couldn’t paste the dropped file paths. Try dragging them again.');
+      } finally {
+        cached.inputSource.userInput = false;
+      }
+      return;
+    }
     if (!hasTerminalPathDrag(event.dataTransfer)) return;
 
     event.preventDefault();

@@ -52,6 +52,23 @@ function renderTabs(overrides?: Partial<React.ComponentProps<typeof VerticalTabB
 }
 
 describe('VerticalTabBar', () => {
+  it('removes legacy workspace entries without requesting directory deletion', () => {
+    const action = vi.fn();
+    renderTabs({ onWorkspaceAction: action });
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^My workspaces/, expanded: true }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Remove workspace…' }));
+    expect(action).toHaveBeenCalledWith('unlink', 'default');
+  });
+  it('offers close for a root session, including an empty session left by an older version', () => {
+    const close = vi.fn();
+    renderTabs({ groups: [{ id: 'work', name: 'Work', directory: 'C:/Work' }],
+      tabs: [{ ...tabs[0], groupId: 'work', cwd: 'C:/Work', root: { id: 'empty', type: 'split', direction: 'vertical', children: [], sizes: [] } }], onCloseTab: close });
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^Main app/ }));
+    expect(screen.queryByRole('menuitem', { name: 'Delete project…' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Close all terminals…' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Close session' }));
+    expect(close).toHaveBeenCalledWith('tab-1');
+  });
   it('opens the project form for an empty-state destination request', async () => {
     const handled = vi.fn();
     renderTabs({ creatorOpen: true, entryRequest: { action: 'create', groupId: 'clients' }, onEntryRequestHandled: handled });
@@ -133,7 +150,7 @@ describe('VerticalTabBar', () => {
     const onLocalAt = vi.fn().mockResolvedValue(undefined);
     const onSelectTab = vi.fn();
     renderTabs({ onLocalAt, onSelectTab });
-    const launch = screen.getByRole('button', { name: `Local terminal in project ${tabs[0].title}` });
+    const launch = screen.getByRole('button', { name: `Local terminal in session ${tabs[0].title}` });
     expect(launch).toHaveClass('directory-terminal-launch');
     expect(launch).toHaveAttribute('data-tooltip-label', 'Add terminal here');
     expect(launch.closest('.vtab-item')).toBeNull();
@@ -389,7 +406,7 @@ describe('VerticalTabBar', () => {
     expect(screen.queryByRole('button', { name: /^rename project$/i })).not.toBeInTheDocument();
     fireEvent.contextMenu(opener);
     expect(screen.getByRole('menu').parentElement).toBe(document.body);
-    fireEvent.click(screen.getByRole('menuitem', { name: /rename project/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /rename session/i }));
     const nameInput = screen.getByRole('textbox', { name: /^tab name$/i });
     expect(nameInput).toHaveAttribute('maxlength', '256');
     fireEvent.change(nameInput, { target: { value: 'Renamed' } });
@@ -410,7 +427,7 @@ describe('VerticalTabBar', () => {
     fireEvent.keyDown(opener, { key: 'ContextMenu' });
 
     const menu = screen.getByRole('menu', { name: 'Actions for Main app' });
-    const rename = screen.getByRole('menuitem', { name: 'Rename project' });
+    const rename = screen.getByRole('menuitem', { name: 'Rename session' });
     const save = screen.getByRole('menuitem', { name: 'Close session' });
     await waitFor(() => expect(rename).toHaveFocus());
     fireEvent.keyDown(menu, { key: 'ArrowUp' });
@@ -422,7 +439,7 @@ describe('VerticalTabBar', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 
     fireEvent.keyDown(opener, { key: 'F10', shiftKey: true });
-    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Rename project' })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Rename session' })).toHaveFocus());
   });
 
   it('closes the tab context menu when clicking outside it', () => {
@@ -706,7 +723,7 @@ describe('VerticalTabBar', () => {
     const move = vi.fn(), close = vi.fn();
     renderTabs({ onMoveWorkspace: move, onCloseTab: close });
     fireEvent.contextMenu(screen.getByRole('button', { name: /Main app Local/ }));
-    expect(screen.getByRole('menuitem', { name: 'Rename project' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Rename session' })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'Rename workspace' })).not.toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /^Move to / })).not.toBeInTheDocument();
     expect(move).not.toHaveBeenCalled();

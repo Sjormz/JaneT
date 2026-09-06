@@ -98,7 +98,12 @@ async function replaceEditorContent(page: Page, editor: Locator, content: string
 test('project remains discoverable with zero terminals after close and restart', async () => {
   test.setTimeout(60000);
   const fixture = createFixture();
-  const userData = createUserData(fixture.directory);
+  const projectDirectory = path.join(fixture.directory, 'Project');
+  fs.mkdirSync(projectDirectory);
+  const projectFile = path.join(projectDirectory, fixture.fileName);
+  fs.renameSync(fixture.filePath, projectFile);
+  fixture.filePath = projectFile;
+  const userData = createUserData(projectDirectory);
   const settingsPath = path.join(userData, 'settings.json');
   const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
   settings.session.groups = [{ id: 'work', name: 'Work', directory: fixture.directory }];
@@ -112,7 +117,7 @@ test('project remains discoverable with zero terminals after close and restart',
     let page = await app.firstWindow();
     await page.getByRole('button', { name: /^Close terminal —/ }).click();
     await page.getByRole('button', { name: 'Close pane', exact: true }).click();
-    await expect(page.getByRole('region', { name: 'Project has no terminals' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'No terminals open' })).toBeVisible();
     await expect(page.locator('.vtab-item').filter({ hasText: 'Editor fixture' })).toBeVisible();
     await expect(page.locator('[data-terminal-id]')).toHaveCount(0);
     await expect.poll(() => JSON.parse(fs.readFileSync(settingsPath, 'utf8')).session.tabs[0].root.children).toEqual([]);
@@ -120,7 +125,7 @@ test('project remains discoverable with zero terminals after close and restart',
     await forceClose(app);
     app = await launch();
     page = await app.firstWindow();
-    await expect(page.getByRole('region', { name: 'Project has no terminals' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'No terminals open' })).toBeVisible();
     await expect(page.locator('.vtab-item').filter({ hasText: 'Editor fixture' })).toBeVisible();
     await expect(page.locator('[data-terminal-id]')).toHaveCount(0);
     await page.getByRole('button', { name: 'Open terminal', exact: true }).click();

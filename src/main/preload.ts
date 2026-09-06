@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   FileEntry,
   SSHConnectionClosedEvent,
@@ -266,7 +266,8 @@ const api = {
   copyText: (text: string): Promise<boolean> => ipcRenderer.invoke('app:copyText', text),
   copyDiagnostics: (): Promise<boolean> => ipcRenderer.invoke('app:copyDiagnostics'),
   copyTerminalText: (text: string): boolean => ipcRenderer.sendSync('app:copyTerminalText', text) === true,
-  readTerminalClipboard: (): Promise<string> => ipcRenderer.invoke('app:readTerminalClipboard'),
+  readTerminalClipboard: (): Promise<string | { imagePath: string }> => ipcRenderer.invoke('app:readTerminalClipboard'),
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   terminalDiagnosticsEnabled: process.env.JANET_TERMINAL_DIAGNOSTICS === '1',
   onPrepareForClose: (callback: PrepareForCloseCallback) => {
     prepareForCloseCallback = callback;

@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { isWorkspaceGroup, normalizeWorkspaceGroups } from '../../src/shared/workspaceGroups';
+import { isWorkspaceGroup, isWorkspaceProject, normalizeWorkspaceGroups } from '../../src/shared/workspaceGroups';
 import { normalizeSession } from '../../src/renderer/sessionRestore';
 
 describe('workspace group persistence', () => {
+  it('retains only owned project directories after the last terminal closes', () => {
+    const groups = [{ id: 'work', name: 'Work', directory: 'C:\\Work\\' }];
+    for (const cwd of ['c:/work/app', 'C:\\Work\\App\\']) {
+      expect(isWorkspaceProject({ groupId: 'work', cwd }, groups)).toBe(true);
+    }
+    for (const cwd of [undefined, 'C:/Work', 'c:/work/', 'C:/Other/App', 'C:/Work/App/nested']) {
+      expect(isWorkspaceProject({ groupId: 'work', cwd }, groups)).toBe(false);
+    }
+    expect(isWorkspaceProject({ groupId: 'work', cwd: 'C:/Work/App' }, [{ ...groups[0], kind: 'folder' }])).toBe(false);
+    expect(isWorkspaceProject({ groupId: 'legacy', cwd: 'C:/Work/App' }, [{ id: 'legacy', name: 'Old' }])).toBe(false);
+  });
   it('preserves linked folder paths and multiple session memberships', () => {
     const group = { id: 'project', name: 'Project X', kind: 'folder', directory: 'C:/Projects/X', collapsed: true };
     const session = normalizeSession({ groups: [group], tabs: ['dev', 'test'].map((id) => ({

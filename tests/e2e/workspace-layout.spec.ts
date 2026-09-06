@@ -239,7 +239,7 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
     const activeTab = page.locator('.vtab-item.active');
     await activeTab.hover();
     await activeTab.click({ button: 'right' });
-    const tabClose = page.getByRole('menuitem', { name: 'Close all terminals…' });
+    const tabClose = page.getByRole('menuitem', { name: 'Close session' });
     await expect(tabClose).toBeVisible();
     const tabCloseBox = await tabClose.boundingBox();
     expect(tabCloseBox).not.toBeNull();

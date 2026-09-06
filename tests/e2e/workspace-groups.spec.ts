@@ -16,7 +16,10 @@ test('creates grouped live workspaces and restores them after closing without a 
   const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-groups-e2e-'));
   const settingsPath = path.join(userData, 'settings.json');
   const legacy = [{ id: 'legacy', name: 'Old setup', type: 'local', terminalCount: 1, splitDirection: 'vertical' }];
-  fs.writeFileSync(settingsPath, JSON.stringify({ mainDirectory: userData, theme: 'one-dark', workspaceTabs: legacy }));
+  const legacyFile = path.join(userData, 'legacy-files-stay.txt');
+  fs.writeFileSync(legacyFile, 'keep');
+  fs.writeFileSync(settingsPath, JSON.stringify({ mainDirectory: userData, theme: 'one-dark', workspaceTabs: legacy,
+    session: { groups: [{ id: 'default', name: 'Old workspace' }], tabs: [] } }));
   const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.ELECTRON_NO_ATTACH_CONSOLE;
@@ -25,6 +28,12 @@ test('creates grouped live workspaces and restores them after closing without a 
   try {
     app = await launch();
     let page = await app.firstWindow();
+    await page.locator('.workspace-group-name').getByText('Old workspace', { exact: true }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Remove workspace…' }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Remove workspace', exact: true }).click();
+    await expect(page.locator('.workspace-group-name').getByText('Old workspace', { exact: true })).toHaveCount(0);
+    await expect.poll(() => JSON.parse(fs.readFileSync(settingsPath, 'utf8')).session?.groups).toEqual([]);
+    expect(fs.readFileSync(legacyFile, 'utf8')).toBe('keep');
     await expect(page.getByRole('heading', { name: 'Create your first workspace' })).toBeVisible();
     await expect(page.locator('.terminal-container')).toHaveCount(0);
     const workspaces = new Workspaces(page);

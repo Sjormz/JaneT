@@ -301,6 +301,36 @@ test('copies TUI OSC 52 selections, rejects unsolicited writes, and pastes brack
     await expect.poll(() => app!.evaluate(() => (globalThis as any).__pastedTerminalData)).toEqual([
       { id: termId, data: '\x1b[200~first\rsecond\x1b[201~', userInput: true },
     ]);
+    await app.evaluate(({ clipboard, nativeImage }) => {
+      (globalThis as any).__pastedTerminalData = [];
+      clipboard.clear();
+      clipboard.writeImage(nativeImage.createFromBitmap(Buffer.from([255, 0, 0, 255]), { width: 1, height: 1 }));
+    });
+    expect(await app.evaluate(({ clipboard }) => clipboard.readImage().isEmpty())).toBe(false);
+    await sendOutput('\x1b[?2004h');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
+    await expect.poll(() => app!.evaluate(() => (globalThis as any).__pastedTerminalData.length)).toBe(1);
+    const imagePaste = await app.evaluate(() => (globalThis as any).__pastedTerminalData[0]);
+    expect(imagePaste.userInput).toBe(true);
+    expect(imagePaste.data).toMatch(/^\x1b\[200~.*janet-clipboard-.*\.png.*\x1b\[201~$/);
+    const pastedImage = imagePaste.data.slice(6, -6).trim().replace(/^'|'$/g, '');
+    expect(fs.readFileSync(pastedImage).subarray(1, 4).toString()).toBe('PNG');
+    await page.evaluate(() => {
+      const input = document.createElement('input');
+      input.type = 'file'; input.id = 'native-drop-file'; input.hidden = true;
+      document.body.append(input);
+    });
+    await page.locator('#native-drop-file').setInputFiles(pastedImage);
+    await app.evaluate(() => { (globalThis as any).__pastedTerminalData = []; });
+    await container.evaluate((node) => {
+      const input = document.getElementById('native-drop-file') as HTMLInputElement;
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(input.files![0]);
+      node.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer }));
+      node.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer }));
+      input.remove();
+    });
+    await expect.poll(() => app!.evaluate(() => (globalThis as any).__pastedTerminalData)).toEqual([imagePaste]);
   } finally {
     await forceClose(app);
     fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

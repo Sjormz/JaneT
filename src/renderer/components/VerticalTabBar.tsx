@@ -11,7 +11,7 @@ import Tooltip from './Tooltip';
 import SSHManager from './SSHManager';
 import MainDirectory from './MainDirectory';
 import RenameDialog from './RenameDialog';
-import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, type WorkspaceGroup } from '../../shared/workspaceGroups';
+import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, isWorkspaceProject, type WorkspaceGroup } from '../../shared/workspaceGroups';
 import type { AgentStatus } from '../terminalAwareness';
 import type { SSHLocalForwardStatus } from '../../main/ssh';
 
@@ -472,7 +472,7 @@ export default function VerticalTabBar({
               </div>
             </div>
               <Tooltip label="Add terminal here" placement="right">
-                <button className="directory-terminal-launch" aria-label={`Local terminal in project ${tab.title}`} onClick={() => void onLocalAt?.(group.id, tab.id).catch((error) => setFolderError(String(error)))}><TerminalTabIcon size="sm" /></button>
+                <button className="directory-terminal-launch" aria-label={`Local terminal in ${isWorkspaceProject(tab, groups) ? 'project' : 'session'} ${tab.title}`} onClick={() => void onLocalAt?.(group.id, tab.id).catch((error) => setFolderError(String(error)))}><TerminalTabIcon size="sm" /></button>
               </Tooltip>
                 {/* TODO: Review project SSH action later; retained but not shown.
                 <button aria-label={`SSH terminal in project ${tab.title}`} onClick={() => { setSshTarget({ groupId: group.id, tabId: tab.id }); onSSHConnectionsOpenChange(true); }}><LockIcon size="xs" />SSH</button>
@@ -502,20 +502,20 @@ export default function VerticalTabBar({
         >
           {tabMenu.group && <>
             <button role="menuitem" onClick={() => { setEditingGroupId(tabMenu.group!.id); setDraftTitle(tabMenu.group!.name); closeTabMenu(); }}>{tabMenu.group.kind === 'folder' ? 'Rename Library entry' : 'Rename workspace'}</button>
-            <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const group = tabMenu.group!; closeTabMenu(); onWorkspaceAction?.(group.kind === 'folder' ? 'unlink' : 'delete', group.id); }}>{tabMenu.group.kind === 'folder' ? 'Remove from Library…' : 'Delete workspace…'}</button>
+            <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const group = tabMenu.group!; closeTabMenu(); onWorkspaceAction?.(group.kind === 'folder' || !group.directory ? 'unlink' : 'delete', group.id); }}>{tabMenu.group.kind === 'folder' ? 'Remove from Library…' : !tabMenu.group.directory ? 'Remove workspace…' : 'Delete workspace…'}</button>
           </>}
           {tabMenu.tab && <>
           <button role="menuitem" onClick={() => { startRename(tabMenu.tab!); closeTabMenu(); }}>
-            {groups.some(group => group.id === tabMenu.tab!.groupId && group.kind === 'folder') ? 'Rename session' : 'Rename project'}
+            {isWorkspaceProject(tabMenu.tab, groups) ? 'Rename project' : 'Rename session'}
           </button>
           {tabMenu.tab.type === 'ssh' && tabMenu.tab.sshSessionId && tabMenu.tab.sshShellReady === true && (
             <button role="menuitem" onClick={() => { openForwardDialog(tabMenu.tab!); closeTabMenu(); }}>Manage local forwards</button>
           )}
-          {groups.some((group) => group.id === tabMenu.tab!.groupId && !group.kind && group.directory && tabMenu.tab!.cwd && tabMenu.tab!.cwd !== group.directory) && <>
+          {isWorkspaceProject(tabMenu.tab, groups) && <>
             <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const tab = tabMenu.tab!; closeTabMenu(); onWorkspaceAction?.('keep', tab.groupId!, tab.id); }}>Keep in Library…</button>
             <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const tab = tabMenu.tab!; closeTabMenu(); onWorkspaceAction?.('delete', tab.groupId!, tab.id); }}>Delete project…</button>
           </>}
-          <button role="menuitem" disabled={countLeaves(tabMenu.tab.root) === 0} onClick={() => { const id = tabMenu.tab!.id; closeTabMenu(); onCloseTab(id); }}>{groups.some(group => group.id === tabMenu.tab!.groupId && group.kind !== 'folder') ? 'Close all terminals…' : 'Close session'}</button>
+          <button role="menuitem" disabled={isWorkspaceProject(tabMenu.tab, groups) && countLeaves(tabMenu.tab.root) === 0} onClick={() => { const id = tabMenu.tab!.id; closeTabMenu(); onCloseTab(id); }}>{isWorkspaceProject(tabMenu.tab, groups) ? 'Close all terminals…' : 'Close session'}</button>
           </>}
         </div>,
         document.body,
