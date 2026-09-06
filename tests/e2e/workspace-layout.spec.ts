@@ -266,11 +266,21 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
     await page.getByRole('button', { name: 'Project', exact: true }).click();
     const presetDialog = page.getByRole('dialog', { name: 'Create project' });
     await expect(presetDialog).toBeVisible();
-    await presetDialog.getByRole('combobox', { name: 'Initial terminals' }).selectOption('2');
-    await expect(presetDialog.getByRole('button', { name: 'Remove terminal 1' })).toBeVisible();
+    await presetDialog.getByRole('spinbutton', { name: 'Initial terminals' }).fill('2');
+    await expect(presetDialog.getByRole('button', { name: 'Fewer terminals' })).toBeVisible();
+    await presetDialog.getByRole('radio', { name: 'Codex', exact: true }).focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(presetDialog.getByRole('radio', { name: 'Hermes', exact: true })).toBeChecked();
+    await page.keyboard.press('ArrowRight');
+    await expect(presetDialog.getByRole('radio', { name: 'Claude', exact: true })).toBeChecked();
+    await page.keyboard.press('ArrowRight');
+    await expect(presetDialog.getByRole('textbox', { name: 'Custom command' })).toBeVisible();
     const presetReport = await measureCompactTargets(page, 'workspace creator');
-    expect(presetReport.measurements.some(({ target }) => target.includes('button.workspace-terminal-remove')))
-      .toBe(true);
+    for (const card of await presetDialog.locator('.workspace-launcher-card').all()) {
+      const box = await card.boundingBox();
+      expect(box!.width).toBeGreaterThanOrEqual(44);
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+    }
     reports.push(presetReport);
 
     await testInfo.attach('compact-target-geometry', {

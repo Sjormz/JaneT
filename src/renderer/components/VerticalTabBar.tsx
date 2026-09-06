@@ -577,7 +577,6 @@ export default function VerticalTabBar({
               <p className="workspace-form-help">Creates a folder in your main directory. Add projects inside this workspace when you are ready.</p>
               <button className="connect-btn" disabled={creating || !groupName.trim()} type="submit">{creating ? 'Creating…' : 'Create workspace'}</button>
             </form> : <WorkspaceForm
-              sshProfiles={sshProfiles}
               groups={groups.filter((group) => !group.kind)}
               folder={folderTarget}
               defaultGroupId={projectParentId ?? groups.find((group) => !group.kind && group.id === tabs.find((tab) => tab.id === activeTabId)?.groupId)?.id ?? groups.find((group) => !group.kind)?.id}

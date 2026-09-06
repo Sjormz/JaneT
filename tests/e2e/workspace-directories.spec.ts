@@ -2,7 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createWorkspace } from './workspaces';
+import { createWorkspace, restoreWorkspaceFixture } from './workspaces';
 
 class FolderSessions {
   constructor(private page: Page, private app: ElectronApplication) {}
@@ -15,7 +15,9 @@ class FolderSessions {
   async start(folder: string, name: string, count: number) {
     await this.page.getByRole('button', { name: `Start new session in ${folder}` }).click();
     await this.page.getByRole('textbox', { name: 'Session name (optional)' }).fill(name);
-    await this.page.getByRole('combobox', { name: 'Initial terminals' }).selectOption(String(count));
+    await this.page.getByRole('spinbutton', { name: 'Initial terminals' }).fill(String(count));
+    await this.page.getByRole('radio', { name: 'Custom', exact: true }).check();
+    await this.page.getByRole('textbox', { name: 'Custom command' }).fill('echo');
     await this.page.getByRole('button', { name: 'Start session', exact: true }).click();
   }
   async close(name: string) {
@@ -184,7 +186,7 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await folders.start('Missing', 'Recovered', 1);
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByRole('alert')).toHaveCount(0);
-    await createWorkspace(page, 'Missing directory recovery', [{ cwd: missing }]);
+    await restoreWorkspaceFixture(page, 'Missing directory recovery', [{ cwd: missing }]);
     await expect(page.getByTestId('local-terminal-notice')).toContainText('Couldn’t start local terminal');
     await folders.choose(project, 'Locate folder');
     await expect(page.getByTestId('local-terminal-notice')).toHaveCount(0);

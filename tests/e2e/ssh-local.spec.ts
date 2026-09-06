@@ -1,4 +1,4 @@
-import { createWorkspace, terminalSettings } from './workspaces';
+import { restoreWorkspaceFixture, terminalSettings } from './workspaces';
 import { test, expect, chromium, Browser, Page } from '@playwright/test';
 import { spawn, ChildProcess } from 'child_process';
 import { createHash, generateKeyPairSync } from 'crypto';
@@ -707,7 +707,7 @@ test('reruns startup commands when restoring a SSH workspace terminal', async ()
     { seedSession: false, seedStartupPreset: true },
   );
   try {
-    await createWorkspace(page, 'Remote startup', [{ sshLabel: `${testUsername}@127.0.0.1:${ssh.port}`, commands: ['printf __JANET_REMOTE_ONE__', 'printf __JANET_REMOTE_TWO__'] }], 'Remote work');
+    await restoreWorkspaceFixture(page, 'Remote startup', [{ sshLabel: `${testUsername}@127.0.0.1:${ssh.port}`, commands: ['printf __JANET_REMOTE_ONE__', 'printf __JANET_REMOTE_TWO__'] }], 'Remote work');
 
     const expectedExpression = "eval 'printf __JANET_REMOTE_ONE__' && eval 'printf __JANET_REMOTE_TWO__'";
     await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 }).toEqual([expectedExpression]);
@@ -735,7 +735,7 @@ test('reruns startup commands when restoring a SSH workspace terminal', async ()
       .toEqual([expectedExpression, expectedExpression]);
 
     // An explicit second workspace creation creates a new pane and runs it again.
-    await createWorkspace(page, 'Remote startup second', [{ sshLabel: `${testUsername}@127.0.0.1:${ssh.port}`, commands: ['printf __JANET_REMOTE_ONE__', 'printf __JANET_REMOTE_TWO__'] }]);
+    await restoreWorkspaceFixture(page, 'Remote startup second', [{ sshLabel: `${testUsername}@127.0.0.1:${ssh.port}`, commands: ['printf __JANET_REMOTE_ONE__', 'printf __JANET_REMOTE_TWO__'] }]);
     await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 })
       .toEqual([expectedExpression, expectedExpression, expectedExpression]);
   } finally {
@@ -752,7 +752,7 @@ test('opens saved local SSH profile, persists profile id, refreshes, and runs ls
     { seedSession: false },
   );
   try {
-    await createWorkspace(page, 'Remote project', [{ sshLabel: `${testUsername}@127.0.0.1:${ssh.port}` }], 'Remote work');
+    await restoreWorkspaceFixture(page, 'Remote project', [{ sshLabel: `${testUsername}@127.0.0.1:${ssh.port}` }], 'Remote work');
 
     await waitForShellCreateCount(eventsPath, 1);
     await runMarkedLs(page, 'OPENED_PROFILE');
@@ -823,7 +823,12 @@ test('restores a mutated mixed workspace in a genuine second Electron process', 
     await paneName.fill('Build');
     await paneName.press('Enter');
 
-    await createWorkspace(firstPage, 'Remote connection', [{ sshLabel: `${testUsername}@127.0.0.1:${ssh.port}` }], 'Remote work');
+    // The restore fixture reloads from disk; wait for the debounced split/name save.
+    await expect.poll(() => readSettings(first!.settingsPath).session?.tabs
+      ?.find((tab: Record<string, any>) => tab.title === 'Project')?.root?.children
+      ?.map((leaf: Record<string, any>) => leaf.title)).toEqual([undefined, 'Build']);
+
+    await restoreWorkspaceFixture(firstPage, 'Remote connection', [{ sshLabel: `${testUsername}@127.0.0.1:${ssh.port}` }], 'Remote work');
     await waitForShellCreateCount(first.eventsPath, 1);
     await runMarkedLs(firstPage, 'RESUME_REMOTE_ONE');
 
