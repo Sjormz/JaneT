@@ -1,4 +1,6 @@
-import type { Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
+import { createWorkspaceRoot } from '../../src/renderer/types';
+import { serializePaneTree } from '../../src/renderer/sessionRestore';
 
 export function terminalSettings(directory: string) {
   return { mainDirectory: directory, session: {
@@ -21,23 +23,35 @@ export async function createWorkspace(page: Page, name: string, terminals: Array
     await page.getByRole('button', { name: 'Project', exact: true }).click();
   }
   await page.getByRole('textbox', { name: 'Project name' }).fill(name);
-  await page.getByRole('combobox', { name: 'Initial terminals' }).selectOption(String(terminals.length));
-  for (const [index, terminal] of terminals.entries()) {
-    const label = `Terminal ${index + 1}`;
-    if (terminal.title) await page.getByRole('textbox', { name: `${label} name (optional)` }).fill(terminal.title);
-    if (terminal.sshLabel) {
-      await page.getByRole('group', { name: `${label} type` }).getByRole('button', { name: 'SSH connection' }).click();
-      await page.getByRole('button', { name: `${label} SSH profile` }).click();
-      await page.getByRole('option', { name: terminal.sshLabel, exact: true }).click();
-    } else if (terminal.cwd) await page.getByRole('textbox', { name: `${label} directory` }).fill(terminal.cwd);
-    if (terminal.commands?.length) {
-      const configuration = page.getByRole('group', { name: `${label} configuration` });
-      await configuration.getByRole('button', { name: /Startup commands/ }).click();
-      for (const [commandIndex, command] of terminal.commands.entries()) {
-        await configuration.getByRole('button', { name: 'Add command', exact: true }).click();
-        await page.getByRole('textbox', { name: `${label} startup command ${commandIndex + 1}`, exact: true }).fill(command);
-      }
-    }
-  }
+  await page.getByRole('spinbutton', { name: 'Initial terminals' }).fill(String(terminals.length));
+  await page.getByRole('radio', { name: 'Custom', exact: true }).check();
+  await page.getByRole('textbox', { name: 'Custom command' }).fill('echo');
   await page.getByRole('dialog', { name: 'Create project', exact: true }).getByRole('button', { name: 'Create project', exact: true }).click();
+}
+
+// Legacy SSH, per-pane commands, and unavailable paths remain supported on restore.
+// Seed those fixtures directly now that the creation form only offers shared local setup.
+export async function restoreWorkspaceFixture(page: Page, name: string, terminals: Array<{
+  title?: string; cwd?: string; sshLabel?: string; commands?: string[];
+}>, groupName?: string) {
+  const settings = await page.evaluate(() => window.janet.getSettings());
+  const profiles = settings.sshProfiles ?? [];
+  const root = serializePaneTree(createWorkspaceRoot(terminals.map((terminal) => ({
+    type: terminal.sshLabel ? 'ssh' as const : 'local' as const,
+    title: terminal.title,
+    cwd: terminal.cwd,
+    sshProfileId: terminal.sshLabel ? profiles.find((profile: any) =>
+      (profile.username ? profile.username + '@' : '') + profile.host + ':' + profile.port === terminal.sshLabel)?.id : undefined,
+    startupCommands: terminal.commands,
+  }))), {}, { includeStartupCommands: true });
+  const session = settings.session;
+  const groups = session?.groups?.length ? session.groups : [{ id: 'fixture-group', name: groupName ?? 'Test work' }];
+  await page.evaluate(async ({ session, groups, root, name }) => {
+    await window.janet.setSettings({ session: { ...session, groups,
+      tabs: [...(session?.tabs ?? []).filter((tab: any) => tab.id !== 'fixture-restored'), { id: 'fixture-restored', title: name, groupId: groups[0].id, type: 'local', root }],
+      activeTabId: 'fixture-restored', tabsOpen: true,
+    } });
+    location.reload();
+  }, { session, groups, root, name });
+  await expect(page.locator('.vtab-name').getByText(name, { exact: true })).toBeVisible();
 }

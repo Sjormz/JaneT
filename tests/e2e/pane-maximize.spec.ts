@@ -1,4 +1,4 @@
-import { createWorkspace } from './workspaces';
+import { restoreWorkspaceFixture } from './workspaces';
 import { test, expect, chromium, Browser, Page } from '@playwright/test';
 import { execFileSync, spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
@@ -436,7 +436,7 @@ test('runs ordered workspace startup commands once per fresh terminal', async ()
     }, 'janet-e2e-startup-app-');
     userData = app.userData;
 
-    await createWorkspace(app.page, 'Ordered startup', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
+    await restoreWorkspaceFixture(app.page, 'Ordered startup', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
 
     await expect.poll(
       () => fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf-8') : '',
@@ -464,7 +464,7 @@ test('runs ordered workspace startup commands once per fresh terminal', async ()
 
     // Creating another workspace explicitly creates a new pane instance, so its startup
     // sequence should run again from the beginning.
-    await createWorkspace(app.page, 'Ordered startup second', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
+    await restoreWorkspaceFixture(app.page, 'Ordered startup second', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
     await expect.poll(
       () => fs.readFileSync(markerPath, 'utf-8'),
       { timeout: 10_000 },
@@ -473,7 +473,7 @@ test('runs ordered workspace startup commands once per fresh terminal', async ()
     // The first row writes a relative marker and exits non-zero. Finding the
     // marker in the saved cwd proves directory selection; never seeing `Y`
     // proves the compound sequence stops before the second row.
-    await createWorkspace(app.page, 'Failure gate', [{ title: 'failure gate', cwd: markerDir, commands: [failAfterRelativeMarker, mustNotRunAfterFailure] }]);
+    await restoreWorkspaceFixture(app.page, 'Failure gate', [{ title: 'failure gate', cwd: markerDir, commands: [failAfterRelativeMarker, mustNotRunAfterFailure] }]);
     await expect.poll(
       () => fs.existsSync(failurePath) ? fs.readFileSync(failurePath, 'utf-8') : '',
       { timeout: 10_000 },

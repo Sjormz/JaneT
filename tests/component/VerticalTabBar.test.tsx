@@ -81,6 +81,22 @@ describe('VerticalTabBar', () => {
     expect(await screen.findByRole('heading', { name: 'New session in JaneT' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Start session' })).toBeInTheDocument();
   });
+  it('starts all session terminals in the selected Library folder with the shared command', () => {
+    const launch = vi.fn();
+    const folder = { id: 'repo', name: 'JaneT', kind: 'folder' as const, directory: 'C:/repo' };
+    renderTabs({ groups: [folder], creatorOpen: true, entryRequest: { action: 'create', groupId: 'repo' },
+      onEntryRequestHandled: vi.fn(), onWorkspaceTabLaunch: launch });
+    fireEvent.click(screen.getByRole('button', { name: 'More terminals' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Hermes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+    expect(launch).toHaveBeenCalledWith(expect.objectContaining({ name: 'Session', terminalCount: 2,
+      root: expect.objectContaining({ children: [
+        expect.objectContaining({ terminalType: 'local', startupCommands: ['hermes --tui'] }),
+        expect.objectContaining({ terminalType: 'local', startupCommands: ['hermes --tui'] }),
+      ] }),
+    }), folder);
+  });
+
   it('separates temporary delete/keep actions from non-destructive Library removal', () => {
     const action = vi.fn();
     const view = renderTabs({ groups: [{ id: 'default', name: 'Work', directory: 'C:/temp/Work' }],
@@ -233,145 +249,27 @@ describe('VerticalTabBar', () => {
     expect(onSSHProfilesChange).toHaveBeenCalledWith([]);
   });
 
-  it('creates optional names for each workspace terminal', () => {
-    const onWorkspaceTabLaunch = vi.fn();
-    renderTabs({ onWorkspaceTabLaunch });
-
-        fireEvent.click(screen.getByRole('button', { name: /new project in My workspaces/i }));
-    fireEvent.change(screen.getByRole('textbox', { name: /project name/i }), { target: { value: 'Named workspace' } });
-    fireEvent.change(screen.getByRole('textbox', { name: 'Terminal 1 name (optional)' }), { target: { value: '  Dev server  ' } });
-    fireEvent.click(screen.getByRole('button', { name: /^add terminal$/i }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Terminal 2 name (optional)' }), { target: { value: 'Tests' } });
-    fireEvent.click(screen.getByRole('button', { name: /^create project$/i }));
-
-    const saved = onWorkspaceTabLaunch.mock.calls[0][0] as WorkspaceTabPreset;
-    const leaves = saved.root?.type === 'split' ? saved.root.children : [saved.root];
-    expect(leaves).toEqual([
-      expect.objectContaining({ type: 'leaf', title: 'Dev server' }),
-      expect.objectContaining({ type: 'leaf', title: 'Tests' }),
-    ]);
-  });
-
-  it('creates, reorders, trims, and saves per-terminal startup commands', () => {
-    const onWorkspaceTabLaunch = vi.fn();
-    renderTabs({ onWorkspaceTabLaunch });
-
-        fireEvent.click(screen.getByRole('button', { name: /new project in My workspaces/i }));
-    fireEvent.change(screen.getByRole('textbox', { name: /project name/i }), { target: { value: 'Automated' } });
-    fireEvent.click(screen.getByRole('button', { name: /startup commands/i }));
-
-    expect(screen.getByText(/commands run in order and stop if one fails/i)).toBeInTheDocument();
-    expect(screen.getByText(/other recognized shells use a short fallback delay/i)).toBeInTheDocument();
-    expect(screen.getByText(/may appear in shell history/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^add command$/i }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Terminal 1 startup command 1' }), { target: { value: '  npm install  ' } });
-    fireEvent.click(screen.getByRole('button', { name: /^add command$/i }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Terminal 1 startup command 2' }), { target: { value: 'npm run dev' } });
-    fireEvent.click(screen.getByRole('button', { name: /^add command$/i }));
-    fireEvent.click(screen.getByRole('button', { name: 'Move startup command 2 up' }));
-    fireEvent.click(screen.getByRole('button', { name: /^create project$/i }));
-
-    const saved = onWorkspaceTabLaunch.mock.calls[0][0] as WorkspaceTabPreset;
-    expect(saved.root).toMatchObject({
-      children: [expect.objectContaining({
-        startupCommands: ['npm run dev', 'npm install'],
-      })],
-    });
-  });
-
-  it('confirms startup-command removal and keeps the parent editor open on Escape', async () => {
-    renderTabs();
-
-        fireEvent.click(screen.getByRole('button', { name: /new project in My workspaces/i }));
-    fireEvent.click(screen.getByRole('button', { name: /startup commands/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^add command$/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^add command$/i }));
-
-    fireEvent.click(screen.getByRole('button', { name: 'Remove startup command 1' }));
-    const confirmation = screen.getByRole('alertdialog', { name: 'Remove startup command 1?' });
-    expect(screen.getAllByRole('textbox', { name: /terminal 1 startup command/i })).toHaveLength(2);
-    fireEvent.keyDown(confirmation, { key: 'Escape' });
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-    expect(screen.getByRole('dialog', { name: /create project/i })).toBeInTheDocument();
-    expect(screen.getAllByRole('textbox', { name: /terminal 1 startup command/i })).toHaveLength(2);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Remove startup command 1' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Remove command' }));
-    await waitFor(() => expect(document.activeElement).toBe(
-      screen.getByRole('textbox', { name: 'Terminal 1 startup command 1' }),
-    ));
-
-    fireEvent.click(screen.getByRole('button', { name: 'Remove startup command 1' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Remove command' }));
-    await waitFor(() => expect(document.activeElement).toBe(
-      screen.getByRole('button', { name: /^add command$/i }),
-    ));
-  });
-
-  it('keeps disclosure state and restores focus when terminal removal leaves one entry', async () => {
-    renderTabs();
-
-        fireEvent.click(screen.getByRole('button', { name: /new project in My workspaces/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^add terminal$/i }));
-    fireEvent.click(screen.getAllByRole('button', { name: /startup commands/i })[1]);
-    fireEvent.click(screen.getByRole('button', { name: 'Remove terminal 1' }));
-    expect(screen.getAllByRole('button', { name: 'Local terminal' })).toHaveLength(2);
-    fireEvent.click(screen.getByRole('button', { name: 'Remove terminal' }));
-
-    const remainingTypeButton = screen.getByRole('button', { name: 'Local terminal' });
-    await waitFor(() => expect(document.activeElement).toBe(remainingTypeButton));
-    expect(screen.getByRole('button', { name: /startup commands/i })).toHaveAttribute('aria-expanded', 'true');
-  });
-
-  it('preserves commands across terminal type changes and defaults SSH syntax to POSIX', () => {
-    const onWorkspaceTabLaunch = vi.fn();
-    renderTabs({ onWorkspaceTabLaunch });
-
-        fireEvent.click(screen.getByRole('button', { name: /new project in My workspaces/i }));
-    fireEvent.change(screen.getByRole('textbox', { name: /project name/i }), { target: { value: 'Remote automated' } });
-    fireEvent.click(screen.getByRole('button', { name: /startup commands/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^add command$/i }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Terminal 1 startup command 1' }), { target: { value: 'hermes --tui' } });
-    fireEvent.click(screen.getByRole('button', { name: 'SSH connection' }));
-
-    expect(screen.getByRole('button', { name: 'SSH connection' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('combobox', { name: 'Terminal 1 remote shell syntax' })).toHaveValue('posix');
-    fireEvent.change(screen.getByRole('combobox', { name: 'Terminal 1 remote shell syntax' }), {
-      target: { value: 'fish' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Local terminal' }));
-    expect(screen.getByRole('textbox', { name: 'Terminal 1 startup command 1' })).toHaveValue('hermes --tui');
-    fireEvent.click(screen.getByRole('button', { name: 'SSH connection' }));
-    expect(screen.getByRole('combobox', { name: 'Terminal 1 remote shell syntax' })).toHaveValue('fish');
-    fireEvent.click(screen.getByRole('button', { name: 'Terminal 1 SSH profile' }));
-    fireEvent.click(screen.getByRole('option', { name: 'pckpr@box.local:22' }));
-    fireEvent.click(screen.getByRole('button', { name: /^create project$/i }));
-
-    const saved = onWorkspaceTabLaunch.mock.calls[0][0] as WorkspaceTabPreset;
-    expect(saved.root).toMatchObject({
-      children: [expect.objectContaining({
-        terminalType: 'ssh',
-        startupCommands: ['hermes --tui'],
-        startupShellDialect: 'fish',
-      })],
-    });
-  });
-
-  it('chooses an SSH profile from the custom workspace picker', () => {
-    const onWorkspaceTabLaunch = vi.fn();
-    renderTabs({ onWorkspaceTabLaunch });
-
-        fireEvent.click(screen.getByRole('button', { name: /new project in My workspaces/i }));
-    fireEvent.change(screen.getByRole('textbox', { name: /project name/i }), { target: { value: 'Remote workspace' } });
-    fireEvent.click(screen.getByRole('button', { name: 'SSH connection' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Terminal 1 SSH profile' }));
-    fireEvent.click(screen.getByRole('option', { name: 'pckpr@box.local:22' }));
-    fireEvent.click(screen.getByRole('button', { name: /^create project$/i }));
-
-    expect(onWorkspaceTabLaunch).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'Remote workspace',
-      root: expect.objectContaining({ children: [expect.objectContaining({ sshProfileId: sshProfiles[0].id })] }),
-    }), groups[0]);
+  it.each(['Codex', 'Hermes', 'Claude', 'Custom'])('runs %s in every local project terminal', (choice) => {
+    const launch = vi.fn();
+    renderTabs({ onWorkspaceTabLaunch: launch });
+    fireEvent.click(screen.getByRole('button', { name: /new project in My workspaces/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Development' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Initial terminals' }), { target: { value: '5' } });
+    expect(screen.getByRole('radio', { name: 'Codex' })).toBeChecked();
+    expect(screen.queryByRole('textbox', { name: 'Custom command' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: choice }));
+    if (choice === 'Custom') fireEvent.change(screen.getByRole('textbox', { name: 'Custom command' }), { target: { value: '  npm run dev  ' } });
+    expect(screen.queryByRole('button', { name: 'SSH connection' })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/directory override/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    const saved = launch.mock.calls[0][0] as WorkspaceTabPreset;
+    const leaves = (node: NonNullable<WorkspaceTabPreset['root']>): any[] => node.type === 'leaf' ? [node] : node.children.flatMap(leaves);
+    expect(leaves(saved.root!)).toHaveLength(5);
+    for (const leaf of leaves(saved.root!)) {
+      expect(leaf.terminalType).toBe('local');
+      expect(leaf.cwd).toBeUndefined();
+      expect(leaf.startupCommands).toEqual([choice === 'Custom' ? 'npm run dev' : choice === 'Hermes' ? 'hermes --tui' : choice.toLowerCase()]);
+    }
   });
 
   it('closes the workspace creation dialog from its backdrop', () => {
@@ -656,17 +554,31 @@ describe('VerticalTabBar', () => {
     expect(screen.getByRole('button', { name: /SSH box Hermes · Turn finished/i })).toBeInTheDocument();
   });
 
-  it('explains why an SSH workspace cannot be created without a saved connection', () => {
-    renderTabs({ sshProfiles: [] });
-
-        fireEvent.click(screen.getByRole('button', { name: /new project in My workspaces/i }));
-    fireEvent.change(screen.getByRole('textbox', { name: /project name/i }), { target: { value: 'Remote' } });
-    fireEvent.click(screen.getByRole('button', { name: 'SSH connection' }));
-
-    expect(screen.getByRole('alert')).toHaveTextContent('Terminal 1 needs a saved SSH connection.');
-    expect(screen.getByRole('button', { name: /^create project$/i })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Terminal 1 SSH profile' }));
-    expect(screen.getByRole('option', { name: 'No saved SSH connections' })).toHaveAttribute('aria-disabled', 'true');
+  it('validates the count and custom command before creation', () => {
+    renderTabs();
+    fireEvent.click(screen.getByRole('button', { name: /new project in My workspaces/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Dev' } });
+    const count = screen.getByRole('spinbutton', { name: 'Initial terminals' });
+    const submit = screen.getByRole('button', { name: 'Create project' });
+    for (const value of ['', '0', '17', '1.5']) {
+      fireEvent.change(count, { target: { value } });
+      expect(submit).toBeDisabled();
+    }
+    fireEvent.change(count, { target: { value: '16' } });
+    expect(submit).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'More terminals' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Fewer terminals' }));
+    expect(count).toHaveValue(15);
+    fireEvent.click(screen.getByRole('radio', { name: 'Custom' }));
+    expect(submit).toBeDisabled();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Custom command' }), { target: { value: '   ' } });
+    expect(submit).toBeDisabled();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Custom command' }), { target: { value: 'npm run dev' } });
+    expect(submit).toBeEnabled();
+    fireEvent.click(screen.getByRole('radio', { name: 'Hermes' }));
+    expect(screen.queryByRole('textbox', { name: 'Custom command' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'Custom' }));
+    expect(screen.getByRole('textbox', { name: 'Custom command' })).toHaveValue('npm run dev');
   });
 
   it('collapses the tabs panel', () => {
@@ -700,23 +612,23 @@ describe('VerticalTabBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
     fireEvent.click(screen.getByRole('button', { name: 'New project in Research' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Experiment' } });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Initial terminals' }), { target: { value: '3' } });
-    expect(screen.getAllByRole('button', { name: 'Local terminal' })).toHaveLength(3);
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Initial terminals' }), { target: { value: '3' } });
+    expect(screen.getByRole('spinbutton', { name: 'Initial terminals' })).toHaveValue(3);
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Terminal limit reached'));
     expect(launch).toHaveBeenCalledWith(expect.objectContaining({ name: 'Experiment', terminalCount: 3 }), expect.objectContaining({ name: 'Research' }));
     expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveValue('Experiment');
   });
 
-  it('requires confirmation before reducing the configured terminal count', () => {
+  it('reduces the shared terminal count without discarding configuration', () => {
     renderTabs();
     fireEvent.click(screen.getByRole('button', { name: 'New workspace or project' }));
     fireEvent.click(screen.getByRole('button', { name: 'Project' }));
-    fireEvent.change(screen.getByRole('combobox', { name: 'Initial terminals' }), { target: { value: '3' } });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Initial terminals' }), { target: { value: '1' } });
-    expect(screen.getAllByRole('button', { name: 'Local terminal' })).toHaveLength(3);
-    fireEvent.click(screen.getByRole('button', { name: 'Reduce terminals' }));
-    expect(screen.getAllByRole('button', { name: 'Local terminal' })).toHaveLength(1);
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Initial terminals' }), { target: { value: '3' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Initial terminals' }), { target: { value: '1' } });
+    expect(screen.getByRole('spinbutton', { name: 'Initial terminals' })).toHaveValue(1);
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Codex' })).toBeChecked();
   });
 
   it('keeps project actions correctly named without workspace move destinations', () => {
