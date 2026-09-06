@@ -33,6 +33,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - name: Install dependencies
         run: npm ci
         env:
@@ -48,10 +52,17 @@ jobs:
         run: npm run build
 
       - name: Run Electron e2e tests
-        run: xvfb-run --auto-servernum npm run test:e2e
+        run: xvfb-run --auto-servernum npx playwright test --config playwright.config.ts
+
+      - uses: actions/upload-artifact@v6
+        if: failure()
+        with:
+          name: electron-failure-linux
+          path: test-results/e2e
+          retention-days: 7
 
   durable-workspace-platforms:
-    name: Durable workspace (${{ matrix.os }})
+    name: Desktop smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -70,11 +81,22 @@ jobs:
         env:
           NODE_ENV: development
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Run unit and component tests
+        run: npm test
+
       - name: Build app
         run: npm run build
 
-      - name: Run close shutdown Electron test
-        run: npx playwright test --config playwright.config.ts tests/e2e/close-shutdown.spec.ts
+      - name: Run desktop workflow smoke tests
+        run: npx playwright test --config playwright.config.ts tests/e2e/dev-instance.spec.ts tests/e2e/close-shutdown.spec.ts tests/e2e/pane-maximize.spec.ts tests/e2e/terminal-copy.spec.ts tests/e2e/editor.spec.ts tests/e2e/settings-recovery.spec.ts tests/e2e/local-terminal-recovery.spec.ts
 
-      - name: Run startup command Electron test
-        run: npx playwright test --config playwright.config.ts tests/e2e/pane-maximize.spec.ts --grep "runs ordered preset startup commands"
+      - uses: actions/upload-artifact@v6
+        if: failure()
+        with:
+          name: electron-failure-${{ matrix.os }}
+          path: test-results/e2e
+          retention-days: 7

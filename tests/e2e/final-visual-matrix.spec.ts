@@ -2,10 +2,12 @@ import { test, expect, _electron as electron, type ElectronApplication, type Loc
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { getTheme, themeNames, type ThemeName } from '../../src/renderer/themes';
 
 const root = path.resolve(__dirname, '../..');
+const agentHarness = path.join(root, 'tests/e2e/helpers/visual-agent.cjs');
 const neutralCwd = process.env.SystemRoot ?? root;
-const themes = ['tokyo-night', 'solarized-light'] as const;
+const themes = themeNames;
 const viewports = [{ width: 1280, height: 800 }, { width: 800, height: 600 }] as const;
 
 function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
@@ -36,12 +38,13 @@ function agentSequence(event: Record<string, unknown>): string {
 
 function emitCommand(event: Record<string, unknown>): string {
   const encoded = Buffer.from(agentSequence(event)).toString('base64');
-  return `node -e "process.stdout.write(Buffer.from('${encoded}','base64'))"`;
+  return `node "${agentHarness}" ${encoded}`;
 }
 
 function gatedEmitCommand(event: Record<string, unknown>): string {
   const encoded = Buffer.from(agentSequence(event)).toString('base64');
-  return `node -e "process.stdin.once('data',()=>process.stdout.write(Buffer.from('${encoded}','base64')))"`;
+  const started = Buffer.from(agentSequence({ event: 'turn.start', sessionId: event.sessionId, turnId: event.turnId })).toString('base64');
+  return `node "${agentHarness}" ${started} ${encoded}`;
 }
 
 async function typeCommand(page: Page, terminal: Locator, command: string): Promise<void> {
@@ -62,19 +65,20 @@ async function selectTab(page: Page, title: string): Promise<Locator> {
   return terminal;
 }
 
-async function switchTheme(page: Page, theme: typeof themes[number]): Promise<void> {
+async function switchTheme(page: Page, theme: ThemeName): Promise<void> {
   await page.getByRole('button', { name: 'Open settings' }).click();
-  const label = theme === 'tokyo-night' ? 'Tokyo Night' : 'Solarized Light';
+  const definition = getTheme(theme);
+  const label = definition.label;
   await page.getByRole('button', { name: label, exact: true }).click();
   await page.getByRole('button', { name: 'Hide settings' }).click();
-  const expected = theme === 'tokyo-night' ? 'rgb(15, 15, 26)' : 'rgb(253, 246, 227)';
   await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement)
-    .getPropertyValue('--bg-primary').trim())).toBe(theme === 'tokyo-night' ? '#0f0f1a' : '#fdf6e3');
-  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(expected);
+    .getPropertyValue('--bg-primary').trim())).toBe(definition.css['bg-primary']);
 }
 
 async function measureVisualState(page: Page, name: string) {
   return page.evaluate((stateName) => {
+    const visibleElement = (selector: string) => Array.from(document.querySelectorAll<HTMLElement>(selector))
+      .find((element) => element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }))!;
     type Rgba = [number, number, number, number];
     const parseColor = (value: string): Rgba => {
       if (value === 'transparent') return [0, 0, 0, 0];
@@ -109,7 +113,7 @@ async function measureVisualState(page: Page, name: string) {
       return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
     };
     const contrast = (selector: string) => {
-      const element = document.querySelector<HTMLElement>(selector)!;
+      const element = visibleElement(selector);
       const background = effectiveBackground(element);
       const foreground = composite(parseColor(getComputedStyle(element).color), background);
       const lighter = Math.max(luminance(foreground), luminance(background));
@@ -123,12 +127,12 @@ async function measureVisualState(page: Page, name: string) {
     };
     const keySelectors = [
       '.app', '.titlebar', '.app-body', '.workspace-tools', '.vtab-bar', '.terminal-area',
-      '.status-bar', '.broadcast-input-banner', '.vtab-sub.running', '.vtab-sub.finished',
-      '.vtab-sub.exited', '.vtab-sub.disconnected', '.leaf-awareness.needs-input',
+      '.status-bar', '.broadcast-input-banner', '.activity-count.running', '.activity-count.finished',
+      '.vtab-item:has(.activity-dot.exited) .vtab-name', '.vtab-item:has(.activity-dot.disconnected) .vtab-name', '.leaf-awareness.needs-input',
       '.terminal-command-failed',
     ];
     const regions = keySelectors.map((selector) => {
-      const element = document.querySelector<HTMLElement>(selector)!;
+      const element = visibleElement(selector);
       const rect = element.getBoundingClientRect();
       return {
         selector,
@@ -142,7 +146,7 @@ async function measureVisualState(page: Page, name: string) {
     const broadcastLeaf = document.querySelector<HTMLElement>('.terminal-leaf.broadcast-selected')!;
     const activeTab = document.querySelector<HTMLElement>('.vtab-item.active')!;
     const inactiveTab = document.querySelector<HTMLElement>('.vtab-item:not(.active)')!;
-    const failedMarker = document.querySelector<HTMLElement>('.terminal-command-failed')!;
+    const failedMarker = visibleElement('.terminal-command-failed');
     return {
       name: stateName,
       viewport: { width: innerWidth, height: innerHeight },
@@ -162,13 +166,23 @@ async function measureVisualState(page: Page, name: string) {
         activeTabBackground: effectiveBackground(activeTab).slice(0, 3).map(Math.round),
         inactiveTabBackground: effectiveBackground(inactiveTab).slice(0, 3).map(Math.round),
         failedMarkerBorder: getComputedStyle(failedMarker).borderLeftWidth,
+        workspaceToolsOverflowY: getComputedStyle(document.querySelector<HTMLElement>('.workspace-tools-panel')!).overflowY,
+        explorerOverflowY: getComputedStyle(document.querySelector<HTMLElement>('.explorer-tree')!).overflowY,
+        verticalDividerWidth: getComputedStyle(document.querySelector<HTMLElement>('.split-divider-vertical')!).width,
+        horizontalDividerHeight: getComputedStyle(document.querySelector<HTMLElement>('.split-divider-horizontal')!).height,
+        workspaceMainPadding: getComputedStyle(document.querySelector<HTMLElement>('.workspace-main')!).paddingTop,
+        terminalLeafBorderWidth: getComputedStyle(document.querySelector<HTMLElement>('.terminal-leaf')!).borderTopWidth,
+        terminalTracks: Array.from(document.querySelectorAll<HTMLElement>('.terminal-container')).map((container) => ({
+          track: getComputedStyle(container.querySelector<HTMLElement>('.xterm-scrollable-element')!).backgroundColor,
+          canvas: getComputedStyle(container).backgroundColor,
+          outerOverflow: getComputedStyle(container).overflowY,
+        })),
       },
       contrastPairs: [
-        contrast('.workspace-tools-following'),
-        contrast('.vtab-sub.running'),
-        contrast('.vtab-sub.finished'),
-        contrast('.vtab-sub.exited'),
-        contrast('.vtab-sub.disconnected'),
+        contrast('.activity-count.running'),
+        contrast('.activity-count.finished'),
+        contrast('.vtab-item:has(.activity-dot.exited) .vtab-name'),
+        contrast('.vtab-item:has(.activity-dot.disconnected) .vtab-name'),
         contrast('.leaf-awareness.needs-input'),
         contrast('.terminal-leaf.broadcast-selected .leaf-title'),
         contrast('.broadcast-input-banner strong'),
@@ -177,13 +191,13 @@ async function measureVisualState(page: Page, name: string) {
   }, name);
 }
 
-test('proves the final two-theme Electron visual matrix', async ({}, testInfo) => {
+test('checks every built-in theme in the Electron visual matrix', async ({}, testInfo) => {
   test.setTimeout(120_000);
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-final-visual-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-final-visual-e2e-'));
   const pageErrors: string[] = [];
   let app: ElectronApplication | undefined;
 
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'left',
@@ -198,7 +212,13 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
             type: 'split', direction: 'vertical', sizes: [1, 1],
             children: [
               { type: 'leaf', title: 'Focused', terminalType: 'local', cwd: neutralCwd },
-              { type: 'leaf', title: 'Failed command', terminalType: 'local', cwd: neutralCwd },
+              {
+                type: 'split', direction: 'horizontal', sizes: [1, 1],
+                children: [
+                  { type: 'leaf', title: 'Failed command', terminalType: 'local', cwd: neutralCwd },
+                  { type: 'leaf', title: 'Stacked pane', terminalType: 'local', cwd: neutralCwd },
+                ],
+              },
             ],
           },
           selectedPanePath: [0],
@@ -247,44 +267,41 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
     await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
       .toEqual({ width: 1280, height: 800 });
     await expect(page.locator('.vtab-item')).toHaveCount(5);
-    await expect(tab(page, 'Disconnected SSH').locator('.vtab-sub')).toHaveText('SSH disconnected');
+    await expect(tab(page, 'Disconnected SSH')).toHaveAttribute('aria-label', /SSH disconnected/);
 
     const runningTerminal = await selectTab(page, 'Running agent');
     await typeCommand(page, runningTerminal, emitCommand({
       event: 'turn.start', sessionId: 'visual-running', turnId: 'turn-running',
     }));
-    await expect(tab(page, 'Running agent').locator('.vtab-sub')).toHaveText('Hermes · Running');
+    await expect(tab(page, 'Running agent')).toHaveAttribute('aria-label', /Hermes · Running/);
 
     const finishedTerminal = await selectTab(page, 'Finished agent');
-    await typeCommand(page, finishedTerminal, emitCommand({
-      event: 'turn.start', sessionId: 'visual-finished', turnId: 'turn-finished',
-    }));
-    await expect(tab(page, 'Finished agent').locator('.vtab-sub')).toHaveText('Hermes · Running');
     const finishedId = await finishedTerminal.getAttribute('data-terminal-id');
     expect(finishedId).toBeTruthy();
     await typeCommand(page, finishedTerminal, gatedEmitCommand({
       event: 'turn.end', sessionId: 'visual-finished',
       turnId: 'turn-finished', outcome: 'succeeded',
     }));
+    await expect(tab(page, 'Finished agent')).toHaveAttribute('aria-label', /Hermes · Running/);
 
     const exitedTerminal = await selectTab(page, 'Exited shell');
     await typeCommand(page, exitedTerminal, 'exit');
-    await expect(tab(page, 'Exited shell').locator('.vtab-sub')).toHaveText('Exited', { timeout: 15_000 });
+    await expect(tab(page, 'Exited shell')).toHaveAttribute('aria-label', /Exited/, { timeout: 15_000 });
 
     await selectTab(page, 'Active workspace');
     await page.evaluate(({ id }) => window.janet.terminalWrite({ id, data: 'x\r', userInput: true }), {
       id: finishedId!,
     });
-    await expect(tab(page, 'Finished agent').locator('.vtab-sub')).toHaveText('Hermes · Turn finished');
+    await expect(tab(page, 'Finished agent')).toHaveAttribute('aria-label', /Hermes · Turn finished/);
 
     const activeTerminals = page.locator('.terminal-container');
-    await expect(activeTerminals).toHaveCount(2);
+    await expect(activeTerminals).toHaveCount(3);
+    const clearCommand = process.platform === 'win32' ? 'cls' : 'clear';
+    await typeCommand(page, activeTerminals.nth(0), clearCommand);
     await typeCommand(page, activeTerminals.nth(0), emitCommand({
       event: 'attention.request', sessionId: 'visual-active', turnId: 'turn-active',
     }));
     await expect(page.locator('.leaf-awareness.needs-input')).toHaveText('Hermes · Needs input');
-    const clearCommand = process.platform === 'win32' ? 'cls' : 'clear';
-    await typeCommand(page, activeTerminals.nth(0), clearCommand);
     await typeCommand(page, activeTerminals.nth(1), clearCommand);
     const failingCommand = process.platform === 'win32' ? 'test' : 'false';
     await typeCommand(page, activeTerminals.nth(1), failingCommand);
@@ -315,13 +332,42 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
           await expect(showTabs).toBeVisible();
           await showTabs.click();
         }
-        await expect(activeTerminals.nth(1).locator('.terminal-command-failed')).toHaveCount(1);
+        // Bash redraws its prompt on resize; repeated reflows can scroll the old
+        // command marker out of view. Keep this visual fixture in the viewport.
+        const markerSuffix = `${themes.indexOf(theme)}-${viewport.width}`;
+        const marker = `V${markerSuffix}`;
+        await page.evaluate(({ id, command }) => window.janet.terminalWrite({
+          id, data: `${command}\r`, userInput: true,
+        }), {
+          id: (await activeTerminals.nth(1).getAttribute('data-terminal-id'))!,
+          command: process.platform === 'win32'
+            ? `Write-Output ('V' + '${markerSuffix}'); ${failingCommand}`
+            : `printf 'V%s\\n' '${markerSuffix}'; ${failingCommand}`,
+        });
+        await expect(activeTerminals.nth(1).locator('.xterm-rows')).toContainText(marker);
+        await expect(page.locator('.terminal-leaf').nth(1).locator('.leaf-awareness')).toHaveText('Shell · Ready');
+        await expect(activeTerminals.nth(1).locator('.terminal-command-failed:visible').first()).toBeVisible();
         await tab(page, 'Active workspace').focus();
         await page.keyboard.press('Tab');
         await page.keyboard.press('Shift+Tab');
         await expect(tab(page, 'Active workspace')).toBeFocused();
 
         const report = await measureVisualState(page, `${theme}-${viewport.width}x${viewport.height}`);
+        const chrome = await page.evaluate(() => {
+          const brand = document.querySelector('.titlebar-brand')!.getBoundingClientRect();
+          const command = document.querySelector('.titlebar-palette-btn')!.getBoundingClientRect();
+          const controls = document.querySelector('.titlebar-right')!.getBoundingClientRect();
+          return {
+            separated: brand.right < command.left && command.right < controls.left,
+            height: document.querySelector('.titlebar')!.getBoundingClientRect().height,
+            commandDrag: getComputedStyle(document.querySelector('.titlebar-palette-btn')!).getPropertyValue('-webkit-app-region'),
+            footerHeight: document.querySelector('.status-bar')!.getBoundingClientRect().height,
+          };
+        });
+        expect(chrome.separated).toBe(true);
+        expect(chrome.height).toBe(54);
+        expect(chrome.footerHeight).toBe(28);
+        expect(chrome.commandDrag).toBe('no-drag');
         expect(report.document.bodyScrollWidth).toBeLessThanOrEqual(viewport.width);
         expect(report.document.rootScrollWidth).toBeLessThanOrEqual(viewport.width);
         expect(report.document.bodyScrollHeight).toBeLessThanOrEqual(viewport.height);
@@ -334,7 +380,17 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
         expect(parseFloat(report.distinctions.activeTabOutlineWidth)).toBeGreaterThanOrEqual(2);
         expect(report.distinctions.activeTabBackground).not.toEqual(report.distinctions.inactiveTabBackground);
         expect(report.distinctions.failedMarkerBorder).toBe('2px');
-        expect(report.contrastPairs.filter(({ ratio }) => ratio < 4.5)).toEqual([]);
+        expect(report.distinctions.workspaceToolsOverflowY).toBe('hidden');
+        expect(report.distinctions.explorerOverflowY).toBe('auto');
+        expect(parseFloat(report.distinctions.verticalDividerWidth)).toBeGreaterThanOrEqual(12);
+        expect(parseFloat(report.distinctions.horizontalDividerHeight)).toBeGreaterThanOrEqual(12);
+        expect(report.distinctions.workspaceMainPadding).toBe('0px');
+        expect(report.distinctions.terminalLeafBorderWidth).toBe('1px');
+        for (const track of report.distinctions.terminalTracks) {
+          expect(track.track).toBe(track.canvas);
+          expect(['auto', 'scroll']).not.toContain(track.outerOverflow);
+        }
+        expect(report.contrastPairs.filter(({ ratio }) => ratio < 7)).toEqual([]);
         reports.push(report);
 
         const screenshot = testInfo.outputPath(`final-visual-matrix-${theme}-${viewport.width}x${viewport.height}.png`);
@@ -360,7 +416,7 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
         expect(menuBox!.y).toBeGreaterThanOrEqual(0);
         expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(viewport.width + 1);
         expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(viewport.height + 1);
-        await expect(menu.getByRole('menuitem', { name: 'Rename tab' })).toBeFocused();
+        await expect(menu.getByRole('menuitem', { name: 'Rename project' })).toBeFocused();
         await page.evaluate(() => document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
         await expect(menu).toBeHidden();
         await expect(activeTab).toBeFocused();
@@ -373,7 +429,7 @@ test('proves the final two-theme Electron visual matrix', async ({}, testInfo) =
           clientX: point.x,
           clientY: point.y,
         })), { x: viewport.width - 1, y: viewport.height - 1 });
-        await expect(menu.getByRole('menuitem', { name: 'Rename tab' })).toBeFocused();
+        await expect(menu.getByRole('menuitem', { name: 'Rename project' })).toBeFocused();
         await page.keyboard.press('Escape');
         await expect(menu).toBeHidden();
         await expect(activeTab).toBeFocused();

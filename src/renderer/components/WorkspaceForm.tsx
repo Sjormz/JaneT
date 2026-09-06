@@ -1,19 +1,18 @@
-import React, { useEffect, useId, useState } from 'react';
+import React, { useId, useState } from 'react';
 import {
   SavedSSHProfile,
   WorkspaceTabPreset,
   WorkspaceTerminal,
-  createPaneRoot,
   createWorkspaceRoot,
+  genId,
 } from '../types';
-import { SavedPaneNode, serializePaneTree } from '../sessionRestore';
+import { serializePaneTree } from '../sessionRestore';
 import {
   ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, ChevronRightIcon, PlusIcon, XCloseIcon,
 } from '../icons';
 import Tooltip from './Tooltip';
 import type { StartupShellDialect } from '../../shared/startupCommands';
 import {
-  isStartupShellDialect,
   MAX_STARTUP_COMMAND_LENGTH,
   MAX_STARTUP_COMMANDS,
   MAX_STARTUP_COMMAND_TOTAL_LENGTH,
@@ -21,7 +20,10 @@ import {
 } from '../../shared/startupCommands';
 import ConfirmationDialog from './ConfirmationDialog';
 
-type PendingPresetRemoval =
+import { type WorkspaceGroup } from '../../shared/workspaceGroups';
+
+type PendingRemoval =
+  | { kind: 'count'; count: number }
   | { kind: 'terminal'; terminalIndex: number }
   | { kind: 'command'; terminalIndex: number; commandIndex: number };
 
@@ -35,81 +37,24 @@ function selectedSshProfileLabel(terminal: WorkspaceTerminal, sshProfiles: Saved
   return profile ? sshProfileLabel(profile) : 'Missing saved connection';
 }
 
-function newPresetId() {
-  return `workspace-tab-${Date.now()}`;
-}
-
-function terminalsFromRoot(root: SavedPaneNode | undefined): WorkspaceTerminal[] {
-  if (!root) return [{ type: 'local' }];
-  if (root.type === 'leaf') {
-    const type = root.terminalType ?? 'local';
-    const startupCommands = sanitizeStartupCommands(root.startupCommands);
-    return [{
-      type,
-      title: root.title,
-      cwd: root.cwd,
-      sshProfileId: root.sshProfileId,
-      startupCommands,
-      startupShellDialect: isStartupShellDialect(root.startupShellDialect)
-        ? root.startupShellDialect
-        : type === 'ssh' && startupCommands.length > 0
-          ? 'posix'
-          : undefined,
-    }];
-  }
-  return root.children.flatMap(terminalsFromRoot);
-}
-
-function terminalsFromPreset(preset: WorkspaceTabPreset | null | undefined): WorkspaceTerminal[] {
-  if (preset?.root) return terminalsFromRoot(preset.root);
-  if (!preset) return [{ type: 'local' }];
-
-  // Older presets stored one top-level terminal configuration plus a count and
-  // split direction. Expand that portable shape for editing instead of
-  // silently replacing it with a single local terminal.
-  const count = Math.max(1, Math.min(8, Math.floor(preset.terminalCount) || 1));
-  return Array.from({ length: count }, () => preset.type === 'ssh'
-    ? { type: 'ssh', sshProfileId: preset.sshProfileId }
-    : { type: 'local', cwd: preset.cwd });
-}
-
-function applyTerminals(root: SavedPaneNode, terminals: WorkspaceTerminal[]): SavedPaneNode {
-  let index = 0;
-  const apply = (node: SavedPaneNode): SavedPaneNode => {
-    if (node.type === 'leaf') {
-      const terminal = terminals[index++] ?? { type: node.terminalType ?? 'local', cwd: node.cwd, sshProfileId: node.sshProfileId };
-      const startupCommands = sanitizeStartupCommands(terminal.startupCommands);
-      return {
-        type: 'leaf',
-        ...(terminal.title?.trim() ? { title: terminal.title.trim() } : {}),
-        terminalType: terminal.type,
-        cwd: terminal.cwd,
-        sshProfileId: terminal.sshProfileId,
-        ...(startupCommands.length > 0 ? { startupCommands } : {}),
-        ...(terminal.type === 'ssh' && startupCommands.length > 0
-          ? { startupShellDialect: terminal.startupShellDialect ?? 'posix' }
-          : {}),
-      };
-    }
-    return { ...node, children: node.children.map(apply) };
-  };
-  return apply(root);
-}
-
-interface WorkspaceTabPresetFormProps {
+interface WorkspaceFormProps {
   sshProfiles: SavedSSHProfile[];
-  preset?: WorkspaceTabPreset | null;
+  groups: WorkspaceGroup[];
+  defaultGroupId?: string;
+  folder?: WorkspaceGroup;
+  submitting?: boolean;
   submitLabel: string;
-  onSubmit: (preset: WorkspaceTabPreset) => void;
+  onSubmit: (workspace: WorkspaceTabPreset, group: WorkspaceGroup) => void;
 }
 
-export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabel, onSubmit }: WorkspaceTabPresetFormProps) {
+export default function WorkspaceForm({ sshProfiles, groups, defaultGroupId, folder, submitting, submitLabel, onSubmit }: WorkspaceFormProps) {
   const formId = useId();
   const [name, setName] = useState('');
+  const [groupId, setGroupId] = useState(defaultGroupId ?? groups[0]?.id ?? 'new');
   const [terminals, setTerminals] = useState<WorkspaceTerminal[]>([{ type: 'local' }]);
   const [openProfileIndex, setOpenProfileIndex] = useState<number | null>(null);
   const [openStartupIndices, setOpenStartupIndices] = useState<Set<number>>(new Set());
-  const [pendingRemoval, setPendingRemoval] = useState<PendingPresetRemoval | null>(null);
+  const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
   const missingSshProfileIndex = terminals.findIndex((terminal) => (
     terminal.type === 'ssh'
     && (!terminal.sshProfileId || !sshProfiles.some((profile) => profile.id === terminal.sshProfileId))
@@ -118,18 +63,8 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
     (terminal.startupCommands ?? []).reduce((total, command) => total + command.length, 0)
       > MAX_STARTUP_COMMAND_TOTAL_LENGTH
   ));
-  const canSubmit = Boolean(name.trim()) && missingSshProfileIndex === -1 && oversizedStartupIndex === -1;
-
-  useEffect(() => {
-    setName(preset?.name ?? '');
-    const nextTerminals = terminalsFromPreset(preset);
-    setTerminals(nextTerminals);
-    setOpenStartupIndices(new Set(nextTerminals.flatMap((terminal, index) => (
-      sanitizeStartupCommands(terminal.startupCommands).length > 0 ? [index] : []
-    ))));
-    setOpenProfileIndex(null);
-    setPendingRemoval(null);
-  }, [preset]);
+  const selectedGroup = folder ?? groups.find((group) => group.id === groupId);
+  const canSubmit = !submitting && Boolean(selectedGroup) && (Boolean(folder) || Boolean(name.trim())) && missingSshProfileIndex === -1 && oversizedStartupIndex === -1;
 
   const updateTerminal = (index: number, next: WorkspaceTerminal) => {
     setTerminals((current) => current.map((terminal, i) => i === index ? next : terminal));
@@ -211,6 +146,12 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
     const removal = pendingRemoval;
     if (!removal) return;
     setPendingRemoval(null);
+    if (removal.kind === 'count') {
+      setTerminals((current) => current.slice(0, removal.count));
+      setOpenProfileIndex(null);
+      setOpenStartupIndices((current) => new Set([...current].filter((index) => index < removal.count)));
+      return;
+    }
     if (removal.kind === 'terminal') {
       removeTerminal(removal.terminalIndex);
       return;
@@ -229,7 +170,7 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!name.trim() || missingSshProfileIndex >= 0 || oversizedStartupIndex >= 0) return;
+    if (!canSubmit || !selectedGroup) return;
     const normalizedTerminals = terminals.map((terminal) => {
       const startupCommands = sanitizeStartupCommands(terminal.startupCommands);
       const title = terminal.title?.trim();
@@ -242,45 +183,32 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
           : undefined,
       };
     });
-    const legacyPreset = preset && !preset.root ? preset : null;
-    const root = preset?.root
-      ? applyTerminals(preset.root, normalizedTerminals)
-      : legacyPreset
-        ? applyTerminals(
-            serializePaneTree(
-              createPaneRoot(legacyPreset.type, normalizedTerminals.length, legacyPreset.splitDirection),
-              {},
-              { includeStartupCommands: true },
-            ),
-            normalizedTerminals,
-          )
-        : serializePaneTree(createWorkspaceRoot(normalizedTerminals), {}, { includeStartupCommands: true });
+    const root = serializePaneTree(createWorkspaceRoot(normalizedTerminals), {}, { includeStartupCommands: true });
     onSubmit({
-      id: preset?.id ?? newPresetId(),
-      name: name.trim(),
-      type: legacyPreset?.type ?? 'local',
-      ...(legacyPreset?.type === 'local'
-        ? { cwd: normalizedTerminals[0]?.cwd ?? legacyPreset.cwd }
-        : {}),
-      ...(legacyPreset?.type === 'ssh'
-        ? { sshProfileId: normalizedTerminals[0]?.sshProfileId ?? legacyPreset.sshProfileId }
-        : {}),
-      root,
+      id: genId('workspace'), name: name.trim() || 'Session', type: 'local', root,
       terminalCount: normalizedTerminals.length,
       splitDirection: root.type === 'split' ? root.direction : 'vertical',
-    });
+    }, selectedGroup);
   };
 
   return (
     <>
     <form className="workspace-form" onSubmit={handleSubmit}>
+      <fieldset className="workspace-creation-fields" disabled={submitting}>
+      {folder ? <p className="main-directory-path">{folder.directory}</p> : <label className="form-field"><span>Workspace</span><select className="form-input" aria-label="Workspace" value={groupId} onChange={(event) => setGroupId(event.target.value)}>{groups.map((group) => <option value={group.id} key={group.id}>{group.name}</option>)}</select></label>}
       <label className="form-field">
-        <span>Preset name</span>
-        <input className="form-input" value={name} onChange={(event) => setName(event.target.value)} placeholder="My development setup" aria-label="Preset name" required />
+        <span>{folder ? 'Session name (optional)' : 'Project name'}</span>
+        <input className="form-input" value={name} onChange={(event) => setName(event.target.value)} placeholder={folder ? 'e.g. Development' : 'My development setup'} aria-label={folder ? 'Session name (optional)' : 'Project name'} maxLength={128} required={!folder} />
       </label>
+      <label className="form-field"><span>Initial terminals</span><select className="form-input" aria-label="Initial terminals" value={terminals.length} onChange={(event) => {
+        const count = Number(event.target.value);
+        if (count < terminals.length) setPendingRemoval({ kind: 'count', count });
+        else setTerminals((current) => [...current, ...Array.from({ length: count - current.length }, (): WorkspaceTerminal => ({ type: 'local' }))]);
+      }}>{Array.from({ length: 16 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1} {index === 0 ? 'terminal' : 'terminals'}</option>)}</select></label>
+      <p className="workspace-form-help">Choose local or SSH for each terminal. Your {folder ? 'session' : 'project'} and layout restore automatically when JaneT reopens.</p>
       <div className="workspace-terminal-list">
         {terminals.map((terminal, index) => (
-          <div className="workspace-terminal-entry" key={index}>
+          <div className="workspace-terminal-entry" key={index} role="group" aria-label={`Terminal ${index + 1} configuration`}>
             <div className="workspace-terminal-label-row">
               <span className="workspace-terminal-label">Terminal {index + 1}</span>
               {terminals.length > 1 && (
@@ -304,7 +232,7 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
               <button id={`${formId}-terminal-${index}-type-ssh`} type="button" aria-pressed={terminal.type === 'ssh'} className={terminal.type === 'ssh' ? 'active' : ''} onClick={() => updateTerminal(index, { ...terminal, type: 'ssh', cwd: undefined, sshProfileId: terminal.type === 'ssh' ? terminal.sshProfileId : undefined, startupShellDialect: terminal.startupShellDialect ?? 'posix' })}>SSH connection</button>
             </div>
             {terminal.type === 'local' ? (
-              <input className="form-input" value={terminal.cwd ?? ''} onChange={(event) => updateTerminal(index, { ...terminal, cwd: event.target.value || undefined })} placeholder="Directory path (blank = home)" aria-label={`Terminal ${index + 1} directory`} />
+              <input className="form-input" value={terminal.cwd ?? ''} onChange={(event) => updateTerminal(index, { ...terminal, cwd: event.target.value || undefined })} placeholder={folder ? 'Directory override (blank = linked folder)' : 'Directory override (blank = workspace folder)'} aria-label={`Terminal ${index + 1} directory`} />
             ) : (
               <div className="workspace-profile-select">
                 <button type="button" className="workspace-profile-trigger" aria-label={`Terminal ${index + 1} SSH profile`} aria-expanded={openProfileIndex === index} aria-haspopup="listbox" onClick={() => setOpenProfileIndex((open) => open === index ? null : index)}>
@@ -393,7 +321,7 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
                   </button>
                   <p className="workspace-form-help">Commands run in order and stop if one fails. Local commands wait for a detected prompt when supported; other recognized shells use a short fallback delay. Submitting an answer to a local profile prompt cancels the pane's automation. SSH begins when its shell channel opens. Put interactive commands last.</p>
                   {terminal.type === 'ssh' && <p className="workspace-form-help">Typing before the remote channel opens cancels automation. Avoid remote login scripts that prompt for input.</p>}
-                  <p className="workspace-form-help workspace-startup-warning">Commands are stored with this preset and may appear in shell history. Don’t include passwords or tokens.</p>
+                  <p className="workspace-form-help workspace-startup-warning">Commands are stored with this workspace and may appear in shell history. Don’t include passwords or tokens.</p>
                 </div>
               )}
             </div>
@@ -410,7 +338,8 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
           Terminal {oversizedStartupIndex + 1} startup commands exceed {MAX_STARTUP_COMMAND_TOTAL_LENGTH.toLocaleString()} characters.
         </div>
       )}
-      <button id={`${formId}-add-terminal`} className="workspace-add-btn" type="button" onClick={() => setTerminals((current) => [...current, { type: 'local' }])}><PlusIcon size="xs" /> Add terminal</button>
+      <button id={`${formId}-add-terminal`} className="workspace-add-btn" type="button" disabled={terminals.length >= 16} onClick={() => setTerminals((current) => [...current, { type: 'local' }])}><PlusIcon size="xs" /> Add terminal</button>
+      </fieldset>
       <button className="connect-btn" type="submit" disabled={!canSubmit}>{submitLabel}</button>
     </form>
     <ConfirmationDialog
@@ -419,11 +348,11 @@ export default function WorkspaceTabPresetForm({ sshProfiles, preset, submitLabe
         ? `Remove terminal ${pendingRemoval.terminalIndex + 1}?`
         : pendingRemoval?.kind === 'command'
           ? `Remove startup command ${pendingRemoval.commandIndex + 1}?`
-          : 'Remove preset item?'}
+          : 'Reduce initial terminals?'}
       description={pendingRemoval?.kind === 'terminal'
-        ? 'Remove this terminal and its startup commands from the preset draft? The saved preset changes only after you save.'
-        : 'Remove this startup command from the preset draft? The saved preset changes only after you save.'}
-      confirmLabel={pendingRemoval?.kind === 'terminal' ? 'Remove terminal' : 'Remove command'}
+        ? 'Remove this terminal and its startup commands from the new workspace draft?'
+        : pendingRemoval?.kind === 'count' ? `Keep the first ${pendingRemoval.count} terminals? Configuration for the remaining terminals will be removed from this draft.` : 'Remove this startup command from the new workspace draft?'}
+      confirmLabel={pendingRemoval?.kind === 'count' ? 'Reduce terminals' : pendingRemoval?.kind === 'terminal' ? 'Remove terminal' : 'Remove command'}
       onCancel={() => setPendingRemoval(null)}
       onConfirm={confirmRemoval}
     />

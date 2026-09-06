@@ -1,6 +1,7 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as net from 'net';
+import { terminalSettings } from './workspaces';
 import * as os from 'os';
 import * as path from 'path';
 
@@ -61,10 +62,10 @@ async function canConnect(port: number): Promise<boolean> {
 }
 
 function createEditorFixture(userData: string): { directory: string; fileName: string } {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-close-editor-'));
+  const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-close-editor-'));
   const fileName = 'dirty-close.ts';
   fs.writeFileSync(path.join(directory, fileName), 'export const clean = true;\n', 'utf8');
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'right',
@@ -89,7 +90,8 @@ function createEditorFixture(userData: string): { directory: string; fileName: s
 
 test('closing the window stops managed terminal work and exits without an active-work prompt', async () => {
   let app: ElectronApplication | undefined;
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-close-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-close-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(terminalSettings(userData)));
   const port = await freePort();
 
   try {
@@ -140,7 +142,7 @@ test('closing the window stops managed terminal work and exits without an active
 
 test('cancelling dirty-editor close keeps the same JaneT window open', async () => {
   let app: ElectronApplication | undefined;
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-close-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-close-e2e-'));
   const fixture = createEditorFixture(userData);
 
   try {

@@ -1,3 +1,4 @@
+import { terminalSettings } from './workspaces';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -21,7 +22,8 @@ async function forceClose(app: ElectronApplication | undefined): Promise<void> {
 }
 
 test('shows the current JaneT version and checks for updates when clicked', async () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-version-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-version-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(terminalSettings(userData)));
   let app: ElectronApplication | undefined;
 
   try {
@@ -49,7 +51,7 @@ test('shows the current JaneT version and checks for updates when clicked', asyn
     const version = page.getByRole('button', {
       name: `JaneT version ${packageMetadata.version}. Check for updates`,
     });
-    await expect(version).toHaveText(`v${packageMetadata.version}`);
+    await expect(version).toHaveText(`BUILDv${packageMetadata.version}`);
 
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(800, 600));
     await expect(version).toBeVisible();
@@ -73,7 +75,8 @@ test('shows the current JaneT version and checks for updates when clicked', asyn
 test('copies exact privacy-safe diagnostics from the packaged runtime', async () => {
   const executablePath = process.env.JANET_PACKAGED_EXECUTABLE;
   test.skip(!executablePath, 'Set JANET_PACKAGED_EXECUTABLE to a freshly built unpacked application');
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-diagnostics-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-diagnostics-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(terminalSettings(userData)));
   let app: ElectronApplication | undefined;
 
   try {
@@ -123,7 +126,8 @@ test('copies exact privacy-safe diagnostics from the packaged runtime', async ()
 test('keeps a packaged updater failure actionable with the fixed releases fallback', async () => {
   const executablePath = process.env.JANET_PACKAGED_EXECUTABLE;
   test.skip(!executablePath, 'Set JANET_PACKAGED_EXECUTABLE to a freshly built unpacked application');
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-updater-failure-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-updater-failure-e2e-'));
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(terminalSettings(userData)));
   let app: ElectronApplication | undefined;
 
   try {

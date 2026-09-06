@@ -46,7 +46,7 @@ export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   'search-toggle': 'Search terminal output',
   'palette-toggle': 'Open command palette',
   'new-terminal': 'New terminal tab',
-  'close-tab': 'Close current tab',
+  'close-tab': 'Close current terminal',
   'settings-toggle': 'Open settings',
   'toggle-sidebar': 'Show or hide workspace tools',
   'font-increase': 'Increase terminal text size',

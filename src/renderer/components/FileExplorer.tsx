@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useId } from 'react';
 import {
-  ArrowLeftIcon, EyeIcon, EyeOffIcon, RefreshIcon,
+  ArrowLeftIcon, EyeIcon, EyeOffIcon, RefreshIcon, FolderIcon,
   fileIconFor,
 } from '../icons';
 import type { FileEntry } from '../../shared/files';
@@ -52,6 +52,8 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
   const [foregroundRequest, setForegroundRequest] = useState<DirectoryRequest | null>(null);
   const [directoryError, setDirectoryError] = useState<DirectoryError | null>(null);
   const [showHidden, setShowHidden] = useState(false);
+  const [showLocation, setShowLocation] = useState(false);
+  const locationId = useId();
   const requestGeneration = useRef(0);
   const lastLoaded = useRef<LoadedDirectory | null>(null);
 
@@ -240,6 +242,11 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
       <div className="explorer-header">
         <span className="section-title">Explorer</span>
         <div className="explorer-toolbar">
+          <Tooltip label="Browse parent folders" placement="bottom">
+            <button className="icon-btn" onClick={() => setShowLocation((shown) => !shown)} aria-label="Browse parent folders" aria-expanded={showLocation} aria-controls={locationId} disabled={!source.ready}>
+              <FolderIcon size="sm" />
+            </button>
+          </Tooltip>
           <Tooltip label="Back to previous folder" placement="bottom">
             <button className="icon-btn" onClick={goBack} disabled={history.length === 0} aria-label="Back to previous folder">
               <ArrowLeftIcon size="sm" />
@@ -270,7 +277,7 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
         </div>
       )}
 
-      <div className="explorer-breadcrumb">
+      {showLocation && <div id={locationId} className="explorer-breadcrumb" role="navigation" aria-label="Folder location">
         {currentPath.startsWith('/') && (
           <button className="crumb" onClick={() => navigateTo('/')} aria-label="Open filesystem root">/</button>
         )}
@@ -291,15 +298,15 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
           const isDrive = /^[A-Z]:?$/i.test(segment);
           if (source.kind === 'local' && isDrive && index === 0) return null;
           return (
-            <React.Fragment key={pathSoFar}>
+            <span className="crumb-part" key={pathSoFar}>
               {(!currentPath.startsWith('/') || index > 0) && <span className="crumb-sep">/</span>}
               <button className="crumb" onClick={() => navigateTo(pathSoFar)}>
                 {segment}
               </button>
-            </React.Fragment>
+            </span>
           );
         })}
-      </div>
+      </div>}
 
       <div className="explorer-tree" aria-busy={loading}>
         {!source.ready && source.kind === 'local' && (

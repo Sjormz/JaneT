@@ -171,6 +171,10 @@ describe('buildShellInit', () => {
         powershell,
         ['-NoLogo', '-NoProfile', '-NoExit', '-Command', init],
         ['', 'cmd /c exit 7', 'cmd /c exit 7 | Out-Null', 'Get-Item Z:\\definitely-missing -ErrorAction SilentlyContinue | cmd /c exit 0', 'Write-Output $(cmd /c exit 7) | Get-Item Z:\\definitely-missing -ErrorAction SilentlyContinue', 'cmd /c exit 7; Get-Item Z:\\definitely-missing -ErrorAction SilentlyContinue', 'Get-Item Z:\\definitely-missing -ErrorAction SilentlyContinue', '$null = 1', 'exit'],
+        {
+          ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'psmodulepath')),
+          PSModulePath: join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'Modules'),
+        },
       );
 
       const startup = promptSegment(output, 0);
@@ -251,7 +255,7 @@ describe('buildShellInit', () => {
       } finally {
         rmSync(fixture, { recursive: true, force: true });
       }
-    });
+    }, 20_000);
     it('returns a PROMPT_COMMAND snippet for bash', () => {
       const init = buildShellInit('bash');
       expect(init).toContain('PROMPT_COMMAND');

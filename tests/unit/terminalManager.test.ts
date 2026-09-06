@@ -9,6 +9,8 @@ vi.mock('node-pty', () => ({
 }));
 
 import { TerminalManager } from '../../src/main/terminal';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 type ExitHandler = (event: { exitCode: number; signal: number }) => void;
 
@@ -31,6 +33,12 @@ function makePty() {
 }
 
 describe('TerminalManager', () => {
+  it('rejects missing working directories before spawning instead of falling back to another location', () => {
+    const manager = new TerminalManager();
+    const missing = path.join(os.tmpdir(), `janet-missing-${crypto.randomUUID()}`);
+    expect(() => manager.create('missing-cwd', missing)).toThrow('Locate the folder');
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
   });

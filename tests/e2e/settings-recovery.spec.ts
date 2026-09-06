@@ -31,11 +31,11 @@ async function forceClose(app: ElectronApplication | undefined): Promise<void> {
 }
 
 test('restores a validated previous generation without overwriting corrupt settings on launch', async () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-settings-recovery-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-settings-recovery-e2e-'));
   const settingsPath = path.join(userData, 'settings.json');
   const corruptBytes = '{"theme":';
   fs.writeFileSync(settingsPath, corruptBytes, 'utf8');
-  fs.writeFileSync(`${settingsPath}.previous`, JSON.stringify({ theme: 'dracula', fontSize: 16 }), 'utf8');
+  fs.writeFileSync(`${settingsPath}.previous`, JSON.stringify({ mainDirectory: userData, theme: 'dracula', fontSize: 16 }), 'utf8');
   let app: ElectronApplication | undefined;
 
   try {
@@ -46,7 +46,8 @@ test('restores a validated previous generation without overwriting corrupt setti
     expect(fs.readFileSync(settingsPath, 'utf8')).toBe(corruptBytes);
 
     await alert.getByRole('button', { name: 'Restore previous' }).click();
-    await expect(page.locator('.terminal-container').first()).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Create your first workspace' })).toBeVisible();
+    await expect(page.locator('.terminal-container')).toHaveCount(0);
     expect(JSON.parse(fs.readFileSync(settingsPath, 'utf8'))).toMatchObject({
       theme: 'dracula',
       fontSize: 16,
@@ -58,7 +59,7 @@ test('restores a validated previous generation without overwriting corrupt setti
 });
 
 test('replaces corrupt settings with defaults only after confirmation', async () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-settings-reset-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-settings-reset-e2e-'));
   const settingsPath = path.join(userData, 'settings.json');
   const corruptBytes = '{"theme":';
   fs.writeFileSync(settingsPath, corruptBytes, 'utf8');
@@ -76,7 +77,7 @@ test('replaces corrupt settings with defaults only after confirmation', async ()
     expect(fs.readFileSync(settingsPath, 'utf8')).toBe(corruptBytes);
 
     await dialog.getByRole('button', { name: 'Use defaults' }).click();
-    await expect(page.locator('.terminal-container').first()).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'A home for your work' })).toBeVisible();
     expect(JSON.parse(fs.readFileSync(settingsPath, 'utf8'))).toMatchObject({
       theme: 'tokyo-night',
       fontSize: 14,

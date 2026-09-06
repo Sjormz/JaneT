@@ -84,6 +84,33 @@ vi.mock('fs', () => ({
 }));
 
 describe('SettingsManager', () => {
+  it('keeps main directory unset until chosen and persists linked folders', async () => {
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    expect(manager.get().mainDirectory).toBeNull();
+    const directory = process.platform === 'win32' ? 'C:\\Projects' : '/projects';
+    const folder = { id: 'project', name: 'Project', kind: 'folder' as const, directory };
+    manager.set({ mainDirectory: directory, session: { ...manager.get().session, groups: [folder] } });
+    expect(manager.get().mainDirectory).toBe(directory);
+    expect(manager.get().session.groups).toEqual([folder]);
+    expect(() => manager.set({ mainDirectory: '../relative' })).toThrow();
+    expect(() => manager.set({ session: { ...manager.get().session, groups: [{ ...folder, directory: '' }] } })).toThrow();
+  });
+  it('round-trips group membership and collapse state while rejecting invalid groups', async () => {
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const session = { ...manager.get().session, groups: [{ id: 'team', name: 'Team', collapsed: true }], tabs: [{
+      id: 'work', title: 'Work', groupId: 'team', type: 'local' as const, root: { type: 'leaf' as const },
+    }] };
+    manager.set({ session });
+    expect(manager.get().session).toMatchObject(session);
+    const copy = manager.get().session;
+    copy.groups![0].name = 'Mutated';
+    expect(manager.get().session.groups![0].name).toBe('Team');
+    expect(() => manager.set({ session: { ...session, groups: [{ id: 'team', name: '' }] } })).toThrow();
+    expect(() => manager.set({ session: { ...session, groups: [...session.groups, ...session.groups] } })).toThrow();
+    expect(manager.get().session.groups![0].name).toBe('Team');
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true);

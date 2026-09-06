@@ -69,6 +69,17 @@ function terminalAt(lines: string[], line: number, column: number) {
 }
 
 describe('SemanticCommandTimeline', () => {
+  it('keeps outer execution across alternate markers, signed exits and clock rollback', () => {
+    const term = terminalAt(['$ work'], 0, 2);
+    let wall = 20000, clock = 10;
+    const completed = vi.fn();
+    const timeline = new SemanticCommandTimeline(term as never, completed, () => wall, undefined, undefined, () => clock);
+    timeline.handleOsc('A'); timeline.handleOsc('B'); term.cursorX = 6; timeline.handleOsc('C');
+    term.type = 'alternate'; timeline.handleOsc('A'); term.type = 'normal';
+    wall = 1; clock = 20010; timeline.handleOsc('D;-1'); timeline.handleOsc('D;-1');
+    expect(completed).toHaveBeenCalledOnce();
+    expect(completed.mock.calls[0][0]).toMatchObject({ durationMs: 20000, exitCode: -1 });
+  });
   it('records a complete OSC 133 command and output lifecycle', () => {
     const term = terminalAt(['$ echo hi'], 0, 2);
     const timeline = new SemanticCommandTimeline(term as never);
@@ -197,20 +208,20 @@ describe('SemanticCommandTimeline', () => {
     expect(term.markers[0].isDisposed).toBe(true);
   });
 
-  it('disposes pending state when C reconstructs an empty command', () => {
+  it('reports completion when C reconstructs an empty command', () => {
     const term = terminalAt(['$   '], 0, 2);
     const completed = vi.fn();
     const timeline = new SemanticCommandTimeline(term as never, completed);
     timeline.handleOsc('A'); timeline.handleOsc('B');
     term.cursorX = 5; timeline.handleOsc('C');
 
-    expect(term.markers[0].isDisposed).toBe(true);
+    expect(term.markers[0].isDisposed).toBe(false);
     timeline.handleOsc('D;0');
-    expect(completed).not.toHaveBeenCalled();
+    expect(completed).toHaveBeenCalledOnce();
     expect(timeline.commands).toEqual([]);
   });
 
-  it('disposes pending state when any command row is unavailable at C', () => {
+  it('reports completion when command text is unavailable at C', () => {
     const term = terminalAt(['$ head', 'tail', 'output'], 0, 2);
     term.wrapped.add(1);
     const completed = vi.fn();
@@ -219,13 +230,13 @@ describe('SemanticCommandTimeline', () => {
     term.lines[0] = undefined;
     term.cursorY = 1; term.cursorX = 4; timeline.handleOsc('C');
 
-    expect(term.markers[0].isDisposed).toBe(true);
+    expect(term.markers[0].isDisposed).toBe(false);
     term.cursorY = 2; term.cursorX = 6; timeline.handleOsc('D;0');
-    expect(completed).not.toHaveBeenCalled();
+    expect(completed).toHaveBeenCalledOnce();
     expect(timeline.commands).toEqual([]);
   });
 
-  it('disposes pending state when C reconstructs an oversized command', () => {
+  it('reports completion without retaining oversized command text', () => {
     const oversized = 'x'.repeat(64 * 1024 + 1);
     const term = terminalAt([oversized], 0, 0);
     const completed = vi.fn();
@@ -233,9 +244,9 @@ describe('SemanticCommandTimeline', () => {
     timeline.handleOsc('A'); timeline.handleOsc('B');
     term.cursorX = oversized.length; timeline.handleOsc('C');
 
-    expect(term.markers[0].isDisposed).toBe(true);
+    expect(term.markers[0].isDisposed).toBe(false);
     timeline.handleOsc('D;0');
-    expect(completed).not.toHaveBeenCalled();
+    expect(completed).toHaveBeenCalledOnce();
     expect(timeline.commands).toEqual([]);
   });
 

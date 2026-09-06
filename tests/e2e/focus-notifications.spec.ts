@@ -2,6 +2,8 @@ import { test, expect, _electron as electron, type ElectronApplication } from '@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { installCodexActivity } from '../../src/main/codexActivitySetup';
+import { parse } from 'smol-toml';
 
 const root = path.resolve(__dirname, '../..');
 const command = 'node -e "setTimeout(()=>{},1200)"';
@@ -26,14 +28,18 @@ async function forceClose(app: ElectronApplication | undefined): Promise<void> {
   await app.waitForEvent('close', { timeout: 5_000 }).catch(() => {});
 }
 
-test('records focused and unfocused notification decisions without command or output', async () => {
+test('records focus decisions and project busy/unread activity without command or output', async ({}, testInfo) => {
   test.setTimeout(60_000);
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-focus-notifications-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-focus-notifications-e2e-'));
   const eventsPath = path.join(userData, 'events.jsonl');
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     notificationsEnabled: true,
     notificationThresholdSeconds: 1,
     workspaceTabs: [],
+    session: { groups: [{ id: 'activity', name: 'Activity', directory: userData }], tabs: [
+      { id: 'work', groupId: 'activity', title: 'Work', type: 'local', cwd: userData, root: { type: 'leaf', cwd: userData } },
+      { id: 'other', groupId: 'activity', title: 'Other', type: 'local', cwd: userData, root: { type: 'leaf', cwd: userData } },
+    ], activeTabId: 'work' },
   }));
   let app: ElectronApplication | undefined;
 
@@ -51,9 +57,11 @@ test('records focused and unfocused notification decisions without command or ou
     await expect(terminal).toBeVisible();
     const termId = await terminal.getAttribute('data-terminal-id');
     expect(termId).toBeTruthy();
+    await expect(terminal.locator('textarea[data-shell-ready="true"]')).toBeAttached();
 
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.focus());
     await page.evaluate(({ id, text }) => window.janet.terminalWrite({ id, data: `${text}\r`, userInput: true }), { id: termId!, text: command });
+    await expect(page.locator('.vtab-item').filter({ hasText: 'Work' }).locator('.activity-dot')).toHaveClass(/running/);
     await expect.poll(() => readDecisions(eventsPath).map((event) => event.decision), { timeout: 15_000 }).toContain('focused');
 
     await app.evaluate(({ BrowserWindow }) => {
@@ -65,6 +73,53 @@ test('records focused and unfocused notification decisions without command or ou
     });
     await page.evaluate(({ id, text }) => window.janet.terminalWrite({ id, data: `${text}\r`, userInput: true }), { id: termId!, text: command });
     await expect.poll(() => readDecisions(eventsPath).map((event) => event.decision), { timeout: 15_000 }).toContain('would-show');
+    await expect(page.locator('.vtab-item').filter({ hasText: 'Work' }).locator('.activity-count.finished')).toContainText('1 new');
+    await page.screenshot({ path: testInfo.outputPath('project-activity.png') });
+    await app.evaluate(({ BrowserWindow }) => {
+      const main = BrowserWindow.getAllWindows().find(window => window.webContents.getURL() !== 'about:blank');
+      main?.focus();
+    });
+    await expect(page.locator('.vtab-item').filter({ hasText: 'Work' }).locator('.activity-count.finished')).toHaveCount(0);
+
+    // Exercise the real Codex hook helper inside a live PTY, without a model request.
+    const helper = path.join(userData, 'agent-activity', 'agent-cli.cjs');
+    const control = path.join(userData, 'event.json');
+    const harness = path.join(root, 'tests/e2e/helpers/activity-harness.cjs');
+    const codexHome = path.join(userData, 'codex-home'); fs.mkdirSync(codexHome);
+    const forwarded = path.join(userData, 'forwarded.json');
+    fs.writeFileSync(path.join(codexHome, 'config.toml'), 'notify=' + JSON.stringify(['node', harness, '--notify', forwarded]));
+    installCodexActivity(codexHome, helper);
+    const notify = parse(fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8')).notify as string[];
+    fs.writeFileSync(path.join(userData, 'harness.json'), JSON.stringify({ helper, notify, codexHome }));
+    const sendHook = (hook: string) => fs.writeFileSync(control, JSON.stringify(hook === 'agent-turn-complete'
+      ? { type: hook, 'thread-id': 'codex-test', 'turn-id': 'turn' }
+      : { hook_event_name: hook, session_id: 'codex-test', turn_id: 'turn' }));
+    sendHook('SessionStart');
+    await page.evaluate(({ id, text }) => window.janet.terminalWrite({ id, data: `${text}\r`, userInput: true }), { id: termId!, text: `node "${harness}" "${userData}"` });
+    const work = page.locator('.vtab-item').filter({ hasText: 'Work' });
+    await expect(work).toHaveAttribute('aria-label', /Codex · Ready/);
+    await page.locator('.vtab-item').filter({ hasText: 'Other' }).click();
+    sendHook('UserPromptSubmit');
+    await expect(work.locator('.activity-dot')).toHaveClass(/running/);
+    sendHook('PermissionRequest');
+    await expect(work.locator('.activity-dot')).toHaveClass(/needs-input/);
+    sendHook('PostToolUse');
+    await expect(work.locator('.activity-dot')).toHaveClass(/running/);
+    sendHook('agent-turn-complete');
+    await expect(work.locator('.activity-count.finished')).toContainText('1 new');
+    await expect.poll(() => fs.existsSync(forwarded) && JSON.parse(fs.readFileSync(forwarded, 'utf8')).type).toBe('agent-turn-complete');
+    expect((await work.boundingBox())!.height).toBeLessThan(45);
+    await page.screenshot({ path: testInfo.outputPath('codex-project-activity.png') });
+    const target = { tabId: (await work.getAttribute('data-tab-id'))!, termId: termId! };
+    await app.evaluate(({ BrowserWindow }, target) => {
+      BrowserWindow.getAllWindows().find(window => window.webContents.getURL() !== 'about:blank')?.webContents.send('notifications:target', target);
+    }, target);
+    await expect(work).toHaveAttribute('aria-pressed', 'true');
+    await expect(work.locator('.activity-count.finished')).toHaveCount(0);
+    await expect(work).toHaveAttribute('aria-label', /Codex · Ready/);
+    fs.writeFileSync(control, JSON.stringify({ setup: true }));
+    await expect(work).toHaveAttribute('aria-label', /Activity tracking incomplete/);
+    await expect(work.locator('.activity-count.running')).toHaveCount(0);
 
     for (const decision of readDecisions(eventsPath)) {
       expect(Object.keys(decision).sort()).toEqual(['contextKind', 'decision', 'durationMs', 'outcome', 'type']);

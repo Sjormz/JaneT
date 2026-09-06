@@ -123,7 +123,7 @@ export function KeybindingsProvider({
       // Xterm owns copy when it has a selection and Ctrl+C when it does not.
       // A user-rebound application action must not preempt either behavior.
       if (
-        e.key.toLowerCase() === 'c'
+        ['c', 'v'].includes(e.key.toLowerCase())
         && (e.ctrlKey || e.metaKey)
         && !e.altKey
         && e.target instanceof Element

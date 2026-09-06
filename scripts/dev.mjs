@@ -1,10 +1,11 @@
 // Development script - starts Vite dev server + Electron with renderer HMR
-// and main/preload rebuild + restart.
+// and main/preload rebuild (restart explicitly to preserve active terminals).
 import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import fs from 'fs';
 import http from 'http';
+import { createRequire } from 'node:module';
 import { buildElectron } from './build-electron.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -43,8 +44,18 @@ export function mainSourceDirectories(projectRoot = root) {
   return [path.join(projectRoot, 'src/main'), path.join(projectRoot, 'src/shared')];
 }
 
-export function npxExecutable(platform = process.platform) {
-  return platform === 'win32' ? 'npx.cmd' : 'npx';
+export function devElectronArgs(platform = process.platform, env = process.env) {
+  // Hosted Linux CI does not allow Chromium's user-namespace sandbox. Keep this
+  // exception confined to disposable acceptance profiles, never normal dev runs.
+  return ['.', ...(platform === 'linux' && env.CI && env.JANET_E2E_USER_DATA_DIR ? ['--no-sandbox'] : [])];
+}
+
+export function devExecutables() {
+  const require = createRequire(import.meta.url);
+  return {
+    electron: require('electron'),
+    vite: path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js'),
+  };
 }
 
 let devServer = parseDevServerUrl();
@@ -54,7 +65,6 @@ let electronProcess = null;
 let electronLog = null;
 let mainWatchers = [];
 let isShuttingDown = false;
-let isRestartingElectron = false;
 let rebuildTimer = null;
 let rebuildInFlight = Promise.resolve();
 
@@ -147,34 +157,23 @@ function openElectronLog() {
 
 function launchElectron() {
   log('Starting Electron...');
-  electronProcess = spawn(npxExecutable(), ['electron', '.'], {
+  const env = { ...process.env, NODE_ENV: 'development', JANET_DEV_SERVER_URL: devServer.url };
+  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.ELECTRON_NO_ATTACH_CONSOLE;
+  electronProcess = spawn(devExecutables().electron, devElectronArgs(), {
     cwd: root,
     stdio: ['ignore', openElectronLog(), electronLog],
     shell: false,
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      JANET_DEV_SERVER_URL: devServer.url,
-    },
+    env,
   });
   electronProcess.on('error', (e) => log(`Electron spawn error: ${e.message}`));
   electronProcess.on('exit', (code, signal) => {
     log(`Electron exited with code ${code}${signal ? ` signal ${signal}` : ''}`);
     electronProcess = null;
-    if (!isRestartingElectron && !isShuttingDown) {
+    if (!isShuttingDown) {
       shutdown(code || 0);
     }
   });
-}
-
-async function restartElectron(reason) {
-  if (isShuttingDown) return;
-  log(`Restarting Electron (${reason})...`);
-  isRestartingElectron = true;
-  await killProcessTree(electronProcess, 'Electron');
-  electronProcess = null;
-  isRestartingElectron = false;
-  launchElectron();
 }
 
 function scheduleMainRebuild(reason) {
@@ -185,7 +184,7 @@ function scheduleMainRebuild(reason) {
       try {
         log(`Main/preload change detected: ${reason}`);
         buildMainProcess();
-        await restartElectron(reason);
+        log('Main/preload rebuilt. Close and restart this dev run when ready; active terminals were preserved.');
       } catch (e) {
         log(`Main/preload rebuild FAILED: ${e.message}`);
       }
@@ -243,6 +242,7 @@ async function main() {
   }
 
   log('Starting dev run');
+  log(`Checkout: ${root}; mode: development (renderer HMR)`);
   loadDotEnv();
   devServer = parseDevServerUrl(process.env.JANET_DEV_SERVER_URL || DEFAULT_DEV_SERVER_URL);
 
@@ -255,12 +255,12 @@ async function main() {
 
   // Step 2: Start Vite dev server in background unless one is already running.
   if (await isHttpReady(devServer.url)) {
-    log(`Reusing existing JaneT Vite dev server at ${devServer.url}`);
+    throw new Error(`Port already serves JaneT at ${devServer.url}. Stop that dev server or choose JANET_DEV_SERVER_URL; refusing to attach to an unverified checkout.`);
   } else {
     log(`Starting Vite dev server at ${devServer.url}...`);
     const viteLog = fs.openSync(path.join(root, '.vite.log'), 'w');
-    viteProcess = spawn(npxExecutable(), [
-      'vite', '--config', 'vite.config.ts', '--host', devServer.host, '--port', String(devServer.port),
+    viteProcess = spawn(process.execPath, [
+      devExecutables().vite, '--config', 'vite.config.ts', '--host', devServer.host, '--port', String(devServer.port),
     ], {
       cwd: root,
       stdio: ['ignore', viteLog, viteLog],

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -68,8 +69,15 @@ function writeReleaseManifestFixture(
 }
 
 describe('development tooling', () => {
+  it('limits the Linux sandbox exception to disposable CI profiles', async () => {
+    const { devElectronArgs } = await loadScript('dev.mjs');
+    expect(devElectronArgs('linux', { CI: 'true', JANET_E2E_USER_DATA_DIR: '/tmp/test-profile' })).toEqual(['.', '--no-sandbox']);
+    expect(devElectronArgs('linux', { CI: 'true' })).toEqual(['.']);
+    expect(devElectronArgs('linux', { JANET_E2E_USER_DATA_DIR: '/tmp/test-profile' })).toEqual(['.']);
+    expect(devElectronArgs('win32', { CI: 'true', JANET_E2E_USER_DATA_DIR: '/tmp/test-profile' })).toEqual(['.']);
+  });
   it('derives the Vite bind host and port from the configured renderer URL', async () => {
-    const { npxExecutable, parseDevServerUrl } = await loadScript('dev.mjs');
+    const { devExecutables, parseDevServerUrl } = await loadScript('dev.mjs');
 
     expect(parseDevServerUrl('http://0.0.0.0:6123/workspace?mode=test')).toEqual({
       url: 'http://0.0.0.0:6123/workspace?mode=test',
@@ -79,8 +87,11 @@ describe('development tooling', () => {
     expect(parseDevServerUrl('http://[::1]:7000')).toMatchObject({ host: '::1', port: 7000 });
     expect(() => parseDevServerUrl('https://localhost:5173')).toThrow(/must use http/);
     expect(() => parseDevServerUrl('http://localhost$(touch-pwned):5173')).toThrow(/unsafe hostname/);
-    expect(npxExecutable('win32')).toBe('npx.cmd');
-    expect(npxExecutable('linux')).toBe('npx');
+    const executables = devExecutables();
+    expect(fs.existsSync(executables.electron)).toBe(true);
+    expect(fs.existsSync(executables.vite)).toBe(true);
+    expect(executables.electron).not.toMatch(/\.cmd$/);
+    expect(execFileSync(process.execPath, [executables.vite, '--version'], { encoding: 'utf8' })).toContain('vite/');
     const source = fs.readFileSync(path.join(projectRoot, 'scripts', 'dev.mjs'), 'utf8');
     expect(source).not.toContain('shell: true');
     expect(source).toContain('shell: false');
@@ -160,6 +171,14 @@ describe('release tooling', () => {
     });
 
     expect(builds).toEqual([
+      expect.objectContaining({
+        absWorkingDir: projectRoot,
+        entryPoints: ['src/main/agent-cli.ts'],
+        outfile: 'dist/main/agent-cli.cjs',
+        bundle: true,
+        platform: 'node',
+        external: ['electron', 'node-pty', 'ssh2', 'ssh2-sftp-client', 'simple-git'],
+      }),
       expect.objectContaining({
         absWorkingDir: projectRoot,
         entryPoints: ['src/main/index.ts'],

@@ -48,10 +48,11 @@ import {
   inspectTerminalControlSequences,
   logTerminalDiagnostic,
   restoreTerminalMouseTracking,
-  suppressTerminalMouseTracking,
+  createMouseTrackingFilter,
   type TerminalMouseTrackingMode,
 } from '../terminalDiagnostics';
 import type { TerminalLeaf } from '../types';
+import { decodeTerminalClipboard } from '../terminalClipboard';
 import '@xterm/xterm/css/xterm.css';
 
 interface TerminalPaneProps {
@@ -90,6 +91,8 @@ type LocalSpawnState =
 type TerminalPathDropState = 'valid' | 'invalid' | null;
 
 const INVALID_PATH_DROP_NOTICE_MS = 1_200;
+// ponytail: xterm 6 has no public non-erasing reset; replace this sequence when it adds one.
+const RESET_TERMINAL_FOR_NEW_SSH_SHELL = '\x18\x1b[?47l\x1b[!p\x1b[?9;1000;1002;1003;1006;1016;2026l';
 
 const SEARCH_OPTIONS: ISearchOptions = {
   decorations: {
@@ -126,6 +129,7 @@ function openTerminalExternalUrl(url: string): void {
 }
 
 interface CachedTerminalPane {
+  interaction: ReturnType<typeof createTerminalInteraction>;
   term: Terminal;
   fitAddon: FitAddon;
   searchAddon: SearchAddon;
@@ -154,6 +158,23 @@ interface CachedTerminalPane {
 }
 
 const terminalPaneCache = new Map<string, CachedTerminalPane>();
+
+export function updateTerminalStartingDirectory(id: string, cwd: string | undefined): void {
+  const cached = terminalPaneCache.get(id);
+  if (cached?.localSpawnRequest && cwd) cached.localSpawnRequest = { ...cached.localSpawnRequest, cwd };
+}
+
+function createTerminalInteraction() {
+  return {
+    selectionProtectionRef: { current: false },
+    protectedMouseTrackingRef: { current: 'none' as TerminalMouseTrackingMode },
+    protectedSelectionRef: { current: '' },
+    dragSelectionRef: { current: '' },
+    mouseTrackingFilterRef: { current: createMouseTrackingFilter() },
+    hoveredLinkRef: { current: null as string | null },
+    linkGestureRef: { current: false },
+  };
+}
 
 export function disposeCachedTerminal(termId: string): boolean {
   const cached = terminalPaneCache.get(termId);
@@ -214,9 +235,13 @@ export default function TerminalPane({
   const [pathDropState, setPathDropState] = useState<TerminalPathDropState>(null);
   const componentMountedRef = useRef(false);
   const searchVisibleRef = useRef(false);
-  const selectionProtectionRef = useRef(false);
-  const protectedMouseTrackingRef = useRef<TerminalMouseTrackingMode>('none');
-  const protectedSelectionRef = useRef('');
+  const [interaction] = useState(() => terminalPaneCache.get(termId)?.interaction ?? createTerminalInteraction());
+  const { selectionProtectionRef, protectedMouseTrackingRef, protectedSelectionRef,
+    mouseTrackingFilterRef, hoveredLinkRef, linkGestureRef, dragSelectionRef } = interaction;
+  const [clipboardError, setClipboardError] = useState<string | null>(null);
+  const copyGestureAtRef = useRef(0);
+  const [requestedClipboard, setRequestedClipboard] = useState<string | null>(null);
+  const suspendMouseTrackingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const diagnosticsEnabled = window.janet.terminalDiagnosticsEnabled === true;
   searchVisibleRef.current = searchVisible;
   const cachedForAgentListener = terminalPaneCache.get(termId);
@@ -400,16 +425,19 @@ export default function TerminalPane({
         selectionProtected: selectionProtectionRef.current,
       });
     };
-    let suspendMouseTrackingTimer: ReturnType<typeof setTimeout> | null = null;
     const beginSelectionProtection = () => {
-      if (selectionProtectionRef.current || term.modes.mouseTrackingMode === 'none') return;
+      if (
+        selectionProtectionRef.current
+        || term.modes.mouseTrackingMode === 'none'
+        || terminalPaneCache.get(termId)?.sshRetryPromise
+      ) return;
       protectedMouseTrackingRef.current = term.modes.mouseTrackingMode;
       protectedSelectionRef.current = '';
       selectionProtectionRef.current = true;
       // Let xterm's forced Shift-selection mousedown run while mouse tracking
       // is still active, then suspend tracking before the first drag update.
-      suspendMouseTrackingTimer = setTimeout(() => {
-        suspendMouseTrackingTimer = null;
+      suspendMouseTrackingTimerRef.current = setTimeout(() => {
+        suspendMouseTrackingTimerRef.current = null;
         if (selectionProtectionRef.current) term.write(DISABLE_TERMINAL_MOUSE_TRACKING);
       }, 0);
       logTerminalDiagnostic(diagnosticsEnabled, termId, 'selection-protection-start', {
@@ -418,10 +446,98 @@ export default function TerminalPane({
       });
     };
     const selectionMouseDownListener = (event: MouseEvent) => {
+      if (event.button === 2) copyGestureAtRef.current = Date.now();
       if (event.button === 0 && (event.shiftKey || event.altKey)) beginSelectionProtection();
     };
     container.addEventListener('mousedown', selectionMouseDownListener, true);
     mountCleanup.push(() => container.removeEventListener('mousedown', selectionMouseDownListener, true));
+    let dragStart: { column: number; row: number; x: number; y: number } | null = null;
+    const dragPosition = (event: MouseEvent) => {
+      const screen = container.querySelector('.xterm-screen');
+      const box = screen?.getBoundingClientRect();
+      if (!box?.width || !box.height) return null;
+      return {
+        column: Math.max(0, Math.min(term.cols, Math.round((event.clientX - box.left) * term.cols / box.width))),
+        row: term.buffer.active.viewportY + Math.max(0, Math.min(term.rows - 1, Math.floor((event.clientY - box.top) * term.rows / box.height))),
+      };
+    };
+    const captureDragStart = (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      dragSelectionRef.current = '';
+      dragStart = null;
+      if (event.shiftKey || event.altKey || term.modes.mouseTrackingMode === 'none'
+        || !(event.target as Element).closest('.xterm-screen')) return;
+      const position = dragPosition(event);
+      if (position) dragStart = { ...position, x: event.clientX, y: event.clientY };
+    };
+    const captureDragEnd = (event: MouseEvent) => {
+      const start = dragStart;
+      dragStart = null;
+      if (!start || event.button !== 0 || Math.hypot(event.clientX - start.x, event.clientY - start.y) < 4) return;
+      const end = dragPosition(event);
+      if (!end) return;
+      const first = start.row * term.cols + start.column;
+      const last = end.row * term.cols + end.column;
+      const offset = Math.min(first, last);
+      // TUIs paint their own selection. Snapshot via xterm's Unicode/wrap-aware
+      // public API before mouse-up reaches the PTY and can trigger a redraw.
+      term.select(offset % term.cols, Math.floor(offset / term.cols), Math.abs(last - first));
+      dragSelectionRef.current = term.getSelection();
+      term.clearSelection();
+    };
+    const cancelDrag = () => { dragStart = null; };
+    container.addEventListener('mousedown', captureDragStart, true);
+    document.addEventListener('mouseup', captureDragEnd, true);
+    window.addEventListener('blur', cancelDrag);
+    mountCleanup.push(() => {
+      container.removeEventListener('mousedown', captureDragStart, true);
+      document.removeEventListener('mouseup', captureDragEnd, true);
+      window.removeEventListener('blur', cancelDrag);
+    });
+    mountCleanup.push(term.parser.registerOscHandler(52, (data) => {
+      const text = decodeTerminalClipboard(data);
+      if (!text) return true;
+      if (container.contains(document.activeElement) && Date.now() - copyGestureAtRef.current < 1500) {
+        copyGestureAtRef.current = 0;
+        if (!window.janet.copyTerminalText(text)) setClipboardError('Couldn’t copy terminal text.');
+      } else setRequestedClipboard(text);
+      return true;
+    }));
+    let pressedLink: { url: string; x: number; y: number } | null = null;
+    const linkDown = (event: MouseEvent) => {
+      pressedLink = event.button === 0 && !event.shiftKey && !event.altKey && hoveredLinkRef.current
+        ? { url: hoveredLinkRef.current, x: event.clientX, y: event.clientY } : null;
+      linkGestureRef.current = Boolean(pressedLink);
+    };
+    const linkUp = (event: MouseEvent) => {
+      const link = pressedLink;
+      pressedLink = null;
+      linkGestureRef.current = false;
+      if (!link || event.button !== 0 || term.hasSelection()
+        || Math.hypot(event.clientX - link.x, event.clientY - link.y) > 4) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openTerminalExternalUrl(link.url);
+    };
+    container.addEventListener('mousedown', linkDown, true);
+    container.addEventListener('mouseup', linkUp, true);
+    const cancelLinkGesture = () => {
+      pressedLink = null;
+      linkGestureRef.current = false;
+    };
+    const outsideLinkUp = (event: MouseEvent) => {
+      if (!container.contains(event.target as Node)) cancelLinkGesture();
+    };
+    document.addEventListener('mouseup', outsideLinkUp, true);
+    window.addEventListener('blur', cancelLinkGesture);
+    mountCleanup.push(() => {
+      container.removeEventListener('mousedown', linkDown, true);
+      container.removeEventListener('mouseup', linkUp, true);
+      document.removeEventListener('mouseup', outsideLinkUp, true);
+      window.removeEventListener('blur', cancelLinkGesture);
+      hoveredLinkRef.current = null;
+      linkGestureRef.current = false;
+    });
     for (const type of ['mousedown', 'mousemove', 'mouseup'] as const) {
       container.addEventListener(type, diagnosticMouseListener, true);
       mountCleanup.push(() => container.removeEventListener(type, diagnosticMouseListener, true));
@@ -448,9 +564,9 @@ export default function TerminalPane({
     }));
     const endSelectionProtection = (clearSelection: boolean) => {
       if (!selectionProtectionRef.current) return;
-      if (suspendMouseTrackingTimer) {
-        clearTimeout(suspendMouseTrackingTimer);
-        suspendMouseTrackingTimer = null;
+      if (suspendMouseTrackingTimerRef.current) {
+        clearTimeout(suspendMouseTrackingTimerRef.current);
+        suspendMouseTrackingTimerRef.current = null;
       }
       selectionProtectionRef.current = false;
       const restore = restoreTerminalMouseTracking(protectedMouseTrackingRef.current);
@@ -462,30 +578,65 @@ export default function TerminalPane({
       });
       term.focus();
     };
+    const pasteClipboard = async () => {
+      try {
+        const text = await window.janet.readTerminalClipboard();
+        if (termRef.current !== term || term.options.disableStdin) return;
+        dragSelectionRef.current = '';
+        endSelectionProtection(true);
+        inputSource.userInput = true;
+        term.paste(text);
+        inputSource.userInput = false;
+        term.focus();
+        setClipboardError(null);
+      } catch {
+        setClipboardError('Couldn’t paste clipboard text. Try copying it again.');
+      }
+    };
+    const copySelection = (selection: string) => {
+      const copied = window.janet.copyTerminalText(selection);
+      if (copied) {
+        endSelectionProtection(true);
+        setClipboardError(null);
+      } else setClipboardError('Couldn’t copy the selection. Try a smaller selection.');
+      return copied;
+    };
     const contextMenuListener = (event: MouseEvent) => {
-      const selection = term.getSelection() || (selectionProtectionRef.current ? protectedSelectionRef.current : '');
-      if (!selection) return;
+      const selection = term.getSelection() || dragSelectionRef.current || (selectionProtectionRef.current ? protectedSelectionRef.current : '');
+      // A mouse-aware TUI owns its own selection and right-click copy gesture.
+      if (!selection && term.modes.mouseTrackingMode !== 'none' && !event.shiftKey) {
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
-      window.janet.copyTerminalText(selection);
-      endSelectionProtection(true);
+      if (selection) copySelection(selection);
+      else void pasteClipboard();
     };
     container.addEventListener('contextmenu', contextMenuListener, true);
     mountCleanup.push(() => container.removeEventListener('contextmenu', contextMenuListener, true));
     term.attachCustomKeyEventHandler((e) => {
       const currentBindings = kbBindingsRef.current;
+      if (e.type === 'keydown' && !e.altKey && (
+        (e.key.toLowerCase() === 'v' && (e.ctrlKey || e.metaKey))
+        || (e.key === 'Insert' && e.shiftKey && !e.ctrlKey && !e.metaKey)
+      )) {
+        e.preventDefault();
+        void pasteClipboard();
+        return false;
+      }
       if (e.type === 'keydown' && e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey) && !e.altKey) {
-        const selection = term.getSelection() || (selectionProtectionRef.current ? protectedSelectionRef.current : '');
+        copyGestureAtRef.current = Date.now();
+        const selection = term.getSelection() || dragSelectionRef.current || (selectionProtectionRef.current ? protectedSelectionRef.current : '');
         if (selection) {
           e.preventDefault();
-          const copied = window.janet.copyTerminalText(selection);
+          const copied = copySelection(selection);
           logTerminalDiagnostic(diagnosticsEnabled, termId, 'copy-attempt', {
             copied,
             selectionLength: selection.length,
             retainedSelection: !term.hasSelection(),
             selectionProtected: selectionProtectionRef.current,
           });
-          endSelectionProtection(true);
           return false;
         }
       }
@@ -538,10 +689,10 @@ export default function TerminalPane({
     // Xterm's onData also includes automatic terminal replies (DA/DSR/CPR),
     // so mark the synchronous keyboard/paste/input path separately. The main
     // process uses this bit to cancel pending startup only for real user input.
-    mountCleanup.push(term.onKey(() => { inputSource.userInput = true; }));
+    mountCleanup.push(term.onKey(() => { dragSelectionRef.current = ''; inputSource.userInput = true; }));
     const textarea = term.textarea;
     if (textarea && inputLabel) textarea.setAttribute('aria-label', inputLabel);
-    const markUserInput = () => { inputSource.userInput = true; };
+    const markUserInput = () => { dragSelectionRef.current = ''; endSelectionProtection(true); inputSource.userInput = true; };
     textarea?.addEventListener('paste', markUserInput, true);
     textarea?.addEventListener('input', markUserInput, true);
     mountCleanup.push(() => {
@@ -552,7 +703,10 @@ export default function TerminalPane({
     // closure while cached/detached so it cannot update an unmounted pane.
     mountCleanup.push(() => term.attachCustomKeyEventHandler(() => true));
     mountCleanup.push(() => {
-      if (suspendMouseTrackingTimer) clearTimeout(suspendMouseTrackingTimer);
+      if (suspendMouseTrackingTimerRef.current) {
+        clearTimeout(suspendMouseTrackingTimerRef.current);
+        suspendMouseTrackingTimerRef.current = null;
+      }
       if (!selectionProtectionRef.current) return;
       selectionProtectionRef.current = false;
       const restore = restoreTerminalMouseTracking(protectedMouseTrackingRef.current);
@@ -640,14 +794,18 @@ export default function TerminalPane({
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: 'block',
+      macOptionClickForcesSelection: true,
       fontSize: fontSize || 14,
       fontFamily: fontFamily || DEFAULT_TERMINAL_FONT_FAMILY,
       lineHeight: 1.2,
       linkHandler: {
         activate: (event, url) => {
+          if (event.button !== 0 || event.shiftKey || event.altKey || term.hasSelection()) return;
           event.preventDefault();
           openTerminalExternalUrl(url);
         },
+        hover: (_event, url) => { hoveredLinkRef.current = url; },
+        leave: () => { hoveredLinkRef.current = null; },
       },
       theme: resolvedTheme || {
         background: '#0f0f1a',
@@ -679,8 +837,12 @@ export default function TerminalPane({
     const fitAddon = new FitAddon();
     const unicode11Addon = new Unicode11Addon();
     const webLinksAddon = new WebLinksAddon((event, url) => {
+      if (event.button !== 0 || event.shiftKey || event.altKey || term.hasSelection()) return;
       event.preventDefault();
       openTerminalExternalUrl(url);
+    }, {
+      hover: (_event, url) => { hoveredLinkRef.current = url; },
+      leave: () => { hoveredLinkRef.current = null; },
     });
     const searchAddon = new SearchAddon();
 
@@ -704,6 +866,10 @@ export default function TerminalPane({
       Date.now,
       (event) => terminalPaneCache.get(termId)?.semanticCommandStartedListener.current?.(termId, event),
       (event) => terminalPaneCache.get(termId)?.semanticCommandCancelledListener.current?.(termId, event),
+      () => performance.now(),
+      () => terminalPaneCache.get(termId)?.agentEventListener?.(termId, {
+        version: 1, provider: 'shell', event: 'session.start', sessionId: termId,
+      }),
     );
     let startupMarked = false;
     let promptMarked = false;
@@ -733,6 +899,7 @@ export default function TerminalPane({
     }));
 
     const disposable = term.onData((data) => {
+      if (linkGestureRef.current && /^\x1b\[(?:<|M)/.test(data)) return;
       const userInput = inputSource.userInput;
       inputSource.userInput = false;
       if (userInput && terminalPaneCache.get(termId)?.broadcastInputListener?.(termId, data)) return;
@@ -745,6 +912,7 @@ export default function TerminalPane({
     lifetimeCleanup.push(disposable);
 
     const binaryDisposable = term.onBinary((data) => {
+      if (linkGestureRef.current && data.startsWith('\x1b[M')) return;
       const userInput = inputSource.userInput;
       inputSource.userInput = false;
       if (userInput && terminalPaneCache.get(termId)?.broadcastInputListener?.(termId, data, true)) return;
@@ -770,7 +938,9 @@ export default function TerminalPane({
           mouseTracking: term.modes.mouseTrackingMode,
           selectionProtected: selectionProtectionRef.current,
         });
-        const renderedData = selectionProtectionRef.current ? suppressTerminalMouseTracking(data) : data;
+        const renderedData = mouseTrackingFilterRef.current(data, selectionProtectionRef.current, (mode) => {
+          protectedMouseTrackingRef.current = mode;
+        });
         term.write(renderedData, () => {
           window.janet.terminalAcknowledgeOutput({ source, id, generation, sequence });
         });
@@ -864,6 +1034,7 @@ export default function TerminalPane({
       lifetimeCleanup.push(() => { if (cwdDebounce) clearTimeout(cwdDebounce); });
     }
     terminalPaneCache.set(termId, {
+      interaction,
       term,
       fitAddon,
       searchAddon,
@@ -969,9 +1140,30 @@ export default function TerminalPane({
     });
     cached.sshRetryPromise = retryPromise;
     cached.sshRetryOpenedShell = true;
+    const previousDisableStdin = term.options.disableStdin;
+    term.options.disableStdin = true;
+    cached.inputSource.userInput = false;
+    if (suspendMouseTrackingTimerRef.current) {
+      clearTimeout(suspendMouseTrackingTimerRef.current);
+      suspendMouseTrackingTimerRef.current = null;
+    }
+    selectionProtectionRef.current = false;
+    protectedMouseTrackingRef.current = 'none';
+    protectedSelectionRef.current = '';
     publishSshNoticeState({ kind: 'reconnecting' });
     try {
-      Promise.resolve(onSshRetry(termId, dimensions)).then(resolveRetry, rejectRetry);
+      term.write(RESET_TERMINAL_FOR_NEW_SSH_SHELL, () => {
+        const currentCache = terminalPaneCache.get(termId);
+        if (currentCache?.term !== term || currentCache.sshRetryPromise !== retryPromise) {
+          rejectRetry(new Error('Reconnect cancelled'));
+          return;
+        }
+        try {
+          Promise.resolve(onSshRetry(termId, dimensions)).then(resolveRetry, rejectRetry);
+        } catch (error) {
+          rejectRetry(error);
+        }
+      });
     } catch (error) {
       rejectRetry(error);
     }
@@ -996,6 +1188,8 @@ export default function TerminalPane({
         publishSshNoticeState({ kind: 'error', message: err?.message || 'Reconnect failed' });
       })
       .finally(() => {
+        cached.inputSource.userInput = false;
+        try { term.options.disableStdin = previousDisableStdin; } catch {}
         const currentCache = terminalPaneCache.get(termId);
         if (currentCache?.term === term && currentCache.sshRetryPromise === retryPromise) {
           currentCache.sshRetryPromise = null;
@@ -1029,6 +1223,22 @@ export default function TerminalPane({
         message: error instanceof Error ? error.message : 'Terminal process could not be started',
       });
     });
+  };
+
+  const locateLocalDirectory = async () => {
+    const cached = terminalPaneCache.get(termId);
+    if (!cached?.localSpawnRequest || cached.localSpawnState.kind !== 'error') return;
+    try {
+      const selected = await window.janet.selectLocalDirectory();
+      if (!selected || terminalPaneCache.get(termId) !== cached) return;
+      const cwd = await window.janet.workspaceDirectory({ parent: selected });
+      if (terminalPaneCache.get(termId) !== cached) return;
+      cached.localSpawnRequest = { ...cached.localSpawnRequest, cwd };
+      onCwdChange?.(termId, cwd);
+      retryLocalTerminal();
+    } catch (error) {
+      if (terminalPaneCache.get(termId) === cached) publishLocalSpawnState({ kind: 'error', message: error instanceof Error ? error.message : String(error) });
+    }
   };
 
   const pathDropTarget = tabType === 'local'
@@ -1110,6 +1320,18 @@ export default function TerminalPane({
       }}
       onDrop={handleTerminalPathDrop}
     >
+      {clipboardError && <div className="ssh-terminal-notice is-error" role="alert">
+        <span>{clipboardError}</span>
+        <button type="button" onClick={() => setClipboardError(null)}>Dismiss</button>
+      </div>}
+      {requestedClipboard !== null && <div className="ssh-terminal-notice" role="status">
+        <span>This terminal wants to replace your clipboard ({requestedClipboard.length.toLocaleString()} characters).</span>
+        <button type="button" onClick={() => {
+          if (window.janet.copyTerminalText(requestedClipboard)) setRequestedClipboard(null);
+          else setClipboardError('Couldn’t copy terminal text.');
+        }}>Allow copy</button>
+        <button type="button" onClick={() => setRequestedClipboard(null)}>Dismiss</button>
+      </div>}
       {pathDropState && (
         <div className="terminal-path-drop-indicator" role="status" aria-live="polite">
           {pathDropState === 'valid' ? 'Drop to paste path' : 'Path belongs to another terminal'}
@@ -1139,6 +1361,7 @@ export default function TerminalPane({
                 <button type="button" className="ssh-notice-action primary" onClick={retryLocalTerminal}>
                   Retry
                 </button>
+                <button type="button" className="ssh-notice-action" onClick={() => void locateLocalDirectory()}>Locate folder</button>
               </div>
             )}
           </div>

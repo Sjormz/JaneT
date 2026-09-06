@@ -2,11 +2,15 @@ import * as electron from 'electron';
 import * as path from 'path';
 import packageMetadata from '../../package.json';
 import { TerminalManager } from './terminal';
+import { AgentActivityBridge } from './agentActivityBridge';
+import * as fs from 'node:fs';
 import { SSHManager } from './ssh';
 import { isAllowedExternalUrl } from './externalUrls';
 import { FileSystemManager } from './filesystem';
 import { GitManager } from './git';
 import { SettingsManager } from './settings';
+import { requireDirectory, createWorkspaceDirectory, renameWorkspaceDirectory } from './workspaceDirectories';
+import { WorkspaceFileOperations } from './workspaceFileOperations';
 import { sendRendererEvent } from './rendererEvents';
 import type { SSHListDirParams } from '../shared/files';
 import type {
@@ -203,6 +207,16 @@ function notificationDecision(payload: CommandNotificationPayload): 'disabled' |
   return 'would-show';
 }
 
+const notificationTargets = new Map<string, NonNullable<CommandNotificationPayload['target']>>();
+let notificationDeliveryError: string | null = null;
+const agentActivityBridge = new AgentActivityBridge((id, event) => sendRendererEvent(mainWindow, 'terminal:agentActivity', { id, event }));
+function activateCommandNotification(key?: string): void {
+  showOrCreateWindow();
+  const target = key && notificationTargets.get(key);
+  if (target) sendRendererEvent(mainWindow, 'notifications:target', target);
+}
+const xmlText = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[char]!));
+
 function deliverCommandNotification(value: unknown): boolean {
   const payload = parseCommandNotificationPayload(value);
   if (!payload) throw new Error('Invalid notification payload');
@@ -215,17 +229,28 @@ function deliverCommandNotification(value: unknown): boolean {
   try {
     const seconds = Math.round(payload.durationMs / 1000);
     const where = payload.context.kind === 'ssh' ? ` on ${payload.context.hostLabel}` : '';
-    const notification = new electron.Notification({
-      title: payload.outcome === 'failure' ? 'Command failed' : payload.outcome === 'success' ? 'Command finished' : 'Command completed',
-      body: `${payload.tabLabel} · ${payload.paneLabel}${where} (${seconds}s)`,
+    const title = payload.outcome === 'failure' ? 'Command failed' : payload.outcome === 'success' ? 'Command finished' : 'Command completed';
+    const body = `${payload.tabLabel} · ${payload.paneLabel}${where} (${seconds}s)`;
+    const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    if (payload.target) notificationTargets.set(key, payload.target);
+    while (notificationTargets.size > 128) notificationTargets.delete(notificationTargets.keys().next().value!);
+    const notification = new electron.Notification({ title, body,
+      ...(process.platform === 'win32' ? { toastXml: `<toast launch="${key}"><visual><binding template="ToastGeneric"><text>${xmlText(title)}</text><text>${xmlText(body)}</text></binding></visual></toast>` } : {}),
     });
+    notification.on('failed', () => {
+      notificationTargets.delete(key);
+      notificationDeliveryError = 'Notification delivery failed. Check OS notification permissions and app installation.';
+      console.warn(notificationDeliveryError);
+    });
+    notification.on('show', () => { notificationDeliveryError = null; });
     // Windows can activate a toast after its Notification instance has been
     // collected or after the app has restarted. Those activations are handled
     // centrally below; keep the per-notification listener for other platforms.
-    if (process.platform !== 'win32') notification.on('click', showOrCreateWindow);
+    if (process.platform !== 'win32') notification.on('click', () => activateCommandNotification(key));
     notification.show();
     return true;
   } catch {
+    notificationDeliveryError = 'Notification delivery failed. Check OS notification permissions and app installation.';
     return false;
   }
 }
@@ -261,6 +286,8 @@ function createWindow() {
 
   const window = mainWindow;
   initializeUpdaterForWindow?.(window);
+  window.on('focus', () => sendRendererEvent(window, 'app:windowFocus', true));
+  window.on('blur', () => sendRendererEvent(window, 'app:windowFocus', false));
   window.webContents.setWindowOpenHandler(({ url }) => {
     openAllowedExternalUrl(url);
     return { action: 'deny' };
@@ -335,7 +362,19 @@ electron.app.whenReady().then(() => {
     );
   }
   const terminalCapacity = new NativeTerminalCapacity();
-  terminalManager = new TerminalManager({ capacity: terminalCapacity });
+  let agentHelper: string | undefined;
+  try {
+    const directory = path.join(electron.app.getPath('userData'), 'agent-activity');
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const destination = path.join(directory, 'agent-cli.cjs');
+    const contents = fs.readFileSync(path.join(__dirname, 'agent-cli.cjs'));
+    if (!fs.existsSync(destination) || !fs.readFileSync(destination).equals(contents)) {
+      if (fs.existsSync(destination) && fs.lstatSync(destination).isSymbolicLink()) throw new Error('Unexpected helper link');
+      fs.writeFileSync(destination, contents, { mode: 0o600 });
+    }
+    agentHelper = destination;
+  } catch { console.warn('Automatic agent setup unavailable; terminals remain usable.'); }
+  terminalManager = new TerminalManager({ capacity: terminalCapacity, agentHelper });
   fsManager = new FileSystemManager();
   gitManager = new GitManager();
   settingsManager = new SettingsManager();
@@ -403,7 +442,7 @@ electron.app.whenReady().then(() => {
   // This API also receives a queued activation when JaneT was launched by a
   // notification click, so it must be registered after mainWindow exists.
   if (process.platform === 'win32') {
-    electron.Notification.handleActivation(showOrCreateWindow);
+    electron.Notification.handleActivation((details) => activateCommandNotification(details?.arguments));
   }
   if (restoreRequestedBySecondInstance) {
     restoreRequestedBySecondInstance = false;
@@ -432,6 +471,7 @@ electron.app.whenReady().then(() => {
 electron.app.on('window-all-closed', () => {
   if (!hasSingleInstanceLock) return;
   terminalManager.cleanup();
+  agentActivityBridge.close();
   fsManager.cleanup();
   sshManager.cleanup();
   if (process.platform !== 'darwin') {
@@ -440,6 +480,13 @@ electron.app.on('window-all-closed', () => {
 });
 
 function registerIpcHandlers() {
+  const workspaceLifecycle = new WorkspaceFileOperations({
+    getSettings: () => settingsManager.get(),
+    setSession: (session) => { settingsManager.set({ session }); },
+    trash: (directory) => electron.shell.trashItem(directory),
+    release: (directory) => fsManager.releaseDirectory(directory),
+    protectedPaths: [electron.app.getPath('home'), electron.app.getPath('userData'), electron.app.getAppPath()],
+  });
   const isTrustedSender = (event: electron.IpcMainEvent | electron.IpcMainInvokeEvent): boolean => {
     const window = mainWindow;
     return Boolean(
@@ -481,12 +528,24 @@ function registerIpcHandlers() {
   });
 
   // === Terminal IPC ===
-  handle('terminal:create', (event, { id, cwd, shell, startupCommands }) => {
-    const pty = terminalManager.create(id, cwd, shell, (data, output) => {
+  handle('app:readTerminalClipboard', () => {
+    const text = electron.clipboard.readText();
+    if (text.length > MAX_TERMINAL_CLIPBOARD_TEXT_LENGTH) throw new Error('Clipboard text exceeds the terminal paste limit');
+    return text;
+  });
+
+  handle('terminal:create', async (event, { id, cwd, shell, startupCommands }) => {
+    const activityEnv = await agentActivityBridge.environment(id).catch(() => {
+      console.warn('Agent activity bridge unavailable; shell terminal remains usable.');
+      return {};
+    });
+    let pty;
+    try { pty = terminalManager.create(id, cwd, shell, (data, output) => {
       return sendRendererEvent(mainWindow, 'terminal:onData', { source: 'local', id, data, ...output });
     }, startupCommands, (exit) => {
+      agentActivityBridge.remove(id);
       sendRendererEvent(mainWindow, 'terminal:onExit', { id, ...exit });
-    });
+    }, activityEnv); } catch (error) { agentActivityBridge.remove(id); throw error; }
     return { pid: pty.pid };
   });
 
@@ -502,6 +561,7 @@ function registerIpcHandlers() {
   });
 
   handle('terminal:destroy', (event, { id }) => {
+    agentActivityBridge.remove(id);
     terminalManager.destroy(id);
   });
 
@@ -703,6 +763,8 @@ function registerIpcHandlers() {
   handle('settings:reset', () => settingsManager.reset());
 
   handle('notifications:command-completed', (_event, payload: unknown) => deliverCommandNotification(payload));
+  handle('notifications:status', () => notificationDeliveryError ?? (electron.Notification.isSupported() ? null : 'Desktop notifications are unavailable on this system.'));
+  handle('app:isWindowFocused', () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()));
 
   handle('app:getPlatform', () => {
     return process.platform;
@@ -715,11 +777,25 @@ function registerIpcHandlers() {
   handle('app:selectLocalDirectory', async () => {
     if (!mainWindow) return null;
     const result = await electron.dialog.showOpenDialog(mainWindow, {
-      title: 'Open project',
-      properties: ['openDirectory'],
+      title: 'Choose folder',
+      properties: ['openDirectory', 'createDirectory'],
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
+
+  handle('workspace:directory', async (_event, request: unknown) => {
+    if (!request || typeof request !== 'object' || Array.isArray(request)) throw new Error('Invalid directory request');
+    const { parent, name } = request as { parent?: unknown; name?: unknown };
+    return name === undefined ? requireDirectory(parent) : createWorkspaceDirectory(parent, name);
+  });
+  handle('workspace:renameDirectory', async (_event, request: unknown) => {
+    if (!request || typeof request !== 'object' || Array.isArray(request)) throw new Error('Invalid rename request');
+    const { source, name } = request as { source?: unknown; name?: unknown };
+    const directory = await requireDirectory(source);
+    fsManager.releaseDirectory(directory);
+    return renameWorkspaceDirectory(source, name);
+  });
+  handle('workspace:lifecycle', (_event, request: unknown) => workspaceLifecycle.run(request));
 
   handle('app:openExternal', async (event, url: unknown) => {
     if (typeof url !== 'string' || !isAllowedExternalUrl(url)) return false;

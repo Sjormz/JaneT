@@ -31,6 +31,7 @@ function buildSync(options) {
 
 export function buildMainProcess(options = {}) {
   const runBuild = options.build ?? buildSync;
+  runBuild(electronBuildOptions('src/main/agent-cli.ts', 'dist/main/agent-cli.cjs'));
   return runBuild(electronBuildOptions('src/main/index.ts', 'dist/main/index.js'));
 }
 

@@ -1,4 +1,5 @@
 import { PaneNode, TerminalLeaf, SplitNode, genId } from './types';
+import { normalizeWorkspaceGroups, type WorkspaceGroup } from '../shared/workspaceGroups';
 import type { StartupShellDialect } from '../shared/startupCommands';
 import { isStartupShellDialect, sanitizeStartupCommands } from '../shared/startupCommands';
 
@@ -22,6 +23,7 @@ export interface SavedPaneSplit {
 export type SavedPaneNode = SavedPaneLeaf | SavedPaneSplit;
 
 export interface SavedTab {
+  groupId?: string;
   id: string;
   title: string;
   type: 'local' | 'ssh';
@@ -33,6 +35,7 @@ export interface SavedTab {
 }
 
 export interface SavedSession {
+  groups?: WorkspaceGroup[];
   tabs: SavedTab[];
   activeTabId: string | null;
   sidebarOpen: boolean;
@@ -185,7 +188,9 @@ function restorePaneTreeWithinBudget(
 
   if (node.type === 'split') {
     const direction = node.direction === 'horizontal' ? 'horizontal' : 'vertical';
-    if (!Array.isArray(node.children) || node.children.length === 0) return null;
+    if (!Array.isArray(node.children)) return null;
+    if (node.children.length === 0) return depth === 0 && Array.isArray(node.sizes) && node.sizes.length === 0
+      ? { id: genId('split'), type: 'split', direction, children: [], sizes: [] } : null;
 
     const restoredChildren: Array<{ node: PaneNode; index: number }> = [];
     for (const [index, child] of node.children.entries()) {
@@ -242,6 +247,7 @@ export function normalizeSession(raw: unknown): SavedSession {
       const maximizedPanePath = normalizeSavedPanePath(tab.maximizedPanePath, tab.root);
       tabs.push({
         id: tab.id,
+        ...(typeof tab.groupId === 'string' && tab.groupId.length <= 256 ? { groupId: tab.groupId } : {}),
         title: tab.title,
         type: tab.type,
         ...(typeof tab.cwd === 'string' ? { cwd: tab.cwd } : {}),
@@ -255,6 +261,7 @@ export function normalizeSession(raw: unknown): SavedSession {
 
   return {
     tabs,
+    ...(obj.groups !== undefined ? { groups: normalizeWorkspaceGroups(obj.groups) } : {}),
     activeTabId: typeof obj.activeTabId === 'string' ? obj.activeTabId : null,
     sidebarOpen: obj.sidebarOpen !== false,
     tabsOpen: obj.tabsOpen !== false,
@@ -286,7 +293,7 @@ function countSavedPaneLeaves(root: unknown, limit: number): number | null {
     if (candidate.type === 'leaf') {
       leaves += 1;
       if (leaves > limit) return null;
-    } else if (candidate.type === 'split' && Array.isArray(candidate.children) && candidate.children.length > 0) {
+    } else if (candidate.type === 'split' && Array.isArray(candidate.children) && (candidate.children.length > 0 || depth === 0)) {
       if (candidate.children.length > MAX_PANE_TREE_NODES - nodes) return null;
       for (const child of candidate.children) pending.push({ node: child, depth: depth + 1 });
     } else {

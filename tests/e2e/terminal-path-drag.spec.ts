@@ -26,7 +26,7 @@ function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 function createRepositoryFixture(): { repoPath: string; fileName: string; filePath: string } {
-  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), REPO_PREFIX));
+  const repoPath = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), REPO_PREFIX));
   const fileName = "drag target's file.txt";
   const filePath = path.join(repoPath, fileName);
 
@@ -47,9 +47,9 @@ function createRepositoryFixture(): { repoPath: string; fileName: string; filePa
 }
 
 function createUserData(repoPath: string): string {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), USER_DATA_PREFIX));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), USER_DATA_PREFIX));
   try {
-    fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+    fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
       theme: 'tokyo-night',
       fontSize: 14,
       sidebarSide: 'left',
@@ -92,7 +92,7 @@ async function forceClose(app: ElectronApplication | undefined): Promise<void> {
 function removeFixture(directory: string | undefined, prefix: string): void {
   if (!directory) return;
   const resolved = path.resolve(directory);
-  const tempRoot = path.resolve(os.tmpdir());
+  const tempRoot = fs.realpathSync(os.tmpdir());
   if (path.dirname(resolved) !== tempRoot || !path.basename(resolved).startsWith(prefix)) {
     throw new Error(`Refusing to remove non-fixture path: ${resolved}`);
   }

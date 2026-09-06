@@ -1273,7 +1273,11 @@ export class SSHManager {
     };
 
     const dispatch = (str: string) => {
-      if (!str) return;
+      if (
+        !str
+        || this.connections.get(sessionId) !== conn
+        || conn.shellHandles.get(termId) !== handle
+      ) return;
       if (!activeCallback) {
         const retained = utf8Tail(str, MAX_SSH_SHELL_QUEUE_BYTES);
         pendingChunks.push(retained);

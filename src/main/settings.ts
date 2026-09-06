@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { isWorkspaceGroup, MAX_WORKSPACE_GROUPS, normalizeWorkspaceGroups, type WorkspaceGroup } from '../shared/workspaceGroups';
 import { app, safeStorage } from 'electron';
 import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
 import type { StartupShellDialect } from '../shared/startupCommands';
@@ -42,6 +43,7 @@ export interface SavedPaneSplit {
 export type SavedPaneNode = SavedPaneLeaf | SavedPaneSplit;
 
 export interface SavedTab {
+  groupId?: string;
   id: string;
   title: string;
   type: 'local' | 'ssh';
@@ -53,6 +55,7 @@ export interface SavedTab {
 }
 
 export interface SavedSession {
+  groups?: WorkspaceGroup[];
   tabs: SavedTab[];
   activeTabId: string | null;
   sidebarOpen: boolean;
@@ -184,6 +187,7 @@ function exactlyMatches(record: Record<string, string>, expected: Record<string,
 }
 
 export interface AppSettings {
+  mainDirectory: string | null;
   theme: ThemeName;
   fontSize: number;
   fontFamily: string;
@@ -275,13 +279,16 @@ const SSH_PROFILE_KEYS = new Set([
   'id', 'host', 'port', 'username', 'auth', 'password', 'privateKey', 'jumpHostProfileId',
 ]);
 const SAVED_SESSION_KEYS = new Set([
+  'groups',
   'tabs', 'activeTabId', 'sidebarOpen', 'tabsOpen', 'sidebarSection',
 ]);
 const SAVED_TAB_KEYS = new Set([
+  'groupId',
   'id', 'title', 'type', 'cwd', 'sshProfileId', 'selectedPanePath', 'maximizedPanePath', 'root',
 ]);
 
 const DEFAULT_SETTINGS: AppSettings = {
+  mainDirectory: null,
   theme: 'tokyo-night',
   fontSize: 14,
   fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
@@ -495,6 +502,8 @@ export class SettingsManager {
     const stored = {
       ...DEFAULT_SETTINGS,
       ...storedSettings,
+      mainDirectory: typeof storedSettings.mainDirectory === 'string' && path.isAbsolute(storedSettings.mainDirectory)
+        && storedSettings.mainDirectory.length <= 8192 && !storedSettings.mainDirectory.includes('\0') ? storedSettings.mainDirectory : null,
       keybindings: isBoundedStringRecord(mergedKeybindings, MAX_KEYBINDINGS, 256, 256)
         ? mergedKeybindings
         : { ...PLATFORM_DEFAULT_KEYBINDINGS },
@@ -735,6 +744,7 @@ function cloneSavedTab(value: unknown): SavedTab | undefined {
   const maximizedPanePath = cloneSavedPanePath(tab.maximizedPanePath, root);
   return {
     id: tab.id,
+    ...(typeof tab.groupId === 'string' && tab.groupId.length <= 256 ? { groupId: tab.groupId } : {}),
     title: tab.title,
     type: tab.type,
     ...(typeof tab.cwd === 'string' ? { cwd: tab.cwd } : {}),
@@ -772,6 +782,7 @@ function cloneSavedSession(value: unknown): SavedSession {
   }
   return {
     tabs,
+    ...(session.groups !== undefined ? { groups: normalizeWorkspaceGroups(session.groups) } : {}),
     activeTabId: typeof session.activeTabId === 'string' ? session.activeTabId : null,
     sidebarOpen: typeof session.sidebarOpen === 'boolean' ? session.sidebarOpen : EMPTY_SESSION.sidebarOpen,
     tabsOpen: typeof session.tabsOpen === 'boolean' ? session.tabsOpen : EMPTY_SESSION.tabsOpen,
@@ -806,6 +817,9 @@ function isValidRuntimeSession(value: unknown): boolean {
     || !Array.isArray(session.tabs)
     || session.tabs.length > MAX_SAVED_SESSION_TABS
     || !hasUniqueIds(session.tabs)
+    || (session.groups !== undefined && (!Array.isArray(session.groups)
+      || session.groups.length > MAX_WORKSPACE_GROUPS || !session.groups.every(isWorkspaceGroup)
+      || !hasUniqueIds(session.groups)))
     || (session.activeTabId !== null
       && (typeof session.activeTabId !== 'string' || session.activeTabId.length > 256))
     || typeof session.sidebarOpen !== 'boolean'
@@ -822,6 +836,7 @@ function isValidRuntimeSession(value: unknown): boolean {
       || tab.id.length > 256
       || typeof tab.title !== 'string'
       || tab.title.length > 256
+      || (tab.groupId !== undefined && (typeof tab.groupId !== 'string' || tab.groupId.length > 256))
       || (tab.type !== 'local' && tab.type !== 'ssh')
       || (tab.cwd !== undefined
         && (typeof tab.cwd !== 'string' || tab.cwd.length > MAX_WORKSPACE_STRING_LENGTH))
@@ -873,7 +888,7 @@ function validateRuntimePaneTree(root: unknown, leafLimit: number): number | nul
       || Object.keys(candidate).some((key) => !SAVED_PANE_SPLIT_KEYS.has(key))
       || (candidate.direction !== 'horizontal' && candidate.direction !== 'vertical')
       || !Array.isArray(candidate.children)
-      || candidate.children.length === 0
+      || (candidate.children.length === 0 && depth !== 0)
       || candidate.children.length > MAX_SAVED_PANE_NODES - nodes
       || !Array.isArray(candidate.sizes)
       || candidate.sizes.length !== candidate.children.length
@@ -903,6 +918,10 @@ function cloneSavedPaneNodeWithinBudget(
   budget.nodesRemaining -= 1;
   const candidate = node as Record<string, unknown>;
   if (candidate.type === 'split') {
+    if (depth === 0 && Array.isArray(candidate.children) && candidate.children.length === 0
+      && Array.isArray(candidate.sizes) && candidate.sizes.length === 0) {
+      return { type: 'split', direction: candidate.direction === 'horizontal' ? 'horizontal' : 'vertical', children: [], sizes: [] };
+    }
     const children: SavedPaneNode[] = [];
     for (const child of Array.isArray(candidate.children) ? candidate.children : []) {
       const cloned = cloneSavedPaneNodeWithinBudget(child, depth + 1, budget);
@@ -1082,7 +1101,7 @@ function parseSettingsUpdate(value: unknown): Partial<AppSettings> | undefined {
     const prototype = Reflect.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) return undefined;
     const allowedKeys = new Set<keyof AppSettings>([
-      'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets',
+      'mainDirectory', 'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets',
       'commandHistory', 'notificationsEnabled', 'notificationThresholdSeconds',
       'sshProfiles', 'workspaceTabs', 'gitWorktreeBaseDir',
       'gitWorktreeNameTemplate', 'session',
@@ -1101,7 +1120,9 @@ function parseSettingsUpdate(value: unknown): Partial<AppSettings> | undefined {
 }
 
 function isValidSettingsUpdate(updates: Partial<AppSettings>): boolean {
-  return (updates.theme === undefined || ['tokyo-night', 'dracula', 'one-dark', 'solarized-light', 'gruvbox'].includes(updates.theme))
+  return (updates.mainDirectory === undefined || updates.mainDirectory === null
+      || (typeof updates.mainDirectory === 'string' && path.isAbsolute(updates.mainDirectory) && updates.mainDirectory.length <= 8192 && !updates.mainDirectory.includes('\0')))
+    && (updates.theme === undefined || ['tokyo-night', 'dracula', 'one-dark', 'solarized-light', 'gruvbox'].includes(updates.theme))
     && (updates.fontSize === undefined
       || (Number.isInteger(updates.fontSize) && updates.fontSize >= 10 && updates.fontSize <= 24))
     && (updates.fontFamily === undefined

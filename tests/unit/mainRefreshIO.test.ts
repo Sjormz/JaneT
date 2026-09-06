@@ -18,6 +18,27 @@ afterEach(async () => {
 });
 
 describe('heartbeat-backed main-process IO', () => {
+  it('releases watchers for a renamed directory and its descendants, not siblings', async () => {
+    const root = await makeTempDir();
+    const source = path.join(root, 'Project');
+    const child = path.join(source, 'Child');
+    const sibling = path.join(root, 'Project-other');
+    await fs.promises.mkdir(child, { recursive: true });
+    await fs.promises.mkdir(sibling);
+    const closed: string[] = [];
+    const manager = new FileSystemManager(60_000, (directory) => ({
+      on() { return this; },
+      close() { closed.push(directory); },
+    }));
+    try {
+      await Promise.all([source, child, sibling].map((directory) => manager.listDir(directory)));
+      manager.releaseDirectory(source);
+      expect(closed.sort()).toEqual([source, child].sort());
+      await manager.listDir(sibling);
+      expect(closed).not.toContain(sibling);
+    } finally { manager.cleanup(); }
+  });
+
   it('lists and sorts directories asynchronously while respecting hidden-file visibility', async () => {
     const root = await makeTempDir();
     await Promise.all([

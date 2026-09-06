@@ -26,7 +26,6 @@ export interface SidebarProps {
   /** True if the active tab is an SSH tab. Source Control shows a notice. */
   isRemote: boolean;
   gitRepository: GitRepositoryState;
-  followingTarget: { label: string; path: string };
   openLocalTerminals?: Array<{ terminalId: string; cwd: string; lastFocused: number }>;
   onOpenTerminal?: (terminalId: string) => void;
   onOpenLocalTabAt?: (cwd: string, title?: string) => void;
@@ -55,7 +54,6 @@ export default function Sidebar({
   cwdReady,
   isRemote,
   gitRepository,
-  followingTarget,
   openLocalTerminals,
   onOpenTerminal,
   onOpenLocalTabAt,
@@ -127,15 +125,6 @@ export default function Sidebar({
       aria-labelledby={`workspace-tool-tab-${activeTool.id}`}
       hidden={!expanded}
     >
-      <div
-        className="workspace-tools-following"
-        aria-label={`Following ${followingTarget.label} at ${followingTarget.path}`}
-        title={followingTarget.path}
-      >
-        <span>Following</span>
-        <strong>{followingTarget.label}</strong>
-        <code>{followingTarget.path}</code>
-      </div>
       {expanded && (
         activeTool.id === 'files' ? (
           <FileExplorer
@@ -164,7 +153,7 @@ export default function Sidebar({
 
   return (
     <aside
-      className={`sidebar workspace-tools workspace-tools-side-${side} ${expanded ? 'is-expanded' : 'is-collapsed'}`}
+      className={`sidebar workspace-tools workspace-supporting-rail workspace-tools-side-${side} ${expanded ? 'is-expanded' : 'is-collapsed'}`}
       aria-label="Workspace tools"
     >
       <div className="workspace-tools-header">

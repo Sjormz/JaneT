@@ -119,32 +119,32 @@ const themes: Record<ThemeName, ThemeDefinition> = {
     name: 'one-dark',
     label: 'One Dark',
     css: {
-      'bg-primary': '#1e2127',
-      'bg-secondary': '#282c34',
-      'bg-tertiary': '#31363f',
-      'bg-hover': '#393e48',
-      'bg-active': '#3e4451',
-      'text-primary': '#abb2bf',
-      'text-secondary': '#9ca0b0',
+      'bg-primary': '#0b0b0c',
+      'bg-secondary': '#141415',
+      'bg-tertiary': '#1c1c1e',
+      'bg-hover': '#242426',
+      'bg-active': '#2b2b2e',
+      'text-primary': '#ededee',
+      'text-secondary': '#b3b3b8',
       'text-muted': '#5c6370',
-      'text-accent': '#61afef',
-      'border-color': '#3e4451',
-      'border-active': '#61afef',
+      'text-accent': '#dedee2',
+      'border-color': '#2c2c2f',
+      'border-active': '#96969d',
       'red': '#e06c75',
       'green': '#98c379',
       'yellow': '#e5c07b',
       'blue': '#61afef',
       'magenta': '#c678dd',
       'cyan': '#56b6c2',
-      'glass-bg': 'rgba(30, 33, 39, 0.78)',
-      'glass-bg-light': 'rgba(40, 44, 52, 0.6)',
-      'glass-border': 'rgba(255, 255, 255, 0.06)',
-      'glass-border-active': 'rgba(97, 175, 239, 0.4)',
+      'glass-bg': 'rgba(20, 20, 21, 0.96)',
+      'glass-bg-light': 'rgba(28, 28, 30, 0.92)',
+      'glass-border': 'rgba(255, 255, 255, 0.10)',
+      'glass-border-active': 'rgba(255, 255, 255, 0.28)',
     },
     xterm: {
-      background: '#1e2127',
-      foreground: '#abb2bf',
-      cursor: '#abb2bf',
+      background: '#0b0b0c',
+      foreground: '#dedee2',
+      cursor: '#ededee',
       selectionBackground: '#3e4451',
       black: '#1e2127',
       red: '#e06c75',
@@ -176,13 +176,13 @@ const themes: Record<ThemeName, ThemeDefinition> = {
       'text-primary': '#2f4850',
       'text-secondary': '#40565d',
       'text-muted': '#93a1a1',
-      'text-accent': '#0b5d8f',
+      'text-accent': '#064b75',
       'border-color': '#cdc5ab',
-      'border-active': '#0b5d8f',
-      'red': '#b12220',
-      'green': '#4d6c00',
+      'border-active': '#064b75',
+      'red': '#941b1b',
+      'green': '#385300',
       'yellow': '#735100',
-      'blue': '#0b5d8f',
+      'blue': '#064b75',
       'magenta': '#a21f65',
       'cyan': '#006b64',
       'glass-bg': 'rgba(253, 246, 227, 0.85)',
@@ -275,14 +275,10 @@ export function applyCssTheme(cssVars: CssThemeVars): void {
   for (const [key, value] of Object.entries(cssVars)) {
     root.style.setProperty(`--${key}`, value);
   }
-  // Keep shared chrome opaque and theme-owned. Legacy `glass-*` entries in
-  // saved theme definitions are deliberately normalized here so light themes
-  // never inherit Tokyo Night titlebars, menus, or hover states.
-  root.style.setProperty('--glass-bg', cssVars['bg-secondary']);
-  root.style.setProperty('--glass-bg-strong', cssVars['bg-tertiary']);
-  root.style.setProperty('--glass-bg-light', cssVars['bg-tertiary']);
-  root.style.setProperty('--glass-border', cssVars['border-color']);
-  root.style.setProperty('--glass-border-active', cssVars['border-active']);
+  // Theme definitions own their translucent chrome values. `glass-bg-strong`
+  // has no separate legacy value, so use the theme's glass surface rather
+  // than flattening it to an opaque panel.
+  root.style.setProperty('--glass-bg-strong', cssVars['glass-bg'] ?? cssVars['bg-secondary']);
   root.style.setProperty('--text-tertiary', cssVars['text-secondary']);
   root.style.setProperty('--text-disabled', cssVars['text-muted']);
 }

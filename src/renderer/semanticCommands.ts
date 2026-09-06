@@ -33,6 +33,7 @@ export class SemanticCommandTimeline {
   private outputStart: Position | null = null;
   private command = '';
   private startedAt = 0;
+  private startedClock = 0;
   private selectedCommand: SemanticCommand | null = null;
   private selectedDecoration: IDecoration | null = null;
 
@@ -42,13 +43,13 @@ export class SemanticCommandTimeline {
     private readonly now: () => number = Date.now,
     private readonly onStart?: (event: SemanticCommandStartedEvent) => void,
     private readonly onCancel?: (event: SemanticCommandStartedEvent) => void,
+    private readonly clock: () => number = now,
+    private readonly onPrompt?: () => void,
   ) {}
 
   handleOsc(data: string): boolean {
-    if (data.length > 64 || this.terminal.buffer.active.type !== 'normal') {
-      this.resetPending();
-      return true;
-    }
+    // An embedded TUI's markers must not cancel its outer shell command.
+    if (data.length > 64 || this.terminal.buffer.active.type !== 'normal') return true;
     const [code, arg, ...rest] = data.split(';');
     if (rest.length || !['A', 'B', 'C', 'D'].includes(code)) return true;
 
@@ -59,20 +60,18 @@ export class SemanticCommandTimeline {
       this.phase = 'command';
       this.commandStart = this.position();
       this.commandMarker = this.terminal.registerMarker(0);
+      this.onPrompt?.();
     } else if (code === 'C' && this.phase === 'command' && arg === undefined && this.commandStart && this.commandMarker) {
       const end = this.position();
       const command = this.read(this.commandStart, end, false).trim();
-      if (!command) {
-        this.resetPending();
-        return true;
-      }
       this.command = command;
       this.startedAt = this.now();
+      this.startedClock = this.clock();
       this.outputStart = end;
       this.phase = 'output';
       this.onStart?.({ command, startedAt: this.startedAt });
     } else if (code === 'D' && this.phase === 'output' && this.outputStart && this.commandMarker) {
-      if (arg !== undefined && !/^\d+$/.test(arg)) return true;
+      if (arg !== undefined && !/^-?\d+$/.test(arg)) return true;
       const exitCode = arg === undefined ? undefined : Number(arg);
       if (exitCode !== undefined && !Number.isSafeInteger(exitCode)) return true;
       const output = this.read(this.outputStart, this.position()).replace(/^\r?\n/, '').replace(/\r?\n$/, '');
@@ -83,7 +82,7 @@ export class SemanticCommandTimeline {
         exitCode,
         startedAt: this.startedAt,
         completedAt,
-        durationMs: Math.max(0, completedAt - this.startedAt),
+        durationMs: Math.max(0, Math.round(this.clock() - this.startedClock)),
       };
       const entry: SemanticCommand = { ...event, marker: this.commandMarker };
       if (exitCode !== undefined && exitCode !== 0) {
@@ -93,7 +92,8 @@ export class SemanticCommandTimeline {
           element.title = `Command failed with exit code ${exitCode}`;
         });
       }
-      this.commands.push(entry);
+      if (event.command) this.commands.push(entry);
+      else this.disposeCommand(entry);
       while (this.commands.length > MAX_COMMANDS) this.disposeCommand(this.commands.shift()!);
       this.onComplete?.(event);
       this.resetPending(false, false);

@@ -29,6 +29,7 @@ interface TerminalInstance {
 }
 
 export interface TerminalManagerOptions {
+  agentHelper?: string;
   processInspector?: ProcessInspector;
   sleep?: (milliseconds: number) => Promise<void>;
   terminateGraceMs?: number;
@@ -164,8 +165,10 @@ export class TerminalManager {
   private readonly capacity: NativeTerminalCapacity;
   private readonly platform: NodeJS.Platform;
   private nextOutputGeneration = 1;
+  private readonly agentHelper?: string;
 
   constructor(options: TerminalManagerOptions = {}) {
+    this.agentHelper = options.agentHelper;
     this.processInspector = options.processInspector ?? new SystemProcessInspector();
     this.sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
     this.terminateGraceMs = Math.max(0, options.terminateGraceMs ?? DEFAULT_TERMINATE_GRACE_MS);
@@ -197,6 +200,7 @@ export class TerminalManager {
     onData?: (data: string, output: TerminalOutputSequence) => unknown,
     startupCommands?: unknown,
     onExit?: (event: { exitCode: number; signal: number }) => void,
+    activityEnv?: Record<string, string>,
   ): IPty {
     if (
       typeof id !== 'string'
@@ -227,12 +231,17 @@ export class TerminalManager {
       throw new Error(`Shell executable was not found: ${defaultShell}`);
     }
     const defaultCwd = resolveTerminalCwd(cwd);
+    try {
+      if (!fs.statSync(defaultCwd).isDirectory()) throw new Error('Not a directory');
+    } catch {
+      throw new Error('Starting directory is unavailable. Locate the folder and try again.');
+    }
     const startupDialect = inferStartupShellDialect(defaultShell);
     const startupExpression = startupDialect
       ? compileStartupCommands(startupCommands, startupDialect)
       : '';
 
-    const init = buildShellInit(defaultShell);
+    const init = buildShellInit(defaultShell, activityEnv?.JANET_ACTIVITY_URL ? this.agentHelper : undefined);
     const startupAtLaunch = Boolean(
       init && startupExpression && !this.startupCommandLedger.has(id),
     );
@@ -253,6 +262,8 @@ export class TerminalManager {
       // in their interactive mode.
       SHELL: defaultShell,
     };
+    delete env.JANET_ACTIVITY_URL;
+    if (activityEnv?.JANET_ACTIVITY_URL) env.JANET_ACTIVITY_URL = activityEnv.JANET_ACTIVITY_URL;
     // The Hermes graphics opt-in is applied only by the direct-shell wrapper
     // in shell-init.ts. Keeping it out of the PTY environment prevents it from
     // leaking into nested tmux/screen sessions that may not pass Kitty APCs.

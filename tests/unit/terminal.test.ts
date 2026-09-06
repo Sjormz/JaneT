@@ -537,13 +537,13 @@ describe('TerminalManager', () => {
     const { TerminalManager } = await loadTerminalManager();
     const manager = new TerminalManager();
 
-    manager.create('term-home', '~/projects/janet', '/bin/zsh', () => {});
+    manager.create('term-home', '~', '/bin/zsh', () => {});
 
     expect(mocks.spawnMock).toHaveBeenCalledWith(
       '/bin/zsh',
       ['-i'],
       expect.objectContaining({
-        cwd: `${os.homedir()}${path.sep}projects${path.sep}janet`,
+        cwd: os.homedir(),
       }),
     );
   });

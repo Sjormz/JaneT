@@ -360,6 +360,13 @@ export class FileSystemManager {
     for (const directory of Array.from(this.snapshots.keys())) this.dropSnapshot(directory);
   }
 
+  releaseDirectory(directory: string): void {
+    for (const cached of Array.from(this.snapshots.keys())) {
+      const relative = path.relative(directory, cached);
+      if (!relative || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`))) this.dropSnapshot(cached);
+    }
+  }
+
   private async resolveTextFilePath(resolvedInput: string): Promise<TextFileResult<string>> {
     try {
       return { ok: true, value: await fs.promises.realpath(resolvedInput) };

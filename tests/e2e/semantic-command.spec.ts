@@ -25,15 +25,15 @@ async function forceClose(app: ElectronApplication | undefined): Promise<void> {
 
 test('navigates, copies, and safely inserts a real semantic command', async () => {
   test.setTimeout(60_000);
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-semantic-e2e-'));
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-semantic-profile-'));
+  const cwd = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-semantic-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-semantic-profile-'));
   const markerPath = path.join(cwd, 'semantic-rerun.txt');
   const command = process.platform === 'win32'
     ? `Add-Content -NoNewline -Path 'semantic-rerun.txt' -Value 'X'; Write-Output '${OUTPUT}'`
     : `printf X >> semantic-rerun.txt; printf '${OUTPUT}\\n'`;
   let app: ElectronApplication | undefined;
 
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'left',

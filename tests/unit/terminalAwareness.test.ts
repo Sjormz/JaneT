@@ -22,6 +22,28 @@ function event(
 }
 
 describe('terminal agent awareness', () => {
+  it('does not call an agent busy or ready before its first lifecycle event', () => {
+    const shell = applyAgentEvent(undefined, event('turn.start', { provider: 'shell', turnId: 'command' }), 1, true);
+    const connecting = applyAgentEvent(shell, event('integration.status', {
+      provider: 'codex', sessionId: 'janet-codex-setup', completionTracking: true,
+    }), 2, true)!;
+    expect(agentStatus(connecting)).toEqual({ kind: 'unavailable', label: 'Codex · Awaiting activity' });
+    expect(aggregateAgentStatus([connecting])?.busyCount).toBe(0);
+    expect(applyAgentEvent(connecting, event('session.start', { provider: 'shell' }), 3, true)).toBe(connecting);
+    const ready = applyAgentEvent(connecting, event('session.start', { provider: 'codex' }), 4, true)!;
+    expect(agentStatus(ready).label).toBe('Codex · Ready');
+    const returnedToShell = applyAgentEvent(connecting, event('turn.end', { provider: 'shell', turnId: 'command', outcome: 'succeeded' }), 5, true)!;
+    expect(agentStatus(returnedToShell).label).toBe('Shell · Ready');
+  });
+  it('keeps unread results through prompt redraw and ignores late completed-turn events', () => {
+    const start = event('turn.start', { provider: 'shell', turnId: 'one' });
+    const running = applyAgentEvent(undefined, start, 1, false);
+    const finished = applyAgentEvent(running, { ...start, event: 'turn.end', outcome: 'succeeded' }, 2, false)!;
+    expect(applyAgentEvent(finished, { ...start, event: 'session.start' }, 3, false)).toBe(finished);
+    expect(applyAgentEvent(finished, { ...start, event: 'attention.resolve' }, 4, false)).toBe(finished);
+    const other = applyAgentEvent(undefined, event('turn.start', { turnId: 'other' }), 5, false);
+    expect(aggregateAgentStatus([finished, other])).toMatchObject({ kind: 'running', busyCount: 1, unseenCount: 1 });
+  });
   it('tracks live phase independently from the last turn outcome', () => {
     let state = applyAgentEvent(undefined, event('session.start'), 10, true);
     expect(state).toMatchObject({ phase: 'ready', phaseChangedAt: 10 });
@@ -101,7 +123,7 @@ describe('terminal agent awareness', () => {
     expect(agentStatus(running)).toMatchObject({ kind: 'running', label: 'Hermes · Running' });
     expect(agentStatus(failed)).toMatchObject({ kind: 'failed', label: 'Hermes · Turn failed' });
     expect(agentStatus(attention)).toMatchObject({ kind: 'needs-input', label: 'Hermes · Needs input' });
-    expect(aggregateAgentStatus([failed, running, attention])).toEqual(agentStatus(attention));
+    expect(aggregateAgentStatus([failed, running, attention])).toMatchObject({ kind: 'needs-input', busyCount: 1, unseenCount: 1 });
     expect(terminalStatus(ready, 'exited')).toEqual({ kind: 'exited', label: 'Exited' });
     expect(terminalStatus(running, 'disconnected')).toEqual({ kind: 'disconnected', label: 'SSH disconnected' });
     expect(terminalStatus(attention, 'exited')).toEqual({ kind: 'exited', label: 'Exited' });
@@ -109,6 +131,6 @@ describe('terminal agent awareness', () => {
     expect(aggregateAgentStatus(
       [ready, undefined],
       [undefined, 'disconnected'],
-    )).toEqual({ kind: 'disconnected', label: 'SSH disconnected' });
+    )).toMatchObject({ kind: 'disconnected', label: 'SSH disconnected' });
   });
 });

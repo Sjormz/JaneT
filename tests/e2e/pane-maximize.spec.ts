@@ -1,3 +1,4 @@
+import { createWorkspace } from './workspaces';
 import { test, expect, chromium, Browser, Page } from '@playwright/test';
 import { execFileSync, spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
@@ -76,11 +77,11 @@ async function connectCdp(port: number): Promise<Browser> {
 }
 
 async function launchApp(settings: unknown, prefix: string, existingUserData?: string): Promise<{ browser: Browser; electronProcess: ChildProcess; page: Page; userData: string }> {
-  const userData = existingUserData ?? fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const userData = existingUserData ?? fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), prefix));
   const settingsPath = path.join(userData, 'settings.json');
   const remoteDebuggingPort = await getFreePort();
 
-  if (settings !== undefined) fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+  if (settings !== undefined) fs.writeFileSync(settingsPath, JSON.stringify({ mainDirectory: userData, ...(settings as object) }, null, 2), 'utf-8');
 
   // Spawn Electron directly so the tracked child is the app process itself.
   // A shell-wrapped `npx electron` can exit or be killed while leaving its
@@ -157,7 +158,7 @@ async function closeApp(browser: Browser, electronProcess: ChildProcess, userDat
     void browser.close().catch(() => {});
   } finally {
     await killProcessTree(electronProcess);
-    if (userData) fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    if (userData) await fs.promises.rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 }
 
@@ -196,7 +197,7 @@ test('maximizes and restores a terminal pane in Electron', async () => {
 
     // Maximizing a pane also makes it the action target. After restoring the
     // layout, pane shortcuts must still act on the pane the user just chose.
-    await page.keyboard.press('Control+Shift+W');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+W' : 'Control+Shift+W');
     const closePaneDialog = page.getByRole('alertdialog', { name: 'Close right?' });
     await expect(closePaneDialog).toBeVisible();
     await closePaneDialog.getByRole('button', { name: 'Close pane' }).click();
@@ -257,7 +258,7 @@ test('focuses the first terminal after clicking a terminal tab', async () => {
 
   try {
     await expect(page.locator('.terminal-container')).toHaveCount(2);
-    await page.getByRole('button', { name: 'New local terminal tab' }).click();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+T' : 'Control+Shift+T');
     await expect(page.locator('.terminal-container')).toHaveCount(1);
     await page.locator('.vtab-item').filter({ hasText: 'two panes' }).click();
     await expect(page.locator('.terminal-container')).toHaveCount(2);
@@ -372,8 +373,8 @@ test('moves the active pane by configured keyboard and command palette without r
   }
 });
 
-test('runs ordered preset startup commands once per fresh terminal', async () => {
-  const markerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-startup-'));
+test('runs ordered workspace startup commands once per fresh terminal', async () => {
+  const markerDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-e2e-startup-'));
   const markerPath = path.join(markerDir, 'ordered.txt');
   const failurePath = path.join(markerDir, 'failure.txt');
   const encodedMarkerPath = Buffer.from(markerPath, 'utf-8').toString('base64');
@@ -435,9 +436,7 @@ test('runs ordered preset startup commands once per fresh terminal', async () =>
     }, 'janet-e2e-startup-app-');
     userData = app.userData;
 
-    const presetsButton = app.page.getByRole('button', { name: 'Presets' });
-    if (await presetsButton.getAttribute('aria-expanded') !== 'true') await presetsButton.click();
-    await app.page.getByRole('button', { name: 'Open preset Ordered startup' }).click();
+    await createWorkspace(app.page, 'Ordered startup', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
 
     await expect.poll(
       () => fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf-8') : '',
@@ -463,11 +462,9 @@ test('runs ordered preset startup commands once per fresh terminal', async () =>
       { timeout: 10_000 },
     ).toBe('ABAB');
 
-    // Opening the preset explicitly creates a new pane instance, so its startup
+    // Creating another workspace explicitly creates a new pane instance, so its startup
     // sequence should run again from the beginning.
-    const reloadedPresetsButton = app.page.getByRole('button', { name: 'Presets' });
-    if (await reloadedPresetsButton.getAttribute('aria-expanded') !== 'true') await reloadedPresetsButton.click();
-    await app.page.getByRole('button', { name: 'Open preset Ordered startup' }).click();
+    await createWorkspace(app.page, 'Ordered startup second', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
     await expect.poll(
       () => fs.readFileSync(markerPath, 'utf-8'),
       { timeout: 10_000 },
@@ -476,7 +473,7 @@ test('runs ordered preset startup commands once per fresh terminal', async () =>
     // The first row writes a relative marker and exits non-zero. Finding the
     // marker in the saved cwd proves directory selection; never seeing `Y`
     // proves the compound sequence stops before the second row.
-    await app.page.getByRole('button', { name: 'Open preset Failure gate' }).click();
+    await createWorkspace(app.page, 'Failure gate', [{ title: 'failure gate', cwd: markerDir, commands: [failAfterRelativeMarker, mustNotRunAfterFailure] }]);
     await expect.poll(
       () => fs.existsSync(failurePath) ? fs.readFileSync(failurePath, 'utf-8') : '',
       { timeout: 10_000 },
@@ -491,7 +488,7 @@ test('runs ordered preset startup commands once per fresh terminal', async () =>
 });
 
 test('refreshes external branch and file changes without a manual reload', async () => {
-  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-heartbeat-repo-'));
+  const repoPath = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-e2e-heartbeat-repo-'));
   let app: Awaited<ReturnType<typeof launchApp>> | undefined;
   try {
     execFileSync('git', ['init', '-b', 'main'], { cwd: repoPath });
@@ -544,7 +541,7 @@ test('refreshes external branch and file changes without a manual reload', async
 
 test('focuses the exact worktree MRU across tabs and a maximized layout without creating terminals', async () => {
   test.setTimeout(60_000);
-  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-worktree-focus-repo-'));
+  const repoPath = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-e2e-worktree-focus-repo-'));
   const nestedPath = path.join(repoPath, 'nested');
   const olderCwd = path.join(repoPath, 'older');
   const targetCwd = path.join(repoPath, 'target');
@@ -665,7 +662,7 @@ test('focuses the exact worktree MRU across tabs and a maximized layout without 
 });
 
 test('stages and commits changes from Source Control', async ({}, testInfo) => {
-  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-source-control-'));
+  const repoPath = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-e2e-source-control-'));
   let app: Awaited<ReturnType<typeof launchApp>> | undefined;
   try {
     execFileSync('git', ['init', '-b', 'main'], { cwd: repoPath });
@@ -701,9 +698,7 @@ test('stages and commits changes from Source Control', async ({}, testInfo) => {
 
     await app.page.bringToFront();
     const sourceControl = app.page.locator('.git-tree');
-    await expect(app.page.locator('.workspace-tools-following')).toContainText(
-      `Followingrepo${repoPath.replace(/\\/g, '/')}`,
-    );
+    await expect(app.page.locator('.workspace-tools-following')).toHaveCount(0);
     await expect(sourceControl.getByRole('button', { name: 'Add worktree with new branch' })).toBeVisible({ timeout: 10_000 });
     await expect(sourceControl.locator('.git-worktree-item.current[aria-current="location"]')).toBeVisible();
     const currentWorktree = sourceControl.getByRole('button', {

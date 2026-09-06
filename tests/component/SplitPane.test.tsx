@@ -297,6 +297,17 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
   return { default: MockTerminalPane, disposeCachedTerminal: rendererMocks.disposeCachedTerminal };
 });
 
+// Most scenarios exercise existing Library sessions, not first-install onboarding.
+function savedSettings(overrides: any = {}) {
+  const session = overrides.session ?? {
+    tabs: [{ id: 'saved-work', title: 'Terminal', type: 'local', cwd: '/home/test', root: { type: 'split', direction: 'vertical', sizes: [1], children: [{ type: 'leaf', cwd: '/home/test' }] } }],
+    activeTabId: 'saved-work',
+  };
+  return { keybindings: {}, workspaceTabs: [], ...overrides, session: {
+    groups: [{ id: 'library', name: 'Test library', kind: 'folder', directory: '/home/test' }], ...session,
+  } };
+}
+
 beforeEach(() => {
   mountedTermIds.length = 0;
   readyTermIds.length = 0;
@@ -357,7 +368,7 @@ beforeEach(() => {
       },
     }),
     selectLocalDirectory: vi.fn().mockResolvedValue(null),
-    getSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [], notificationsEnabled: false, notificationThresholdSeconds: 10 }),
+    getSettings: vi.fn().mockResolvedValue(savedSettings({ notificationsEnabled: false, notificationThresholdSeconds: 10 })),
     getSettingsRecoveryState: vi.fn().mockResolvedValue({ previousAvailable: false }),
     restorePreviousSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] }),
     resetSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] }),
@@ -600,7 +611,7 @@ describe('split panes in the app', () => {
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Start broadcast input' }));
     expect(screen.getByRole('status', { name: /broadcast input active/i })).toBeInTheDocument();
 
-    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
     expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
     expect(screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i })).toHaveLength(1);
@@ -617,7 +628,7 @@ describe('split panes in the app', () => {
     try {
       render(<App />);
       const terminal = await screen.findByTestId(/terminal-/);
-      await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+      await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
       const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
       act(() => { emit(semanticEvent('printf first', 'FIRST OUTPUT')); emit(semanticEvent('printf second', 'SECOND OUTPUT')); });
 
@@ -642,7 +653,7 @@ describe('split panes in the app', () => {
   it('persists a submitted command immediately and updates it when execution finishes', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const termId = terminal.dataset.terminalId!;
 
     act(() => rendererMocks.semanticCommandStartedHandlers.get(termId)!({
@@ -674,7 +685,7 @@ describe('split panes in the app', () => {
   it('keeps an accepted command but clears Running when the lifecycle is cancelled', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const termId = terminal.dataset.terminalId!;
     const event = { command: 'exit', startedAt: 10 };
 
@@ -693,7 +704,7 @@ describe('split panes in the app', () => {
   it('clears Running when the owning local terminal exits without D', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const termId = terminal.dataset.terminalId!;
 
     act(() => rendererMocks.semanticCommandStartedHandlers.get(termId)!({ command: 'exit', startedAt: 10 }));
@@ -714,7 +725,7 @@ describe('split panes in the app', () => {
     ));
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const termId = terminal.dataset.terminalId!;
 
     act(() => rendererMocks.semanticCommandStartedHandlers.get(termId)!({ command: 'exit', startedAt: 10 }));
@@ -739,7 +750,7 @@ describe('split panes in the app', () => {
     ));
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
     act(() => { emit(semanticEvent('first')); emit(semanticEvent('second')); });
     await waitFor(() => expect(historyUpdates()).toHaveLength(1));
@@ -753,7 +764,7 @@ describe('split panes in the app', () => {
   it('replaces an older duplicate command instead of adding another row', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
 
     act(() => emit({ ...semanticEvent('repeat'), startedAt: 10 }));
@@ -770,7 +781,7 @@ describe('split panes in the app', () => {
     fireEvent.click(await screen.findByRole('button', { name: /split pane right/i }));
     const [firstId, secondId] = (await screen.findAllByTestId(/terminal-/))
       .map((terminal) => terminal.dataset.terminalId!);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
 
     act(() => rendererMocks.semanticCommandStartedHandlers.get(firstId)!({ command: 'repeat', startedAt: 10 }));
     await waitFor(() => expect(historyUpdates()).toHaveLength(1));
@@ -789,7 +800,7 @@ describe('split panes in the app', () => {
   it('removes a command-history entry from settings and the picker', async () => {
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
     act(() => emit(semanticEvent('remove me')));
     await waitFor(() => expect(historyUpdates()).toHaveLength(1));
@@ -808,7 +819,7 @@ describe('split panes in the app', () => {
     try {
       render(<App />);
       const terminal = await screen.findByTestId(/terminal-/);
-      await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+      await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
       const termId = terminal.dataset.terminalId!;
       act(() => rendererMocks.semanticCommandStartedHandlers.get(termId)!({ command: 'still running', startedAt: 10 }));
       await waitFor(() => expect(historyUpdates()).toHaveLength(1));
@@ -841,7 +852,7 @@ describe('split panes in the app', () => {
     ));
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const termId = terminal.dataset.terminalId!;
     const emit = rendererMocks.semanticCommandHandlers.get(termId)!;
     act(() => { emit(semanticEvent('first')); emit(semanticEvent('second')); });
@@ -862,15 +873,15 @@ describe('split panes in the app', () => {
     ));
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget?.path).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
     const emit = rendererMocks.semanticCommandHandlers.get(terminal.dataset.terminalId!)!;
     act(() => { emit(semanticEvent('first')); emit(semanticEvent('stale')); });
     await waitFor(() => expect(historyUpdates()).toHaveLength(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal)/i }));
     await confirmPendingAction(/^close tab$/i);
     await act(async () => blocker.resolve());
-    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+    await waitFor(() => expect(screen.queryAllByTestId(/terminal-/)).toHaveLength(0));
     await act(async () => Promise.resolve());
     expect(historyUpdates()).toHaveLength(1);
   });
@@ -914,6 +925,7 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(window.janet.notifyCommandCompleted).toHaveBeenCalledOnce());
     expect(window.janet.notifyCommandCompleted).toHaveBeenCalledWith({
       durationMs: 10_000, outcome: 'success', tabLabel: 'Terminal', paneLabel: 'Terminal', context: { kind: 'local' },
+      target: { tabId: rendererMocks.verticalTabBarProps.activeTabId, termId },
     });
     expect(JSON.stringify(vi.mocked(window.janet.notifyCommandCompleted).mock.calls)).not.toMatch(/secret command|secret output|command|output/);
   });
@@ -924,7 +936,7 @@ describe('split panes in the app', () => {
     const termId = terminal.dataset.terminalId!;
     const staleHandler = rendererMocks.semanticCommandHandlers.get(termId)!;
     const oldTabId = rendererMocks.verticalTabBarProps.tabs[0].id;
-    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
     act(() => rendererMocks.verticalTabBarProps.onCloseTab(oldTabId));
     await confirmPendingAction(/close tab/i);
@@ -945,18 +957,18 @@ describe('split panes in the app', () => {
       sessionId: 'session-1', turnId: 'turn-1',
     }));
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[tabId])
-      .toEqual({ kind: 'running', label: 'Hermes · Running' }));
+      .toMatchObject({ kind: 'running', label: 'Hermes · Running · 1 busy', busyCount: 1 }));
 
     act(() => rendererMocks.terminalExitHandler!({ id: termId, exitCode: 17, signal: 0 }));
 
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[tabId])
-      .toEqual({ kind: 'exited', label: 'Exited' }));
+      .toMatchObject({ kind: 'exited', label: 'Exited' }));
     expect(screen.getByText('Exited')).toHaveClass('leaf-awareness', 'exited');
     expect(channel).toHaveTextContent('Terminal · Terminal — Local terminal pane · Exited');
   });
 
   it('announces an actionable terminal status once through one polite channel', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       session: {
         tabs: [{
@@ -965,7 +977,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'project-tab',
       },
-    });
+    }));
     render(<App />);
     const terminal = await screen.findByTestId(/terminal-/);
     const emit = rendererMocks.agentEventHandlers.get(terminal.dataset.terminalId!)!;
@@ -982,7 +994,7 @@ describe('split panes in the app', () => {
       version: 1, provider: 'hermes', event: 'session.start', sessionId: 'session-1',
     }));
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[tabId])
-      .toEqual({ kind: 'ready', label: 'Hermes · Ready' }));
+      .toMatchObject({ kind: 'ready', label: 'Hermes · Ready' }));
     expect(channel).toBeEmptyDOMElement();
 
     act(() => emit({
@@ -990,7 +1002,7 @@ describe('split panes in the app', () => {
       sessionId: 'session-1', turnId: 'turn-1',
     }));
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[tabId])
-      .toEqual({ kind: 'running', label: 'Hermes · Running' }));
+      .toMatchObject({ kind: 'running', label: 'Hermes · Running · 1 busy', busyCount: 1 }));
     expect(channel).toBeEmptyDOMElement();
 
     act(() => emit({
@@ -1027,7 +1039,7 @@ describe('split panes in the app', () => {
   });
 
   it('disambiguates duplicate pane labels without exposing terminal IDs', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       session: {
         tabs: [{
@@ -1042,7 +1054,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'project-tab',
       },
-    });
+    }));
     render(<App />);
     const terminals = await screen.findAllByTestId(/terminal-/);
     const secondTerminalId = terminals[1].dataset.terminalId!;
@@ -1066,7 +1078,7 @@ describe('split panes in the app', () => {
     const firstTabId = rendererMocks.verticalTabBarProps.tabs[0].id;
     const channel = screen.getByRole('status', { name: 'Terminal status announcements' });
 
-    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
 
     const emit = rendererMocks.agentEventHandlers.get(firstTerminalId)!;
@@ -1082,7 +1094,7 @@ describe('split panes in the app', () => {
     });
 
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[firstTabId])
-      .toEqual({ kind: 'finished', label: 'Hermes · Turn finished' }));
+      .toMatchObject({ kind: 'finished', label: 'Hermes · Turn finished · 1 unread', unseenCount: 1 }));
     expect(channel).toHaveTextContent('Hermes · Turn finished');
 
     act(() => {
@@ -1128,7 +1140,7 @@ describe('split panes in the app', () => {
 
     act(() => rendererMocks.verticalTabBarProps.onSelectTab(firstTabId));
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[firstTabId])
-      .toEqual({ kind: 'ready', label: 'Hermes · Ready' }));
+      .toMatchObject({ kind: 'ready', label: 'Hermes · Ready' }));
     expect(screen.getByText('Hermes · Ready')).toHaveClass('leaf-awareness', 'ready');
     expect(channel).toBeEmptyDOMElement();
   });
@@ -1140,7 +1152,7 @@ describe('split panes in the app', () => {
     const oldTabId = rendererMocks.verticalTabBarProps.tabs[0].id;
     const channel = screen.getByRole('status', { name: 'Terminal status announcements' });
 
-    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
     act(() => rendererMocks.verticalTabBarProps.onCloseTab(oldTabId));
     await confirmPendingAction(/close tab/i);
@@ -1155,10 +1167,10 @@ describe('split panes in the app', () => {
 
   it('opens snippets with the configured shortcut and routes pasted content to the focused terminal', async () => {
     const pasted = vi.fn();
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: { 'palette-toggle': 'Ctrl+K', 'snippets-toggle': 'Ctrl+Shift+P' }, workspaceTabs: [],
       notificationsEnabled: false, notificationThresholdSeconds: 10,
-    });
+    }));
     window.addEventListener('janet:terminal-paste-request', pasted);
     try {
       render(<App />);
@@ -1234,7 +1246,7 @@ describe('split panes in the app', () => {
     const pendingId = screen.getAllByTestId(/terminal-/)[1].dataset.terminalId!;
     expect(readyTermIds).not.toContain(pendingId);
 
-    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal tab)/i })[1]);
+    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal)/i })[1]);
     await confirmPendingAction(/^close pane$/i);
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
     await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -1330,7 +1342,7 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
 
     // Close the second pane
-    const closeButtons = screen.getAllByRole('button', { name: /close (?:pane|terminal tab)/i });
+    const closeButtons = screen.getAllByRole('button', { name: /close (?:pane|terminal)/i });
     fireEvent.click(closeButtons[1]);
     expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
     await confirmPendingAction(/^close pane$/i);
@@ -1446,7 +1458,7 @@ describe('split panes in the app', () => {
     render(<App />);
 
     const firstTerminalTestId = (await screen.findByTestId(/terminal-/)).getAttribute('data-testid')!;
-    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
     const [firstTab, secondTab] = rendererMocks.verticalTabBarProps.tabs;
     expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(secondTab.id);
@@ -1461,10 +1473,10 @@ describe('split panes in the app', () => {
   });
 
   it('opens settings and resets the terminal text size from their shortcuts', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [], fontSize: 18,
       notificationsEnabled: false, notificationThresholdSeconds: 10,
-    });
+    }));
     render(<App />);
     await waitFor(() => expect(window.janet.setSettings).toHaveBeenCalledWith({
       keybindings: expect.objectContaining({
@@ -1500,6 +1512,22 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument());
   });
 
+  it('shows failed automatic workspace persistence and retries the current state', async () => {
+    let failSessionSave = true;
+    vi.mocked(window.janet.setSettings).mockImplementation(async (update) => {
+      if (update.session && failSessionSave) throw new Error('Disk unavailable');
+    });
+    render(<App />);
+    const retry = await screen.findByRole('button', { name: 'Retry workspace save' }, { timeout: 2_000 });
+    expect(screen.getByRole('alert')).toHaveTextContent('Workspace changes could not be saved');
+    failSessionSave = false;
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry workspace save' })).not.toBeInTheDocument());
+    expect(window.janet.setSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      session: expect.objectContaining({ groups: [{ id: 'library', name: 'Test library', kind: 'folder', directory: '/home/test' }] }),
+    }));
+  });
+
   it('exposes unassigned optional actions in the palette', async () => {
     render(<App />);
     await screen.findByTestId(/terminal-/);
@@ -1520,7 +1548,7 @@ describe('split panes in the app', () => {
     ])));
   });
 
-  it('discovers core workflows and saves the current workspace from the palette', async () => {
+  it('discovers core workflows and opens workspace creation from the palette', async () => {
     render(<App />);
     await screen.findByTestId(/terminal-/);
 
@@ -1529,98 +1557,45 @@ describe('split panes in the app', () => {
       expect.objectContaining({ id: 'sidebar-ssh', keywords: ['connect', 'remote'] }),
       expect.objectContaining({ id: 'settings-toggle', keywords: ['preferences'] }),
       expect.objectContaining({
-        id: 'save-workspace',
-        label: 'Save current workspace',
-        keywords: ['preset', 'layout'],
+        id: 'new-workspace',
+        label: 'New workspace or project',
+        keywords: ['group', 'layout'],
       }),
     ])));
 
-    const activeTab = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { id: string }) => tab.id === rendererMocks.verticalTabBarProps.activeTabId,
-    );
-    vi.mocked(window.janet.setSettings).mockClear();
-    act(() => rendererMocks.paletteActions.find((action) => action.id === 'save-workspace')!.handler());
-
-    await waitFor(() => expect(window.janet.setSettings).toHaveBeenCalledWith({
-      workspaceTabs: [expect.objectContaining({
-        name: activeTab.title,
-        terminalCount: 1,
-      })],
-    }));
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-workspace')!.handler());
+    expect(rendererMocks.verticalTabBarProps.creatorOpen).toBe(true);
+    expect(rendererMocks.paletteActions.some((action) => action.id === 'save-workspace')).toBe(false);
   });
 
-  it('keeps the starter terminal and shows bounded fresh-profile entry actions', async () => {
+  it('starts a fresh profile empty and offers workspace creation', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] });
     render(<App />);
-
-    expect(await screen.findByTestId(/terminal-/)).toBeInTheDocument();
-    const entry = await screen.findByRole('region', { name: 'Get started' });
-
-    expect(within(entry).getByText(
-      'Projects open in their own tabs; workspace tools follow the active pane.',
-    )).toBeInTheDocument();
-    expect(within(entry).getByRole('button', { name: 'Open project' })).toBeInTheDocument();
-    expect(within(entry).getByRole('button', { name: 'Add SSH' })).toBeInTheDocument();
-    expect(within(entry).getByRole('button', { name: 'Save workspace' })).toBeInTheDocument();
-    fireEvent.click(within(entry).getByRole('button', { name: 'Dismiss get started' }));
-    expect(screen.queryByRole('region', { name: 'Get started' })).not.toBeInTheDocument();
-    expect(screen.getByTestId(/terminal-/)).toBeInTheDocument();
+    const entry = await screen.findByRole('region', { name: 'Create your first workspace' });
+    expect(screen.queryAllByTestId(/terminal-/)).toHaveLength(0);
+    expect(window.janet.terminalCreate).not.toHaveBeenCalled();
+    fireEvent.click(within(entry).getByRole('button', { name: 'Create workspace' }));
+    expect(rendererMocks.verticalTabBarProps.entryRequest).toEqual({ action: 'create', groupId: undefined });
   });
 
-  it('opens a selected project in a new local tab while chooser cancellation is inert', async () => {
-    vi.mocked(window.janet.selectLocalDirectory)
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce('C:\\work\\sample-project');
+  it('routes linking a Library folder independently of workspace creation', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] });
     render(<App />);
-
-    const entry = await screen.findByRole('region', { name: 'Get started' });
-    const openProject = within(entry).getByRole('button', { name: 'Open project' });
-    await screen.findByTestId(/terminal-/);
-    const starterTab = rendererMocks.verticalTabBarProps.tabs[0];
-    vi.mocked(window.janet.terminalDestroy).mockClear();
-
-    fireEvent.click(openProject);
-    await waitFor(() => expect(window.janet.selectLocalDirectory).toHaveBeenCalledTimes(1));
-    expect(rendererMocks.verticalTabBarProps.tabs).toEqual([starterTab]);
-
-    fireEvent.click(openProject);
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
-    const openedTab = rendererMocks.verticalTabBarProps.tabs[1];
-    expect(openedTab).toMatchObject({
-      title: 'sample-project',
-      type: 'local',
-      cwd: 'C:\\work\\sample-project',
-    });
-    expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(openedTab.id);
-    expect(window.janet.selectLocalDirectory).toHaveBeenNthCalledWith(1);
-    expect(window.janet.selectLocalDirectory).toHaveBeenNthCalledWith(2);
-    expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Link folder to Library' }));
+    expect(rendererMocks.verticalTabBarProps.entryRequest).toEqual({ action: 'link' });
+    expect(window.janet.terminalCreate).not.toHaveBeenCalled();
   });
 
-  it('routes fresh-profile SSH and workspace actions through their existing owners', async () => {
+  it('routes an empty Library entry to a new session in that entry', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({ session: { tabs: [], activeTabId: null } }));
     render(<App />);
-
-    const entry = await screen.findByRole('region', { name: 'Get started' });
-    expect(rendererMocks.verticalTabBarProps.sshConnectionsOpen).toBe(false);
-    fireEvent.click(within(entry).getByRole('button', { name: 'Add SSH' }));
-    await waitFor(() => {
-      expect(rendererMocks.verticalTabBarProps.sshConnectionsOpen).toBe(true);
-    });
-
-    const activeTab = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { id: string }) => tab.id === rendererMocks.verticalTabBarProps.activeTabId,
-    );
-    vi.mocked(window.janet.setSettings).mockClear();
-    fireEvent.click(within(entry).getByRole('button', { name: 'Save workspace' }));
-    await waitFor(() => expect(window.janet.setSettings).toHaveBeenCalledWith({
-      workspaceTabs: [expect.objectContaining({
-        name: activeTab.title,
-        terminalCount: 1,
-      })],
-    }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start session' }));
+    expect(rendererMocks.verticalTabBarProps.entryRequest).toEqual({ action: 'create', groupId: 'library' });
+    expect(window.janet.terminalCreate).not.toHaveBeenCalled();
   });
 
   it('does not show first exposure when the original session restores a valid workspace', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       session: {
         tabs: [{
@@ -1629,7 +1604,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'restored',
       },
-    });
+    }));
 
     render(<App />);
     expect(await screen.findByText('Restored pane')).toBeInTheDocument();
@@ -1637,7 +1612,7 @@ describe('split panes in the app', () => {
   });
 
   it('moves the active pane by keyboard and pointer without replacing its terminal', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: { 'move-pane-right': 'Alt+ArrowRight' }, workspaceTabs: [],
       session: {
         tabs: [{
@@ -1649,7 +1624,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'move-tab',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
@@ -1726,7 +1701,7 @@ describe('split panes in the app', () => {
     await waitFor(() => {
       expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
     });
-    await waitFor(() => expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus());
+    await waitFor(() => expect(screen.queryAllByTestId(/terminal-/)).toHaveLength(0));
   });
 
   it('routes the command-palette close-tab action through confirmation', async () => {
@@ -1746,7 +1721,7 @@ describe('split panes in the app', () => {
     await confirmPendingAction(/^close tab$/i);
     await waitFor(() => {
       expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
-      expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus();
+      expect(screen.queryAllByTestId(/terminal-/)).toHaveLength(0);
     });
   });
 
@@ -1899,7 +1874,7 @@ describe('split panes in the app', () => {
   });
 
   it('migrates a previously open SSH sidebar into the Tabs connection view', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [],
       session: {
@@ -1908,7 +1883,7 @@ describe('split panes in the app', () => {
         tabsOpen: false,
         sidebarSection: 'ssh',
       },
-    });
+    }));
 
     render(<App />);
 
@@ -1921,7 +1896,7 @@ describe('split panes in the app', () => {
   });
 
   it('migrates a previously open Settings sidebar into the titlebar popover', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [],
       session: {
@@ -1930,7 +1905,7 @@ describe('split panes in the app', () => {
         tabsOpen: true,
         sidebarSection: 'settings',
       },
-    });
+    }));
 
     render(<App />);
 
@@ -1963,7 +1938,7 @@ describe('split panes in the app', () => {
     await confirmPendingAction(/^use defaults$/i);
     expect(window.janet.resetSettings).toHaveBeenCalledOnce();
     expect(await screen.findByTestId('titlebar')).toBeInTheDocument();
-    await waitFor(() => expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus());
+    await waitFor(() => expect(screen.queryAllByTestId(/terminal-/)).toHaveLength(0));
   });
 
   it('restores a validated previous settings generation from startup recovery', async () => {
@@ -2011,7 +1986,7 @@ describe('split panes in the app', () => {
   });
 
   it('restores selected and maximized panes from structural paths without saving runtime ids', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [],
       session: {
@@ -2040,7 +2015,7 @@ describe('split panes in the app', () => {
         tabsOpen: true,
         sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
 
@@ -2072,7 +2047,7 @@ describe('split panes in the app', () => {
   });
 
   it('restores a selected pane without maximizing the layout', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       session: {
         tabs: [{
@@ -2084,7 +2059,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'selected-tab',
       },
-    });
+    }));
 
     render(<App />);
 
@@ -2154,7 +2129,7 @@ describe('split panes in the app', () => {
       expect(screen.getByRole('button', { name: /restore pane layout/i })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal)/i }));
     await confirmPendingAction(/^close pane$/i);
 
     await waitFor(() => {
@@ -2296,7 +2271,7 @@ describe('split panes in the app', () => {
   });
 
   it('does not auto-open saved workspace presets at startup', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [{
         id: 'workspace-tab-1',
@@ -2306,7 +2281,7 @@ describe('split panes in the app', () => {
         terminalCount: 1,
         splitDirection: 'vertical',
       }],
-    });
+    }));
 
     render(<App />);
 
@@ -2345,7 +2320,7 @@ describe('split panes in the app', () => {
       terminalCount: 2,
       splitDirection: 'vertical' as const,
     };
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [preset],
       sshProfiles: [{
@@ -2356,7 +2331,7 @@ describe('split panes in the app', () => {
         auth: 'password',
         password: 'secret',
       }],
-    });
+    }));
 
     render(<App />);
 
@@ -2368,7 +2343,7 @@ describe('split panes in the app', () => {
     (window.janet.sshCreateShell as any).mockClear();
 
     await act(async () => {
-      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
     });
 
     await waitFor(() => {
@@ -2398,28 +2373,11 @@ describe('split panes in the app', () => {
     }, { timeout: 1_500 });
 
     const launchedTab = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+      (tab: { title: string }) => tab.title === preset.name,
     );
     expect(launchedTab).toBeTruthy();
-    (window.janet.setSettings as any).mockClear();
-    act(() => rendererMocks.verticalTabBarProps.onSaveWorkspaceTab(launchedTab));
-    expect(window.janet.setSettings).not.toHaveBeenCalled();
-    expect(screen.getByRole('alertdialog', { name: 'Update preset “Forge workspace”?' })).toHaveTextContent(
-      'Replace the saved preset with this tab’s current layout',
-    );
-    await confirmPendingAction(/^update preset$/i);
-    await waitFor(() => {
-      const workspaceUpdates = (window.janet.setSettings as any).mock.calls
-        .map((call: any[]) => call[0])
-        .filter((update: any) => Array.isArray(update?.workspaceTabs));
-      const savedPreset = workspaceUpdates.at(-1)?.workspaceTabs
-        .find((candidate: { id: string }) => candidate.id === preset.id);
-      expect(savedPreset?.root.children[0].startupCommands).toEqual(['npm install', 'npm run dev']);
-      expect(savedPreset?.root.children[1]).toMatchObject({
-        startupCommands: ['hermes doctor', 'hermes -p forge --tui'],
-        startupShellDialect: 'posix',
-      });
-    });
+    expect(launchedTab.groupId).toBe('default');
+    expect(rendererMocks.verticalTabBarProps.onSaveWorkspaceTab).toBeUndefined();
   });
 
   it('launches every terminal from a rootless legacy SSH preset', async () => {
@@ -2432,7 +2390,7 @@ describe('split panes in the app', () => {
       terminalCount: 2,
       splitDirection: 'horizontal' as const,
     };
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [preset],
       sshProfiles: [{
@@ -2443,7 +2401,7 @@ describe('split panes in the app', () => {
         auth: 'password',
         password: 'secret',
       }],
-    });
+    }));
 
     render(<App />);
     await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
@@ -2452,12 +2410,12 @@ describe('split panes in the app', () => {
     const shellCallStart = (window.janet.sshCreateShell as any).mock.calls.length;
 
     await act(async () => {
-      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
     });
 
     await waitFor(() => {
       const launchedTab = rendererMocks.verticalTabBarProps.tabs.find(
-        (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+        (tab: { title: string }) => tab.title === preset.name,
       );
       const sessionIds = launchedTab.root.children.map((leaf: { sshSessionId: string }) => leaf.sshSessionId);
       const connectionIds = (window.janet.sshConnect as any).mock.calls
@@ -2490,21 +2448,21 @@ describe('split panes in the app', () => {
         startupShellDialect: 'posix' as const,
       },
     };
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [preset], sshProfiles: [],
-    });
+    }));
 
     render(<App />);
     await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
     (window.janet.terminalCreate as any).mockClear();
 
     await act(async () => {
-      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
     });
 
     await waitFor(() => {
       const launched = rendererMocks.verticalTabBarProps.tabs.find(
-        (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+        (tab: { title: string }) => tab.title === preset.name,
       );
       expect(launched?.root).toMatchObject({
         terminalType: 'ssh',
@@ -2519,7 +2477,7 @@ describe('split panes in the app', () => {
     expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
     expect(window.janet.terminalCreate).not.toHaveBeenCalled();
     const launched = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+      (tab: { title: string }) => tab.title === preset.name,
     );
     expect(rendererMocks.sshRetryHandlers.get(launched.root.id)).toBeTypeOf('function');
   });
@@ -2540,14 +2498,14 @@ describe('split panes in the app', () => {
         startupShellDialect: 'posix' as const,
       },
     };
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [preset],
       sshProfiles: [{
         id: sshProfileId, host: 'box.local', port: 22, username: 'offline',
         auth: 'password', password: 'secret',
       }],
-    });
+    }));
     (window.janet.sshConnect as any).mockRejectedValueOnce(new Error('offline'));
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -2558,12 +2516,12 @@ describe('split panes in the app', () => {
       (window.janet.terminalCreate as any).mockClear();
 
       await act(async () => {
-        await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+        await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
       });
 
       await waitFor(() => {
         const launched = rendererMocks.verticalTabBarProps.tabs.find(
-          (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+          (tab: { title: string }) => tab.title === preset.name,
         );
         expect(launched?.root).toMatchObject({
           terminalType: 'ssh', sshProfileId,
@@ -2575,7 +2533,7 @@ describe('split panes in the app', () => {
       expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
       expect(window.janet.terminalCreate).not.toHaveBeenCalled();
       const launched = rendererMocks.verticalTabBarProps.tabs.find(
-        (tab: { workspaceId?: string }) => tab.workspaceId === preset.id,
+        (tab: { title: string }) => tab.title === preset.name,
       );
       expect(rendererMocks.sshRetryHandlers.get(launched.root.id)).toBeTypeOf('function');
     } finally {
@@ -2584,7 +2542,7 @@ describe('split panes in the app', () => {
   });
 
   it('restores startup commands with a saved session and reruns them in fresh terminals', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [],
       session: {
@@ -2620,7 +2578,7 @@ describe('split panes in the app', () => {
         tabsOpen: true,
         sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
 
@@ -2643,7 +2601,7 @@ describe('split panes in the app', () => {
   });
 
   it('focuses the first terminal after clicking a terminal tab', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [],
       session: {
@@ -2671,7 +2629,7 @@ describe('split panes in the app', () => {
         tabsOpen: true,
         sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
@@ -2702,7 +2660,7 @@ describe('split panes in the app', () => {
   });
 
   it('focuses an existing worktree terminal without creating another tab', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [],
       session: {
@@ -2715,7 +2673,7 @@ describe('split panes in the app', () => {
         tabsOpen: true,
         sidebarSection: 'git',
       },
-    });
+    }));
     render(<App />);
     await waitFor(() => expect(rendererMocks.sidebarProps.openLocalTerminals).toHaveLength(2));
     expect(within(screen.getByTestId('vertical-tab-bar')).getByText('main')).toBeInTheDocument();
@@ -2735,9 +2693,9 @@ describe('split panes in the app', () => {
   it('describes the terminal and cwd driving workspace tools', async () => {
     render(<App />);
 
-    await waitFor(() => expect(rendererMocks.sidebarProps.followingTarget).toEqual({
-      label: 'Terminal',
-      path: '/home/test',
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource).toMatchObject({
+      kind: 'local',
+      cwd: '/home/test',
     }));
   });
 
@@ -2745,16 +2703,16 @@ describe('split panes in the app', () => {
     const tabs = new Array(64).fill(null).map((_, index) => ({
       id: `saved-${index}`, title: `Saved ${index}`, type: 'local', root: { type: 'leaf' },
     }));
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       session: {
         tabs, activeTabId: tabs[0].id, sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(64));
-    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
 
     expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(64);
   });
@@ -2763,12 +2721,12 @@ describe('split panes in the app', () => {
     const tabs = new Array(64).fill(null).map((_, index) => ({
       id: `saved-${index}`, title: `Saved ${index}`, type: 'local', root: { type: 'leaf' },
     }));
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       session: {
         tabs, activeTabId: tabs[0].id, sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
@@ -2801,7 +2759,7 @@ describe('split panes in the app', () => {
       expect(connectResolved).toBe(true);
       return Promise.resolve({ connected: true });
     });
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [],
       sshProfiles: [profile],
@@ -2824,7 +2782,7 @@ describe('split panes in the app', () => {
         tabsOpen: true,
         sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
 
@@ -2890,7 +2848,7 @@ describe('split panes in the app', () => {
     });
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[
       rendererMocks.verticalTabBarProps.activeTabId
-    ]).toEqual({ kind: 'needs-input', label: 'Hermes · Needs input' }));
+    ]).toMatchObject({ kind: 'needs-input', label: 'Hermes · Needs input' }));
 
     act(() => {
       rendererMocks.verticalTabBarProps.onSSHProfilesChange([{ ...profile, host: 'renamed-box.local' }]);
@@ -2921,7 +2879,7 @@ describe('split panes in the app', () => {
     expect(rendererMocks.verticalTabBarProps.awarenessByTab[
       rendererMocks.verticalTabBarProps.activeTabId
     ])
-      .toEqual({ kind: 'disconnected', label: 'SSH disconnected' });
+      .toMatchObject({ kind: 'disconnected', label: 'SSH disconnected' });
     expect(screen.getByText('SSH disconnected')).toHaveClass('leaf-awareness', 'disconnected');
     expect(screen.getByRole('status', { name: 'Terminal status announcements' }))
       .toHaveTextContent('SSH disconnected');
@@ -2970,7 +2928,7 @@ describe('split panes in the app', () => {
       .toHaveAttribute('data-ssh-connection-lost', 'true');
     expect(rendererMocks.verticalTabBarProps.awarenessByTab[
       rendererMocks.verticalTabBarProps.activeTabId
-    ]).toEqual({ kind: 'disconnected', label: 'SSH disconnected' });
+    ]).toMatchObject({ kind: 'disconnected', label: 'SSH disconnected' });
     expect(rendererMocks.verticalTabBarProps.tabs[0]).toMatchObject({
       type: 'ssh',
       sshProfileId,
@@ -2996,7 +2954,7 @@ describe('split panes in the app', () => {
       expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
       expect(rendererMocks.verticalTabBarProps.awarenessByTab[
         rendererMocks.verticalTabBarProps.activeTabId
-      ]).toEqual({ kind: 'ready', label: 'Hermes · Ready' });
+      ]).toMatchObject({ kind: 'ready', label: 'Hermes · Ready' });
     });
     expect(window.janet.sshCreateShell).toHaveBeenLastCalledWith(expect.objectContaining({
       termId: shellArgs.termId,
@@ -3016,7 +2974,7 @@ describe('split panes in the app', () => {
     });
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[
       rendererMocks.verticalTabBarProps.activeTabId
-    ]).toEqual({ kind: 'needs-input', label: 'Hermes · Needs input' }));
+    ]).toMatchObject({ kind: 'needs-input', label: 'Hermes · Needs input' }));
     act(() => {
       rendererMocks.sshConnectionClosedHandler?.({ id: connectArgs.id, reason: 'transport reset' });
     });
@@ -3029,7 +2987,7 @@ describe('split panes in the app', () => {
       expect(window.janet.sshConnect).toHaveBeenCalledTimes(5);
       expect(rendererMocks.verticalTabBarProps.awarenessByTab[
         rendererMocks.verticalTabBarProps.activeTabId
-      ]).toEqual({ kind: 'ready', label: 'Hermes · Ready' });
+      ]).toMatchObject({ kind: 'ready', label: 'Hermes · Ready' });
     });
 
     act(() => {
@@ -3044,7 +3002,7 @@ describe('split panes in the app', () => {
     });
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[
       rendererMocks.verticalTabBarProps.activeTabId
-    ]).toEqual({ kind: 'needs-input', label: 'Hermes · Needs input' }));
+    ]).toMatchObject({ kind: 'needs-input', label: 'Hermes · Needs input' }));
     act(() => {
       rendererMocks.sshConnectionClosedHandler?.({ id: connectArgs.id, reason: 'transport reset' });
     });
@@ -3067,7 +3025,7 @@ describe('split panes in the app', () => {
       expect(window.janet.sshConnect).toHaveBeenCalledTimes(6);
       expect(rendererMocks.verticalTabBarProps.awarenessByTab[
         rendererMocks.verticalTabBarProps.activeTabId
-      ]).toEqual({ kind: 'running', label: 'Hermes · Running' });
+      ]).toMatchObject({ kind: 'running', label: 'Hermes · Running · 1 busy', busyCount: 1 });
     });
   });
 
@@ -3075,7 +3033,7 @@ describe('split panes in the app', () => {
     const sshProfileId = 'pckpr@box.local:22:password';
     const initialShell = deferred<{ connected: true }>();
     window.janet.sshCreateShell = vi.fn().mockReturnValue(initialShell.promise);
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [],
       sshProfiles: [{
@@ -3103,7 +3061,7 @@ describe('split panes in the app', () => {
         tabsOpen: true,
         sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
 
@@ -3117,7 +3075,7 @@ describe('split panes in the app', () => {
     });
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[
       rendererMocks.verticalTabBarProps.activeTabId
-    ]).toEqual({ kind: 'ready', label: 'Hermes · Ready' }));
+    ]).toMatchObject({ kind: 'ready', label: 'Hermes · Ready' }));
     act(() => {
       emitAgentEvent({
         version: 1, provider: 'hermes', event: 'attention.request',
@@ -3154,7 +3112,7 @@ describe('split panes in the app', () => {
     const sshProfileId = 'late-initial@box.local:22:password';
     const initialShell = deferred<{ connected: true }>();
     window.janet.sshCreateShell = vi.fn().mockReturnValue(initialShell.promise);
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       sshProfiles: [{
         id: sshProfileId, host: 'box.local', port: 22, username: 'late-initial',
@@ -3167,7 +3125,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'late-initial-shell', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
@@ -3207,7 +3165,7 @@ describe('split panes in the app', () => {
       .mockReturnValueOnce(initialShell.promise)
       .mockRejectedValueOnce(new Error('session not found'))
       .mockReturnValueOnce(replacementShell.promise);
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       sshProfiles: [{
         id: sshProfileId, host: 'box.local', port: 22, username: 'stale-initial',
@@ -3220,7 +3178,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'stale-initial-shell', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
@@ -3271,7 +3229,7 @@ describe('split panes in the app', () => {
       .mockReturnValueOnce(initialShell.promise)
       .mockRejectedValueOnce(new Error('session not found'))
       .mockResolvedValueOnce({ connected: true });
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       sshProfiles: [{
         id: sshProfileId, host: 'box.local', port: 22, username: 'stale-failure',
@@ -3284,7 +3242,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'stale-initial-failure', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
@@ -3321,7 +3279,7 @@ describe('split panes in the app', () => {
     window.janet.sshCreateShell = vi.fn()
       .mockResolvedValueOnce({ connected: true })
       .mockRejectedValueOnce(new Error('initial shell unavailable'));
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       sshProfiles: [{
         id: sshProfileId, host: 'box.local', port: 22, username: 'shared-initial',
@@ -3337,7 +3295,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'shared-initial-shell', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
 
@@ -3353,7 +3311,7 @@ describe('split panes in the app', () => {
     expect(screen.getByTestId(`terminal-${failedLeaf.id}`))
       .toHaveAttribute('data-ssh-connection-lost', 'false');
 
-    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal tab)/i })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal)/i })[0]);
     await confirmPendingAction(/^close pane$/i);
 
     await waitFor(() => {
@@ -3369,7 +3327,7 @@ describe('split panes in the app', () => {
   });
 
   it('preserves a restored SSH tab with a missing profile as unavailable remote state', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [],
       sshProfiles: [],
@@ -3392,7 +3350,7 @@ describe('split panes in the app', () => {
         tabsOpen: true,
         sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
 
@@ -3421,7 +3379,7 @@ describe('split panes in the app', () => {
 
   it('keeps an established SSH tab disconnected when replacement shell creation fails', async () => {
     const sshProfileId = 'retry@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       sshProfiles: [{
         id: sshProfileId, host: 'box.local', port: 22, username: 'retry',
@@ -3437,7 +3395,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'retry-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => {
@@ -3497,7 +3455,7 @@ describe('split panes in the app', () => {
 
   it('does not restore SSH status when a direct retry finishes after its sole owner closes', async () => {
     const sshProfileId = 'late-sole@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       sshProfiles: [{
         id: sshProfileId, host: 'box.local', port: 22, username: 'late-sole',
@@ -3510,7 +3468,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'late-sole-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => {
@@ -3533,7 +3491,7 @@ describe('split panes in the app', () => {
     });
     expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
 
-    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal)/i }));
     await confirmPendingAction(/^close tab$/i);
     await waitFor(() => {
       expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: restored.sshSessionId });
@@ -3549,7 +3507,7 @@ describe('split panes in the app', () => {
 
   it('does not reconnect after closing the sole owner cancels its direct retry', async () => {
     const sshProfileId = 'cancelled-retry@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       sshProfiles: [{
         id: sshProfileId, host: 'box.local', port: 22, username: 'cancelled-retry',
@@ -3562,7 +3520,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'cancelled-retry-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => {
@@ -3583,7 +3541,7 @@ describe('split panes in the app', () => {
     });
     expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
 
-    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal)/i }));
     await confirmPendingAction(/^close tab$/i);
     await waitFor(() => {
       expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: restored.sshSessionId });
@@ -3600,7 +3558,7 @@ describe('split panes in the app', () => {
 
   it('does not restore SSH status when a replacement shell finishes after its sole owner closes', async () => {
     const sshProfileId = 'late-sole-replacement@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       sshProfiles: [{
         id: sshProfileId, host: 'box.local', port: 22, username: 'late-sole-replacement',
@@ -3613,7 +3571,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'late-sole-replacement-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => {
@@ -3638,7 +3596,7 @@ describe('split panes in the app', () => {
     });
     await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(3));
 
-    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal)/i }));
     await confirmPendingAction(/^close tab$/i);
     await waitFor(() => {
       expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: restored.sshSessionId });
@@ -3654,7 +3612,7 @@ describe('split panes in the app', () => {
 
   it('preserves sibling SSH status when a direct retry finishes after its shared pane closes', async () => {
     const sshProfileId = 'late@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       sshProfiles: [{
         id: sshProfileId, host: 'box.local', port: 22, username: 'late',
@@ -3670,7 +3628,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'late-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => {
@@ -3698,7 +3656,7 @@ describe('split panes in the app', () => {
     expect(screen.getByTestId(`terminal-${retainedLeaf.id}`))
       .toHaveAttribute('data-ssh-connection-lost', 'false');
 
-    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal tab)/i })[1]);
+    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal)/i })[1]);
     await confirmPendingAction(/^close pane$/i);
     await waitFor(() => {
       expect(window.janet.sshDestroyShell).toHaveBeenCalledWith({
@@ -3725,7 +3683,7 @@ describe('split panes in the app', () => {
 
   it('preserves sibling SSH status when a replacement shell finishes after its shared pane closes', async () => {
     const sshProfileId = 'late-replacement@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       sshProfiles: [{
         id: sshProfileId, host: 'box.local', port: 22, username: 'late-replacement',
@@ -3741,7 +3699,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'late-replacement-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => {
@@ -3771,7 +3729,7 @@ describe('split panes in the app', () => {
     expect(screen.getByTestId(`terminal-${retainedLeaf.id}`))
       .toHaveAttribute('data-ssh-connection-lost', 'false');
 
-    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal tab)/i })[1]);
+    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal)/i })[1]);
     await confirmPendingAction(/^close pane$/i);
     await waitFor(() => {
       expect(window.janet.sshDestroyShell).toHaveBeenCalledWith({
@@ -3801,7 +3759,7 @@ describe('split panes in the app', () => {
     window.janet.sshCreateShell = vi.fn()
       .mockResolvedValueOnce({ connected: true })
       .mockRejectedValueOnce(new Error('initial shell unavailable'));
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       sshProfiles: [{
         id: sshProfileId, host: 'box.local', port: 22, username: 'late-failure',
@@ -3817,7 +3775,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'late-failure-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => {
@@ -3844,7 +3802,7 @@ describe('split panes in the app', () => {
     });
     expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(3);
 
-    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal tab)/i })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal)/i })[0]);
     await confirmPendingAction(/^close pane$/i);
     await waitFor(() => expect(window.janet.sshDestroyShell).toHaveBeenCalledWith({
       sessionId: restored.sshSessionId,
@@ -3863,7 +3821,7 @@ describe('split panes in the app', () => {
   });
 
   it('preserves only a restored workspace SSH leaf whose profile is missing', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [],
       sshProfiles: [],
@@ -3887,7 +3845,7 @@ describe('split panes in the app', () => {
         tabsOpen: true,
         sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
 
@@ -3917,7 +3875,7 @@ describe('split panes in the app', () => {
 
   it('preserves a restored SSH tab when reconnecting its transport fails', async () => {
     const sshProfileId = 'offline@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       sshProfiles: [{
         id: sshProfileId, host: 'box.local', port: 22, username: 'offline',
@@ -3933,7 +3891,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'offline-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
     (window.janet.sshConnect as any).mockRejectedValueOnce(new Error('host offline'));
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -3978,7 +3936,7 @@ describe('split panes in the app', () => {
 
   it('preserves a restored workspace SSH leaf when reconnecting its transport fails', async () => {
     const sshProfileId = 'mixed-offline@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
       sshProfiles: [{
         id: sshProfileId, host: 'box.local', port: 22, username: 'mixed-offline',
@@ -4000,7 +3958,7 @@ describe('split panes in the app', () => {
         }],
         activeTabId: 'mixed-offline', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
-    });
+    }));
     (window.janet.sshConnect as any).mockRejectedValueOnce(new Error('host offline'));
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -4051,7 +4009,7 @@ describe('split panes in the app', () => {
         ],
       },
     };
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [preset],
       sshProfiles: [{
@@ -4062,13 +4020,13 @@ describe('split panes in the app', () => {
         auth: 'password',
         password: 'secret',
       }],
-    });
+    }));
 
     render(<App />);
 
     await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
     await act(async () => {
-      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset);
+      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
     });
 
     await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
@@ -4134,7 +4092,7 @@ describe('split panes in the app', () => {
     window.janet.sshConnect = vi.fn().mockImplementation(() => new Promise((resolve) => {
       resolveConnect = resolve;
     }));
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [],
       sshProfiles: [{
@@ -4158,7 +4116,7 @@ describe('split panes in the app', () => {
         tabsOpen: true,
         sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
     await waitFor(() => {
@@ -4167,7 +4125,7 @@ describe('split panes in the app', () => {
     });
     const sessionId = (window.janet.sshConnect as any).mock.calls[0][0].id as string;
 
-    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal)/i }));
     expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
     await confirmPendingAction(/^close tab$/i);
     await waitFor(() => {
@@ -4188,7 +4146,7 @@ describe('split panes in the app', () => {
 
   it('destroys individual SSH shells, disconnects released sessions, and disposes cached terminals', async () => {
     const sshProfileId = 'test@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue({
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [],
       sshProfiles: [{
@@ -4217,7 +4175,7 @@ describe('split panes in the app', () => {
         tabsOpen: true,
         sidebarSection: 'files',
       },
-    });
+    }));
 
     render(<App />);
 
@@ -4229,7 +4187,7 @@ describe('split panes in the app', () => {
 
     const sessionId = (window.janet.sshConnect as any).mock.calls[0][0].id as string;
     const secondId = screen.getAllByTestId(/terminal-/)[1].textContent!;
-    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal tab)/i })[1]);
+    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal)/i })[1]);
     expect(window.janet.sshDestroyShell).not.toHaveBeenCalled();
     await confirmPendingAction(/^close pane$/i);
 
@@ -4241,7 +4199,7 @@ describe('split panes in the app', () => {
     expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
 
     const remainingId = screen.getByTestId(/terminal-/).textContent!;
-    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal tab)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal)/i }));
     expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
     await confirmPendingAction(/^close tab$/i);
 
@@ -4253,7 +4211,7 @@ describe('split panes in the app', () => {
   });
 
   it('persists the open tabs to settings after a tab change', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] });
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({ keybindings: {}, workspaceTabs: [] }));
     window.janet.setSettings = vi.fn().mockResolvedValue(undefined);
 
     render(<App />);
@@ -4302,12 +4260,12 @@ describe('editor documents in the app', () => {
     'focuses the previous document after closing the active document from the %s',
     async (route) => {
       if (route === 'shortcut') {
-        window.janet.getSettings = vi.fn().mockResolvedValue({
+        window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
           keybindings: { 'close-document': 'Ctrl+Alt+D' },
           workspaceTabs: [],
           notificationsEnabled: false,
           notificationThresholdSeconds: 10,
-        });
+        }));
       }
       render(<App />);
 
@@ -4333,12 +4291,12 @@ describe('editor documents in the app', () => {
     'focuses the next document after closing the first document from the %s',
     async (route) => {
       if (route === 'shortcut') {
-        window.janet.getSettings = vi.fn().mockResolvedValue({
+        window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
           keybindings: { 'close-document': 'Ctrl+Alt+D' },
           workspaceTabs: [],
           notificationsEnabled: false,
           notificationThresholdSeconds: 10,
-        });
+        }));
       }
       render(<App />);
 
@@ -4366,12 +4324,12 @@ describe('editor documents in the app', () => {
     'focuses the terminal after closing the only document from the %s',
     async (route) => {
       if (route === 'shortcut') {
-        window.janet.getSettings = vi.fn().mockResolvedValue({
+        window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
           keybindings: { 'close-document': 'Ctrl+Alt+D' },
           workspaceTabs: [],
           notificationsEnabled: false,
           notificationThresholdSeconds: 10,
-        });
+        }));
       }
       render(<App />);
 
@@ -4394,12 +4352,12 @@ describe('editor documents in the app', () => {
   it.each(["Don't Save", 'Save'] as const)(
     'restores focus after Cancel and focuses the terminal after shortcut %s closes the only dirty document',
     async (closeAction) => {
-      window.janet.getSettings = vi.fn().mockResolvedValue({
+      window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
         keybindings: { 'close-document': 'Ctrl+Alt+D' },
         workspaceTabs: [],
         notificationsEnabled: false,
         notificationThresholdSeconds: 10,
-      });
+      }));
       render(<App />);
 
       const editor = await openSampleEditor();
@@ -4563,7 +4521,7 @@ describe('unsaved editor shutdown handshake', () => {
   it('persists a same-batch active tab selection before close', async () => {
     render(<App />);
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.onNewTab).toBeTypeOf('function'));
-    act(() => rendererMocks.verticalTabBarProps.onNewTab());
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
     const [firstTab, secondTab] = rendererMocks.verticalTabBarProps.tabs;
     act(() => rendererMocks.verticalTabBarProps.onSelectTab(firstTab.id));

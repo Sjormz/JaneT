@@ -45,7 +45,6 @@ function makeProps(overrides: Partial<SidebarProps> = {}): SidebarProps {
       status: null,
       searching: false,
     },
-    followingTarget: { label: 'API', path: '/workspace/janet/src' },
     onOpenLocalTabAt: vi.fn(),
     ...overrides,
   };
@@ -89,10 +88,12 @@ describe('Sidebar workspace tools', () => {
     expect(screen.queryByTestId('git-tree')).toBeNull();
   });
 
-  it('shows which terminal and path the workspace tools follow', () => {
+  it('omits redundant terminal context while retaining the active tool', () => {
     render(<Sidebar {...makeProps()} />);
 
-    expect(screen.getByLabelText('Following API at /workspace/janet/src')).toHaveTextContent('FollowingAPI/workspace/janet/src');
+    expect(screen.queryByText('Following')).not.toBeInTheDocument();
+    expect(screen.queryByText('/workspace/janet')).not.toBeInTheDocument();
+    expect(screen.getByTestId('file-explorer')).toBeInTheDocument();
   });
 
   it.each([

@@ -77,9 +77,8 @@ describe('themes', () => {
     }
   });
 
-  it('keeps the Following label legible on the sidebar surface in every theme', () => {
-    const rule = globalCss.match(/\.workspace-tools-following\s*\{([^}]*)\}/)?.[1];
-    const textToken = rule?.match(/color:\s*var\(--([\w-]+)\)/)?.[1];
+  it('keeps secondary sidebar text legible in every theme', () => {
+    const textToken = 'text-secondary';
     const sidebarSurfaceTokens = [...globalCss.matchAll(/([^{}]+)\{([^{}]*)\}/gs)]
       .filter(([, selectors]) => selectors.split(',').some((selector) => selector.trim() === '.sidebar'))
       .flatMap(([, , declarations]) => (

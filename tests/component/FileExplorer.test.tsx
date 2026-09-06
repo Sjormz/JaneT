@@ -146,6 +146,9 @@ describe('FileExplorer live refresh', () => {
       expect(fsListDir).toHaveBeenCalledWith({ dirPath: '/Users/chris', showHidden: false });
     });
 
+    expect(screen.queryByRole('navigation', { name: 'Folder location' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Browse parent folders' }));
+    expect(screen.getByRole('button', { name: 'Browse parent folders' })).toHaveAttribute('aria-expanded', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Users' }));
 
     await waitFor(() => {
@@ -371,6 +374,7 @@ describe('FileExplorer live refresh', () => {
     await waitFor(() => expect(sshListDir).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'ssh-b', showHidden: false,
     })));
+    fireEvent.click(screen.getByRole('button', { name: 'Browse parent folders' }));
     expect(screen.getByRole('button', { name: 'b' })).toBeInTheDocument();
 
     view.rerender(<FileExplorer source={sshSource('ssh-a', true, 'a.local')} />);

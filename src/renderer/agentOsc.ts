@@ -65,7 +65,13 @@ export function decodeAgentOsc(data: string): AgentOscDecodeResult {
   } catch {
     return { recognized: true };
   }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return { recognized: true };
+  return { recognized: true, event: validateAgentEvent(provider, value) };
+}
+
+/** Shared validation for OSC and the local activity bridge. */
+export function validateAgentEvent(provider: string, value: unknown): AgentLifecycleEvent | undefined {
+  if (!PROVIDER.test(provider)) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
 
   const candidate = value as Record<string, unknown>;
   if (
@@ -75,7 +81,7 @@ export function decodeAgentOsc(data: string): AgentOscDecodeResult {
     || !EVENTS.has(candidate.event as AgentEventName)
     || !boundedId(candidate.sessionId)
     || (candidate.turnId !== undefined && !boundedId(candidate.turnId))
-  ) return { recognized: true };
+  ) return undefined;
 
   const event = candidate.event as AgentEventName;
   const isSessionEvent = event === 'session.start' || event === 'session.end';
@@ -84,17 +90,14 @@ export function decodeAgentOsc(data: string): AgentOscDecodeResult {
     || (!isSessionEvent && !boundedId(candidate.turnId))
     || (event !== 'turn.end' && candidate.outcome !== undefined)
     || (event === 'turn.end' && !OUTCOMES.has(candidate.outcome as TurnOutcome))
-  ) return { recognized: true };
+  ) return undefined;
 
   return {
-    recognized: true,
-    event: {
       version: 1,
       provider,
       event,
       sessionId: candidate.sessionId,
       ...(candidate.turnId ? { turnId: candidate.turnId } : {}),
       ...(event === 'turn.end' ? { outcome: candidate.outcome as TurnOutcome } : {}),
-    },
   };
 }

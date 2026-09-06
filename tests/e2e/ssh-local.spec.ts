@@ -1,3 +1,4 @@
+import { createWorkspace, terminalSettings } from './workspaces';
 import { test, expect, chromium, Browser, Page } from '@playwright/test';
 import { spawn, ChildProcess } from 'child_process';
 import { createHash, generateKeyPairSync } from 'crypto';
@@ -229,7 +230,11 @@ function ignoreBenignSshFixtureError(error: unknown) {
 }
 
 function respondToShellCommand(stream: NodeJS.WritableStream & { exit?: (code: number) => void }, command: string) {
-  const normalized = command.replace(/\r/g, '\n');
+  if (command === '__JANET_ENABLE_STALE_MODES__') {
+    stream.write('__JANET_NORMAL_HISTORY__\x0d\x0a\x1b[?1049h\x1b[?1003h\x1b[?1006h__JANET_STALE_MODES_ENABLED__\x0d\x0a$ ');
+    return;
+  }
+  const normalized = command.replace(/\x0d/g, '\x0a');
   const markerMatches: RegExpExecArray[] = [];
   const markerPattern = /__JANET_([A-Z_]+?)_(START|DONE)__/g;
   let markerMatch: RegExpExecArray | null;
@@ -255,6 +260,7 @@ interface LocalSshServer {
   port: number;
   fingerprint: string;
   receivedCommands: string[];
+  receivedData: string[];
   disconnectClients: () => void;
   close: () => Promise<void>;
   restart: () => Promise<LocalSshServer>;
@@ -277,6 +283,7 @@ async function startLocalSshServer(options: { port?: number; privateKey?: string
   const clients = new Set<{ end: () => void }>();
   const sockets = new Set<net.Socket>();
   const receivedCommands: string[] = [];
+  const receivedData: string[] = [];
   const server = new Server({ hostKeys: [privateKey] }, (client) => {
     clients.add(client);
     client.on('close', () => clients.delete(client));
@@ -310,10 +317,12 @@ async function startLocalSshServer(options: { port?: number; privateKey?: string
         session.on('shell', (acceptShell) => {
           const stream = acceptShell();
           stream.on('error', ignoreBenignSshFixtureError);
-          stream.write('Welcome to JaneT local SSH fixture\r\n$ ');
+          stream.write('Welcome to JaneT local SSH fixture\x0d\x0a$ ');
           let buffer = '';
           stream.on('data', (chunk: Buffer) => {
-            buffer += chunk.toString('utf-8');
+            const data = chunk.toString('utf-8');
+            receivedData.push(data);
+            buffer += data;
             if (!/[\r\n]$/.test(buffer)) return;
             const command = buffer.trim();
             buffer = '';
@@ -344,6 +353,7 @@ async function startLocalSshServer(options: { port?: number; privateKey?: string
     port,
     fingerprint,
     receivedCommands,
+    receivedData,
     disconnectClients: () => {
       for (const client of clients) client.end();
     },
@@ -368,7 +378,7 @@ async function launchAppWithLocalSsh(
   userData: string;
 }> {
   const ownsUserData = !options.userData;
-  const userData = options.userData ?? fs.mkdtempSync(path.join(os.tmpdir(), 'janet-e2e-local-ssh-'));
+  const userData = options.userData ?? fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-e2e-local-ssh-'));
   const eventsPath = path.join(userData, 'events.ndjson');
   const settingsPath = path.join(userData, 'settings.json');
   const remoteDebuggingPort = await getFreePort();
@@ -381,7 +391,7 @@ async function launchAppWithLocalSsh(
     auth: 'password' as const,
   };
 
-  if (ownsUserData) fs.writeFileSync(settingsPath, JSON.stringify({
+  if (ownsUserData) fs.writeFileSync(settingsPath, JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'left',
@@ -415,7 +425,7 @@ async function launchAppWithLocalSsh(
       sidebarOpen: true,
       tabsOpen: true,
       sidebarSection: 'files',
-    } : undefined,
+    } : terminalSettings(userData).session,
   }, null, 2), 'utf-8');
 
   const electronProcess = spawn(electronExecutable, ['.', ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
@@ -456,15 +466,23 @@ async function launchAppWithLocalSsh(
 
 async function closeApp(browser: Browser, electronProcess: ChildProcess, userData?: string) {
   try {
+    // Let JaneT release its PTYs/profile before the forced fallback on Windows.
+    const exited = new Promise<void>((resolve) => {
+      if (!electronProcess.pid || electronProcess.exitCode !== null || electronProcess.signalCode !== null) return resolve();
+      const done = () => { clearTimeout(timer); electronProcess.off('exit', done); resolve(); };
+      const timer = setTimeout(done, 1_500);
+      electronProcess.once('exit', done);
+    });
     for (const context of browser.contexts()) {
       for (const page of context.pages()) {
         void page.evaluate(() => window.close()).catch(() => {});
       }
     }
+    await exited;
     void browser.close().catch(() => {});
   } finally {
     await killProcessTree(electronProcess);
-    if (userData) fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    if (userData) await fs.promises.rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 }
 
@@ -600,6 +618,54 @@ test('restores local SSH terminal after refresh and runs ls again', async () => 
   }
 });
 
+test('resets stale xterm mouse modes before reconnecting a cached SSH terminal', async () => {
+  const ssh = await startLocalSshServer();
+  const app = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
+  let restartedSsh: LocalSshServer | undefined;
+  try {
+    await waitForShellCreateCount(app.eventsPath, 1);
+    const terminal = app.page.locator('.terminal-container').first();
+    const rows = terminal.locator('.xterm-rows');
+    await expect.poll(() => rows.innerText(), { timeout: 20_000 })
+      .toContain('Welcome to JaneT local SSH fixture');
+
+    await terminal.click();
+    await app.page.keyboard.type('__JANET_ENABLE_STALE_MODES__');
+    await app.page.keyboard.press('Enter');
+    await expect.poll(() => rows.innerText(), { timeout: 20_000 })
+      .toContain('__JANET_STALE_MODES_ENABLED__');
+
+    const box = await terminal.boundingBox();
+    if (!box) throw new Error('SSH terminal has no bounding box');
+    await app.page.mouse.move(box.x + 20, box.y + 20);
+    await app.page.mouse.move(box.x + 40, box.y + 40, { steps: 2 });
+    await expect.poll(() => ssh.receivedData.join(''), { timeout: 5_000 })
+      .toContain('\x1b[<');
+
+    ssh.disconnectClients();
+    await ssh.close();
+    await expect(app.page.getByText('Connection closed')).toBeVisible({ timeout: 20_000 });
+    restartedSsh = await ssh.restart();
+    await app.page.getByRole('button', { name: 'Reconnect' }).click();
+    await expect(terminal.getByTestId('ssh-terminal-notice')).toHaveCount(0, { timeout: 20_000 });
+    await expect.poll(() => rows.innerText(), { timeout: 20_000 })
+      .toContain('__JANET_NORMAL_HISTORY__');
+    await expect(rows).not.toContainText('__JANET_STALE_MODES_ENABLED__');
+
+    await app.page.mouse.move(box.x + 60, box.y + 60);
+    await app.page.mouse.move(box.x + 80, box.y + 80, { steps: 2 });
+    await app.page.waitForTimeout(250);
+    expect(restartedSsh.receivedData.join('')).not.toContain('\x1b[<');
+    await runMarkedLs(app.page, 'AFTER_MODE_RESET');
+  } finally {
+    await closeApp(app.browser, app.electronProcess, app.userData);
+    restartedSsh?.disconnectClients();
+    await restartedSsh?.close().catch(() => {});
+    ssh.disconnectClients();
+    await ssh.close().catch(() => {});
+  }
+});
+
 test('preserves SSH identity after a failed second-process restore and reconnects explicitly', async () => {
   const ssh = await startLocalSshServer();
   const first = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint);
@@ -633,7 +699,7 @@ test('preserves SSH identity after a failed second-process restore and reconnect
   }
 });
 
-test('reruns startup commands when restoring a saved SSH preset terminal', async () => {
+test('reruns startup commands when restoring a SSH workspace terminal', async () => {
   const ssh = await startLocalSshServer();
   const { browser, electronProcess, page, eventsPath, settingsPath, userData } = await launchAppWithLocalSsh(
     ssh.port,
@@ -641,9 +707,7 @@ test('reruns startup commands when restoring a saved SSH preset terminal', async
     { seedSession: false, seedStartupPreset: true },
   );
   try {
-    const presetsButton = page.getByRole('button', { name: 'Presets' });
-    if (await presetsButton.getAttribute('aria-expanded') !== 'true') await presetsButton.click();
-    await page.getByRole('button', { name: 'Open preset Remote startup' }).click();
+    await createWorkspace(page, 'Remote startup', [{ sshLabel: `${testUsername}@127.0.0.1:${ssh.port}`, commands: ['printf __JANET_REMOTE_ONE__', 'printf __JANET_REMOTE_TWO__'] }], 'Remote work');
 
     const expectedExpression = "eval 'printf __JANET_REMOTE_ONE__' && eval 'printf __JANET_REMOTE_TWO__'";
     await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 }).toEqual([expectedExpression]);
@@ -654,10 +718,11 @@ test('reruns startup commands when restoring a saved SSH preset terminal', async
       const session = readSettings(settingsPath).session;
       const savedTab = session?.tabs?.find((tab: Record<string, any>) => tab.title === 'Remote startup');
       if (!savedTab) return null;
+      const root = savedTab.root?.type === 'split' ? savedTab.root.children[0] : savedTab.root;
       return {
-        terminalType: savedTab.root?.terminalType,
-        startupCommands: savedTab.root?.startupCommands,
-        startupShellDialect: savedTab.root?.startupShellDialect,
+        terminalType: root?.terminalType,
+        startupCommands: root?.startupCommands,
+        startupShellDialect: root?.startupShellDialect,
       };
     }, { timeout: 10_000 }).toEqual({
       terminalType: 'ssh',
@@ -669,12 +734,8 @@ test('reruns startup commands when restoring a saved SSH preset terminal', async
     await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 })
       .toEqual([expectedExpression, expectedExpression]);
 
-    // An explicit second preset launch creates a new pane and runs it again.
-    const reloadedPresetsButton = page.getByRole('button', { name: 'Presets' });
-    if (await reloadedPresetsButton.getAttribute('aria-expanded') !== 'true') {
-      await reloadedPresetsButton.click();
-    }
-    await page.getByRole('button', { name: 'Open preset Remote startup' }).click();
+    // An explicit second workspace creation creates a new pane and runs it again.
+    await createWorkspace(page, 'Remote startup second', [{ sshLabel: `${testUsername}@127.0.0.1:${ssh.port}`, commands: ['printf __JANET_REMOTE_ONE__', 'printf __JANET_REMOTE_TWO__'] }]);
     await expect.poll(() => ssh.receivedCommands, { timeout: 20_000 })
       .toEqual([expectedExpression, expectedExpression, expectedExpression]);
   } finally {
@@ -691,15 +752,14 @@ test('opens saved local SSH profile, persists profile id, refreshes, and runs ls
     { seedSession: false },
   );
   try {
-    await page.getByRole('button', { name: 'SSH connections', exact: true }).click();
-    await page.getByRole('button', { name: new RegExp(`connect to janet@127\\.0\\.0\\.1:${ssh.port}`, 'i') }).click();
+    await createWorkspace(page, 'Remote project', [{ sshLabel: `${testUsername}@127.0.0.1:${ssh.port}` }], 'Remote work');
 
     await waitForShellCreateCount(eventsPath, 1);
     await runMarkedLs(page, 'OPENED_PROFILE');
 
     await expect.poll(() => {
       const session = readSettings(settingsPath).session;
-      return session?.tabs?.find((tab: any) => tab.type === 'ssh')?.sshProfileId;
+      return session?.tabs?.find((tab: any) => tab.title === 'Remote project')?.root?.children?.[0]?.sshProfileId;
     }, { timeout: 5_000 }).toBe(`janet@127.0.0.1:${ssh.port}:password`);
 
     await page.reload({ waitUntil: 'domcontentloaded' });
@@ -715,7 +775,7 @@ test('opens saved local SSH profile, persists profile id, refreshes, and runs ls
 test('restores a mutated mixed workspace in a genuine second Electron process', async () => {
   test.setTimeout(90_000);
   const ssh = await startLocalSshServer();
-  const localWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-resume-workspace-'));
+  const localWorkspace = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-resume-workspace-'));
   const normalizedWorkspace = localWorkspace.replace(/\\/g, '/');
   const profileId = `janet@127.0.0.1:${ssh.port}:password`;
   let first: Awaited<ReturnType<typeof launchAppWithLocalSsh>> | undefined;
@@ -730,7 +790,6 @@ test('restores a mutated mixed workspace in a genuine second Electron process', 
     await expect(firstLocalTerminal).toBeVisible({ timeout: 15_000 });
     await expect(firstLocalTerminal.locator('.xterm-helper-textarea'))
       .toHaveAttribute('data-shell-ready', 'true', { timeout: 15_000 });
-    await firstPage.getByRole('button', { name: 'Dismiss get started' }).click();
     await firstLocalTerminal.locator('.xterm-helper-textarea').focus();
 
     const firstLocalMarker = '__JANET_RESUME_LOCAL_ONE__';
@@ -764,10 +823,7 @@ test('restores a mutated mixed workspace in a genuine second Electron process', 
     await paneName.fill('Build');
     await paneName.press('Enter');
 
-    await firstPage.getByRole('button', { name: 'SSH connections' }).click();
-    await firstPage.getByRole('button', {
-      name: new RegExp(`connect to janet@127\\.0\\.0\\.1:${ssh.port}`, 'i'),
-    }).click();
+    await createWorkspace(firstPage, 'Remote connection', [{ sshLabel: `${testUsername}@127.0.0.1:${ssh.port}` }], 'Remote work');
     await waitForShellCreateCount(first.eventsPath, 1);
     await runMarkedLs(firstPage, 'RESUME_REMOTE_ONE');
 
@@ -791,24 +847,26 @@ test('restores a mutated mixed workspace in a genuine second Electron process', 
     await expect.poll(() => {
       const session = readSettings(first!.settingsPath).session;
       const localTab = session?.tabs?.find((tab: Record<string, any>) => tab.title === 'Project');
-      const sshTab = session?.tabs?.find((tab: Record<string, any>) => tab.type === 'ssh');
+      const sshTab = session?.tabs?.find((tab: Record<string, any>) => tab.title === 'Remote connection');
       return {
-        tabTypes: session?.tabs?.map((tab: Record<string, any>) => tab.type).sort(),
+        tabTitles: session?.tabs?.map((tab: Record<string, any>) => tab.title).sort(),
         activeTitle: session?.tabs?.find((tab: Record<string, any>) => tab.id === session.activeTabId)?.title,
         paneTitles: localTab?.root?.children?.map((leaf: Record<string, any>) => leaf.title),
         localCwd: localTab?.root?.children?.[0]?.cwd,
         selectedPanePath: localTab?.selectedPanePath,
         maximizedPanePath: localTab?.maximizedPanePath,
-        sshProfileId: sshTab?.sshProfileId,
+        sshProfileId: sshTab?.root?.children?.[0]?.sshProfileId,
+        sshTerminalType: sshTab?.root?.children?.[0]?.terminalType,
       };
     }, { timeout: 15_000 }).toEqual({
-      tabTypes: ['local', 'ssh'],
+      tabTitles: ['Project', 'Remote connection'],
       activeTitle: 'Project',
-      paneTitles: ['terminal', 'Build'],
+      paneTitles: [undefined, 'Build'],
       localCwd: normalizedWorkspace,
       selectedPanePath: [1],
       maximizedPanePath: [1],
       sshProfileId: profileId,
+      sshTerminalType: 'ssh',
     });
     const firstSavedSettings = fs.readFileSync(first.settingsPath, 'utf-8');
     for (const terminalId of firstLocalIds) expect(firstSavedSettings).not.toContain(terminalId as string);
@@ -838,7 +896,7 @@ test('restores a mutated mixed workspace in a genuine second Electron process', 
     second = await launchAppWithLocalSsh(ssh.port, ssh.fingerprint, { userData });
     const secondPage = second.page;
     await expect(secondPage.locator('.vtab-item').filter({ hasText: 'Project' })).toBeVisible();
-    await expect(secondPage.locator('.vtab-item.ssh')).toHaveCount(1);
+    await expect(secondPage.locator('.vtab-item').filter({ hasText: 'Remote connection' })).toHaveCount(1);
     const restoredBuildPane = secondPage.locator('.terminal-leaf').filter({
       has: secondPage.locator('.leaf-title', { hasText: 'Build' }),
     });
@@ -873,12 +931,12 @@ test('restores a mutated mixed workspace in a genuine second Electron process', 
       { timeout: 15_000 },
     ).toContain(secondLocalMarker);
 
-    await secondPage.locator('.vtab-item.ssh').click();
+    await secondPage.locator('.vtab-item').filter({ hasText: 'Remote connection' }).click();
     await waitForShellCreateCount(second.eventsPath, 2);
     await runMarkedLs(secondPage, 'RESUME_REMOTE_TWO');
     const restoredSettings = readSettings(second.settingsPath);
-    expect(restoredSettings.session.tabs.find((tab: Record<string, any>) => tab.type === 'ssh'))
-      .toMatchObject({ sshProfileId: profileId });
+    expect(restoredSettings.session.tabs.find((tab: Record<string, any>) => tab.title === 'Remote connection')?.root?.children?.[0])
+      .toMatchObject({ terminalType: 'ssh', sshProfileId: profileId });
   } finally {
     if (second) await closeApp(second.browser, second.electronProcess, userData);
     else if (first) await closeApp(first.browser, first.electronProcess, userData);

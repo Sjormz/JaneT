@@ -71,7 +71,7 @@ function validatedEntry(value: unknown): CommandHistoryEntry | null {
     || entry.command.length > MAX_COMMAND_HISTORY_COMMAND_LENGTH
     || !isSafeNonnegativeInteger(entry.startedAt)
     || !isSafeNonnegativeInteger(entry.durationMs)
-    || (entry.exitCode !== undefined && !isSafeNonnegativeInteger(entry.exitCode))
+    || (entry.exitCode !== undefined && !Number.isSafeInteger(entry.exitCode))
     || !context) return null;
   try {
     structuredClone(value);
@@ -81,7 +81,7 @@ function validatedEntry(value: unknown): CommandHistoryEntry | null {
   return {
     id: entry.id, command: entry.command, startedAt: entry.startedAt,
     durationMs: entry.durationMs,
-    ...(entry.exitCode === undefined ? {} : { exitCode: entry.exitCode }), context,
+    ...(entry.exitCode === undefined ? {} : { exitCode: entry.exitCode as number }), context,
   };
 }
 

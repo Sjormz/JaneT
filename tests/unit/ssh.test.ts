@@ -1880,6 +1880,47 @@ describe('SSHManager', () => {
     ]);
   });
 
+  it('drops revoked shell output after reconnecting the same terminal id', async () => {
+    const streams: MockShellStream[] = [];
+    mocks.shellMock.mockImplementation((_opts: unknown, cb: (error: Error | undefined, channel?: MockShellStream) => void) => {
+      const stream = new MockShellStream();
+      streams.push(stream);
+      cb(undefined, stream);
+    });
+    mocks.connectMock.mockImplementation(() => queueMicrotask(() => mocks.lastClient?.emit('ready')));
+
+    const { SSHManager } = await loadSSHManager();
+    const manager = new SSHManager();
+    await manager.connect('revoked-output-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const handle = manager.createShell(
+      'revoked-output-session',
+      'revoked-output-term',
+      { cols: 80, rows: 24 },
+    );
+    const received: string[] = [];
+    handle.onData((data) => received.push(data));
+    await handle.ready;
+    streams[0].emit('data', Buffer.from('before close'));
+
+    mocks.lastClient?.emit('error', new Error('transport reset'));
+    await manager.connect('revoked-output-session', {
+      host: 'example.com', port: 22, username: 'alice', auth: 'password',
+    });
+    const replacement = manager.createShell(
+      'revoked-output-session',
+      'revoked-output-term',
+      { cols: 80, rows: 24 },
+    );
+    replacement.onData((data) => received.push(data));
+    await replacement.ready;
+    streams[0].emit('data', Buffer.from('\x1b[?1003h'));
+    streams[1].emit('data', Buffer.from('replacement prompt'));
+
+    expect(received).toEqual(['before close', 'replacement prompt']);
+  });
+
   it('decodes UTF-8 incrementally when a code point spans SSH data chunks', async () => {
     let stream: MockShellStream | undefined;
     mocks.shellMock.mockImplementation((_opts: unknown, cb: (err: Error | undefined, channel?: MockShellStream) => void) => {

@@ -18,6 +18,12 @@ npm install
 npm run dev
 ```
 
+Renderer edits hot-reload. Main/preload edits rebuild, but do not restart Electron automatically: close the dev window and rerun `npm run dev` when your terminals and editors are safe to close. The launcher prints the checkout and renderer URL, and refuses to reuse an already-running server. Set `JANET_DEV_SERVER_URL` to another local port if needed.
+
+The Hermes integration test needs Python 3. If it is not on PATH, set `JANET_TEST_PYTHON` to the Python executable (an absolute path is supported). CI provisions Python explicitly. PowerShell tests use the system module path rather than inheriting another application's PSReadLine.
+
+To check the actual installed `hermes --tui` copy gesture on Windows, build JaneT, set `JANET_TEST_HERMES=1` in the test process environment, and run `npx playwright test tests/e2e/hermes-copy.spec.ts --repeat-each=3`. Hermes must already be installed and on PATH. This opt-in check uses temporary JaneT/Hermes profiles, no conversation prompts, and tests ordinary drag then Ctrl+Shift+C before and after a resize redraw. The regular terminal-copy suite also covers redraw retention without requiring Hermes.
+
 ## Validation
 
 Before opening a pull request, run:
@@ -30,6 +36,8 @@ npm run test:e2e
 ```
 
 If you change Electron main-process code, preload code, or release behavior, make sure the build still succeeds after your changes.
+
+To record local performance baselines after building, run `npx playwright test tests/e2e/performance-baseline.spec.ts tests/e2e/editor.spec.ts --repeat-each=3`. Attachments record launch/editor timings, terminal input during sustained output, and working-set memory across five pane open/close cycles. Compare medians on the same machine; these are measurements, not a cross-machine performance guarantee. All-theme checks live in `tests/e2e/final-visual-matrix.spec.ts`.
 
 ## Pull request expectations
 

@@ -29,10 +29,10 @@ JaneT is for work that starts in a shell and quickly spreads across more shells,
 
 - **Local and SSH terminals:** Run local shells or connect to remote machines with password or private-key authentication.
 - **Tabs and split panes:** Build resizable layouts, maximize a pane when it needs your full attention, and mix local and SSH terminals in the same workspace.
-- **Reusable presets:** Save a live pane layout, working directories, SSH profiles, and ordered startup commands. Open the whole setup again in one step.
+- **Grouped workspaces:** Organize live workspaces under collapsible parent groups. Create a workspace with an initial terminal count and configure each pane as local or SSH.
 - **Files and editing:** Browse the focused terminal's local directory or a remote machine over SFTP, then open supported text files in the built-in Monaco editor.
 - **Everyday Git tools:** Stage, unstage, commit, fetch, pull, push, switch branches, manage worktrees, and safely discard tracked unstaged changes.
-- **Restorable workspaces:** Closing JaneT ends its managed local and SSH terminal sessions. Restarting restores the saved workspace structure into fresh shells, and preset startup commands run again. Detached jobs may continue outside JaneT.
+- **Automatic restoration:** Groups, workspace membership, pane layouts, directories and startup commands persist automatically—no save button or presets. Closing JaneT ends its managed local and SSH terminal sessions. Restarting restores the saved workspace structure into fresh shells; configured startup commands run again. Detached jobs may continue outside JaneT.
 - **Semantic command tools:** Jump between completed commands, copy a command or its output, and paste a command back without running it automatically.
 - **Safe broadcast input:** Explicitly select panes, confirm the recipient set, then send the same keyboard, paste, or binary input to every selected terminal.
 - **Contextual command history:** Search bounded local history by command text or SSH host without storing terminal output.
@@ -62,7 +62,13 @@ JaneT automatically adds semantic markers to new local Bash, zsh, fish, Windows 
 
 ## Copy from full-screen terminal applications
 
-Terminal applications such as agent TUIs, Vim, and tmux can take ownership of mouse input. Hold Shift and drag on Windows/Linux, or Option-drag on macOS, then use the normal platform copy shortcut. JaneT automatically protects the selection from TUI mouse reporting and redraws, then restores the application immediately after copying or continuing to type.
+In `hermes --tui`, drag normally and press Ctrl+Shift+C. JaneT retains the dragged text independently of the TUI's painted highlight, so a subsequent screen redraw does not erase what you copy. A new left click or typing discards the retained selection. Paste continues to use the normal terminal paste path.
+
+Terminal applications such as agent TUIs, Vim, and tmux can take ownership of mouse input. For forced native terminal selection, hold Shift and drag on Windows/Linux, or Option-drag on macOS, then use the normal platform copy shortcut. JaneT automatically protects that selection from TUI mouse reporting and redraws, then restores the application immediately after copying or continuing to type.
+
+Hermes `--tui` can also send its own selection through OSC 52. A copy shortcut or right-click authorizes the immediate copy; unsolicited clipboard replacements ask for confirmation. Terminal applications cannot read your clipboard through OSC 52. Paste with Ctrl+V, Cmd+V, or Shift+Insert; multiline text preserves the terminal's bracketed-paste handling. Right-click copies a native selection, otherwise pastes in ordinary terminals or keeps a mouse-tracking TUI's own gesture.
+
+Click word-labelled terminal links (OSC 8) to open them in your default browser, including while a TUI redraws. Dragging to select text does not activate the link.
 
 ## Find a command in contextual history
 
@@ -119,9 +125,21 @@ Other terminal agents continue to work normally in JaneT, but do not show agent-
 
 ## Build the workspace once
 
-Split a tab into the layout your project needs, combine local and remote panes, then save it as a preset. Each pane can remember its own directory or SSH connection and run an ordered list of startup commands when a fresh workspace opens.
+On first launch, choose JaneT's **main directory**. Create a workspace to make a folder beneath it, then use that workspace's + button to create projects as subfolders. Each project has its own terminals. Local terminals start in their project folder unless you supply an override; SSH terminals retain their remote configuration. Click the **Workspaces** heading to change where future workspaces are created. Changing the main directory does not move existing files.
 
-Presets work well for repeatable setups such as an app shell beside a test runner, several services in one grid, or a local project paired with its deployment host.
+The **Library** section is for persistent work: link a repo or existing directory, then use its **+** to start named sessions with 1–16 terminals. Sessions share that directory; they are not copies or isolated worktrees. Existing folder links automatically appear in Library without moving files.
+
+Workspaces are temporary storage. Right-click a managed project or workspace and choose **Delete…** to send its actual folder and all contents to the OS Recycle Bin/Trash after confirmation. **Close session** only stops terminals and keeps files. **Remove from Library…** only unlinks persistent work and stops its sessions; it never deletes files. Missing directories show **Locate folder**.
+
+To make temporary work permanent, choose **Keep in Library…** on a project and select a destination parent outside temporary storage. JaneT creates a new folder there, copies hidden files and project data, verifies file hashes, saves the Library entry, and recycles the original. The confirmation explains which terminals will stop/reopen. Existing destinations are never merged or overwritten. Save changed editor files and stop external writers first. Failures preserve the original or the verified Library copy; incomplete destination copies are left for inspection. External symlinks cannot be promoted automatically.
+
+Use **+** beside Workspaces to create a workspace folder, then its **+** to create a project with 1–16 initial terminals. Each terminal can use a local directory or saved SSH connection and optional ordered startup commands. The terminal icon on a workspace or project starts a local terminal in that directory. Split and rearrange panes afterward; changes are restored automatically. Renaming managed workspace or project folders also renames them on disk and updates saved paths. Invalid names and existing destination folders are rejected. Close editor files first; programs holding a folder open may also need to be closed. Library entry/session names remain labels and do not rename external folders.
+
+Existing flat sessions appear under **My workspaces**. Legacy preset data is retained in settings for recovery but is no longer shown or launched automatically.
+
+Choosing the main directory does not create starter folders or terminals. Create your workspace and then its projects explicitly, or link a project under Library. Closing the last session leaves an empty screen, preserved after restart; only explicit confirmed Delete actions remove temporary folders.
+
+Sessions work well for an app shell beside a test runner, several services in one grid, or a local project paired with its deployment host.
 
 ## Move between terminal and file without losing context
 
@@ -149,9 +167,9 @@ Destructive history operations are deliberately left to the terminal. JaneT does
 
 ## SSH as part of the workspace
 
-Save an SSH connection once and reopen it from the tab rail or a preset. JaneT pins host keys, reconnects restored SSH panes, and gives the focused remote terminal an SFTP-backed Explorer and editor.
+Save an SSH connection once and select it when creating a workspace or from the SSH quick action. JaneT pins host keys, reconnects restored SSH panes, and gives the focused remote terminal an SFTP-backed Explorer and editor.
 
-A preset can combine local and SSH panes, so a project shell, log stream, and remote deployment session can share one saved layout.
+A workspace can combine local and SSH panes, so a project shell, log stream, and remote deployment session can share one automatically restored layout.
 
 ### Reach a host through a jump host
 
