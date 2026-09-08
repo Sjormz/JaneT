@@ -54,7 +54,13 @@ the native ConPTY pipe connection until the output worker reports ready.
 Without that ordering fix, constrained Windows CI runners can block the Node
 event loop inside `ConnectNamedPipe` before a JavaScript timeout can run.
 
-The Windows release verifier checks that the backport and unpacked worker path
+The `afterPack` hook copies the bundled `conpty.dll` and `OpenConsole.exe` beside
+any rebuilt `build/Release` or `build/Debug` native module before signing.
+`node-pty` prefers those modules over its prebuild, so leaving the DLLs only in
+the prebuild directory breaks packaged terminal startup.
+
+The Windows release verifier checks every packaged native module has its DLL
+payload, and checks that the backport and unpacked worker path
 survived packaging, then exercises the packaged module with a real ConPTY
 input/output round trip using the bundled ConPTY DLL, matching the app's Kitty
 graphics passthrough path. Keep this backport guarded against dependency-source

@@ -38,7 +38,7 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/main"
           git fetch --no-tags --depth=1 origin main
           test "$GITHUB_SHA" = "$(git rev-parse FETCH_HEAD)"
-          git checkout "$GITHUB_SHA" -- .github/workflows/release.yml package.json scripts/verify-release-artifacts.mjs tests/unit/releaseTooling.test.ts
+          git checkout "$GITHUB_SHA" -- .github/workflows/release.yml package.json scripts/verify-release-artifacts.mjs scripts/package-windows-conpty.cjs tests/unit/releaseTooling.test.ts
 
       - uses: actions/setup-node@v7
         with:
@@ -106,7 +106,7 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/main"
           git fetch --no-tags --depth=1 origin main
           test "$GITHUB_SHA" = "$(git rev-parse FETCH_HEAD)"
-          git checkout "$GITHUB_SHA" -- .github/workflows/release.yml package.json scripts/verify-release-artifacts.mjs tests/unit/releaseTooling.test.ts
+          git checkout "$GITHUB_SHA" -- .github/workflows/release.yml package.json scripts/verify-release-artifacts.mjs scripts/package-windows-conpty.cjs tests/unit/releaseTooling.test.ts
 
       - uses: actions/setup-node@v7
         with:
