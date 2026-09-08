@@ -52,7 +52,7 @@ export async function restoreWorkspaceFixture(page: Page, name: string, terminal
       tabs: [...(session?.tabs ?? []).filter((tab: any) => tab.id !== 'fixture-restored'), { id: 'fixture-restored', title: name, groupId: groups[0].id, type: 'local', root }],
       activeTabId: 'fixture-restored', tabsOpen: true,
     } });
-    location.reload();
   }, { session, groups, root, name });
+  await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.locator('.vtab-name').getByText(name, { exact: true })).toBeVisible();
 }
