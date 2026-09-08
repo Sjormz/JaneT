@@ -1,13 +1,13 @@
 import type { IDisposable, Terminal } from '@xterm/xterm';
+import { ImageAddon } from '@xterm/addon-image';
 
 const APC_START = '\x1b_G';
 const APC_END = '\x1b\\';
 const KITTY_PLACEHOLDER_CODEPOINT = 0x10EEEE;
 const KITTY_FIRST_ROW_MARK = 0x0305;
 
-// JaneT deliberately implements only the bounded subset emitted by Hermes:
-// direct, PNG, virtual placements rendered through Unicode placeholders.
-// It does not claim general Kitty graphics compatibility through TERM.
+// ponytail: the upstream image addon does not yet render Unicode placements.
+// Keep this bounded PNG fallback until the addon supports U=1 placements.
 const MAX_PNG_BYTES = 1024 * 1024;
 const MAX_BASE64_CHARS = Math.ceil(MAX_PNG_BYTES * 4 / 3) + 4;
 const MAX_APC_CHARS = MAX_BASE64_CHARS + 1024;
@@ -325,7 +325,17 @@ export class KittyGraphicsLayer implements IDisposable {
     private readonly overlay: HTMLDivElement,
   ) {
     this.decoder = new KittyGraphicsDecoder((frame) => this.storeFrame(frame));
+    let virtualChunks = false;
     this.disposables.push(
+      term.parser.registerApcHandler({ final: 'G' }, (data) => {
+        const controls = parseControls(data.split(';', 1)[0]);
+        const virtual = controls?.get('U') === '1'
+          || (virtualChunks && !controls?.has('a'));
+        virtualChunks = virtual && controls?.get('m') === '1';
+        if (!virtual) return false;
+        this.decoder.push(`${APC_START}${data}${APC_END}`);
+        return true;
+      }),
       term.onWriteParsed(() => this.scheduleRefresh()),
       term.onRender(() => this.scheduleRefresh()),
       term.onScroll(() => this.scheduleRefresh()),
@@ -448,4 +458,19 @@ export function createKittyGraphicsLayer(term: Terminal): KittyGraphicsLayer | n
   });
   screen.appendChild(overlay);
   return new KittyGraphicsLayer(term, screen, overlay);
+}
+
+/** Shared by local and SSH panes; replies use xterm's existing onData route. */
+export function enableTerminalGraphics(term: Terminal): IDisposable | null {
+  term.loadAddon(new ImageAddon({
+    kittySupport: true,
+    // Keep this integration focused on Kitty; other protocols can be enabled
+    // after their rendering and lifecycle behavior have been tested.
+    sixelSupport: false,
+    iipSupport: false,
+    pixelLimit: 4096 * 4096,
+    storageLimit: 32,
+    kittySizeLimit: 8 * 1024 * 1024,
+  }));
+  return createKittyGraphicsLayer(term);
 }

@@ -69,6 +69,18 @@ function terminalAt(lines: string[], line: number, column: number) {
 }
 
 describe('SemanticCommandTimeline', () => {
+  it('follows the prompt marker when a resize moves its buffer line', () => {
+    const term = terminalAt(['old output', '$ false'], 1, 2);
+    const timeline = new SemanticCommandTimeline(term as never);
+    timeline.handleOsc('A'); timeline.handleOsc('B');
+    term.lines = ['$ false'];
+    term.markers[0].line = 0;
+    term.cursorY = 0; term.cursorX = 7;
+    timeline.handleOsc('C'); timeline.handleOsc('D;1');
+    expect(timeline.commands).toMatchObject([{ command: 'false', exitCode: 1 }]);
+    expect(term.registerDecoration).toHaveBeenCalledOnce();
+  });
+
   it('keeps outer execution across alternate markers, signed exits and clock rollback', () => {
     const term = terminalAt(['$ work'], 0, 2);
     let wall = 20000, clock = 10;

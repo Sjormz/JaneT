@@ -188,6 +188,7 @@ function exactlyMatches(record: Record<string, string>, expected: Record<string,
 
 export interface AppSettings {
   mainDirectory: string | null;
+  mainDirectorySetupSkipped: boolean;
   theme: ThemeName;
   fontSize: number;
   fontFamily: string;
@@ -289,6 +290,7 @@ const SAVED_TAB_KEYS = new Set([
 
 const DEFAULT_SETTINGS: AppSettings = {
   mainDirectory: null,
+  mainDirectorySetupSkipped: false,
   theme: 'tokyo-night',
   fontSize: 14,
   fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
@@ -502,6 +504,7 @@ export class SettingsManager {
     const stored = {
       ...DEFAULT_SETTINGS,
       ...storedSettings,
+      mainDirectorySetupSkipped: storedSettings.mainDirectorySetupSkipped === true,
       mainDirectory: typeof storedSettings.mainDirectory === 'string' && path.isAbsolute(storedSettings.mainDirectory)
         && storedSettings.mainDirectory.length <= 8192 && !storedSettings.mainDirectory.includes('\0') ? storedSettings.mainDirectory : null,
       keybindings: isBoundedStringRecord(mergedKeybindings, MAX_KEYBINDINGS, 256, 256)
@@ -1101,7 +1104,7 @@ function parseSettingsUpdate(value: unknown): Partial<AppSettings> | undefined {
     const prototype = Reflect.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) return undefined;
     const allowedKeys = new Set<keyof AppSettings>([
-      'mainDirectory', 'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets',
+      'mainDirectory', 'mainDirectorySetupSkipped', 'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets',
       'commandHistory', 'notificationsEnabled', 'notificationThresholdSeconds',
       'sshProfiles', 'workspaceTabs', 'gitWorktreeBaseDir',
       'gitWorktreeNameTemplate', 'session',
@@ -1120,7 +1123,8 @@ function parseSettingsUpdate(value: unknown): Partial<AppSettings> | undefined {
 }
 
 function isValidSettingsUpdate(updates: Partial<AppSettings>): boolean {
-  return (updates.mainDirectory === undefined || updates.mainDirectory === null
+  return (updates.mainDirectorySetupSkipped === undefined || typeof updates.mainDirectorySetupSkipped === 'boolean')
+    && (updates.mainDirectory === undefined || updates.mainDirectory === null
       || (typeof updates.mainDirectory === 'string' && path.isAbsolute(updates.mainDirectory) && updates.mainDirectory.length <= 8192 && !updates.mainDirectory.includes('\0')))
     && (updates.theme === undefined || ['tokyo-night', 'dracula', 'one-dark', 'solarized-light', 'gruvbox'].includes(updates.theme))
     && (updates.fontSize === undefined

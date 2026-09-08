@@ -9,14 +9,10 @@ export const STARTUP_READY_MARKER = '\x1b]777;janet-ready\x1b\\';
  *
  * - emits an OSC 7 escape sequence (file://HOST/PATH) before every prompt,
  *   so JaneT can keep its cwd-aware UI in sync; and
- * - in supported Unix shells, opts a directly invoked Hermes CLI into JaneT's
- *   deliberately narrow Kitty PNG renderer without exporting that capability
- *   to every process.
+ * - prepares agent activity hooks without changing graphics capabilities.
  *
  * The Hermes wrapper is installed only when `hermes` currently resolves to
- * an external command, so a user's alias or function is never replaced. It
- * scopes JANET_KITTY_GRAPHICS to that invocation and explicitly disables it
- * behind tmux/screen, whose passthrough support is not guaranteed.
+ * an external command, so a user's alias or function is never replaced.
  *
  * Returns the empty string for shells we don't know how to instrument
  * (or `cmd.exe`, which has no scripting facility that can run on each
@@ -161,7 +157,7 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       // the name while the shell parses this skipped conditional branch.
       "  function hermes {",
       setupAgent(agentHelper, 'hermes', 'bash'),
-      "    if [ -n \"${TMUX:-}${STY:-}\" ]; then JANET_KITTY_GRAPHICS= KITTY_WINDOW_ID= WEZTERM_PANE= ITERM_SESSION_ID= TERM_PROGRAM=JaneT command hermes \"$@\"; else JANET_KITTY_GRAPHICS=1 command hermes \"$@\"; fi",
+      "    command hermes \"$@\"",
       "  }",
       "fi",
       "__jt_debug() {",
@@ -201,7 +197,7 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       setupAgent(agentHelper, 'hermes', 'zsh'),
       // Quote the external command name so a zsh global alias cannot expand
       // it while this compound statement is parsed.
-      "    if [[ -n \"${TMUX:-}${STY:-}\" ]]; then JANET_KITTY_GRAPHICS= KITTY_WINDOW_ID= WEZTERM_PANE= ITERM_SESSION_ID= TERM_PROGRAM=JaneT command 'hermes' \"$@\"; else JANET_KITTY_GRAPHICS=1 command 'hermes' \"$@\"; fi",
+      "    command 'hermes' \"$@\"",
       "  }",
       "fi",
       "fi",
@@ -245,17 +241,8 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "  end",
       "end",
       "if type -q hermes; and test (type -t hermes) = file",
-      "  function hermes --description 'Hermes with JaneT graphics'",
+      "  function hermes --description 'Hermes with JaneT activity'",
       setupAgent(agentHelper, 'hermes', 'fish'),
-      "    if test -n \"$TMUX$STY\"",
-      "      set -lx JANET_KITTY_GRAPHICS ''",
-      "      set -lx KITTY_WINDOW_ID ''",
-      "      set -lx WEZTERM_PANE ''",
-      "      set -lx ITERM_SESSION_ID ''",
-      "      set -lx TERM_PROGRAM JaneT",
-      "    else",
-      "      set -lx JANET_KITTY_GRAPHICS 1",
-      "    end",
       "    command hermes $argv",
       "  end",
       "end",

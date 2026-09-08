@@ -201,6 +201,7 @@ export default function VerticalTabBar({
   };
 
   const openWorkspaceForm = () => {
+    if (!mainDirectory) { setDirectoryOpen(true); return; }
     setFolderTarget(undefined);
     setCreationError('');
     setCreationKind('group');
@@ -215,11 +216,12 @@ export default function VerticalTabBar({
     event.preventDefault();
     const name = groupName.trim();
     if (!name) return;
+    if (!mainDirectory) return setCreationError('Choose a main directory from Workspaces before creating a workspace.');
     if (groups.length >= MAX_WORKSPACE_GROUPS) return setCreationError('The 64-group limit has been reached.');
     setCreating(true); setCreationError('');
     try {
-      const directory = mainDirectory ? await window.janet.workspaceDirectory({ parent: mainDirectory, name }) : undefined;
-      onGroupsChange([...groups, { id: genId('group'), name, ...(directory ? { directory } : {}) }]);
+      const directory = await window.janet.workspaceDirectory({ parent: mainDirectory, name });
+      onGroupsChange([...groups, { id: genId('group'), name, directory }]);
       setGroupName(''); onCreatorOpenChange(false);
     } catch (error) { setCreationError(error instanceof Error ? error.message : String(error)); }
     finally { setCreating(false); }
@@ -244,6 +246,7 @@ export default function VerticalTabBar({
     onEntryRequestHandled?.();
     if (entryRequest.action === 'link') { void linkFolder(); return; }
     const target = groups.find(group => group.id === entryRequest.groupId);
+    if (!mainDirectory && target?.kind !== 'folder') { setDirectoryOpen(true); return; }
     setFolderTarget(target?.kind === 'folder' ? target : undefined);
     setProjectParentId(target?.kind !== 'folder' ? target?.id : undefined);
     setCreationKind(target ? 'workspace' : 'group');
@@ -355,6 +358,10 @@ export default function VerticalTabBar({
 
       <div className="vtab-list workspace-group-list">
         {folderError && <p className="form-error" role="alert">{folderError}</p>}
+        {!mainDirectory && <div className="workspace-group-empty">
+          <p>Choose a main directory to create workspaces.</p>
+          <button type="button" className="connect-btn" onClick={() => setDirectoryOpen(true)}>Set up workspaces</button>
+        </div>}
         {(['workspaces', 'folders'] as const).map((section) => <React.Fragment key={section}>
         {section === 'folders' && <div className="folder-section-header"><h2>Library</h2><button className="vtab-header-btn" aria-label="Add to Library" disabled={folderBusy} onClick={() => void linkFolder()}><PlusIcon size="sm" /></button></div>}
         {section === 'folders' && !groups.some((group) => group.kind === 'folder') && <p className="workspace-group-empty">Link a repo or keep a project here. Library files stay yours.</p>}
@@ -572,7 +579,7 @@ export default function VerticalTabBar({
               <button type="button" aria-pressed={creationKind === 'workspace'} onClick={() => setCreationKind('workspace')} disabled={creating || !groups.some((group) => !group.kind)}>Project</button>
             </div>}
             {creationError && <p role="alert" className="form-error">{creationError}</p>}
-            {creationKind === 'group' ? <form className="workspace-form" onSubmit={createGroup}>
+            {creationKind === 'group' && !mainDirectory ? <MainDirectory directory={null} onChange={async (directory) => { await onMainDirectoryChange?.(directory); onCreatorOpenChange(false); }} /> : creationKind === 'group' ? <form className="workspace-form" onSubmit={createGroup}>
               <label className="form-field"><span>Workspace name</span><input className="form-input" aria-label="Workspace name" required maxLength={128} value={groupName} onChange={(event) => setGroupName(event.target.value)} placeholder="e.g. Personal" /></label>
               <p className="workspace-form-help">Creates a folder in your main directory. Add projects inside this workspace when you are ready.</p>
               <button className="connect-btn" disabled={creating || !groupName.trim()} type="submit">{creating ? 'Creating…' : 'Create workspace'}</button>

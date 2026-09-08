@@ -264,16 +264,15 @@ export class TerminalManager {
     };
     delete env.JANET_ACTIVITY_URL;
     if (activityEnv?.JANET_ACTIVITY_URL) env.JANET_ACTIVITY_URL = activityEnv.JANET_ACTIVITY_URL;
-    // The Hermes graphics opt-in is applied only by the direct-shell wrapper
-    // in shell-init.ts. Keeping it out of the PTY environment prevents it from
-    // leaking into nested tmux/screen sessions that may not pass Kitty APCs.
+    // Remove the legacy app-specific opt-in. Graphics now belong to the PTY.
     delete env.JANET_KITTY_GRAPHICS;
-    // JaneT may itself have been launched from another terminal. Do not leak
-    // that parent's graphics capabilities into this independent PTY: Hermes
-    // (and similar tools) would otherwise mis-detect Kitty/iTerm/WezTerm even
-    // after the JaneT-specific opt-in is removed inside a multiplexer.
-    delete env.KITTY_WINDOW_ID;
+    // Advertise Kitty graphics to clients (including Codex) that use this
+    // capability hint instead of probing. Keep portable xterm terminfo.
+    env.KITTY_WINDOW_ID = id;
+    // Do not inherit a different emulator's transport or file-transfer hints.
     delete env.WEZTERM_PANE;
+    delete env.WEZTERM_EXECUTABLE;
+    delete env.WEZTERM_VERSION;
     delete env.ITERM_SESSION_ID;
     // A JaneT PTY is also a fresh terminal boundary even if the Electron app
     // was launched from a tmux/screen shell. Nested multiplexers created inside
@@ -287,6 +286,9 @@ export class TerminalManager {
     try {
       pty = spawn(defaultShell, launch.args, {
         name: 'xterm-256color', cols: DEFAULT_COLS, rows: DEFAULT_ROWS, cwd: defaultCwd, env,
+        // The OS ConPTY can discard Kitty APCs; node-pty's bundled version
+        // preserves them, including capability queries and their replies.
+        useConptyDll: process.platform === 'win32',
       });
     } catch (error) {
       this.capacity.release(id);

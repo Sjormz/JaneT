@@ -5,7 +5,7 @@ import EmptyWorkspace from '../../src/renderer/components/EmptyWorkspace';
 
 it('suggests a project or Library session based on the chosen destination', () => {
   const onRequest = vi.fn();
-  render(<EmptyWorkspace groups={[{ id: 'mark', name: 'mark' }, { id: 'repo', name: 'JaneT', kind: 'folder' }]} onRequest={onRequest} />);
+  render(<EmptyWorkspace mainDirectory="C:/Work" groups={[{ id: 'mark', name: 'mark' }, { id: 'repo', name: 'JaneT', kind: 'folder' }]} onRequest={onRequest} />);
   fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
   expect(onRequest).toHaveBeenLastCalledWith({ action: 'create', groupId: 'mark' });
   fireEvent.change(screen.getByLabelText('Where do you want to work?'), { target: { value: 'repo' } });
@@ -24,7 +24,7 @@ it('suggests a project or Library session based on the chosen destination', () =
 
 it('offers a workspace on a fresh profile, not a project without a parent', () => {
   const onRequest = vi.fn();
-  render(<EmptyWorkspace groups={[]} onRequest={onRequest} />);
+  render(<EmptyWorkspace mainDirectory="C:/Work" groups={[]} onRequest={onRequest} />);
   expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
   expect(onRequest).toHaveBeenCalledWith({ action: 'create', groupId: undefined });

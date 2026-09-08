@@ -61,6 +61,7 @@ class MockAddonSearch {
 }
 
 class MockUnicode11Addon {}
+vi.mock('@xterm/addon-image', () => ({ ImageAddon: class {} }));
 
 class MockTerminal {
   static instances: MockTerminal[] = [];

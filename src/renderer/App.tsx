@@ -1332,7 +1332,9 @@ function AppInner({ initialSettings, persistSettings }: {
         return false;
       }
       if (groupsRef.current.length === 0) {
-        const nextGroups = [{ ...DEFAULT_WORKSPACE_GROUP }];
+        if (!mainDirectory && !homeDir) return false;
+        const nextGroups: WorkspaceGroup[] = [mainDirectory ? { ...DEFAULT_WORKSPACE_GROUP }
+          : { id: DEFAULT_WORKSPACE_GROUP.id, name: 'Home', kind: 'folder', directory: homeDir }];
         groupsRef.current = nextGroups;
         setGroups(nextGroups);
       }
@@ -1354,7 +1356,7 @@ function AppInner({ initialSettings, persistSettings }: {
       setActiveTabId(tab.id);
       return true;
     },
-    [canAddTerminalTab, tabs.length, mainDirectory],
+    [canAddTerminalTab, tabs.length, mainDirectory, homeDir],
   );
 
   const openLocalTabAt = useCallback((cwd: string, title?: string) => {
@@ -2810,7 +2812,7 @@ function AppInner({ initialSettings, persistSettings }: {
         )}
         <main key="terminal" className="terminal-area workspace-main" aria-label="Terminal workspace">
           {directoryActionError && <div role="alert" className="settings-save-notice">{directoryActionError}<button onClick={() => setDirectoryActionError('')}>Dismiss</button></div>}
-          {!activeTab && <EmptyWorkspace groups={groups} onRequest={request => {
+          {!activeTab && <EmptyWorkspace groups={groups} mainDirectory={mainDirectory} onRequest={request => {
             responsiveTabsCollapsedRef.current = false;
             setTabsOpen(true);
             setWorkspaceEntryRequest(request);
@@ -3089,8 +3091,11 @@ export default function App() {
     );
   }
 
-  if (settings.mainDirectory === null) {
-    return <MainDirectory directory={null} onboarding onChange={async (directory) => {
+  if (settings.mainDirectory === null && !settings.mainDirectorySetupSkipped) {
+    return <MainDirectory directory={null} onboarding onSkip={async () => {
+      await window.janet.setSettings({ mainDirectorySetupSkipped: true });
+      setSettings({ ...settings, mainDirectorySetupSkipped: true });
+    }} onChange={async (directory) => {
       const updates: Record<string, unknown> = { mainDirectory: directory };
       await window.janet.setSettings(updates);
       setSettings({ ...settings, ...updates });

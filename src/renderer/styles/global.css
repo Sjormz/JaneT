@@ -1278,7 +1278,7 @@ html, body, #root {
 .terminal-container .xterm-viewport {
   background: var(--bg-primary) !important;
 }
-.terminal-container .xterm-scrollable-element > .scrollbar > .slider {
+.terminal-container .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider {
   border-radius: 999px;
 }
 .terminal-container .xterm-viewport {

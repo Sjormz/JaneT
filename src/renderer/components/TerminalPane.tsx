@@ -25,7 +25,7 @@ import { matchesShortcut } from '../keybindings';
 import { fileUrlToPath } from '../osc7';
 import { decodeAgentOsc } from '../agentOsc';
 import type { AgentLifecycleEvent } from '../terminalAwareness';
-import { createKittyGraphicsLayer } from '../kittyGraphics';
+import { enableTerminalGraphics } from '../kittyGraphics';
 import { refreshCoordinator } from '../refreshCoordinator';
 import { TERMINAL_SEARCH_REQUEST_EVENT, TerminalSearchRequestDetail } from '../terminalSearch';
 import { requestTerminalPaste, TERMINAL_PASTE_REQUEST_EVENT, TerminalPasteRequestDetail } from '../terminalPaste';
@@ -890,7 +890,7 @@ export default function TerminalPane({
       return semanticCommands.handleOsc(data);
     }));
     lifetimeCleanup.push(semanticCommands);
-    const kittyGraphics = tabType === 'local' ? createKittyGraphicsLayer(term) : null;
+    const kittyGraphics = enableTerminalGraphics(term);
     if (kittyGraphics) lifetimeCleanup.push(kittyGraphics);
     lifetimeCleanup.push(term.parser.registerOscHandler(777, (data) => {
       if (data === 'janet-ready') {
@@ -934,7 +934,6 @@ export default function TerminalPane({
       if (id === termId && source === tabType) {
         sshNoticeAttemptRef.current += 1;
         publishSshNoticeState({ kind: 'hidden' });
-        kittyGraphics?.push(data);
         const controls = diagnosticsEnabled ? inspectTerminalControlSequences(data) : [];
         logTerminalDiagnostic(diagnosticsEnabled, termId, 'terminal-output', {
           bytes: data.length,

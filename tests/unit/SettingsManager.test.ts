@@ -88,6 +88,11 @@ describe('SettingsManager', () => {
     const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();
     expect(manager.get().mainDirectory).toBeNull();
+    expect(manager.get().mainDirectorySetupSkipped).toBe(false);
+    manager.set({ mainDirectorySetupSkipped: true });
+    expect(manager.get().mainDirectorySetupSkipped).toBe(true);
+    expect(manager.get().mainDirectory).toBeNull();
+    expect(() => manager.set({ mainDirectorySetupSkipped: 'yes' })).toThrow();
     const directory = process.platform === 'win32' ? 'C:\\Projects' : '/projects';
     const folder = { id: 'project', name: 'Project', kind: 'folder' as const, directory };
     manager.set({ mainDirectory: directory, session: { ...manager.get().session, groups: [folder] } });

@@ -122,6 +122,7 @@ describe('KittyGraphicsLayer', () => {
     const listeners: Array<Array<(value: any) => void>> = [[], [], [], [], []];
     const term = {
       element: root,
+      parser: { registerApcHandler: vi.fn(() => ({ dispose: vi.fn() })) },
       cols,
       rows,
       options: { theme: { background: '#123456' } },
@@ -140,7 +141,9 @@ describe('KittyGraphicsLayer', () => {
     } as unknown as Terminal;
 
     const layer = createKittyGraphicsLayer(term)!;
-    layer.push(kittyFrame());
+    const handleApc = vi.mocked(term.parser.registerApcHandler).mock.calls[0][1];
+    expect(handleApc('a=q,i=1;AAAA')).toBe(false);
+    expect(handleApc(kittyFrame().slice(3, -2))).toBe(true);
     layer.refresh();
 
     const wrapper = screen.querySelector<HTMLElement>('[data-kitty-image-id="42"]')!;
@@ -182,6 +185,7 @@ describe('KittyGraphicsLayer', () => {
     const listeners: Array<Array<(value: any) => void>> = [[], [], [], [], []];
     const term = {
       element: root,
+      parser: { registerApcHandler: vi.fn(() => ({ dispose: vi.fn() })) },
       cols,
       rows,
       options: { theme: { background: '#123456' } },

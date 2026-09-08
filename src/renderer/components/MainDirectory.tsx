@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import BrandMark from './BrandMark';
 
-export default function MainDirectory({ directory, onboarding = false, onChange }: {
+export default function MainDirectory({ directory, onboarding = false, onChange, onSkip }: {
   directory: string | null;
   onboarding?: boolean;
   onChange: (directory: string) => Promise<void>;
+  onSkip?: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -15,6 +16,12 @@ export default function MainDirectory({ directory, onboarding = false, onChange 
     });
   }, [onboarding, busy]);
   const Heading = onboarding ? 'h1' : 'h2';
+  const skip = async () => {
+    setBusy(true); setError('');
+    try { await onSkip?.(); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
   const choose = async () => {
     setBusy(true); setError('');
     try {
@@ -26,11 +33,11 @@ export default function MainDirectory({ directory, onboarding = false, onChange 
   const content = <>
     {onboarding && <div className="directory-onboarding-brand"><BrandMark size={40} /><span>Welcome to JaneT</span></div>}
     <Heading>{onboarding ? 'A home for your work' : 'Main directory'}</Heading>
-    <p>{onboarding ? 'Choose a home for temporary workspaces and projects. Keep work in Library when you want to save it elsewhere. You can change this location from the Workspaces heading.' : 'New temporary workspaces are created here. Existing workspaces and Library locations stay where they are; no files are moved.'}</p>
+    <p>{onboarding ? 'Choose a home for temporary workspaces and projects, or skip this for now. You can set it later from Workspaces in the side panel. Creating workspaces requires a main directory; Library folders do not.' : 'New temporary workspaces are created here. Existing workspaces and Library locations stay where they are; no files are moved.'}</p>
     {directory && <p className="main-directory-path">{directory}</p>}
     {error && <p role="alert" className="form-error">{error}</p>}
     <button type="button" className="connect-btn" disabled={busy} onClick={() => void choose()}>{busy ? 'Setting up…' : directory ? 'Change main directory' : 'Choose main directory'}</button>
-    {onboarding && <button type="button" className="directory-onboarding-quit" disabled={busy} onClick={() => window.janet.windowClose()}>Quit JaneT</button>}
+    {onboarding && onSkip && <button type="button" className="directory-onboarding-quit" disabled={busy} onClick={() => void skip()}>Skip for now</button>}
   </>;
   return onboarding ? <main className="app-startup directory-setup"><section className="directory-onboarding" aria-label="Set up main directory">{content}</section></main>
     : <section className="theme-section main-directory-settings">{content}</section>;

@@ -116,7 +116,7 @@ function detectRemoteBash(client: Client): Promise<string | null> {
 
 export function remoteBashCommand(shell: string): string {
   const marker = '__JANET_SHELL_INTEGRATION__';
-  return `exec ${quotePosix(shell)} --rcfile /dev/fd/3 -i 3<<'${marker}'\n[ -f /etc/profile ] && . /etc/profile\nif [ -f ~/.bash_profile ]; then . ~/.bash_profile; elif [ -f ~/.bash_login ]; then . ~/.bash_login; elif [ -f ~/.profile ]; then . ~/.profile; fi\n${buildShellInit('bash')}\n${marker}`;
+  return `exec ${quotePosix(shell)} --rcfile /dev/fd/3 -i 3<<'${marker}'\n[ -f /etc/profile ] && . /etc/profile\nif [ -f ~/.bash_profile ]; then . ~/.bash_profile; elif [ -f ~/.bash_login ]; then . ~/.bash_login; elif [ -f ~/.profile ]; then . ~/.profile; fi\nexport TERM_PROGRAM=JaneT KITTY_WINDOW_ID=janet-ssh\n${buildShellInit('bash')}\n${marker}`;
 }
 
 export interface SSHCredentials {

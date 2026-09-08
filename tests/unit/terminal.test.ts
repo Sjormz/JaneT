@@ -594,8 +594,9 @@ describe('TerminalManager', () => {
       new TerminalManager().create('term-clean-env', undefined, '/bin/zsh', () => {});
 
       const env = mocks.spawnMock.mock.calls[0][2].env;
+      expect(mocks.spawnMock.mock.calls[0][2].useConptyDll).toBe(process.platform === 'win32');
       expect(env).toMatchObject({ TERM: 'xterm-256color', TERM_PROGRAM: 'JaneT' });
-      expect(env).not.toHaveProperty('KITTY_WINDOW_ID');
+      expect(env.KITTY_WINDOW_ID).toBe('term-clean-env');
       expect(env).not.toHaveProperty('WEZTERM_PANE');
       expect(env).not.toHaveProperty('ITERM_SESSION_ID');
       expect(env).not.toHaveProperty('JANET_KITTY_GRAPHICS');
