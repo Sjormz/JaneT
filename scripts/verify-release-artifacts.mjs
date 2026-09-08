@@ -218,6 +218,13 @@ export function validateWindowsPtyRuntime(runtime) {
     path.join(runtime.nodePtyRoot, 'prebuilds', 'win32-x64', 'conpty.node'),
     'packaged node-pty Windows native module',
   );
+  for (const relativeRoot of ['build/Release', 'build/Debug', 'prebuilds/win32-x64']) {
+    const nativeRoot = path.join(runtime.nodePtyRoot, relativeRoot);
+    if (!fs.existsSync(path.join(nativeRoot, 'conpty.node'))) continue;
+    for (const file of ['conpty.dll', 'OpenConsole.exe']) {
+      requireNonEmptyFile(path.join(nativeRoot, 'conpty', file), 'packaged ConPTY payload');
+    }
+  }
   const requirements = [
     ['windowsConoutConnection.js', WINDOWS_PATCH_POSTCONDITIONS.worker, 'worker cannot resolve app.asar.unpacked'],
     ['windowsPtyAgent.js', WINDOWS_PATCH_POSTCONDITIONS.agent, 'agent is missing the deferred ConPTY connection fix'],

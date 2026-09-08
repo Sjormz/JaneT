@@ -91,11 +91,11 @@ describe('development tooling', () => {
     expect(fs.existsSync(executables.electron)).toBe(true);
     expect(fs.existsSync(executables.vite)).toBe(true);
     expect(executables.electron).not.toMatch(/\.cmd$/);
-    expect(execFileSync(process.execPath, [executables.vite, '--version'], { encoding: 'utf8' })).toContain('vite/');
+    expect(execFileSync(process.execPath, [executables.vite, '--version'], { encoding: 'utf8', timeout: 10_000 })).toContain('vite/');
     const source = fs.readFileSync(path.join(projectRoot, 'scripts', 'dev.mjs'), 'utf8');
     expect(source).not.toContain('shell: true');
     expect(source).toContain('shell: false');
-  });
+  }, 15_000);
 
   it('watches shared modules that are bundled into the Electron main process', async () => {
     const { mainSourceDirectories } = await loadScript('dev.mjs');
@@ -511,6 +511,8 @@ describe('release tooling', () => {
       fs.mkdirSync(prebuildRoot, { recursive: true });
       fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: '1.2.0-beta.14' }));
       fs.writeFileSync(path.join(prebuildRoot, 'conpty.node'), 'native');
+      fs.mkdirSync(path.join(prebuildRoot, 'conpty'));
+      for (const file of ['conpty.dll', 'OpenConsole.exe']) fs.writeFileSync(path.join(prebuildRoot, 'conpty', file), file);
       fs.writeFileSync(path.join(libRoot, 'windowsConoutConnection.js'), legacy);
       for (const fileName of ['windowsPtyAgent.js', 'windowsTerminal.js', 'conpty_console_list_agent.js']) {
         fs.writeFileSync(path.join(libRoot, fileName), 'unpatched');
@@ -533,13 +535,33 @@ describe('release tooling', () => {
       expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).toThrow(/native module/);
       fs.writeFileSync(path.join(prebuildRoot, 'conpty.node'), 'native');
       expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).not.toThrow();
+      const { default: packageConpty } = await loadScript('package-windows-conpty.cjs');
+      const appOutDir = path.join(fixtureRoot, 'app');
+      const packagedRoot = path.join(appOutDir, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty');
+      fs.cpSync(nodePtyRoot, packagedRoot, { recursive: true });
+      for (const mode of ['Release', 'Debug']) {
+        fs.mkdirSync(path.join(packagedRoot, 'build', mode), { recursive: true });
+        fs.writeFileSync(path.join(packagedRoot, 'build', mode, 'conpty.node'), 'rebuilt native');
+      }
+      expect(() => validateWindowsPtyRuntime({ nodePtyRoot: packagedRoot })).toThrow(/ConPTY payload/);
+      packageConpty({ appOutDir, electronPlatformName: 'win32', arch: 1 });
+      expect(() => validateWindowsPtyRuntime({ nodePtyRoot: packagedRoot })).not.toThrow();
+      for (const mode of ['Release', 'Debug']) {
+        for (const file of ['conpty.dll', 'OpenConsole.exe']) {
+          expect(fs.readFileSync(path.join(packagedRoot, 'build', mode, 'conpty', file), 'utf8')).toBe(file);
+        }
+      }
+      fs.writeFileSync(path.join(packagedRoot, 'build', 'Release', 'conpty', 'conpty.dll'), '');
+      expect(() => validateWindowsPtyRuntime({ nodePtyRoot: packagedRoot })).toThrow(/ConPTY payload/);
+      expect(() => packageConpty({ appOutDir: 'does-not-exist', electronPlatformName: 'darwin', arch: 3 })).not.toThrow();
     } finally {
       fs.rmSync(fixtureRoot, { recursive: true, force: true });
     }
 
     const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
     expect(packageJson.scripts.postinstall).toContain('patch-node-pty-windows-worker.mjs');
-  });
+    expect(packageJson.build.afterPack).toBe('scripts/package-windows-conpty.cjs');
+  }, 30_000);
 
   it.skipIf(process.platform === 'win32')('validates the Apple Silicon PTY layout and helper execute bits', async () => {
     const { macPackagedRuntimes, validateMacPtyLayout } = await loadScript('verify-release-artifacts.mjs');
@@ -684,7 +706,7 @@ module.exports = {
       '          test "$GITHUB_REF" = "refs/heads/main"',
       '          git fetch --no-tags --depth=1 origin main',
       '          test "$GITHUB_SHA" = "$(git rev-parse FETCH_HEAD)"',
-      '          git checkout "$GITHUB_SHA" -- .github/workflows/release.yml package.json scripts/verify-release-artifacts.mjs tests/unit/releaseTooling.test.ts',
+      '          git checkout "$GITHUB_SHA" -- .github/workflows/release.yml package.json scripts/verify-release-artifacts.mjs scripts/package-windows-conpty.cjs tests/unit/releaseTooling.test.ts',
     ].join('\n');
 
     expect(workflow.replaceAll('\r\n', '\n').split(recovery)).toHaveLength(3);

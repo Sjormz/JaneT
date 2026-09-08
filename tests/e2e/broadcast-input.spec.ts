@@ -46,7 +46,7 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
 
     const terminals = page.locator('.terminal-container');
     await expect(terminals).toHaveCount(1);
-    await page.getByRole('button', { name: 'Split pane right' }).click();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Backslash' : 'Control+Backslash');
     await expect(terminals).toHaveCount(2);
     await expect(terminals.locator('.xterm-helper-textarea[data-shell-ready="true"]'))
       .toHaveCount(2, { timeout: 15_000 });

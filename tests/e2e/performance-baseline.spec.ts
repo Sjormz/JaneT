@@ -35,7 +35,7 @@ test('records startup, loaded-terminal input and pane lifecycle memory baselines
       .map(({ type, memory: sample }) => ({ type, workingSetKB: sample.workingSetSize })));
     const before = await memory();
     for (let cycle = 0; cycle < 5; cycle++) {
-      await page.getByRole('button', { name: 'Split pane right', exact: true }).first().click();
+      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Backslash' : 'Control+Backslash');
       await expect(page.locator('.terminal-container')).toHaveCount(2);
       await page.locator('.terminal-leaf').last().getByRole('button', { name: /^Close pane/ }).click();
       await page.getByRole('alertdialog').getByRole('button', { name: 'Close pane', exact: true }).click();

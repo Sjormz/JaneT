@@ -11,7 +11,8 @@ describe('workspace group persistence', () => {
     for (const cwd of [undefined, 'C:/Work', 'c:/work/', 'C:/Other/App', 'C:/Work/App/nested']) {
       expect(isWorkspaceProject({ groupId: 'work', cwd }, groups)).toBe(false);
     }
-    expect(isWorkspaceProject({ groupId: 'work', cwd: 'C:/Work/App' }, [{ ...groups[0], kind: 'folder' }])).toBe(false);
+    expect(isWorkspaceProject({ groupId: 'work', cwd: 'C:/Work/App' }, [{ ...groups[0], kind: 'folder' }])).toBe(true);
+    expect(isWorkspaceProject({ groupId: 'work', cwd: 'C:/Work' }, [{ ...groups[0], kind: 'folder' }])).toBe(false);
     expect(isWorkspaceProject({ groupId: 'legacy', cwd: 'C:/Work/App' }, [{ id: 'legacy', name: 'Old' }])).toBe(false);
   });
   it('preserves linked folder paths and multiple session memberships', () => {

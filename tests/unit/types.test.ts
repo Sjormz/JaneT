@@ -1,8 +1,32 @@
 import { describe, it, expect } from 'vitest';
 import {
   createLeaf, splitPane, removePane, movePane, directionalPaneTarget, findLeaf,
-  getAllLeafIds, countLeaves, resizePane, PaneNode,
+  getAllLeafIds, countLeaves, resizePane, PaneNode, arrangePaneGrid,
 } from '../../src/renderer/types';
+
+describe('arrangePaneGrid', () => {
+  it('keeps repeated additions balanced and preserves terminal objects and order', () => {
+    const leaves = Array.from({ length: 9 }, () => createLeaf());
+    let root: PaneNode = leaves[0];
+    for (let index = 1; index < leaves.length; index++) {
+      root = arrangePaneGrid([root, leaves[index]]);
+      expect(getAllLeafIds(root)).toEqual(leaves.slice(0, index + 1).map(leaf => leaf.id));
+      for (const leaf of leaves.slice(0, index + 1)) expect(findLeaf(root, leaf.id)).toBe(leaf);
+      if (index === 3 || index === 5 || index === 8) {
+        expect(root.type).toBe('split');
+        if (root.type !== 'split') throw new Error('Expected rows');
+        expect(root.direction).toBe('horizontal');
+        expect(root.children).toHaveLength(index === 8 ? 3 : 2);
+        for (const row of root.children) {
+          expect(row.type).toBe('split');
+          if (row.type !== 'split') throw new Error('Expected columns');
+          expect(row.children).toHaveLength(index === 3 ? 2 : 3);
+          expect(row.sizes).toEqual(row.children.map(() => 1));
+        }
+      }
+    }
+  });
+});
 
 describe('createLeaf', () => {
   it('creates distinct typed terminal leaves', () => {

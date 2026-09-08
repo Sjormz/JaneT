@@ -79,7 +79,7 @@ test('replaces corrupt settings with defaults only after confirmation', async ()
     await dialog.getByRole('button', { name: 'Use defaults' }).click();
     await expect(page.getByRole('heading', { name: 'A home for your work' })).toBeVisible();
     expect(JSON.parse(fs.readFileSync(settingsPath, 'utf8'))).toMatchObject({
-      theme: 'tokyo-night',
+      theme: 'one-dark',
       fontSize: 14,
     });
   } finally {

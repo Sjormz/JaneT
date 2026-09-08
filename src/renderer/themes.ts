@@ -267,7 +267,7 @@ const themes: Record<ThemeName, ThemeDefinition> = {
 export default themes;
 
 export function getTheme(name: ThemeName): ThemeDefinition {
-  return themes[name] || themes['tokyo-night'];
+  return themes[name] || themes['one-dark'];
 }
 
 export function applyCssTheme(cssVars: CssThemeVars): void {
@@ -284,7 +284,7 @@ export function applyCssTheme(cssVars: CssThemeVars): void {
 }
 
 export const themeNames = Object.keys(themes) as ThemeName[];
-export const themeOptions = themeNames.map((name) => ({
+export const themeOptions = (['one-dark', ...themeNames.filter(name => name !== 'one-dark')] as ThemeName[]).map((name) => ({
   value: name,
   label: themes[name].label,
 }));

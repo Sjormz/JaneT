@@ -18,7 +18,7 @@ import {
   Circle, CircleDot,
   // UI
   Search, SearchX, ArrowUp, ArrowDown, ArrowRight, Undo2,
-  Pencil, Trash2, Sliders, Type,
+  Pencil, Trash2, Sliders, Type, CodeXml,
   ChevronsRight, ChevronsDown, ChevronsUp, ChevronsLeft,
   // SSH
   Plug, Unplug, Server,
@@ -105,6 +105,7 @@ export const ChevronsUpDownIcon = make(ChevronsUpDown);
 
 // Tabs
 export const TerminalTabIcon = make(TerminalIcon);
+export const CodeIcon = make(CodeXml);
 export const LockIcon = make(Lock);
 
 // File types

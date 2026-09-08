@@ -5,8 +5,7 @@ import {
 } from '../types';
 import TerminalPane from './TerminalPane';
 import {
-  ChevronsRightIcon,
-  ChevronsDownIcon,
+  PlusIcon,
   MaximizeIcon,
   RestoreIcon,
   XCloseIcon,
@@ -40,7 +39,7 @@ interface SplitPaneProps {
   onBroadcastRecipientChange?: (termId: string, selected: boolean) => void;
   awarenessByTerminal?: Record<string, AgentAwareness>;
   transportByTerminal?: Record<string, TerminalTransportStatus>;
-  onSplitPane: (leafId: string, direction: 'horizontal' | 'vertical') => void;
+  onAddTerminals: () => void;
   onClosePane: (leafId: string) => void;
   onResizePane: (splitId: string, dividerIndex: number, leftFraction: number) => void;
   onMovePane: (draggedLeafId: string, targetLeafId: string, side: PaneDropSide) => void;
@@ -92,8 +91,7 @@ function TerminalPaneLeaf({
   awareness,
   transport,
   isActive,
-  onSplitRight,
-  onSplitDown,
+  onAddTerminals,
   onClose,
   onToggleMaximize,
   draggedLeafId,
@@ -133,8 +131,7 @@ function TerminalPaneLeaf({
   awareness?: AgentAwareness;
   transport?: TerminalTransportStatus;
   isActive?: boolean;
-  onSplitRight: () => void;
-  onSplitDown: () => void;
+  onAddTerminals?: () => void;
   onClose: () => void;
   onToggleMaximize: () => void;
   onMovePane: (draggedLeafId: string, targetLeafId: string, side: PaneDropSide) => void;
@@ -256,16 +253,9 @@ function TerminalPaneLeaf({
               </button>
             </Tooltip>
           )}
-          {!isMaximized && (
-            <>
-              <Tooltip label="Split pane right" placement="bottom">
-                <button className="leaf-btn" onClick={onSplitRight} aria-label="Split pane right"><ChevronsRightIcon size="sm" /></button>
-              </Tooltip>
-              <Tooltip label="Split pane below" placement="bottom">
-                <button className="leaf-btn" onClick={onSplitDown} aria-label="Split pane below"><ChevronsDownIcon size="sm" /></button>
-              </Tooltip>
-            </>
-          )}
+          <Tooltip label="Add terminals" placement="bottom">
+            <button className="leaf-btn" onClick={onAddTerminals} aria-label="Add terminals"><PlusIcon size="sm" /></button>
+          </Tooltip>
           <Tooltip label={closeLabel} placement="bottom">
             <button className="leaf-btn leaf-close" onClick={onClose} aria-label={closeLabel}><XCloseIcon size="sm" /></button>
           </Tooltip>
@@ -446,7 +436,7 @@ export default function SplitPane(props: SplitPaneProps) {
     onBroadcastRecipientChange,
     awarenessByTerminal,
     transportByTerminal,
-    onSplitPane,
+    onAddTerminals,
     onClosePane,
     onResizePane,
     onMovePane,
@@ -491,8 +481,7 @@ export default function SplitPane(props: SplitPaneProps) {
         awareness={awarenessByTerminal?.[node.id]}
         transport={transportByTerminal?.[node.id]}
         isActive={activeTerminalId === node.id}
-        onSplitRight={() => onSplitPane(node.id, 'vertical')}
-        onSplitDown={() => onSplitPane(node.id, 'horizontal')}
+        onAddTerminals={onAddTerminals}
         onClose={() => onClosePane(node.id)}
         onToggleMaximize={() => onToggleMaximizePane(node.id)}
         onMovePane={onMovePane}
@@ -543,7 +532,7 @@ export default function SplitPane(props: SplitPaneProps) {
             onBroadcastRecipientChange={onBroadcastRecipientChange}
             awarenessByTerminal={awarenessByTerminal}
             transportByTerminal={transportByTerminal}
-            onSplitPane={onSplitPane}
+            onAddTerminals={onAddTerminals}
             onClosePane={onClosePane}
             onResizePane={onResizePane}
             onMovePane={onMovePane}
@@ -608,7 +597,7 @@ export default function SplitPane(props: SplitPaneProps) {
               onBroadcastRecipientChange={onBroadcastRecipientChange}
               awarenessByTerminal={awarenessByTerminal}
               transportByTerminal={transportByTerminal}
-              onSplitPane={onSplitPane}
+              onAddTerminals={onAddTerminals}
               onClosePane={onClosePane}
               onResizePane={onResizePane}
               onMovePane={onMovePane}

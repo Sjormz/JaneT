@@ -48,6 +48,16 @@ describe('temporary workspace file operations', () => {
     expect(result.session.groups).toHaveLength(whole ? 0 : 1);
     expect(await fs.readFile(path.join(f.root, 'recycled', ...(whole ? ['Experiment'] : []), 'keep.txt'), 'utf8')).toBe('important');
   });
+  it('recycles a Library child project while retaining its parent entry', async () => {
+    const f = await fixture();
+    f.session.groups![0].kind = 'folder';
+    await expect(f.operations.run({ action: 'keep', groupId: 'work', projectId: 'project', destinationParent: f.library })).rejects.toThrow('Only managed');
+    const result = await f.operations.run({ action: 'delete', groupId: 'work', projectId: 'project' });
+    expect(f.dependencies.trash).toHaveBeenCalledWith(f.project);
+    expect(result.session.groups).toHaveLength(1);
+    expect(result.session.tabs).toEqual([]);
+    expect((await fs.stat(f.workspace)).isDirectory()).toBe(true);
+  });
   it('rejects Library deletion, root targets, blank IDs and sessions without their own directory', async () => {
     const f = await fixture();
     await expect(f.operations.run({ action: 'delete', groupId: 'work', projectId: '' })).rejects.toThrow('Invalid');

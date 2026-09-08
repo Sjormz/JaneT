@@ -14,19 +14,20 @@ export function terminalSettings(directory: string) {
 export async function createWorkspace(page: Page, name: string, terminals: Array<{
   title?: string; cwd?: string; sshLabel?: string; commands?: string[];
 }>, newGroup?: string) {
-  await page.getByRole('button', { name: 'New workspace or project' }).click();
   if (newGroup) {
+    await page.getByRole('button', { name: 'New workspace', exact: true }).click();
     await page.getByRole('textbox', { name: 'Workspace name' }).fill(newGroup);
     await page.getByRole('dialog', { name: 'Create workspace', exact: true }).getByRole('button', { name: 'Create workspace', exact: true }).click();
-    await page.getByRole('button', { name: `New project in ${newGroup}`, exact: true }).click();
+    await page.getByRole('button', { name: `Add project to ${newGroup}`, exact: true }).click();
   } else {
-    await page.getByRole('button', { name: 'Project', exact: true }).click();
+    await page.getByRole('button', { name: /^Add project to / }).first().click();
   }
   await page.getByRole('textbox', { name: 'Project name' }).fill(name);
+  await page.getByRole('button', { name: /Add terminals/ }).click();
   await page.getByRole('spinbutton', { name: 'Initial terminals' }).fill(String(terminals.length));
   await page.getByRole('radio', { name: 'Custom', exact: true }).check();
   await page.getByRole('textbox', { name: 'Custom command' }).fill('echo');
-  await page.getByRole('dialog', { name: 'Create project', exact: true }).getByRole('button', { name: 'Create project', exact: true }).click();
+  await page.getByRole('button', { name: 'Create project', exact: true }).click();
 }
 
 // Legacy SSH, per-pane commands, and unavailable paths remain supported on restore.
@@ -51,7 +52,7 @@ export async function restoreWorkspaceFixture(page: Page, name: string, terminal
       tabs: [...(session?.tabs ?? []).filter((tab: any) => tab.id !== 'fixture-restored'), { id: 'fixture-restored', title: name, groupId: groups[0].id, type: 'local', root }],
       activeTabId: 'fixture-restored', tabsOpen: true,
     } });
-    location.reload();
   }, { session, groups, root, name });
+  await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.locator('.vtab-name').getByText(name, { exact: true })).toBeVisible();
 }

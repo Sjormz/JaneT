@@ -70,7 +70,7 @@ function ControlledSidebar({
   );
 }
 
-describe('Sidebar workspace tools', () => {
+describe('Sidebar project tools', () => {
   beforeEach(() => {
     childSpies.fileExplorer.mockClear();
     childSpies.gitTree.mockClear();
@@ -79,8 +79,8 @@ describe('Sidebar workspace tools', () => {
   it('exposes a data-driven tool switcher with exactly one active view', () => {
     render(<ControlledSidebar />);
 
-    expect(screen.getByRole('heading', { name: 'Workspace tools' })).toBeInTheDocument();
-    expect(screen.getByRole('tablist', { name: 'Workspace tool views' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Project tools' })).toBeInTheDocument();
+    expect(screen.getByRole('tablist', { name: 'Project tool views' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Explorer' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: 'Source Control' })).toHaveAttribute('aria-selected', 'false');
     expect(screen.getAllByRole('tab').filter((tab) => tab.getAttribute('aria-selected') === 'true')).toHaveLength(1);
@@ -101,9 +101,9 @@ describe('Sidebar workspace tools', () => {
     ['right', 'panel', 'rail'],
   ] as const)('places the tool selector on the outside edge when docked %s', (side, first, last) => {
     const { container } = render(<Sidebar {...makeProps({ side })} />);
-    const tools = screen.getByRole('complementary', { name: 'Workspace tools' });
+    const tools = screen.getByRole('complementary', { name: 'Project tools' });
     const body = container.querySelector('.workspace-tools-body');
-    const rail = screen.getByRole('tablist', { name: 'Workspace tool views' });
+    const rail = screen.getByRole('tablist', { name: 'Project tool views' });
     const panel = screen.getByRole('tabpanel');
     const elements = { rail, panel };
 
@@ -152,8 +152,8 @@ describe('Sidebar workspace tools', () => {
   it('keeps the tool rail accessible when collapsed and expands the selected view', () => {
     render(<ControlledSidebar initialExpanded={false} />);
 
-    expect(screen.getByRole('complementary', { name: 'Workspace tools' })).toHaveClass('is-collapsed');
-    expect(screen.getByRole('button', { name: 'Expand workspace tools' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('complementary', { name: 'Project tools' })).toHaveClass('is-collapsed');
+    expect(screen.getByRole('button', { name: 'Expand project tools' })).toHaveAttribute('aria-expanded', 'false');
     expect(screen.getByRole('tab', { name: 'Explorer' })).toBeVisible();
     expect(screen.getByRole('tab', { name: 'Source Control' })).toBeVisible();
     expect(screen.getByRole('tabpanel', { hidden: true })).not.toBeVisible();
@@ -164,8 +164,8 @@ describe('Sidebar workspace tools', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Source Control' }));
 
-    expect(screen.getByRole('complementary', { name: 'Workspace tools' })).toHaveClass('is-expanded');
-    expect(screen.getByRole('button', { name: 'Collapse workspace tools' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('complementary', { name: 'Project tools' })).toHaveClass('is-expanded');
+    expect(screen.getByRole('button', { name: 'Collapse project tools' })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('tab', { name: 'Source Control' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tabpanel')).toBeVisible();
     expect(screen.getByTestId('git-tree')).toBeInTheDocument();
@@ -175,7 +175,7 @@ describe('Sidebar workspace tools', () => {
     const onExpandedChange = vi.fn();
     render(<Sidebar {...makeProps({ onExpandedChange })} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse workspace tools' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse project tools' }));
 
     expect(onExpandedChange).toHaveBeenCalledOnce();
     expect(onExpandedChange).toHaveBeenCalledWith(false);

@@ -4,6 +4,8 @@ import EmptyWorkspace, { type WorkspaceEntryRequest } from './components/EmptyWo
 import Titlebar from './components/Titlebar';
 import VerticalTabBar from './components/VerticalTabBar';
 import SplitPane from './components/SplitPane';
+import SSHConnectionsDialog from './components/SSHConnectionsDialog';
+import AddTerminalsDialog from './components/AddTerminalsDialog';
 import { disposeCachedTerminal, updateTerminalStartingDirectory } from './components/TerminalPane';
 import Sidebar, { WorkspaceToolSection } from './components/Sidebar';
 import StatusBar from './components/StatusBar';
@@ -25,7 +27,7 @@ import {
   SavedSSHProfile,
   WorkspaceTabPreset,
   PaneNode, PaneDropSide, TerminalLeaf,
-  createPaneRoot, splitPane, removePane, movePane, directionalPaneTarget, resizePane, getAllLeafIds, genId, mapLeaves, findLeaf, countLeaves,
+  createPaneRoot, arrangePaneGrid, splitPane, removePane, movePane, directionalPaneTarget, resizePane, getAllLeafIds, genId, mapLeaves, findLeaf, countLeaves,
 } from './types';
 import { ThemeName, applyCssTheme, getTheme } from './themes';
 import { KeybindingsProvider, useKeybindings } from './KeybindingsContext';
@@ -207,7 +209,6 @@ interface InitialAppState {
   snippets: Snippet[];
   commandHistory: CommandHistoryEntry[];
   notificationsEnabled: boolean;
-  notificationThresholdSeconds: number;
 }
 
 function createInitialAppState(settings: any): InitialAppState {
@@ -257,7 +258,7 @@ function createInitialAppState(settings: any): InitialAppState {
   }
 
   const tabs = restored;
-  const theme = getTheme(s.theme || 'tokyo-night').name;
+  const theme = getTheme(s.theme || 'one-dark').name;
   const restoreLegacySettings = session.sidebarOpen && session.sidebarSection === 'settings';
   const restoreLegacySsh = session.sidebarOpen && session.sidebarSection === 'ssh';
   const restoreMovedLegacySurface = restoreLegacySettings || restoreLegacySsh;
@@ -281,7 +282,6 @@ function createInitialAppState(settings: any): InitialAppState {
     snippets: Array.isArray(s.snippets) ? s.snippets : [],
     commandHistory: Array.isArray(s.commandHistory) ? s.commandHistory : [],
     notificationsEnabled: s.notificationsEnabled === true,
-    notificationThresholdSeconds: Number.isInteger(s.notificationThresholdSeconds) ? s.notificationThresholdSeconds : 10,
   };
 }
 
@@ -321,6 +321,7 @@ function AppInner({ initialSettings, persistSettings }: {
   const [mainDirectory, setMainDirectory] = useState<string | null>(initialSettings.mainDirectory ?? null);
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
+  const [addTerminalsTabId, setAddTerminalsTabId] = useState<string | null>(null);
   const [workspaceCreatorOpen, setWorkspaceCreatorOpen] = useState(false);
   const [workspaceEntryRequest, setWorkspaceEntryRequest] = useState<WorkspaceEntryRequest>();
   const [sessionSaveFailed, setSessionSaveFailed] = useState(false);
@@ -574,7 +575,6 @@ function AppInner({ initialSettings, persistSettings }: {
   }>());
   const [runningCommandHistoryIds, setRunningCommandHistoryIds] = useState<Set<string>>(new Set());
   const [notificationsEnabled, setNotificationsEnabled] = useState(initialState.notificationsEnabled);
-  const [notificationThresholdSeconds, setNotificationThresholdSeconds] = useState(initialState.notificationThresholdSeconds);
   const settingsLoadedRef = useRef(true);
 
   const clearPendingCommandHistoryRuns = useCallback((terminalIds: ReadonlySet<string>) => {
@@ -781,12 +781,6 @@ function AppInner({ initialSettings, persistSettings }: {
   const persistNotificationsEnabled = useCallback((enabled: boolean) => {
     setNotificationsEnabled(enabled);
     void persistSettings({ notificationsEnabled: enabled });
-  }, []);
-
-  const persistNotificationThreshold = useCallback((seconds: number) => {
-    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 86_400) return;
-    setNotificationThresholdSeconds(seconds);
-    void persistSettings({ notificationThresholdSeconds: seconds });
   }, []);
 
   // Persist keybindings when they change
@@ -1866,25 +1860,22 @@ function AppInner({ initialSettings, persistSettings }: {
 
   // === SSH session management ===
 
-  const openContextTerminal = async (groupId: string, tabId?: string, session?: SessionInfo) => {
+  const addSessionTerminals = async (tabId: string, preset: WorkspaceTabPreset) => {
     if (directoryRenameBusy.current) throw new Error('Wait for the folder rename to finish.');
-    const group = groupsRef.current.find((item) => item.id === groupId);
-    const tab = tabId ? tabsRef.current.find((item) => item.id === tabId && item.groupId === groupId) : undefined;
-    if (!group || (tabId && !tab) || !group.directory) throw new Error('Select an available workspace or project folder first.');
-    const cwd = await window.janet.workspaceDirectory({ parent: tab?.cwd || group.directory });
+    const tab = tabsRef.current.find(item => item.id === tabId);
+    if (!tab) throw new Error('This session was closed. Select it again.');
+    const group = groupsRef.current.find(item => item.id === tab.groupId);
+    const cwd = await window.janet.workspaceDirectory({ parent: (tab.type === 'ssh' ? undefined : tab.cwd) || group?.directory || homeDir });
     if (directoryRenameBusy.current) throw new Error('The folder is being renamed. Try again afterward.');
-    if (terminalCount() >= MAX_RESTORED_TERMINALS || (!tabId && tabsRef.current.length >= MAX_RESTORED_TABS)) throw new Error('Terminal or project limit reached. Close a terminal first.');
-    if (!groupsRef.current.some((item) => item.id === groupId) || (tabId && !tabsRef.current.some((item) => item.id === tabId))) throw new Error('The selected folder was closed. Select it again.');
-    const leaf: TerminalLeaf = { type: 'leaf', id: genId('term'), terminalType: session ? 'ssh' : 'local',
-      ...(session ? { sshSessionId: session.id, sshProfileId: session.sshProfileId, sshShellReady: true } : { cwd }) };
-    const id = tabId ?? genId('tab');
-    const next = tabId ? tabsRef.current.map((item): TabInfo => item.id !== tabId ? item : { ...item, root: getAllLeafIds(item.root).length === 0 ? leaf : {
-      type: 'split', id: genId('split'), direction: 'vertical', sizes: [0.5, 0.5], children: [item.root, leaf],
-    } }) : [...tabsRef.current, { id, title: session ? 'SSH session' : 'Local session', groupId, type: 'local' as const, cwd, root: leaf }];
-    tabsRef.current = next; setTabs(next); setActiveTabId(id); setFocusedTerminalId(leaf.id);
-    setMaximizedLeafByTab((current) => ({ ...current, [id]: null }));
-    groupsRef.current = groupsRef.current.map((item) => item.id === groupId ? { ...item, collapsed: false } : item);
-    setGroups(groupsRef.current);
+    const root = restorePaneTree(preset.root);
+    if (!root || countLeaves(root) === 0) throw new Error('Invalid terminal configuration.');
+    if (terminalCount() + countLeaves(root) > MAX_RESTORED_TERMINALS) throw new Error('Terminal limit reached. Close a terminal first.');
+    if (!tabsRef.current.some(item => item.id === tabId)) throw new Error('This session was closed. Select it again.');
+    const addition = mapLeaves(root, leaf => ({ ...leaf, terminalType: 'local' as const, cwd }));
+    const next = tabsRef.current.map(item => item.id !== tabId ? item : { ...item, root: arrangePaneGrid([item.root, addition]) });
+    tabsRef.current = next; setTabs(next); setActiveTabId(tabId); setFocusedTerminalId(getAllLeafIds(addition)[0]);
+    setMaximizedLeafByTab(current => ({ ...current, [tabId]: null }));
+    setGroups(current => current.map(item => item.id === tab.groupId ? { ...item, collapsed: false } : item));
   };
   const [directoryActionError, setDirectoryActionError] = useState('');
   const requestWorkspaceAction = async (action: 'delete' | 'keep' | 'unlink', groupId: string, projectId?: string) => {
@@ -1898,7 +1889,7 @@ function AppInner({ initialSettings, persistSettings }: {
       setDirectoryActionError('Save or close changed editor files before deleting, keeping, or removing this entry.');
       return;
     }
-    if (action !== 'unlink' && group.kind === 'folder') return;
+    if (group.kind === 'folder' && (action === 'keep' || (action === 'delete' && !project))) return;
     const destinationParent = action === 'keep' ? await window.janet.selectLocalDirectory() : undefined;
     if (action === 'keep' && !destinationParent) return;
     const source = project?.cwd ?? group.directory;
@@ -1963,11 +1954,10 @@ function AppInner({ initialSettings, persistSettings }: {
     });
   };
   const handleSSHConnected = useCallback(
-    async (session: SessionInfo, groupId?: string, tabId?: string) => {
+    (session: SessionInfo) => {
       let opened = false;
       try {
-        if (groupId) { await openContextTerminal(groupId, tabId, session); opened = true; }
-        else opened = addTab('ssh', session.id, true, session.sshProfileId);
+        opened = addTab('ssh', session.id, true, session.sshProfileId);
       } catch (error) { setDirectoryActionError(error instanceof Error ? error.message : String(error)); }
       if (!opened) {
         window.janet.sshDisconnect({ id: session.id }).catch(() => {});
@@ -1979,7 +1969,7 @@ function AppInner({ initialSettings, persistSettings }: {
       ));
       setSshConnectionsOpen(false);
     },
-    [addTab, openContextTerminal],
+    [addTab],
   );
 
   // Re-open the SSH shell for a single term. Triggered by the
@@ -2147,7 +2137,7 @@ function AppInner({ initialSettings, persistSettings }: {
         ? groupsRef.current.map((item) => item.id === group.id ? group : item) : [...groupsRef.current, group];
       groupsRef.current = nextGroups;
       setGroups(nextGroups);
-      directory = await window.janet.workspaceDirectory({ parent: group.directory!, ...(group.kind === 'folder' ? {} : { name: preset.name }) });
+      directory = await window.janet.workspaceDirectory({ parent: group.directory!, ...(group.kind === 'folder' && !preset.createProject ? {} : { name: preset.name }) });
       root = mapLeaves(root, (leaf) => leaf.terminalType === 'ssh' ? leaf : { ...leaf, cwd: leaf.cwd || directory });
     }
     if (tabsRef.current.length >= MAX_RESTORED_TABS || terminalCount() + countLeaves(root) > MAX_RESTORED_TERMINALS) {
@@ -2208,7 +2198,6 @@ function AppInner({ initialSettings, persistSettings }: {
       }
     }
   }, [mainDirectory, markSshSessionDisconnected, sshProfiles, terminalCount, updateTab]);
-
 
   const activeTab = getTab(activeTabId);
 
@@ -2515,11 +2504,11 @@ function AppInner({ initialSettings, persistSettings }: {
         shortcut: bindings['rename-tab'], handler: requestRenameTab,
       },
       {
-        id: 'new-workspace', label: 'New workspace or project', category: 'Workspace',
-        keywords: ['group', 'layout'], handler: () => { setTabsOpen(true); setWorkspaceCreatorOpen(true); },
+        id: 'new-workspace', label: 'New workspace', category: 'Workspace',
+        keywords: ['group', 'layout'], handler: () => { setTabsOpen(true); setWorkspaceEntryRequest({ action: 'create' }); },
       },
       {
-        id: 'toggle-sidebar', label: 'Show or hide workspace tools', category: 'View',
+        id: 'toggle-sidebar', label: 'Show or hide project tools', category: 'View',
         shortcut: bindings['toggle-sidebar'], handler: toggleWorkspaceTools,
       },
       {
@@ -2744,9 +2733,7 @@ function AppInner({ initialSettings, persistSettings }: {
               sidebarSide={sidebarSide}
               onSidebarSideChange={persistSidebarSide}
               notificationsEnabled={notificationsEnabled}
-              notificationThresholdSeconds={notificationThresholdSeconds}
               onNotificationsEnabledChange={persistNotificationsEnabled}
-              onNotificationThresholdSecondsChange={persistNotificationThreshold}
             />
             <div className="theme-section shortcut-settings-section">
               <button
@@ -2763,6 +2750,7 @@ function AppInner({ initialSettings, persistSettings }: {
           </div>
         )}
       />
+      {sshConnectionsOpen && <SSHConnectionsDialog sshProfiles={sshProfiles} canConnect={canAddTerminalTab} onConnected={handleSSHConnected} onProfilesChange={handleSSHProfilesChange} onClose={() => setSshConnectionsOpen(false)} />}
       <div className={`app-body app-layout sidebar-${sidebarSide}`}>
         {sidebarSide === 'left' && workspaceTools}
         {tabsOpen ? (
@@ -2773,26 +2761,18 @@ function AppInner({ initialSettings, persistSettings }: {
             dirtyTabIds={editorDocuments.dirtyTabIds}
             awarenessByTab={awarenessByTab}
             sshProfiles={sshProfiles}
-            sshConnectionsOpen={sshConnectionsOpen}
-            onSSHConnectionsOpenChange={setSshConnectionsOpen}
-            canConnectSSH={canAddTerminalTab}
-            onSSHConnected={handleSSHConnected}
-            onSSHProfilesChange={handleSSHProfilesChange}
             groups={groups}
             mainDirectory={mainDirectory}
             onMainDirectoryChange={async (directory) => { await window.janet.setSettings({ mainDirectory: directory }); setMainDirectory(directory); }}
             onRenameGroup={renameGroup}
-            onLocalAt={openContextTerminal}
             onWorkspaceAction={(action, groupId, projectId) => { void requestWorkspaceAction(action, groupId, projectId).catch((error) => setDirectoryActionError(String(error))); }}
             onGroupsChange={setGroups}
-            onMoveWorkspace={(id, groupId) => updateTab(id, (tab) => ({ ...tab, groupId }))}
             creatorOpen={workspaceCreatorOpen}
             entryRequest={workspaceEntryRequest}
             onEntryRequestHandled={() => setWorkspaceEntryRequest(undefined)}
             onCreatorOpenChange={setWorkspaceCreatorOpen}
             onSelectTab={selectTerminalTab}
             onCloseTab={requestCloseTab}
-            onNewTab={() => { setWorkspaceCreatorOpen(true); }}
             onWorkspaceTabLaunch={openWorkspaceTab}
             onRenameTab={renameTab}
             onCollapse={() => {
@@ -2810,7 +2790,7 @@ function AppInner({ initialSettings, persistSettings }: {
             </button>
           </Tooltip>
         )}
-        <main key="terminal" className="terminal-area workspace-main" aria-label="Terminal workspace">
+        <main id="workspace-main" key="terminal" className="terminal-area workspace-main" aria-label="Terminal workspace">
           {directoryActionError && <div role="alert" className="settings-save-notice">{directoryActionError}<button onClick={() => setDirectoryActionError('')}>Dismiss</button></div>}
           {!activeTab && <EmptyWorkspace groups={groups} mainDirectory={mainDirectory} onRequest={request => {
             responsiveTabsCollapsedRef.current = false;
@@ -2847,12 +2827,15 @@ function AppInner({ initialSettings, persistSettings }: {
             onRetryDocument={(key) => { void editorDocuments.retryDocument(key); }}
             onCloseDocument={requestCloseEditorDocument}
             terminal={getAllLeafIds(activeTab.root).length === 0 ? (
-              <section className="editor-state" aria-label="No terminals open">
+              (isWorkspaceProject(activeTab, groups) || groups.some(group => group.id === activeTab.groupId && group.kind === 'folder')) ? <div className="empty-project-setup">
+                <AddTerminalsDialog key={activeTab.id} inline
+                  group={groups.find(group => group.id === activeTab.groupId)!}
+                  onClose={() => {}}
+                  onSubmit={preset => addSessionTerminals(activeTab.id, preset)}
+                />
+              </div> : <section className="editor-state" aria-label="No terminals open">
                 <strong>No terminals open</strong>
-                {isWorkspaceProject(activeTab, groups) ? <>
-                <span>{activeTab.title} is still available. Open a terminal to continue working in its folder.</span>
-                <button onClick={() => { if (activeTab.groupId) void openContextTerminal(activeTab.groupId, activeTab.id).catch(error => setDirectoryActionError(String(error))); }}>Open terminal</button>
-                </> : <button onClick={() => requestCloseTab(activeTab.id)}>Close session</button>}
+                <button onClick={() => requestCloseTab(activeTab.id)}>Close session</button>
               </section>
             ) : (
               <SplitPane
@@ -2873,7 +2856,7 @@ function AppInner({ initialSettings, persistSettings }: {
                 onBroadcastRecipientChange={handleBroadcastRecipientChange}
                 awarenessByTerminal={awarenessByTerminal}
                 transportByTerminal={transportByTerminal}
-                onSplitPane={(leafId, dir) => handleSplitPane((activeTab?.id ?? ""), leafId, dir)}
+                onAddTerminals={() => setAddTerminalsTabId(activeTab.id)}
                 onClosePane={(leafId) => requestClosePane((activeTab?.id ?? ""), leafId)}
                 onResizePane={(splitId, dividerIndex, leftFraction) => handleResizePane((activeTab?.id ?? ""), splitId, dividerIndex, leftFraction)}
                 onMovePane={(draggedLeafId, targetLeafId, side) => handleMovePane((activeTab?.id ?? ""), draggedLeafId, targetLeafId, side)}
@@ -2954,6 +2937,11 @@ function AppInner({ initialSettings, persistSettings }: {
         onCancel={() => setRenameTarget(null)}
         onSave={saveRename}
       />
+      {addTerminalsTabId && <AddTerminalsDialog
+        group={groups.find(group => group.id === tabs.find(tab => tab.id === addTerminalsTabId)?.groupId) ?? DEFAULT_WORKSPACE_GROUP}
+        onClose={() => setAddTerminalsTabId(null)}
+        onSubmit={preset => addSessionTerminals(addTerminalsTabId, preset)}
+      />}
       <ConfirmationDialog
         open={broadcastConfirmationOpen}
         title="Start broadcast input?"

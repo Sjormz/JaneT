@@ -29,9 +29,9 @@ describe('themes', () => {
     expect(themeNames).toContain('gruvbox');
   });
 
-  it('returns tokyo-night by default for unknown themes', () => {
+  it('returns one-dark by default for unknown themes', () => {
     const theme = getTheme('nonexistent' as any);
-    expect(theme.name).toBe('tokyo-night');
+    expect(theme.name).toBe('one-dark');
   });
 
   it('each theme has required fields', () => {

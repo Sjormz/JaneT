@@ -66,6 +66,7 @@ export interface SavedSSHProfile {
 }
 
 export interface WorkspaceTabPreset {
+  createProject?: boolean;
   id: string;
   name: string;
   type: 'local' | 'ssh';
@@ -103,6 +104,13 @@ function workspaceLeaf(terminal: WorkspaceTerminal): TerminalLeaf {
 /** Creates a balanced initial workspace grid; the final pane spans unused row cells. */
 export function createWorkspaceRoot(terminals: WorkspaceTerminal[]): PaneNode {
   const leaves = terminals.length ? terminals.map(workspaceLeaf) : [workspaceLeaf({ type: 'local' })];
+  return arrangePaneGrid(leaves);
+}
+
+/** Reflow panes in reading order while retaining their live terminal identities. */
+export function arrangePaneGrid(trees: PaneNode[]): PaneNode {
+  const collect = (node: PaneNode): TerminalLeaf[] => node.type === 'leaf' ? [node] : node.children.flatMap(collect);
+  const leaves = trees.flatMap(collect);
   const columns = Math.ceil(Math.sqrt(leaves.length));
   const rows: PaneNode[] = [];
   for (let offset = 0; offset < leaves.length; offset += columns) {

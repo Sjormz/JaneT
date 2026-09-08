@@ -200,8 +200,8 @@ describe('Hermes agent awareness plugin', () => {
     for (const hook of hookNames) expect(manifest).toContain(`  - ${hook}`);
 
     const python = process.env.JANET_TEST_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
-    const result = spawnSync(python, ['-c', probe, pluginDir], { encoding: 'utf8' });
-    if (result.error) throw new Error(`Python 3 is required for the Hermes integration test. Set JANET_TEST_PYTHON to its executable. ${result.error.message}`);
+    const result = spawnSync(python, ['-', pluginDir], { input: probe, encoding: 'utf8', timeout: 10_000, windowsHide: true });
+    if (result.error) throw new Error(`Hermes Python probe failed (${python}): ${result.error.message}. stderr: ${result.stderr}`);
     expect(result.status, result.stderr).toBe(0);
     const observed = JSON.parse(result.stdout);
 
@@ -245,5 +245,5 @@ describe('Hermes agent awareness plugin', () => {
       { version: 1, provider: 'hermes', event: 'session.end', sessionId: 'tui-session' },
     ]);
     expect(observed.tui_protocol).toBe('');
-  });
+  }, 15_000);
 });

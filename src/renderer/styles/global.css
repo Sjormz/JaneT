@@ -865,9 +865,15 @@ html, body, #root {
 .workspace-count-picker button:disabled { opacity: .4; cursor: default; }
 .workspace-count-picker input { width: 48px; height: 44px; padding: 0; border: 0; background: transparent; color: var(--text-primary); font: 600 16px var(--font-mono); text-align: center; appearance: textfield; }
 .workspace-count-picker input::-webkit-inner-spin-button, .workspace-count-picker input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.workspace-count-picker input:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -5px;
+  box-shadow: none;
+}
 .workspace-launcher-field { min-width: 0; margin: 0; padding: 0; border: 0; }
 .workspace-launcher-field legend { margin-bottom: 10px; padding: 0; color: var(--text-secondary); font-size: 12px; }
-.workspace-launcher-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.workspace-launcher-options { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
 .workspace-launcher-option { position: relative; cursor: pointer; }
 .workspace-launcher-option input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .workspace-launcher-card { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 88px; border: 1px solid var(--glass-border); border-radius: var(--radius-md); background: var(--control-bg); color: var(--text-secondary); font-size: 12px; font-weight: 600; transition: background var(--transition-fast), border-color var(--transition-fast); }
@@ -1067,17 +1073,8 @@ html, body, #root {
 }
 
 .fresh-profile-entry {
-  position: absolute;
-  z-index: 5;
-  top: 16px;
-  left: 50%;
-  width: min(520px, calc(100% - 32px));
-  padding: 24px;
-  transform: translateX(-50%);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--surface-overlay);
-  box-shadow: var(--glass-shadow);
+  width: min(640px, 100%);
+  margin: auto;
   color: var(--text-secondary);
 }
 .fresh-profile-entry strong { color: var(--text-primary); font-size: 13px; }
@@ -1089,8 +1086,7 @@ html, body, #root {
 .fresh-profile-entry-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .empty-workspace-locations { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-subtle); }
 .empty-workspace-locations p { margin: 0 0 10px; font-size: 12px; }
-.fresh-profile-entry-actions button,
-.fresh-profile-entry-dismiss {
+.fresh-profile-entry-actions button {
   min-height: 30px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
@@ -1100,16 +1096,7 @@ html, body, #root {
   font: 600 11px/1 var(--font-ui);
 }
 .fresh-profile-entry-actions button { padding: 0 11px; }
-.fresh-profile-entry-actions button:hover,
-.fresh-profile-entry-dismiss:hover { border-color: var(--text-accent); background: var(--control-hover); }
-.fresh-profile-entry-dismiss {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 28px;
-  padding: 0;
-  font-size: 16px;
-}
+.fresh-profile-entry-actions button:hover { border-color: var(--text-accent); background: var(--control-hover); }
 
 /* === Terminal-owned document workspace === */
 .workspace-content {
@@ -2723,7 +2710,6 @@ html, body, #root {
   overflow-wrap: anywhere;
 }
 
-
 /* === Drag & Drop === */
 .explorer-item[draggable="true"],
 .git-file-item[draggable="true"] {
@@ -3123,6 +3109,7 @@ textarea:focus-visible {
 .sidebar { position: relative; }
 .vtab-heading { display: inline-flex; align-items: center; gap: 8px; }
 .vtab-header-actions { display: inline-flex; align-items: center; gap: 4px; }
+
 .vtab-header-btn {
   display: inline-flex;
   align-items: center;
@@ -4013,9 +4000,7 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
 .workspace-modal,
 .confirmation-dialog,
 .git-dialog,
-.ssh-terminal-notice,
-.fresh-profile-entry,
-.tooltip-popover,
+.ssh-terminal-notice,.tooltip-popover,
 .update-banner {
   background: var(--surface-floating);
   backdrop-filter: blur(var(--glass-blur-heavy)) saturate(140%);
@@ -4038,9 +4023,7 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
 .git-file-context-menu,
 .git-kebab-dropdown,
 .workspace-profile-menu,
-.ssh-terminal-notice,
-.fresh-profile-entry,
-.tooltip-popover,
+.ssh-terminal-notice,.tooltip-popover,
 .update-banner {
   border-radius: var(--radius-lg);
 }
@@ -4113,9 +4096,7 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
   .workspace-modal,
   .confirmation-dialog,
   .git-dialog,
-  .ssh-terminal-notice,
-  .fresh-profile-entry,
-  .tooltip-popover,
+  .ssh-terminal-notice,  .tooltip-popover,
   .update-banner {
     background: var(--surface-panel);
   }
@@ -4149,9 +4130,7 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
   .workspace-modal,
   .confirmation-dialog,
   .git-dialog,
-  .ssh-terminal-notice,
-  .fresh-profile-entry,
-  .tooltip-popover,
+  .ssh-terminal-notice,  .tooltip-popover,
   .update-banner {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
@@ -4259,7 +4238,7 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
 .command-item.selected { box-shadow: inset 3px 0 var(--text-accent); }
 .vtab-context-menu, .git-file-context-menu, .git-kebab-dropdown { padding: 6px; }
 :is(.vtab-context-menu, .git-file-context-menu, .git-kebab-dropdown) button { min-height: 34px; border-radius: 8px; }
-.workspace-modal-header { padding: 20px 22px; }
+.workspace-modal-header { padding: 0; margin-bottom: 20px; min-height: 32px; }
 .workspace-modal-header h2, .confirmation-dialog-title { font-size: 18px; letter-spacing: -0.025em; }
 .confirmation-dialog-description { line-height: 1.65; }
 .form-input { border-radius: 10px; }

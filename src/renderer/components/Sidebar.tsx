@@ -88,7 +88,7 @@ export default function Sidebar({
       key="workspace-tools-rail"
       className="workspace-tools-rail"
       role="tablist"
-      aria-label="Workspace tool views"
+      aria-label="Project tool views"
       aria-orientation="vertical"
     >
       {WORKSPACE_TOOLS.map(({ id, label, Icon }, index) => {
@@ -154,25 +154,27 @@ export default function Sidebar({
   return (
     <aside
       className={`sidebar workspace-tools workspace-supporting-rail workspace-tools-side-${side} ${expanded ? 'is-expanded' : 'is-collapsed'}`}
-      aria-label="Workspace tools"
+      aria-label="Project tools"
     >
       <div className="workspace-tools-header">
-        <h2 className="workspace-tools-title">Workspace tools</h2>
-        <button
-          type="button"
-          className="workspace-tools-toggle"
-          aria-controls={panelId}
-          aria-expanded={expanded}
-          aria-label={expanded ? 'Collapse workspace tools' : 'Expand workspace tools'}
-          onClick={() => onExpandedChange(!expanded)}
-        >
-          {expanded ? <ChevronsLeftIcon size="md" /> : <ChevronsRightIcon size="md" />}
-        </button>
+        <h2 className="workspace-tools-title">Project tools</h2>
+
       </div>
 
       <div className="workspace-tools-body">
         {side === 'left' ? [toolRail, toolPanel] : [toolPanel, toolRail]}
       </div>
+        <button
+          type="button"
+          className="workspace-rail-collapse project-tools-collapse"
+          aria-controls={panelId}
+          aria-expanded={expanded}
+          aria-label={expanded ? 'Collapse project tools' : 'Expand project tools'}
+          onClick={() => onExpandedChange(!expanded)}
+        >
+          {(side === 'right') === expanded ? <ChevronsRightIcon size="sm" /> : <ChevronsLeftIcon size="sm" />}
+          {expanded && <span>Collapse sidebar</span>}
+        </button>
     </aside>
   );
 }

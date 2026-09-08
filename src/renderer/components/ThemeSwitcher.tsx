@@ -18,9 +18,7 @@ interface ThemeSwitcherProps {
   sidebarSide: 'left' | 'right';
   onSidebarSideChange: (side: 'left' | 'right') => void;
   notificationsEnabled: boolean;
-  notificationThresholdSeconds: number;
   onNotificationsEnabledChange: (enabled: boolean) => void;
-  onNotificationThresholdSecondsChange: (seconds: number) => void;
 }
 
 export default function ThemeSwitcher({
@@ -31,9 +29,7 @@ export default function ThemeSwitcher({
   sidebarSide,
   onSidebarSideChange,
   notificationsEnabled,
-  notificationThresholdSeconds,
   onNotificationsEnabledChange,
-  onNotificationThresholdSecondsChange,
 }: ThemeSwitcherProps) {
   const [diagnosticsFeedback, setDiagnosticsFeedback] = React.useState('');
 
@@ -94,8 +90,8 @@ export default function ThemeSwitcher({
       </div>
 
       <div className="theme-section">
-        <span className="theme-label">Workspace tools position</span>
-        <div className="theme-options" role="group" aria-label="Workspace tools position">
+        <span className="theme-label">Project tools position</span>
+        <div className="theme-options" role="group" aria-label="Project tools position">
           <button
             className={`theme-option ${sidebarSide === 'left' ? 'active' : ''}`}
             onClick={() => onSidebarSideChange('left')}
@@ -120,8 +116,7 @@ export default function ThemeSwitcher({
           <input type="checkbox" checked={notificationsEnabled} onChange={(event) => onNotificationsEnabledChange(event.currentTarget.checked)} />
           Notify when long commands finish while JaneT is unfocused
         </label>
-        <label className="notification-threshold-label" htmlFor="notification-threshold">Notification threshold (seconds)</label>
-        <input id="notification-threshold" type="number" min={1} max={86_400} step={1} value={notificationThresholdSeconds} disabled={!notificationsEnabled} onChange={(event) => onNotificationThresholdSecondsChange(Number(event.currentTarget.value))} />
+        <p className="workspace-form-help">For commands lasting 10 seconds or longer.</p>
       </div>
       <div className="theme-section shortcut-settings-section">
         <button type="button" className="shortcut-settings-button" onClick={() => { void copyDiagnostics(); }} aria-label="Copy diagnostics">

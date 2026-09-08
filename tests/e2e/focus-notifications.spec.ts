@@ -6,7 +6,7 @@ import { installCodexActivity } from '../../src/main/codexActivitySetup';
 import { parse } from 'smol-toml';
 
 const root = path.resolve(__dirname, '../..');
-const command = 'node -e "setTimeout(()=>{},1200)"';
+const command = 'node -e "setTimeout(()=>{},10500)"';
 
 function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
   const env = { ...process.env, ...extra };
@@ -29,12 +29,12 @@ async function forceClose(app: ElectronApplication | undefined): Promise<void> {
 }
 
 test('records focus decisions and project busy/unread activity without command or output', async ({}, testInfo) => {
-  test.setTimeout(60_000);
+  test.setTimeout(90_000);
   const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-focus-notifications-e2e-'));
   const eventsPath = path.join(userData, 'events.jsonl');
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     notificationsEnabled: true,
-    notificationThresholdSeconds: 1,
+    notificationThresholdSeconds: 10,
     workspaceTabs: [],
     session: { groups: [{ id: 'activity', name: 'Activity', directory: userData }], tabs: [
       { id: 'work', groupId: 'activity', title: 'Work', type: 'local', cwd: userData, root: { type: 'leaf', cwd: userData } },
@@ -62,7 +62,7 @@ test('records focus decisions and project busy/unread activity without command o
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.focus());
     await page.evaluate(({ id, text }) => window.janet.terminalWrite({ id, data: `${text}\r`, userInput: true }), { id: termId!, text: command });
     await expect(page.locator('.vtab-item').filter({ hasText: 'Work' }).locator('.activity-dot')).toHaveClass(/running/);
-    await expect.poll(() => readDecisions(eventsPath).map((event) => event.decision), { timeout: 15_000 }).toContain('focused');
+    await expect.poll(() => readDecisions(eventsPath).map((event) => event.decision), { timeout: 25_000 }).toContain('focused');
 
     await app.evaluate(({ BrowserWindow }) => {
       const main = BrowserWindow.getAllWindows()[0];
