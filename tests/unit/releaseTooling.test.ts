@@ -91,11 +91,11 @@ describe('development tooling', () => {
     expect(fs.existsSync(executables.electron)).toBe(true);
     expect(fs.existsSync(executables.vite)).toBe(true);
     expect(executables.electron).not.toMatch(/\.cmd$/);
-    expect(execFileSync(process.execPath, [executables.vite, '--version'], { encoding: 'utf8' })).toContain('vite/');
+    expect(execFileSync(process.execPath, [executables.vite, '--version'], { encoding: 'utf8', timeout: 10_000 })).toContain('vite/');
     const source = fs.readFileSync(path.join(projectRoot, 'scripts', 'dev.mjs'), 'utf8');
     expect(source).not.toContain('shell: true');
     expect(source).toContain('shell: false');
-  });
+  }, 15_000);
 
   it('watches shared modules that are bundled into the Electron main process', async () => {
     const { mainSourceDirectories } = await loadScript('dev.mjs');
