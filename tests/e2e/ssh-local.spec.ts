@@ -812,6 +812,8 @@ test('restores a mutated mixed workspace in a genuine second Electron process', 
       .getByRole('textbox', { name: 'Tab name' });
     await tabName.fill('Project');
     await tabName.press('Enter');
+    await expect(firstPage.getByRole('dialog', { name: 'Rename tab' })).toBeHidden();
+    await expect(firstLocalTerminal.locator('.xterm-helper-textarea')).toBeFocused();
 
     await firstPage.keyboard.press(process.platform === 'darwin' ? 'Meta+Backslash' : 'Control+Backslash');
     await expect(firstPage.locator('.terminal-leaf')).toHaveCount(2);

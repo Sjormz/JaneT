@@ -117,7 +117,7 @@ test('project remains discoverable with zero terminals after close and restart',
     let page = await app.firstWindow();
     await page.getByRole('button', { name: /^Close terminal —/ }).click();
     await page.getByRole('button', { name: 'Close pane', exact: true }).click();
-    await expect(page.getByRole('region', { name: 'No terminals open' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Start session', exact: true })).toBeVisible();
     await expect(page.locator('.vtab-item').filter({ hasText: 'Editor fixture' })).toBeVisible();
     await expect(page.locator('[data-terminal-id]')).toHaveCount(0);
     await expect.poll(() => JSON.parse(fs.readFileSync(settingsPath, 'utf8')).session.tabs[0].root.children).toEqual([]);
@@ -125,10 +125,10 @@ test('project remains discoverable with zero terminals after close and restart',
     await forceClose(app);
     app = await launch();
     page = await app.firstWindow();
-    await expect(page.getByRole('region', { name: 'No terminals open' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Start session', exact: true })).toBeVisible();
     await expect(page.locator('.vtab-item').filter({ hasText: 'Editor fixture' })).toBeVisible();
     await expect(page.locator('[data-terminal-id]')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Open terminal', exact: true }).click();
+    await page.getByRole('button', { name: 'Start session', exact: true }).click();
     await expect(page.locator('[data-terminal-id]')).toHaveCount(1);
     await expect(page.locator('textarea[data-shell-ready="true"]')).toBeAttached();
   } finally {
