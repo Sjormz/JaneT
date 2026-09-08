@@ -291,7 +291,7 @@ const SAVED_TAB_KEYS = new Set([
 const DEFAULT_SETTINGS: AppSettings = {
   mainDirectory: null,
   mainDirectorySetupSkipped: false,
-  theme: 'tokyo-night',
+  theme: 'one-dark',
   fontSize: 14,
   fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
   sidebarSide: 'right',

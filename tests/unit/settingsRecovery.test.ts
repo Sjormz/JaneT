@@ -123,14 +123,14 @@ describe('SettingsManager recovery', () => {
     const damaged = new SettingsManager();
 
     expect(fs.readFileSync(settingsPath, 'utf8')).toBe(corruptBytes);
-    expect(damaged.reset()).toMatchObject({ theme: 'tokyo-night', fontSize: 14 });
+    expect(damaged.reset()).toMatchObject({ theme: 'one-dark', fontSize: 14 });
     expect(JSON.parse(fs.readFileSync(settingsPath, 'utf8'))).toMatchObject({
-      theme: 'tokyo-night',
+      theme: 'one-dark',
       fontSize: 14,
     });
     expect(fs.existsSync(previousPath)).toBe(false);
     expect(damaged.getRecoveryState()).toEqual({ previousAvailable: false });
-    expect(damaged.get()).toMatchObject({ theme: 'tokyo-night', fontSize: 14 });
+    expect(damaged.get()).toMatchObject({ theme: 'one-dark', fontSize: 14 });
   });
 
   it('blocks ordinary saves while corrupt settings await recovery', async () => {

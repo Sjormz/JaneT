@@ -9,10 +9,10 @@ export default function EmptyWorkspace({ groups, mainDirectory, onRequest }: {
   const [selectedId, setSelectedId] = useState('');
   const selected = groups.find(group => group.id === selectedId) ?? groups[0];
   const library = selected?.kind === 'folder';
-  return <section className="fresh-profile-entry" aria-labelledby="fresh-profile-entry-title">
+  return <div className="empty-project-setup"><section className="fresh-profile-entry workspace-landing" aria-labelledby="fresh-profile-entry-title">
     <h2 id="fresh-profile-entry-title">{selected ? 'What would you like to work on?' : mainDirectory ? 'Create your first workspace' : 'Choose where to work'}</h2>
     <p>{selected
-      ? 'Choose a workspace for a temporary project, or a Library folder for a new terminal session.'
+      ? 'Choose a workspace or Library folder for your new project.'
       : mainDirectory ? 'A workspace holds temporary projects. Each project gets its own folder and terminals. For an existing repo, link its folder to Library.' : 'Link a folder to Library to open terminals. You can set up workspaces later from the side panel.'}</p>
     {selected && <>
       <label className="form-field"><span>Where do you want to work?</span>
@@ -23,11 +23,11 @@ export default function EmptyWorkspace({ groups, mainDirectory, onRequest }: {
           </optgroup>)}
         </select>
       </label>
-      <p>{library ? 'Start terminals in this folder without moving or copying its files.' : 'Create a project folder here, then choose how many terminals to open.'}</p>
+      <p>Create a project folder here. Add terminals now or start a session later.</p>
     </>}
     <div className="fresh-profile-entry-actions" role="group" aria-label={selected ? 'Selected location' : 'Get started'}>
       <button type="button" className="empty-workspace-primary" onClick={() => onRequest({ action: 'create', groupId: selected?.id })}>
-        {!mainDirectory && !library ? 'Set up workspaces' : selected ? library ? 'Start session' : 'Create project' : 'Create workspace'}
+        {!mainDirectory && !library ? 'Set up workspaces' : selected ? 'Create project' : 'Create workspace'}
       </button>
     </div>
     <div className="empty-workspace-locations" role="group" aria-label="Add a location">
@@ -37,5 +37,5 @@ export default function EmptyWorkspace({ groups, mainDirectory, onRequest }: {
         <button type="button" onClick={() => onRequest({ action: 'link' })}>{selected ? 'Link another folder' : 'Link folder to Library'}</button>
       </div>
     </div>
-  </section>;
+  </section></div>;
 }

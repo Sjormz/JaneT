@@ -219,7 +219,7 @@ function showOrCreateWindow(): void {
 function notificationDecision(payload: CommandNotificationPayload): 'disabled' | 'below-threshold' | 'unsupported' | 'focused' | 'would-show' {
   const settings = settingsManager.get();
   if (!settings.notificationsEnabled) return 'disabled';
-  if (payload.durationMs < settings.notificationThresholdSeconds * 1000) return 'below-threshold';
+  if (payload.durationMs < 10_000) return 'below-threshold';
   if (!electron.Notification.isSupported()) return 'unsupported';
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) return 'focused';
   return 'would-show';

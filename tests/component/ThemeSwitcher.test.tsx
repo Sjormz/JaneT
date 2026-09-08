@@ -19,9 +19,7 @@ function renderThemeSwitcher(overrides?: Partial<React.ComponentProps<typeof The
       sidebarSide="left"
       onSidebarSideChange={vi.fn()}
       notificationsEnabled={false}
-      notificationThresholdSeconds={10}
       onNotificationsEnabledChange={vi.fn()}
-      onNotificationThresholdSecondsChange={vi.fn()}
       {...overrides}
     />,
   );
@@ -82,7 +80,7 @@ describe('ThemeSwitcher', () => {
     const onSidebarSideChange = vi.fn();
     renderThemeSwitcher({ sidebarSide: 'left', onSidebarSideChange });
 
-    expect(screen.getByRole('group', { name: 'Workspace tools position' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Project tools position' })).toBeInTheDocument();
     fireEvent.click(screen.getByText('Right'));
     expect(onSidebarSideChange).toHaveBeenCalledWith('right');
     expect(screen.getByRole('button', { name: 'Right' })).toHaveAttribute('aria-pressed', 'false');
@@ -90,23 +88,18 @@ describe('ThemeSwitcher', () => {
 
   it('renders accessible bounded notification controls and invokes callbacks', () => {
     const onNotificationsEnabledChange = vi.fn();
-    const onNotificationThresholdSecondsChange = vi.fn();
-    renderThemeSwitcher({ onNotificationsEnabledChange, onNotificationThresholdSecondsChange });
+
+    renderThemeSwitcher({ onNotificationsEnabledChange });
     const enabled = screen.getByRole('checkbox', { name: 'Notify when long commands finish while JaneT is unfocused' });
-    const threshold = screen.getByRole('spinbutton', { name: 'Notification threshold (seconds)' }) as HTMLInputElement;
     expect(enabled).not.toBeChecked();
-    expect(threshold).toBeDisabled();
-    expect(threshold).toHaveAttribute('min', '1');
-    expect(threshold).toHaveAttribute('max', '86400');
     fireEvent.click(enabled);
     expect(onNotificationsEnabledChange).toHaveBeenCalledWith(true);
   });
 
-  it('changes the notification threshold while notifications are enabled', () => {
-    const onNotificationThresholdSecondsChange = vi.fn();
-    renderThemeSwitcher({ notificationsEnabled: true, onNotificationThresholdSecondsChange });
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Notification threshold (seconds)' }), { target: { value: '42' } });
-    expect(onNotificationThresholdSecondsChange).toHaveBeenCalledWith(42);
+  it('shows the fixed notification threshold without an adjustment field', () => {
+    renderThemeSwitcher({ notificationsEnabled: true });
+    expect(screen.queryByRole('spinbutton')).toBeNull();
+    expect(screen.getByText('For commands lasting 10 seconds or longer.')).toBeInTheDocument();
   });
 
   it('copies diagnostics without renderer data and politely confirms success', async () => {

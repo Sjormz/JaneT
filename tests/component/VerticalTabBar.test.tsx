@@ -41,11 +41,9 @@ function renderTabs(overrides?: Partial<React.ComponentProps<typeof VerticalTabB
     return <VerticalTabBar
       mainDirectory="C:/Work"
       tabs={tabs} activeTabId="tab-1" sshProfiles={sshProfiles}
-      groups={currentGroups} onGroupsChange={onGroupsChange} onMoveWorkspace={vi.fn()}
+      groups={currentGroups} onGroupsChange={onGroupsChange}
       creatorOpen={creatorOpen} onCreatorOpenChange={onCreatorOpenChange}
-      onSelectTab={vi.fn()} onCloseTab={vi.fn()} onNewTab={vi.fn()}
-      sshConnectionsOpen={false} onSSHConnectionsOpenChange={vi.fn()}
-      onSSHConnected={vi.fn()} onSSHProfilesChange={vi.fn()}
+      onSelectTab={vi.fn()} onCloseTab={vi.fn()}
       onWorkspaceTabLaunch={vi.fn().mockResolvedValue(undefined)}
       onRenameTab={vi.fn()} onCollapse={vi.fn()} {...overrides} />;
   }
@@ -53,10 +51,46 @@ function renderTabs(overrides?: Partial<React.ComponentProps<typeof VerticalTabB
 }
 
 describe('VerticalTabBar', () => {
+  it('uses the newly clicked parent when switching project creation between entries', async () => {
+    const launch = vi.fn().mockResolvedValue(undefined);
+    renderTabs({ groups: [
+      { id: 'work', name: 'Work', directory: '/work' },
+      { id: 'library', name: 'Library parent', directory: '/repos', kind: 'folder' },
+    ], onWorkspaceTabLaunch: launch });
+    fireEvent.click(screen.getByRole('button', { name: 'Add project to Work' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add project to Library parent' }));
+    expect(screen.getByRole('button', { name: 'Create project' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    await waitFor(() => expect(launch).toHaveBeenCalledWith(expect.objectContaining({ name: 'Test' }), expect.objectContaining({ id: 'library' })));
+  });
+  it.each([undefined, 'folder'] as const)('creates projects from their parent link (%s)', async kind => {
+    const launch = vi.fn().mockResolvedValue(undefined);
+    renderTabs({ groups: [{ id: 'parent', name: 'Parent', directory: '/parent', kind }], onWorkspaceTabLaunch: launch });
+    fireEvent.click(screen.getByRole('button', { name: 'Add project to Parent' }));
+    expect(screen.queryByRole('combobox')).toBeNull();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Child' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    await waitFor(() => expect(launch).toHaveBeenCalledWith(expect.objectContaining({ name: 'Child', createProject: true, terminalCount: 0 }), expect.objectContaining({ id: 'parent', kind })));
+    expect(screen.getByRole('button', { name: 'Add project to Parent' })).toBeInTheDocument();
+  });
+  it('creates a project without terminals by default', () => {
+    const launch = vi.fn();
+    renderTabs({ onWorkspaceTabLaunch: launch });
+    fireEvent.click(screen.getByRole('button', { name: /Add project to My workspaces/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Later' } });
+    expect(screen.getByRole('button', { name: /Add terminals/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('spinbutton')).toBeNull();
+    expect(screen.queryByRole('radio')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    expect(launch).toHaveBeenCalledWith(expect.objectContaining({ name: 'Later', terminalCount: 0,
+      root: { type: 'split', direction: 'vertical', children: [], sizes: [] },
+    }), expect.anything());
+  });
   it('opens setup instead of creating a workspace when no main directory is set', () => {
     const groupsChanged = vi.fn();
     renderTabs({ mainDirectory: null, groups: [], onGroupsChange: groupsChanged });
-    fireEvent.click(screen.getByRole('button', { name: 'New workspace or project' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New workspace' }));
     expect(screen.getByRole('dialog', { name: 'Main directory settings' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create workspace' })).not.toBeInTheDocument();
     expect(groupsChanged).not.toHaveBeenCalled();
@@ -84,21 +118,23 @@ describe('VerticalTabBar', () => {
     expect(await screen.findByRole('heading', { name: 'Create project' })).toBeInTheDocument();
     expect(handled).toHaveBeenCalled();
   });
-  it('opens a Library session form for an empty-state destination request', async () => {
+  it('opens a Library project form for an empty-state destination request', async () => {
     renderTabs({ groups: [{ id: 'repo', name: 'JaneT', kind: 'folder', directory: 'C:/repo' }], creatorOpen: true,
       entryRequest: { action: 'create', groupId: 'repo' }, onEntryRequestHandled: vi.fn() });
-    expect(await screen.findByRole('heading', { name: 'New session in JaneT' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Start session' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Create project' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create project' })).toBeInTheDocument();
   });
-  it('starts all session terminals in the selected Library folder with the shared command', () => {
+  it('configures all terminals for a Library child project with the shared command', () => {
     const launch = vi.fn();
     const folder = { id: 'repo', name: 'JaneT', kind: 'folder' as const, directory: 'C:/repo' };
     renderTabs({ groups: [folder], creatorOpen: true, entryRequest: { action: 'create', groupId: 'repo' },
       onEntryRequestHandled: vi.fn(), onWorkspaceTabLaunch: launch });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Child' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add terminals/ }));
     fireEvent.click(screen.getByRole('button', { name: 'More terminals' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Hermes' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
-    expect(launch).toHaveBeenCalledWith(expect.objectContaining({ name: 'Session', terminalCount: 2,
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    expect(launch).toHaveBeenCalledWith(expect.objectContaining({ name: 'Child', createProject: true, terminalCount: 2,
       root: expect.objectContaining({ children: [
         expect.objectContaining({ terminalType: 'local', startupCommands: ['hermes --tui'] }),
         expect.objectContaining({ terminalType: 'local', startupCommands: ['hermes --tui'] }),
@@ -154,115 +190,12 @@ describe('VerticalTabBar', () => {
     expect(onCloseTab).toHaveBeenCalledWith(tabs[0].id);
   });
 
-  it('labels the section as Tabs and creates a local terminal from its visible action', () => {
-    const onLocalAt = vi.fn().mockResolvedValue(undefined);
-    renderTabs({ onLocalAt });
-
-    expect(screen.getByText('Workspaces')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'New local terminal tab' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Local terminal in My workspaces' }));
-    expect(onLocalAt).toHaveBeenCalledWith('default');
-  });
-
-  it('hides sidebar SSH entry points pending review while retaining Local actions', () => {
-    renderTabs({ sshConnectionsOpen: true });
-    expect(screen.queryByRole('button', { name: /^SSH terminal in/ })).not.toBeInTheDocument();
-    expect(document.getElementById('vtab-ssh-connections')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Local terminal in My workspaces' })).toBeInTheDocument();
-  });
-
-  it('keeps compact project launch controls separate from row selection', () => {
-    const onLocalAt = vi.fn().mockResolvedValue(undefined);
-    const onSelectTab = vi.fn();
-    renderTabs({ onLocalAt, onSelectTab });
-    const launch = screen.getByRole('button', { name: `Local terminal in session ${tabs[0].title}` });
-    expect(launch).toHaveClass('directory-terminal-launch');
-    expect(launch).toHaveAttribute('data-tooltip-label', 'Add terminal here');
-    expect(launch.closest('.vtab-item')).toBeNull();
-    expect(launch.textContent).toBe('');
-    fireEvent.click(launch);
-    expect(onLocalAt).toHaveBeenCalledWith('default', tabs[0].id);
-    expect(onSelectTab).not.toHaveBeenCalled();
-  });
-
-  // TODO: Restore these integration checks when sidebar SSH entry points are reviewed.
-  it.skip('opens and closes SSH connection management from the Tabs section', () => {
-    const onSSHConnectionsOpenChange = vi.fn();
-
-    function Harness() {
-      const [sshConnectionsOpen, setSSHConnectionsOpen] = useState(false);
-      return (
-        <VerticalTabBar
-          tabs={tabs}
-          activeTabId="tab-1"
-          sshProfiles={sshProfiles}
-          groups={groups} creatorOpen={false} onCreatorOpenChange={vi.fn()} onGroupsChange={vi.fn()} onMoveWorkspace={vi.fn()}
-          onSelectTab={vi.fn()}
-          onCloseTab={vi.fn()}
-          onNewTab={vi.fn()}
-          sshConnectionsOpen={sshConnectionsOpen}
-          onSSHConnectionsOpenChange={(open) => {
-            onSSHConnectionsOpenChange(open);
-            setSSHConnectionsOpen(open);
-          }}
-          onSSHConnected={vi.fn()}
-          onSSHProfilesChange={vi.fn()}
-
-          onWorkspaceTabLaunch={vi.fn()}
-
-          onRenameTab={vi.fn()}
-          onCollapse={vi.fn()}
-        />
-      );
-    }
-
-    render(<Harness />);
-    const toggle = screen.getByRole('button', { name: 'SSH terminal in My workspaces' });
-    fireEvent.click(toggle);
-
-    expect(onSSHConnectionsOpenChange).toHaveBeenLastCalledWith(true);
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByText('Saved connections')).toBeInTheDocument();
-
-    fireEvent.click(toggle);
-    expect(onSSHConnectionsOpenChange).toHaveBeenLastCalledWith(false);
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByText('Saved connections')).not.toBeInTheDocument();
-  });
-
-  it.skip('forwards SSH sessions and saved-profile changes from the embedded manager', async () => {
-    const sshConnect = vi.fn().mockResolvedValue({ connected: true });
-    Object.defineProperty(window, 'janet', {
-      configurable: true,
-      value: { sshConnect },
-    });
-    const onSSHConnected = vi.fn();
-    const onSSHProfilesChange = vi.fn();
-    renderTabs({
-      sshConnectionsOpen: true,
-      onSSHConnected,
-      onSSHProfilesChange,
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /connect to pckpr@box\.local:22/i }));
-    await waitFor(() => expect(onSSHConnected).toHaveBeenCalledWith(expect.objectContaining({
-      host: 'box.local',
-      port: 22,
-      username: 'pckpr',
-      sshProfileId: sshProfiles[0].id,
-    })));
-
-    fireEvent.click(screen.getByRole('button', { name: /remove pckpr@box\.local:22/i }));
-    expect(onSSHProfilesChange).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Remove connection' }));
-    expect(onSSHProfilesChange).toHaveBeenCalledWith([]);
-  });
-
-  it.each(['Codex', 'Hermes', 'Claude', 'Custom'])('runs %s in every local project terminal', (choice) => {
+  it.each(['Terminal', 'Codex', 'Hermes', 'Claude', 'Custom'])('runs %s in every local project terminal', (choice) => {
     const launch = vi.fn();
     renderTabs({ onWorkspaceTabLaunch: launch });
-    fireEvent.click(screen.getByRole('button', { name: /new project in My workspaces/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add project to My workspaces/i }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Development' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add terminals/ }));
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Initial terminals' }), { target: { value: '5' } });
     expect(screen.getByRole('radio', { name: 'Codex' })).toBeChecked();
     expect(screen.queryByRole('textbox', { name: 'Custom command' })).not.toBeInTheDocument();
@@ -277,34 +210,28 @@ describe('VerticalTabBar', () => {
     for (const leaf of leaves(saved.root!)) {
       expect(leaf.terminalType).toBe('local');
       expect(leaf.cwd).toBeUndefined();
-      expect(leaf.startupCommands).toEqual([choice === 'Custom' ? 'npm run dev' : choice === 'Hermes' ? 'hermes --tui' : choice.toLowerCase()]);
+      expect(leaf.startupCommands).toEqual(choice === 'Terminal' ? undefined : [choice === 'Custom' ? 'npm run dev' : choice === 'Hermes' ? 'hermes --tui' : choice.toLowerCase()]);
     }
   });
 
-  it('closes the workspace creation dialog from its backdrop', () => {
+  it('cancels inline project creation without a modal', () => {
     renderTabs();
-
-        fireEvent.click(screen.getByRole('button', { name: /new project in My workspaces/i }));
-    fireEvent.pointerDown(screen.getByRole('dialog').parentElement!);
-
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add project to My workspaces' }));
+    expect(screen.getByRole('heading', { name: 'Create project' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('heading', { name: 'Create project' })).toBeNull();
   });
-
-  it('focuses the workspace form and restores the opener on Escape', async () => {
+  it('focuses workspace creation and restores the opener on Escape', async () => {
     renderTabs();
-
-        const opener = screen.getByRole('button', { name: /new project in My workspaces/i });
-    opener.focus();
-    fireEvent.click(opener);
-
-    const nameInput = screen.getByRole('textbox', { name: /project name/i });
+    const opener = screen.getByRole('button', { name: 'New workspace' });
+    opener.focus(); fireEvent.click(opener);
+    const nameInput = screen.getByRole('textbox', { name: 'Workspace name' });
     await waitFor(() => expect(nameInput).toHaveFocus());
     fireEvent.keyDown(nameInput, { key: 'Escape' });
-
     await waitFor(() => expect(opener).toHaveFocus());
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
-
   it('moves secondary tab actions into a context menu', () => {
     const onRenameTab = vi.fn();
         renderTabs({ onRenameTab });
@@ -317,7 +244,7 @@ describe('VerticalTabBar', () => {
     const nameInput = screen.getByRole('textbox', { name: /^tab name$/i });
     expect(nameInput).toHaveAttribute('maxlength', '256');
     fireEvent.change(nameInput, { target: { value: 'Renamed' } });
-    fireEvent.click(screen.getByRole('button', { name: /save tab name/i }));
+    fireEvent.keyDown(nameInput, { key: 'Enter' });
 
     expect(onRenameTab).toHaveBeenCalledWith('tab-1', 'Renamed');
 
@@ -464,9 +391,8 @@ describe('VerticalTabBar', () => {
     expect(await screen.findByRole('dialog', { name: 'SSH local forwards' })).toBeInTheDocument();
 
     view.rerender(<VerticalTabBar
-      tabs={[{ ...readyTab, sshShellReady: false }]} activeTabId="tab-2" sshProfiles={sshProfiles} groups={groups} creatorOpen={false} onCreatorOpenChange={vi.fn()} onGroupsChange={vi.fn()} onMoveWorkspace={vi.fn()}
-      onSelectTab={vi.fn()} onCloseTab={vi.fn()} onNewTab={vi.fn()} sshConnectionsOpen={false}
-      onSSHConnectionsOpenChange={vi.fn()} onSSHConnected={vi.fn()} onSSHProfilesChange={vi.fn()}
+      tabs={[{ ...readyTab, sshShellReady: false }]} activeTabId="tab-2" sshProfiles={sshProfiles} groups={groups} creatorOpen={false} onCreatorOpenChange={vi.fn()} onGroupsChange={vi.fn()}
+      onSelectTab={vi.fn()} onCloseTab={vi.fn()}
        onWorkspaceTabLaunch={vi.fn()}
       onRenameTab={vi.fn()} onCollapse={vi.fn()}
     />);
@@ -498,9 +424,8 @@ describe('VerticalTabBar', () => {
     await waitFor(() => expect(sshStartLocalForward).toHaveBeenCalledOnce());
 
     view.rerender(<VerticalTabBar
-      tabs={[{ ...readyTab, sshShellReady: false }]} activeTabId="tab-2" sshProfiles={sshProfiles} groups={groups} creatorOpen={false} onCreatorOpenChange={vi.fn()} onGroupsChange={vi.fn()} onMoveWorkspace={vi.fn()}
-      onSelectTab={vi.fn()} onCloseTab={vi.fn()} onNewTab={vi.fn()} sshConnectionsOpen={false}
-      onSSHConnectionsOpenChange={vi.fn()} onSSHConnected={vi.fn()} onSSHProfilesChange={vi.fn()}
+      tabs={[{ ...readyTab, sshShellReady: false }]} activeTabId="tab-2" sshProfiles={sshProfiles} groups={groups} creatorOpen={false} onCreatorOpenChange={vi.fn()} onGroupsChange={vi.fn()}
+      onSelectTab={vi.fn()} onCloseTab={vi.fn()}
        onWorkspaceTabLaunch={vi.fn()}
       onRenameTab={vi.fn()} onCollapse={vi.fn()}
     />);
@@ -565,8 +490,9 @@ describe('VerticalTabBar', () => {
 
   it('validates the count and custom command before creation', () => {
     renderTabs();
-    fireEvent.click(screen.getByRole('button', { name: /new project in My workspaces/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add project to My workspaces/i }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Dev' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add terminals/ }));
     const count = screen.getByRole('spinbutton', { name: 'Initial terminals' });
     const submit = screen.getByRole('button', { name: 'Create project' });
     for (const value of ['', '0', '17', '1.5']) {
@@ -605,8 +531,7 @@ describe('VerticalTabBar', () => {
     fireEvent.click(group);
     expect(group).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('button', { name: /Main app Local/ })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'New workspace or project' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Workspace' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New workspace' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Workspace name' }), { target: { value: 'Research' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
     expect(await screen.findByRole('button', { name: /^Research/ })).toBeInTheDocument();
@@ -618,11 +543,12 @@ describe('VerticalTabBar', () => {
     Object.defineProperty(window, 'janet', { configurable: true, value: { ...window.janet, workspaceDirectory: vi.fn().mockResolvedValue('C:/Work/Research') } });
     const launch = vi.fn().mockRejectedValue(new Error('Terminal limit reached'));
     renderTabs({ onWorkspaceTabLaunch: launch });
-    fireEvent.click(screen.getByRole('button', { name: 'New workspace or project' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New workspace' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Workspace name' }), { target: { value: 'Research' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'New project in Research' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add project to Research' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Experiment' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add terminals/ }));
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Initial terminals' }), { target: { value: '3' } });
     expect(screen.getByRole('spinbutton', { name: 'Initial terminals' })).toHaveValue(3);
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
@@ -633,8 +559,8 @@ describe('VerticalTabBar', () => {
 
   it('reduces the shared terminal count without discarding configuration', () => {
     renderTabs();
-    fireEvent.click(screen.getByRole('button', { name: 'New workspace or project' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Project' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add project to My workspaces' }));
+    fireEvent.click(screen.getByRole('button', { name: /Add terminals/ }));
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Initial terminals' }), { target: { value: '3' } });
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Initial terminals' }), { target: { value: '1' } });
     expect(screen.getByRole('spinbutton', { name: 'Initial terminals' })).toHaveValue(1);
@@ -643,13 +569,13 @@ describe('VerticalTabBar', () => {
   });
 
   it('keeps project actions correctly named without workspace move destinations', () => {
-    const move = vi.fn(), close = vi.fn();
-    renderTabs({ onMoveWorkspace: move, onCloseTab: close });
+    const close = vi.fn();
+    renderTabs({ onCloseTab: close });
     fireEvent.contextMenu(screen.getByRole('button', { name: /Main app Local/ }));
     expect(screen.getByRole('menuitem', { name: 'Rename session' })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'Rename workspace' })).not.toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /^Move to / })).not.toBeInTheDocument();
-    expect(move).not.toHaveBeenCalled();
+
     expect(close).not.toHaveBeenCalled();
   });
 

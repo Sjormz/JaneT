@@ -126,7 +126,7 @@ describe('SettingsManager', () => {
     const manager = new SettingsManager();
     const settings = manager.get();
 
-    expect(settings.theme).toBe('tokyo-night');
+    expect(settings.theme).toBe('one-dark');
     expect(settings.fontSize).toBe(14);
     expect(settings.fontFamily).toContain('JetBrains Mono Variable');
     expect(settings.sidebarSide).toBe('right');
@@ -328,7 +328,7 @@ describe('SettingsManager', () => {
 
     const updated = manager.set({ fontSize: 18 });
     expect(updated.fontSize).toBe(18);
-    expect(updated.theme).toBe('tokyo-night'); // unchanged
+    expect(updated.theme).toBe('one-dark'); // unchanged
   });
 
   it('returns a copy, not a reference', async () => {

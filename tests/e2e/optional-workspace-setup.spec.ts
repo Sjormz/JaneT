@@ -28,7 +28,7 @@ test('skips setup across restarts and enables workspace creation after choosing 
     page = await app.firstWindow();
     await expect(page.getByRole('region', { name: 'Choose where to work' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Skip for now' })).toHaveCount(0);
-    await page.getByRole('button', { name: 'New workspace or project' }).click();
+    await page.getByRole('button', { name: 'New workspace' }).click();
     const dialog = page.getByRole('dialog', { name: 'Main directory settings' });
     await expect(dialog).toBeVisible();
     await expect(page.getByRole('button', { name: 'Create workspace', exact: true })).toHaveCount(0);
@@ -37,7 +37,7 @@ test('skips setup across restarts and enables workspace creation after choosing 
     }, workspaceRoot);
     await dialog.getByRole('button', { name: 'Choose main directory' }).click();
     await expect(dialog).toHaveCount(0);
-    await page.getByRole('button', { name: 'New workspace or project' }).click();
+    await page.getByRole('button', { name: 'New workspace' }).click();
     await page.getByRole('textbox', { name: 'Workspace name' }).fill('First workspace');
     await page.getByRole('dialog', { name: 'Create workspace', exact: true }).getByRole('button', { name: 'Create workspace', exact: true }).click();
     await expect(page.getByRole('button', { name: /^First workspace/, expanded: true })).toBeVisible();

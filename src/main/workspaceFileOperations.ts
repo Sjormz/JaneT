@@ -81,7 +81,7 @@ export class WorkspaceFileOperations {
       const session = settings.session;
       const groups = session.groups ?? [];
       const group = groups.find((entry) => entry.id === request.groupId);
-      if (!group || group.kind === 'folder' || !group.directory) throw new Error('Only managed temporary workspaces can be deleted or kept.');
+      if (!group || !group.directory || (group.kind === 'folder' && (request.action !== 'delete' || !request.projectId))) throw new Error('Only managed temporary workspaces can be deleted or kept.');
       const base = await plainDirectory(group.directory);
       const project = request.projectId ? session.tabs.find((tab) => tab.id === request.projectId && tab.groupId === group.id) : undefined;
       if (request.projectId && (!project || !project.cwd)) throw new Error('Project directory is unavailable.');

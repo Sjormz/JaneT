@@ -129,7 +129,7 @@ describe('main notification bridge', () => {
   });
 
   it.each([
-    ['disabled', { enabled: false }], ['below threshold', { threshold: 11 }],
+    ['disabled', { enabled: false }],
     ['unsupported', { supported: false }], ['focused', { focused: true }],
   ])('suppresses when %s', async (_label, options) => {
     const bridge = await loadMain(options);
@@ -219,6 +219,11 @@ describe('main notification bridge', () => {
     expect(bridge.writeFileSync).toHaveBeenCalledOnce();
   });
 
+  it('uses a fixed ten-second cutoff even with a legacy custom threshold', async () => {
+    const bridge = await loadMain({ threshold: 1 });
+    await expect(bridge.invoke({ ...validPayload, durationMs: 9_999 })).resolves.toBe(false);
+    await expect(bridge.invoke({ ...validPayload, durationMs: 10_000 })).resolves.toBe(true);
+  });
   it('quietly handles display failure', async () => {
     const bridge = await loadMain();
     bridge.notificationShow.mockImplementationOnce(() => { throw new Error('display failed'); });

@@ -223,7 +223,7 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
     const pane = page.locator('.terminal-leaf').first();
     await pane.hover();
     const paneActions = pane.locator('.leaf-btn');
-    await expect(paneActions).toHaveCount(5);
+    await expect(paneActions).toHaveCount(4);
     for (const action of await paneActions.all()) {
       const box = await action.boundingBox();
       expect(box).not.toBeNull();
@@ -262,10 +262,10 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
     reports.push(await measureCompactTargets(page, 'settings'));
     await page.getByRole('button', { name: 'Hide settings' }).click();
 
-    await page.getByRole('button', { name: 'New workspace or project' }).click();
-    await page.getByRole('button', { name: 'Project', exact: true }).click();
-    const presetDialog = page.getByRole('dialog', { name: 'Create project' });
+    await page.getByRole('button', { name: /^Add project to / }).first().click();
+    const presetDialog = page.locator('.project-creation-content');
     await expect(presetDialog).toBeVisible();
+    await presetDialog.getByRole('button', { name: /Add terminals/ }).click();
     await presetDialog.getByRole('spinbutton', { name: 'Initial terminals' }).fill('2');
     await expect(presetDialog.getByRole('button', { name: 'Fewer terminals' })).toBeVisible();
     await presetDialog.getByRole('radio', { name: 'Codex', exact: true }).focus();
@@ -322,7 +322,7 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     await expect(page.locator('.terminal-container').first()).toBeVisible();
     await expect(appBody).toHaveClass(/sidebar-right/);
     await expect(workspaceTools).toHaveClass(/is-expanded/);
-    await expect(workspaceTools.getByRole('tablist', { name: 'Workspace tool views' }))
+    await expect(workspaceTools.getByRole('tablist', { name: 'Project tool views' }))
       .toHaveAttribute('aria-orientation', 'vertical');
     await expect(workspaceTools.getByRole('tab', { name: 'Explorer' })).toHaveAttribute('aria-selected', 'true');
     await expect(workspaceTools.getByRole('tab', { name: 'Source Control' })).toHaveAttribute('aria-selected', 'false');

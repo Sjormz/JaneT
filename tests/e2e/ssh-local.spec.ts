@@ -813,7 +813,7 @@ test('restores a mutated mixed workspace in a genuine second Electron process', 
     await tabName.fill('Project');
     await tabName.press('Enter');
 
-    await firstPage.getByRole('button', { name: 'Split pane right' }).click();
+    await firstPage.keyboard.press(process.platform === 'darwin' ? 'Meta+Backslash' : 'Control+Backslash');
     await expect(firstPage.locator('.terminal-leaf')).toHaveCount(2);
     const generatedInput = firstPage.locator('.terminal-leaf').nth(1).locator('.xterm-helper-textarea');
     await expect(generatedInput).toBeFocused();
