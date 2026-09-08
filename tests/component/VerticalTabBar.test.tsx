@@ -39,6 +39,7 @@ function renderTabs(overrides?: Partial<React.ComponentProps<typeof VerticalTabB
     const [creatorOpen, onCreatorOpenChange] = useState(false);
     const [currentGroups, onGroupsChange] = useState(groups);
     return <VerticalTabBar
+      mainDirectory="C:/Work"
       tabs={tabs} activeTabId="tab-1" sshProfiles={sshProfiles}
       groups={currentGroups} onGroupsChange={onGroupsChange} onMoveWorkspace={vi.fn()}
       creatorOpen={creatorOpen} onCreatorOpenChange={onCreatorOpenChange}
@@ -52,6 +53,14 @@ function renderTabs(overrides?: Partial<React.ComponentProps<typeof VerticalTabB
 }
 
 describe('VerticalTabBar', () => {
+  it('opens setup instead of creating a workspace when no main directory is set', () => {
+    const groupsChanged = vi.fn();
+    renderTabs({ mainDirectory: null, groups: [], onGroupsChange: groupsChanged });
+    fireEvent.click(screen.getByRole('button', { name: 'New workspace or project' }));
+    expect(screen.getByRole('dialog', { name: 'Main directory settings' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create workspace' })).not.toBeInTheDocument();
+    expect(groupsChanged).not.toHaveBeenCalled();
+  });
   it('removes legacy workspace entries without requesting directory deletion', () => {
     const action = vi.fn();
     renderTabs({ onWorkspaceAction: action });
@@ -588,7 +597,8 @@ describe('VerticalTabBar', () => {
     fireEvent.click(screen.getByRole('button', { name: /collapse terminal tabs/i }));
     expect(onCollapse).toHaveBeenCalledOnce();
   });
-  it('creates a group without launching terminals and can collapse a populated group', () => {
+  it('creates a group without launching terminals and can collapse a populated group', async () => {
+    Object.defineProperty(window, 'janet', { configurable: true, value: { ...window.janet, workspaceDirectory: vi.fn().mockResolvedValue('C:/Work/Research') } });
     const onLaunch = vi.fn();
     renderTabs({ onWorkspaceTabLaunch: onLaunch });
     const group = screen.getByRole('button', { name: /^My workspaces/ });
@@ -599,18 +609,19 @@ describe('VerticalTabBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Workspace' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Workspace name' }), { target: { value: 'Research' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
-    expect(screen.getByRole('button', { name: /^Research/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Research/ })).toBeInTheDocument();
     expect(onLaunch).not.toHaveBeenCalled();
     expect(screen.queryByText('Presets')).not.toBeInTheDocument();
   });
 
   it('creates three terminals in a new parent group and preserves the draft on launch failure', async () => {
+    Object.defineProperty(window, 'janet', { configurable: true, value: { ...window.janet, workspaceDirectory: vi.fn().mockResolvedValue('C:/Work/Research') } });
     const launch = vi.fn().mockRejectedValue(new Error('Terminal limit reached'));
     renderTabs({ onWorkspaceTabLaunch: launch });
     fireEvent.click(screen.getByRole('button', { name: 'New workspace or project' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Workspace name' }), { target: { value: 'Research' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
-    fireEvent.click(screen.getByRole('button', { name: 'New project in Research' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'New project in Research' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Experiment' } });
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Initial terminals' }), { target: { value: '3' } });
     expect(screen.getByRole('spinbutton', { name: 'Initial terminals' })).toHaveValue(3);

@@ -1,6 +1,6 @@
 {
   "name": "janet",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "A focused cross-platform terminal workspace with SSH, file browsing, and Git tools",
   "desktopName": "janet",
   "main": "dist/main/index.js",
@@ -169,10 +169,11 @@
   "license": "MIT",
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-image": "0.10.0-beta.301",
     "@xterm/addon-search": "^0.16.0",
     "@xterm/addon-unicode11": "^0.9.0",
     "@xterm/addon-web-links": "^0.12.0",
-    "@xterm/xterm": "^6.0.0",
+    "@xterm/xterm": "6.1.0-beta.304",
     "electron-updater": "^6.8.9",
     "lucide-react": "^1.28.0",
     "monaco-editor": "0.56.0",

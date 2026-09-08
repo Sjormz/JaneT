@@ -311,6 +311,7 @@ try {
   const childArgs = ['-e', childProgram];
   terminal = pty.spawn(childExecutable, childArgs, {
     name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd(),
+    useConptyDll: windows,
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',

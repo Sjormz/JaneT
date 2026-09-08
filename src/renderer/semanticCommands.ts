@@ -63,7 +63,8 @@ export class SemanticCommandTimeline {
       this.onPrompt?.();
     } else if (code === 'C' && this.phase === 'command' && arg === undefined && this.commandStart && this.commandMarker) {
       const end = this.position();
-      const command = this.read(this.commandStart, end, false).trim();
+      // The marker follows buffer reflow and scrollback trimming after a resize.
+      const command = this.read({ ...this.commandStart, line: this.commandMarker.line }, end, false).trim();
       this.command = command;
       this.startedAt = this.now();
       this.startedClock = this.clock();

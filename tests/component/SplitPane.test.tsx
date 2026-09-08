@@ -1569,13 +1569,23 @@ describe('split panes in the app', () => {
   });
 
   it('starts a fresh profile empty and offers workspace creation', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] });
+    window.janet.getSettings = vi.fn().mockResolvedValue({ mainDirectory: '/work', keybindings: {}, workspaceTabs: [] });
     render(<App />);
     const entry = await screen.findByRole('region', { name: 'Create your first workspace' });
     expect(screen.queryAllByTestId(/terminal-/)).toHaveLength(0);
     expect(window.janet.terminalCreate).not.toHaveBeenCalled();
     fireEvent.click(within(entry).getByRole('button', { name: 'Create workspace' }));
     expect(rendererMocks.verticalTabBarProps.entryRequest).toEqual({ action: 'create', groupId: undefined });
+  });
+
+  it('opens standalone terminals in Library after workspace setup was skipped', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue({ mainDirectory: null, mainDirectorySetupSkipped: true, keybindings: {}, workspaceTabs: [] });
+    render(<App />);
+    await screen.findByRole('region', { name: 'Choose where to work' });
+    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
+    expect(rendererMocks.verticalTabBarProps.groups).toEqual([expect.objectContaining({ kind: 'folder', name: 'Home' })]);
   });
 
   it('routes linking a Library folder independently of workspace creation', async () => {

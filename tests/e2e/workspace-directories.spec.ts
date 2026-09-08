@@ -70,7 +70,7 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await expect(page.getByRole('heading', { name: 'A home for your work' })).toBeVisible();
     await expect(page.locator('.terminal-container')).toHaveCount(0);
     const onboardingClosed = app.waitForEvent('close');
-    await page.getByRole('button', { name: 'Quit JaneT' }).click();
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
     await onboardingClosed; app = undefined;
     app = await launch(); page = await app.firstWindow(); folders = new FolderSessions(page, app);
     await expect(page.getByRole('heading', { name: 'A home for your work' })).toBeVisible();

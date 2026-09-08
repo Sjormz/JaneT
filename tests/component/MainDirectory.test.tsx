@@ -3,6 +3,16 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import MainDirectory from '../../src/renderer/components/MainDirectory';
 
+it('allows skipping and reports a failed save without closing onboarding', async () => {
+  window.janet = {} as typeof window.janet;
+  const skip = vi.fn().mockRejectedValueOnce(new Error('Could not save')).mockResolvedValue(undefined);
+  render(<MainDirectory directory={null} onboarding onChange={vi.fn()} onSkip={skip} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not save');
+  fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
+  await waitFor(() => expect(skip).toHaveBeenCalledTimes(2));
+});
+
 it('asks for a directory and keeps onboarding open when persistence fails', async () => {
   window.janet = { selectLocalDirectory: vi.fn().mockResolvedValue('C:/JaneT'), workspaceDirectory: vi.fn().mockResolvedValue('C:/JaneT') } as unknown as typeof window.janet;
   const save = vi.fn().mockRejectedValueOnce(new Error('Disk unavailable')).mockResolvedValue(undefined);

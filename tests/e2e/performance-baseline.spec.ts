@@ -25,7 +25,7 @@ test('records startup, loaded-terminal input and pane lifecycle memory baselines
     await expect(page.locator('.xterm-rows')).toContainText('LOAD_', { timeout: 20_000 });
     const startupMs = performance.now() - started;
     await expect.poll(async () => Math.max(0, ...Array.from((await page.locator('.xterm-rows').innerText()).matchAll(/LOAD_(\d+)/g), (match) => Number(match[1])))).toBeGreaterThan(100);
-    await expect.poll(() => page.locator('.xterm-scrollable-element .scrollbar.vertical .slider').evaluate((el) => el.clientHeight)).toBeGreaterThan(0);
+    await expect.poll(() => page.locator('.xterm-scrollable-element .xterm-scrollbar.xterm-vertical .xterm-slider').evaluate((el) => el.clientHeight)).toBeGreaterThan(0);
     await page.locator('.xterm-helper-textarea').focus();
     const inputStarted = performance.now();
     await page.keyboard.type('x');

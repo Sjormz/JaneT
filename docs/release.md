@@ -56,7 +56,8 @@ event loop inside `ConnectNamedPipe` before a JavaScript timeout can run.
 
 The Windows release verifier checks that the backport and unpacked worker path
 survived packaging, then exercises the packaged module with a real ConPTY
-input/output round trip. Keep this backport guarded against dependency-source
+input/output round trip using the bundled ConPTY DLL, matching the app's Kitty
+graphics passthrough path. Keep this backport guarded against dependency-source
 drift until JaneT upgrades to a stable `node-pty` release that contains the
 upstream fix.
 

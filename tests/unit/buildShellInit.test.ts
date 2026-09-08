@@ -351,13 +351,11 @@ describe('buildShellInit', () => {
         .toBe('cwd first ready');
     });
 
-    it('scopes Hermes graphics to direct, non-multiplexed invocations', () => {
+    it('keeps the Hermes activity wrapper without app-specific graphics flags', () => {
       const init = buildShellInit('bash');
       expect(init).toContain('type -t hermes');
-      expect(init).toContain('JANET_KITTY_GRAPHICS=1 command hermes');
-      expect(init).toContain('JANET_KITTY_GRAPHICS= KITTY_WINDOW_ID= WEZTERM_PANE= ITERM_SESSION_ID= TERM_PROGRAM=JaneT command hermes');
-      expect(init).toContain('TMUX');
-      expect(init).toContain('STY');
+      expect(init).toContain('command hermes');
+      expect(init).not.toContain('JANET_KITTY_GRAPHICS');
       expect(init).toContain('function hermes {');
       expect(init).not.toContain('hermes() {');
     });
@@ -490,11 +488,10 @@ describe('buildShellInit', () => {
       expect(init).toContain("printf '\\033]777;janet-ready\\033\\\\' >&2");
     });
 
-    it('uses a function-local exported graphics flag', () => {
+    it('inherits terminal graphics without a Hermes-only flag', () => {
       const init = buildShellInit('fish');
-      expect(init).toContain("set -lx JANET_KITTY_GRAPHICS 1");
-      expect(init).toContain("set -lx JANET_KITTY_GRAPHICS ''");
-      expect(init).toContain("set -lx TERM_PROGRAM JaneT");
+      expect(init).toContain('command hermes $argv');
+      expect(init).not.toContain('JANET_KITTY_GRAPHICS');
     });
   });
 
