@@ -2489,6 +2489,7 @@ describe('split panes in the app', () => {
 
     render(<App />);
     await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
+    await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalled());
     (window.janet.terminalCreate as any).mockClear();
 
     await act(async () => {
