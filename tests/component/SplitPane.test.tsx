@@ -2716,7 +2716,7 @@ describe('split panes in the app', () => {
     render(<App />);
     await waitFor(() => expect(rendererMocks.sidebarProps.openLocalTerminals).toHaveLength(2));
     expect(within(screen.getByTestId('vertical-tab-bar')).getByText('main')).toBeInTheDocument();
-    expect(window.janet.terminalCreate).toHaveBeenCalledOnce();
+    await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalledOnce());
 
     fireEvent.click(screen.getByRole('button', { name: 'Focus last open terminal' }));
 
@@ -2725,7 +2725,7 @@ describe('split panes in the app', () => {
       expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(cleanupTab.id);
       expect(within(screen.getByTestId(/terminal-/)).getByRole('textbox')).toHaveFocus();
     });
-    expect(window.janet.terminalCreate).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalledTimes(2));
     expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2);
   });
 
@@ -3901,7 +3901,7 @@ describe('split panes in the app', () => {
       expect(screen.getByTestId(`terminal-${remote.id}`))
         .toHaveAttribute('data-ssh-connection-lost', 'true');
     });
-    expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1));
     expect(window.janet.sshConnect).not.toHaveBeenCalled();
     expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
     const restored = rendererMocks.verticalTabBarProps.tabs.find(
@@ -4018,7 +4018,7 @@ describe('split panes in the app', () => {
         expect(screen.getByTestId(`terminal-${remote.id}`))
           .toHaveAttribute('data-ssh-connection-lost', 'true');
       });
-      expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1));
       expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
     } finally {
       consoleError.mockRestore();
