@@ -479,8 +479,11 @@ describe('split panes in the app', () => {
     fireEvent.click(within(dialog).getByRole('radio', { name: 'Codex' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add terminals' }));
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(4));
+    await waitFor(() => {
+      const creations = vi.mocked(window.janet.terminalCreate).mock.calls.map(([request]) => request);
+      expect(creations.filter(request => request.startupCommands?.[0] === 'codex')).toHaveLength(3);
+    });
     const creations = vi.mocked(window.janet.terminalCreate).mock.calls.map(([request]) => request);
-    expect(creations.filter(request => request.startupCommands?.[0] === 'codex')).toHaveLength(3);
     expect(creations.every(request => request.cwd === '/home/test/project')).toBe(true);
     expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
   });

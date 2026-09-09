@@ -303,7 +303,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
     }));
     await expect(page.locator('.leaf-awareness.needs-input')).toHaveText('Hermes · Needs input');
     await typeCommand(page, activeTerminals.nth(1), clearCommand);
-    const failingCommand = process.platform === 'win32' ? 'test' : 'false';
+    const failingCommand = 'node -e "process.exit(1)"';
     await typeCommand(page, activeTerminals.nth(1), failingCommand);
     await expect(activeTerminals.nth(1).locator('.terminal-command-failed'))
       .toHaveCount(1, { timeout: 15_000 });
