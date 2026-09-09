@@ -10,9 +10,9 @@ import { buildShellInit } from '../../src/main/shell-init';
 import { parse } from 'smol-toml';
 import { applyAgentEvent, agentStatus, type AgentAwareness } from '../../src/renderer/terminalAwareness';
 
-function run(executable: string, args: string[], env: NodeJS.ProcessEnv, input = '', closeInput = true): Promise<string> {
+function run(executable: string, args: string[], env: NodeJS.ProcessEnv, input = '', closeInput = true, cwd?: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { env, windowsHide: true });
+    const child = spawn(executable, args, { env, cwd, windowsHide: true });
     let output = '';
     const timer = setTimeout(() => { child.kill(); reject(new Error('Child timed out')); }, 12000);
     child.stdout.on('data', chunk => output += chunk);
@@ -25,6 +25,31 @@ function run(executable: string, args: string[], env: NodeJS.ProcessEnv, input =
 }
 
 describe('automatic agent launch runtime', () => {
+  it('trusts all 12 concurrently launched directories without losing config or duplicating hooks', async () => {
+    const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-codex-batch-'));
+    const bridge = new AgentActivityBridge(() => {});
+    try {
+      const helper = path.join(directory, 'agent-cli.cjs');
+      buildSync({ entryPoints: ['src/main/agent-cli.ts'], bundle: true, platform: 'node', outfile: helper });
+      const codexHome = path.join(directory, 'home'); fs.mkdirSync(codexHome);
+      fs.writeFileSync(path.join(codexHome, 'config.toml'), '# existing settings\nmodel = "test-model"\n');
+      const env = { ...process.env, ...await bridge.environment('batch'), CODEX_HOME: codexHome };
+      const projects = Array.from({ length: 12 }, (_, i) => path.join(directory, `project ${i}`));
+      projects.forEach(project => fs.mkdirSync(project));
+      const outputs = await Promise.all(projects.map(project => run(process.execPath, [helper, '--setup-codex'], env, '', true, project)));
+      expect(outputs).toEqual(projects.map(() => ''));
+      const configPath = path.join(codexHome, 'config.toml');
+      const config = fs.readFileSync(configPath, 'utf8');
+      expect(config).toContain('# existing settings');
+      expect(parse(config).model).toBe('test-model');
+      expect(parse(config).projects).toEqual(Object.fromEntries(projects.map(project => [project, { trust_level: 'trusted' }])));
+      const hooks = JSON.parse(fs.readFileSync(path.join(codexHome, 'hooks.json'), 'utf8')).hooks;
+      expect(Object.values(hooks).every(groups => (groups as unknown[]).length === 1)).toBe(true);
+      await Promise.all(projects.map(project => run(process.execPath, [helper, '--setup-codex'], env, '', true, project)));
+      expect(fs.readFileSync(configPath, 'utf8')).toBe(config);
+    } finally { bridge.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+  }, 25000);
+
   it('returns to Ready through the configured notifier while preserving the existing handler inside and outside JaneT', async () => {
     const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-codex-forward-'));
     const helper = path.join(directory, 'agent-cli.cjs');

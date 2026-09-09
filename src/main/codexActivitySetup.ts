@@ -1,10 +1,40 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { parseArgs, isDeepStrictEqual } from 'node:util';
+import { parse, stringify, type TomlTableWithoutBigInt } from 'smol-toml';
 import { connectCodexNotify } from './codexNotify';
 
 const LIMIT = 1024 * 1024;
 const EVENTS = ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'Interrupt'];
+
+/** Resolve only CLI options we understand; unknown syntax keeps normal Codex onboarding. */
+export function codexLaunchDirectory(args: string[], cwd: string): string | undefined {
+  try {
+    const options: Record<string, { type: 'string' | 'boolean'; short?: string; multiple?: boolean }> = {};
+    for (const [name, short] of [['cd', 'C'], ['config', 'c'], ['image', 'i'], ['model', 'm'], ['profile', 'p'],
+      ['sandbox', 's'], ['ask-for-approval', 'a'], ['local-provider'], ['add-dir'], ['enable'], ['disable'], ['remote'], ['remote-auth-token-env']]) {
+      options[name] = { type: 'string', ...(short ? { short } : {}), multiple: name !== 'cd' };
+    }
+    for (const name of ['oss', 'search', 'no-alt-screen', 'strict-config', 'approve-for-me', 'last', 'all',
+      'dangerously-bypass-approvals-and-sandbox', 'dangerously-bypass-hook-trust']) options[name] = { type: 'boolean' };
+    const { values, positionals } = parseArgs({ args, options, allowPositionals: true });
+    if (values.remote || (positionals.length && !['resume', 'fork'].includes(positionals[0]))) return undefined;
+    return fs.realpathSync(path.resolve(cwd, typeof values.cd === 'string' ? values.cd : '.'));
+  } catch { return undefined; }
+}
+
+function trustDirectory(source: string, directory: string): string {
+  const expected = parse(source);
+  // Keep explicit existing trust decisions, including "untrusted".
+  const projects = expected.projects as TomlTableWithoutBigInt | undefined;
+  if (projects && Object.hasOwn(projects, directory)) return source;
+  const entry = { trust_level: 'trusted' };
+  const next = source + '\n' + stringify({ projects: { [directory]: entry } });
+  expected.projects = { ...projects, [directory]: entry };
+  if (!isDeepStrictEqual(parse(next), expected)) throw new Error('Cannot safely save Codex directory trust.');
+  return next;
+}
 
 function rejectLinks(target: string): void {
   for (let current = target; ; current = path.dirname(current)) {
@@ -35,18 +65,28 @@ function read(target: string): string | undefined {
 }
 
 /** Automatic setup is additive; Codex itself still owns hook trust and feature policy. */
-export function installCodexActivity(directory: string, helperPath: string): { message?: string } {
+export function installCodexActivity(directory: string, helperPath: string, projectDirectory?: string): { message?: string } {
   if (!path.isAbsolute(directory) || !path.isAbsolute(helperPath) || /[\x00-\x1f\x7f]/.test(directory + helperPath)) {
     throw new Error('Codex setup requires absolute, valid paths.');
   }
   rejectLinks(directory);
+  if (projectDirectory !== undefined) {
+    if (!path.isAbsolute(projectDirectory)) throw new Error('Codex project trust requires an absolute directory.');
+    projectDirectory = fs.realpathSync(projectDirectory);
+    if (!fs.statSync(projectDirectory).isDirectory()) throw new Error('Codex project trust requires a directory.');
+  }
   fs.mkdirSync(directory, { recursive: true });
   const lockPath = path.join(directory, '.janet-activity.lock');
   let lock: number;
-  try { lock = fs.openSync(lockPath, 'wx', 0o600); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return { message: 'JaneT activity setup is already running or its lock remains from an interrupted setup. Codex will open unchanged.' };
-    throw error;
+  const deadline = Date.now() + (projectDirectory ? 5000 : 0);
+  for (;;) {
+    try { lock = fs.openSync(lockPath, 'wx', 0o600); break; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (Date.now() >= deadline) return { message: 'JaneT activity setup is already running or its lock remains from an interrupted setup. Codex will open unchanged.' };
+      // This runs in the standalone setup helper, never the Electron UI process.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
   }
   const temporary: string[] = [];
   try {
@@ -54,7 +94,8 @@ export function installCodexActivity(directory: string, helperPath: string): { m
     const hooksPath = path.join(directory, 'hooks.json');
     const config = read(configPath);
     const originalHooks = read(hooksPath);
-    const nextConfig = connectCodexNotify(config ?? '', helperPath, true);
+    let nextConfig = connectCodexNotify(config ?? '', helperPath, true);
+    if (projectDirectory) nextConfig = trustDirectory(nextConfig, projectDirectory);
     const profiles = fs.readdirSync(directory).filter(name => name.endsWith('.config.toml'));
     if (profiles.length > 256) throw new Error('Too many Codex profiles to inspect safely.');
     const changes: { target: string; original: string | undefined; next: string }[] = [];

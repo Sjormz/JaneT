@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { installCodexActivity } from '../../src/main/codexActivitySetup';
+import { codexLaunchDirectory, installCodexActivity } from '../../src/main/codexActivitySetup';
 import { parse } from 'smol-toml';
 
 vi.mock('node:fs', async importOriginal => ({ ...await importOriginal<typeof import('node:fs')>() }));
@@ -17,6 +17,34 @@ function fixture(config = '# preserve comments\n[features]\nhooks = true\n') {
 afterEach(() => { vi.restoreAllMocks(); for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
 
 describe('automatic Codex setup', () => {
+  it('saves exact directory trust once while preserving config and explicit untrusted entries', () => {
+    const f = fixture('# keep this\n[projects."elsewhere"]\ntrust_level = "untrusted"\n');
+    installCodexActivity(f.directory, f.helper, f.directory);
+    const next = fs.readFileSync(f.configPath, 'utf8');
+    expect(parse(next).projects).toEqual({ elsewhere: { trust_level: 'untrusted' }, [f.directory]: { trust_level: 'trusted' } });
+    expect(next).toContain('# keep this');
+    installCodexActivity(f.directory, f.helper, f.directory);
+    expect(fs.readFileSync(f.configPath, 'utf8')).toBe(next);
+    fs.writeFileSync(f.configPath, next.replace('trust_level = "trusted"', 'trust_level = "untrusted"'));
+    installCodexActivity(f.directory, f.helper, f.directory);
+    expect((parse(fs.readFileSync(f.configPath, 'utf8')).projects as any)[f.directory].trust_level).toBe('untrusted');
+  });
+
+  it('resolves Codex working directories without treating prompt or option values as directory flags', () => {
+    const f = fixture();
+    const child = join(f.directory, "project's folder"); fs.mkdirSync(child);
+    for (const args of [[], ['resume', '--last'], ['--model', 'test-model']]) {
+      expect(codexLaunchDirectory(args, f.directory)).toBe(f.directory);
+    }
+    for (const args of [['-C', child], [`--cd=${child}`], [`-C${child}`], ['--cd', "project's folder"]]) {
+      expect(codexLaunchDirectory(args, f.directory)).toBe(child);
+    }
+    for (const args of [['--', '--cd', child], ['explain', '-C', child], ['--remote', 'ws://localhost:1234'],
+      ['--unknown-option', child], ['-C'], ['--model', '-C'], ['login']]) {
+      expect(codexLaunchDirectory(args, f.directory)).toBeUndefined();
+    }
+  });
+
   it('preserves config and existing hooks, and repeated launches do not write or back up again', () => {
     const f = fixture();
     const config = fs.readFileSync(f.configPath, 'utf8');

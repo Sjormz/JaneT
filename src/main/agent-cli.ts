@@ -4,7 +4,7 @@ import * as http from 'node:http';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { spawn } from 'node:child_process';
-import { installCodexActivity } from './codexActivitySetup';
+import { codexLaunchDirectory, installCodexActivity } from './codexActivitySetup';
 import { installHermesActivity, mapHermesActivity } from './hermesActivitySetup';
 import { codexActivity } from './agentActivityBridge';
 import { notifyCommand } from './codexNotify';
@@ -64,7 +64,7 @@ if (mode === '--codex-notify-forward') {
     // Help/version invocations should remain completely read-only.
     if (!args.some(arg => ['--help', '-h', '--version', '-V'].includes(arg))) {
       const result = mode === '--setup-codex'
-        ? installCodexActivity(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), __filename)
+        ? installCodexActivity(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), __filename, codexLaunchDirectory(args, process.cwd()))
         : installHermesActivity(__filename, args, process.env);
       if (result.message) process.stderr.write(`[JaneT activity] ${result.message}\n`);
       if (mode === '--setup-codex') {
