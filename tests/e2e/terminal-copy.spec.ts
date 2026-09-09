@@ -296,7 +296,9 @@ test('copies TUI OSC 52 selections, rejects unsolicited writes, and pastes brack
       ipcMain.handle('terminal:write', (_event, data) => { (globalThis as any).__pastedTerminalData.push(data); });
       clipboard.writeText('first\nsecond');
     });
-    await sendOutput('\x1b[?2004h\x1b[?1049h\x1b[?1003h');
+    await sendOutput('\x1b[?2004h\x1b[?1049h\x1b[?1003hBRACKETED_TEXT_READY');
+    // IPC delivery precedes xterm parsing; wait for output after the mode sequence.
+    await expect(container.locator('.xterm-rows')).toContainText('BRACKETED_TEXT_READY');
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+Shift+V');
     await expect.poll(() => app!.evaluate(() => (globalThis as any).__pastedTerminalData)).toEqual([
       { id: termId, data: '\x1b[200~first\rsecond\x1b[201~', userInput: true },
@@ -307,7 +309,8 @@ test('copies TUI OSC 52 selections, rejects unsolicited writes, and pastes brack
       clipboard.writeImage(nativeImage.createFromBitmap(Buffer.from([255, 0, 0, 255]), { width: 1, height: 1 }));
     });
     expect(await app.evaluate(({ clipboard }) => clipboard.readImage().isEmpty())).toBe(false);
-    await sendOutput('\x1b[?2004h');
+    await sendOutput('\x1b[?2004h\r\nBRACKETED_IMAGE_READY');
+    await expect(container.locator('.xterm-rows')).toContainText('BRACKETED_IMAGE_READY');
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
     await expect.poll(() => app!.evaluate(() => (globalThis as any).__pastedTerminalData.length)).toBe(1);
     const imagePaste = await app.evaluate(() => (globalThis as any).__pastedTerminalData[0]);
