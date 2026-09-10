@@ -267,6 +267,13 @@ test('copies TUI OSC 52 selections, rejects unsolicited writes, and pastes brack
     await markerPosition(page);
     const container = page.locator('.terminal-container');
     const termId = await container.getAttribute('data-terminal-id');
+    // This case injects a synthetic TUI stream. Capture input before Ctrl+C so
+    // a real shell interrupt cannot redraw over the injected mode/ready markers.
+    await app.evaluate(({ ipcMain }) => {
+      (globalThis as any).__pastedTerminalData = [];
+      ipcMain.removeHandler('terminal:write');
+      ipcMain.handle('terminal:write', (_event, data) => { (globalThis as any).__pastedTerminalData.push(data); });
+    });
     const sendOutput = (data: string) => app!.evaluate(({ BrowserWindow }, payload) => {
       BrowserWindow.getAllWindows()[0].webContents.send('terminal:onData', { source: 'local', generation: 999, sequence: 999, ...payload });
     }, { id: termId, data });
@@ -282,11 +289,9 @@ test('copies TUI OSC 52 selections, rejects unsolicited writes, and pastes brack
     await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toBe('Hermes copied ✓');
     await expect(container.getByRole('button', { name: 'Allow copy' })).toHaveCount(0);
 
-    // Intercept at the main IPC boundary to inspect the exact bytes sent to PTY.
-    await app.evaluate(({ ipcMain, clipboard }) => {
+    // Clear the copy gesture before checking the exact paste bytes at the IPC boundary.
+    await app.evaluate(({ clipboard }) => {
       (globalThis as any).__pastedTerminalData = [];
-      ipcMain.removeHandler('terminal:write');
-      ipcMain.handle('terminal:write', (_event, data) => { (globalThis as any).__pastedTerminalData.push(data); });
       clipboard.writeText('first\nsecond');
     });
     await sendOutput('\x1b[?2004h\x1b[?1049h\x1b[?1003hBRACKETED_TEXT_READY');
