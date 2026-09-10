@@ -58,6 +58,4 @@ The local visual matrix also reproduced its missing visible marker after the ini
 
 The repair commit was pushed before local full-suite verification completed. That was a process mistake: the next update must finish local verification before pushing, then check the new hosted results. A running or partially passing suite must never be reported as a clean run.
 
-Final local verification for this follow-up: Windows, Node 22.23.2, Python 3.12.14; typecheck and production build passed; full unit/component suite (
-pm test -- --maxWorkers=4) passed 1,268 tests with eight skips; full Electron suite (
-px playwright test --config playwright.config.ts --retries=0) passed 52 tests with five skips. The visual matrix passed three focused repetitions and the startup-command case passed three focused repetitions, all with retries disabled. Hosted checks must still be verified on the new commit.
+Final local verification for this follow-up: Windows, Node 22.23.2, Python 3.12.14; typecheck and production build passed; full unit/component suite (`npm test -- --maxWorkers=4`) passed 1,268 tests with eight skips; full Electron suite (`npx playwright test --config playwright.config.ts --retries=0`) passed 52 tests with five skips. The visual matrix passed three focused repetitions and the startup-command case passed three focused repetitions, all with retries disabled. Hosted checks must still be verified on the new commit.
