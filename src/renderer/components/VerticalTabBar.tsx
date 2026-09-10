@@ -10,9 +10,10 @@ import { useModalFocus } from '../useModalFocus';
 import Tooltip from './Tooltip';
 import MainDirectory from './MainDirectory';
 import RenameDialog from './RenameDialog';
-import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, isWorkspaceProject, type WorkspaceGroup } from '../../shared/workspaceGroups';
+import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, isWorkspaceProject, rebaseDirectory, type WorkspaceGroup } from '../../shared/workspaceGroups';
 import type { AgentStatus } from '../terminalAwareness';
 import type { SSHLocalForwardStatus } from '../../main/ssh';
+import type { GitWorktreeInfo } from '../../shared/gitWorktrees';
 
 interface VerticalTabBarProps {
   tabs: TabInfo[];
@@ -85,6 +86,25 @@ export default function VerticalTabBar({
   useModalFocus({ open: directoryOpen, containerRef: directoryDialogRef, onClose: () => setDirectoryOpen(false), fallbackFocus: () => directoryButtonRef.current });
   const [folderBusy, setFolderBusy] = useState(false);
   const [missingDirectories, setMissingDirectories] = useState<Set<string>>(new Set());
+  const [worktreeDirectories, setWorktreeDirectories] = useState<Set<string>>(new Set());
+  const projectDirectories = JSON.stringify([...new Set(tabs.filter(tab => tab.type !== 'ssh' && tab.cwd).map(tab => tab.cwd!))]);
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      const directories: string[] = JSON.parse(projectDirectories);
+      const linked = await Promise.all(directories.map(async directory => {
+        try {
+          const trees: GitWorktreeInfo[] | null = await window.janet.gitWorktrees({ repoPath: directory });
+          // Git lists the main checkout first; only subsequent entries are linked worktrees.
+          return trees?.slice(1).some(tree => !tree.prunable && rebaseDirectory(directory, tree.path, '__worktree__') !== directory) ? directory : null;
+        } catch { return null; }
+      }));
+      if (!cancelled) setWorktreeDirectories(new Set(linked.filter((directory): directory is string => directory !== null)));
+    };
+    void check();
+    window.addEventListener('focus', check);
+    return () => { cancelled = true; window.removeEventListener('focus', check); };
+  }, [projectDirectories]);
   useEffect(() => {
     let cancelled = false;
     const check = async () => {
@@ -339,6 +359,7 @@ export default function VerticalTabBar({
             {children.length === 0 && <p className="workspace-group-empty">No projects yet</p>}
         {children.map((tab) => {
           const isActive = tab.id === activeTabId;
+          const isWorktree = Boolean(tab.cwd && worktreeDirectories.has(tab.cwd));
           const leaves = workspaceLeaves(tab.root);
           const sshCount = leaves.filter((leaf) => (leaf.terminalType ?? tab.type) === 'ssh').length;
           const isSSH = leaves.length > 0 && sshCount === leaves.length;
@@ -364,7 +385,7 @@ export default function VerticalTabBar({
               role="button"
               aria-pressed={isActive}
               data-tab-id={tab.id}
-              aria-label={`${tab.title} ${subLabel}${dirty ? ', unsaved editor changes' : ''}`}
+              aria-label={`${tab.title} ${subLabel}${isWorktree ? ', Worktree project' : ''}${dirty ? ', unsaved editor changes' : ''}`}
               tabIndex={0}
               className={`vtab-item ${isActive ? 'active' : ''} ${isSSH ? 'ssh' : ''}`}
               onClick={() => !editing && onSelectTab(tab.id)}
@@ -408,6 +429,7 @@ export default function VerticalTabBar({
                     {dirty && <span className="vtab-dirty-marker" aria-hidden="true">●</span>}
                   </div>
                 )}
+                {isWorktree && <span className="vtab-worktree" role="img" aria-label="Worktree project" title="Worktree project">w</span>}
               </div>
               <div className="vtab-meta">
                 {!!awareness?.busyCount && <span className="activity-count running" title="Busy terminals">{awareness.busyCount} busy</span>}
@@ -459,7 +481,7 @@ export default function VerticalTabBar({
           )}
           {isWorkspaceProject(tabMenu.tab, groups) && <>
             {groups.find(group => group.id === tabMenu.tab!.groupId)?.kind !== 'folder' && <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const tab = tabMenu.tab!; closeTabMenu(); onWorkspaceAction?.('keep', tab.groupId!, tab.id); }}>Keep in Library…</button>}
-            <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const tab = tabMenu.tab!; closeTabMenu(); onWorkspaceAction?.('delete', tab.groupId!, tab.id); }}>Delete project…</button>
+            <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const tab = tabMenu.tab!; closeTabMenu(); onWorkspaceAction?.(tab.isProject && groups.find(group => group.id === tab.groupId)?.kind === 'folder' ? 'unlink' : 'delete', tab.groupId!, tab.id); }}>{tabMenu.tab.isProject && groups.find(group => group.id === tabMenu.tab!.groupId)?.kind === 'folder' ? 'Remove project…' : 'Delete project…'}</button>
           </>}
           <button role="menuitem" disabled={isWorkspaceProject(tabMenu.tab, groups) && countLeaves(tabMenu.tab.root) === 0} onClick={() => { const id = tabMenu.tab!.id; closeTabMenu(); onCloseTab(id); }}>{isWorkspaceProject(tabMenu.tab, groups) ? 'Close all terminals…' : 'Close session'}</button>
           </>}

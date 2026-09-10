@@ -9,10 +9,11 @@ export interface WorkspaceGroup {
 export const DEFAULT_WORKSPACE_GROUP: WorkspaceGroup = { id: 'default', name: 'My workspaces' };
 export const MAX_WORKSPACE_GROUPS = 64;
 
-/** Only a workspace's immediate child directory owns a persistent project. */
-export function isWorkspaceProject(tab: { groupId?: string; cwd?: string }, groups: WorkspaceGroup[]): boolean {
+/** Explicit projects persist without owning a folder; retain legacy directory-backed projects. */
+export function isWorkspaceProject(tab: { groupId?: string; cwd?: string; isProject?: boolean }, groups: WorkspaceGroup[]): boolean {
   const group = groups.find((entry) => entry.id === tab.groupId);
   if (!group || !group.directory || !tab.cwd) return false;
+  if (tab.isProject) return true;
   const normalize = (value: string) => {
     const normalized = value.replaceAll('\\', '/').replace(/\/+$/, '');
     return /^(?:[a-z]:|\/\/)/i.test(normalized) ? normalized.toLowerCase() : normalized;

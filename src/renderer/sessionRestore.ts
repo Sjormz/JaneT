@@ -23,6 +23,7 @@ export interface SavedPaneSplit {
 export type SavedPaneNode = SavedPaneLeaf | SavedPaneSplit;
 
 export interface SavedTab {
+  isProject?: boolean;
   groupId?: string;
   id: string;
   title: string;
@@ -248,6 +249,7 @@ export function normalizeSession(raw: unknown): SavedSession {
       tabs.push({
         id: tab.id,
         ...(typeof tab.groupId === 'string' && tab.groupId.length <= 256 ? { groupId: tab.groupId } : {}),
+        ...(tab.isProject === true ? { isProject: true } : {}),
         title: tab.title,
         type: tab.type,
         ...(typeof tab.cwd === 'string' ? { cwd: tab.cwd } : {}),

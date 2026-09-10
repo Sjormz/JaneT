@@ -43,6 +43,7 @@ export interface SavedPaneSplit {
 export type SavedPaneNode = SavedPaneLeaf | SavedPaneSplit;
 
 export interface SavedTab {
+  isProject?: boolean;
   groupId?: string;
   id: string;
   title: string;
@@ -284,6 +285,7 @@ const SAVED_SESSION_KEYS = new Set([
   'tabs', 'activeTabId', 'sidebarOpen', 'tabsOpen', 'sidebarSection',
 ]);
 const SAVED_TAB_KEYS = new Set([
+  'isProject',
   'groupId',
   'id', 'title', 'type', 'cwd', 'sshProfileId', 'selectedPanePath', 'maximizedPanePath', 'root',
 ]);
@@ -748,6 +750,7 @@ function cloneSavedTab(value: unknown): SavedTab | undefined {
   return {
     id: tab.id,
     ...(typeof tab.groupId === 'string' && tab.groupId.length <= 256 ? { groupId: tab.groupId } : {}),
+    ...(tab.isProject === true ? { isProject: true } : {}),
     title: tab.title,
     type: tab.type,
     ...(typeof tab.cwd === 'string' ? { cwd: tab.cwd } : {}),
@@ -840,6 +843,7 @@ function isValidRuntimeSession(value: unknown): boolean {
       || typeof tab.title !== 'string'
       || tab.title.length > 256
       || (tab.groupId !== undefined && (typeof tab.groupId !== 'string' || tab.groupId.length > 256))
+      || (tab.isProject !== undefined && typeof tab.isProject !== 'boolean')
       || (tab.type !== 'local' && tab.type !== 'ssh')
       || (tab.cwd !== undefined
         && (typeof tab.cwd !== 'string' || tab.cwd.length > MAX_WORKSPACE_STRING_LENGTH))

@@ -93,9 +93,9 @@ export default function WorkspaceForm({ terminalsOnly = false, group, submitting
             <span id={`${formId}-command-help`} className="workspace-form-help">Runs in all terminals. Saved with this {terminalsOnly ? 'session' : 'project'}; avoid passwords or tokens.</span>
           </label>
         )}
-        <p className="workspace-form-help">Every terminal opens in {terminalsOnly ? 'this folder' : 'the new project folder'}. Your layout restores automatically.</p>
+        <p className="workspace-form-help">Every terminal opens in {terminalsOnly || group?.kind === 'folder' ? 'this folder' : 'the new project folder'}. Your layout restores automatically.</p>
         </>}
-        {!withTerminals && <p className="workspace-form-help">Create the project folder now. Add terminals whenever you’re ready.</p>}
+        {!withTerminals && <p className="workspace-form-help">{group?.kind === 'folder' ? 'Create a project in this Library folder without creating a new folder.' : 'Create the project folder now.'} Add terminals whenever you’re ready.</p>}
       </fieldset>
       <button className="connect-btn" type="submit" disabled={!canSubmit}>{submitLabel}</button>
     </form>

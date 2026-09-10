@@ -1002,6 +1002,16 @@ html, body, #root {
   gap: 6px;
   flex-shrink: 0;
 }
+.vtab-worktree {
+  align-self: flex-start;
+  color: var(--text-secondary);
+  font: 600 11px/16px var(--font-mono);
+  text-align: center;
+  width: 16px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  margin-top: 3px;
+}
 .vtab-time {
   font-size: 10px;
   color: var(--text-tertiary);
