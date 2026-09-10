@@ -1,3 +1,4 @@
+import { forceClose } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
@@ -24,11 +25,6 @@ function electronEnv(userData: string): Record<string, string> {
     PATH: '',
     SHELL: path.join(userData, 'missing-shell'),
   };
-}
-
-async function forceClose(app: ElectronApplication | undefined): Promise<void> {
-  if (!app) return;
-  await app.close().catch(() => {});
 }
 
 test('recovers a failed local terminal in the same pane only after explicit retry', async () => {

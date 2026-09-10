@@ -13,6 +13,7 @@ describe('workspace group persistence', () => {
     }
     expect(isWorkspaceProject({ groupId: 'work', cwd: 'C:/Work/App' }, [{ ...groups[0], kind: 'folder' }])).toBe(true);
     expect(isWorkspaceProject({ groupId: 'work', cwd: 'C:/Work' }, [{ ...groups[0], kind: 'folder' }])).toBe(false);
+    expect(isWorkspaceProject({ groupId: 'work', cwd: 'C:/Work', isProject: true }, [{ ...groups[0], kind: 'folder' }])).toBe(true);
     expect(isWorkspaceProject({ groupId: 'legacy', cwd: 'C:/Work/App' }, [{ id: 'legacy', name: 'Old' }])).toBe(false);
   });
   it('preserves linked folder paths and multiple session memberships', () => {

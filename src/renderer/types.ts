@@ -34,6 +34,7 @@ export interface SplitNode {
 export type PaneNode = TerminalLeaf | SplitNode;
 
 export interface TabInfo {
+  isProject?: boolean;
   id: string;
   title: string;
   type: 'local' | 'ssh';

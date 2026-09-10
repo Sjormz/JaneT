@@ -3,7 +3,8 @@
 ## Final behavior ? 2026-09-08
 
 - Workspaces and Library have matching section headers and separate plus buttons. Workspaces adds a workspace; Library links a parent directory. Each expanded parent always offers Add project.
-- Create project is an inline page for the clicked parent, with no parent selector or workspace/project switch. It creates a folder by default; Add terminals optionally reveals startup controls.
+- Create project is an inline page for the clicked parent, with no parent selector or workspace/project switch. Workspace projects create a folder; Library projects reuse the linked directory without creating a folder. Add terminals optionally reveals startup controls.
+- Library projects persist after closing their last terminal and across restart. Remove project removes only the saved project entry. Linked Git worktrees show a small `w` beneath the project name; the main checkout does not.
 - Empty projects show Start session inline. A session is a group of terminals, not an additional persisted hierarchy. Existing sessions offer Add terminals from a single terminal-header plus.
 - Terminal startup choices are Terminal, Codex, Hermes, Claude, and Custom. The count starts at one; Custom uses the code icon. Terminal opens the configured shell without a startup command.
 - Adding terminals arranges all panes in reading order using the existing near-square layout algorithm. Existing terminal IDs survive; manual pane sizes reset on addition. Directional split shortcuts and command actions remain available.

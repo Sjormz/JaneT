@@ -1,3 +1,4 @@
+import { forceClose } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
@@ -14,11 +15,6 @@ function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(
     Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
   );
-}
-
-async function forceClose(app: ElectronApplication | undefined): Promise<void> {
-  if (!app) return;
-  await app.close().catch(() => {});
 }
 
 async function panelBoxes(page: Page) {
@@ -436,7 +432,6 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     expect(narrow.tabs.x + narrow.tabs.width).toBeLessThanOrEqual(narrow.terminal.x + 1);
     expect(narrow.terminal.x + narrow.terminal.width).toBeLessThanOrEqual(narrowViewport.width + 1);
     expect(narrow.terminal.width).toBeGreaterThanOrEqual(300);
-
 
     const tabOpener = tabsPanel.locator('.vtab-item.active');
     const tabTitle = (await tabOpener.locator('.vtab-name').textContent())!.trim();

@@ -1087,8 +1087,15 @@ describe('split panes in the app', () => {
     const terminals = await screen.findAllByTestId(/terminal-/);
     const secondTerminalId = terminals[1].dataset.terminalId!;
     const channel = screen.getByRole('status', { name: 'Terminal status announcements' });
+    const emit = rendererMocks.agentEventHandlers.get(secondTerminalId)!;
+    act(() => emit({
+      version: 1, provider: 'hermes', event: 'session.start', sessionId: 'session-1',
+    }));
+    const tabId = rendererMocks.verticalTabBarProps.tabs[0].id;
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[tabId])
+      .toMatchObject({ kind: 'ready', label: 'Hermes · Ready' }));
 
-    act(() => rendererMocks.agentEventHandlers.get(secondTerminalId)!({
+    act(() => emit({
       version: 1, provider: 'hermes', event: 'attention.request',
       sessionId: 'session-1', turnId: 'turn-1',
     }));

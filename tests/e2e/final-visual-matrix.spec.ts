@@ -1,3 +1,4 @@
+import { forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -17,14 +18,6 @@ function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(
     Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
   );
-}
-
-async function forceClose(app: ElectronApplication | undefined): Promise<void> {
-  if (!app) return;
-  try {
-    await app.evaluate(({ app: electronApp }) => electronApp.exit(0));
-  } catch {}
-  await app.waitForEvent('close', { timeout: 5_000 }).catch(() => {});
 }
 
 function tab(page: Page, title: string): Locator {
@@ -303,8 +296,12 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
     }));
     await expect(page.locator('.leaf-awareness.needs-input')).toHaveText('Hermes · Needs input');
     await typeCommand(page, activeTerminals.nth(1), clearCommand);
-    // Keep POSIX input short so its command-start marker survives the smallest pane.
-    const failingCommand = process.platform === 'win32' ? 'node -e "process.exit(1)"' : 'false';
+    // The smallest pane is only a few columns wide. Keep each invocation short
+    // so PSReadLine redraws cannot scroll its command-start marker out of view.
+    await typeCommand(page, activeTerminals.nth(1), process.platform === 'win32'
+      ? "function v($n) { 'V'+$n }"
+      : "v() { printf 'V%s\\n' \"$1\"; }");
+    const failingCommand = process.platform === 'win32' ? 'cmd /c exit 1' : 'false';
     await typeCommand(page, activeTerminals.nth(1), failingCommand);
     await expect(activeTerminals.nth(1).locator('.terminal-command-failed'))
       .toHaveCount(1, { timeout: 15_000 });
@@ -335,18 +332,19 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
         }
         // Bash redraws its prompt on resize; repeated reflows can scroll the old
         // command marker out of view. Keep this visual fixture in the viewport.
-        const markerSuffix = `${themes.indexOf(theme)}-${viewport.width}`;
+        const markerSuffix = `${themes.indexOf(theme) * viewports.length + viewports.indexOf(viewport)}`;
         const marker = `V${markerSuffix}`;
         await page.evaluate(({ id, command }) => window.janet.terminalWrite({
           id, data: `${command}\r`, userInput: true,
         }), {
           id: (await activeTerminals.nth(1).getAttribute('data-terminal-id'))!,
-          command: process.platform === 'win32'
-            ? `Write-Output ('V' + '${markerSuffix}'); ${failingCommand}`
-            : `printf 'V%s\\n' '${markerSuffix}'; ${failingCommand}`,
+          command: `v ${markerSuffix}`,
         });
         await expect(activeTerminals.nth(1).locator('.xterm-rows')).toContainText(marker);
         await expect(page.locator('.terminal-leaf').nth(1).locator('.leaf-awareness')).toHaveText('Shell · Ready');
+        await page.evaluate(({ id, command }) => window.janet.terminalWrite({
+          id, data: `${command}\r`, userInput: true,
+        }), { id: (await activeTerminals.nth(1).getAttribute('data-terminal-id'))!, command: failingCommand });
         await expect(activeTerminals.nth(1).locator('.terminal-command-failed:visible').first()).toBeVisible();
         await tab(page, 'Active workspace').focus();
         await page.keyboard.press('Tab');

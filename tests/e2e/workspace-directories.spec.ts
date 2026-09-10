@@ -2,6 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createWorkspace, restoreWorkspaceFixture } from './workspaces';
 
 class FolderSessions {
@@ -127,8 +128,9 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await expect.poll(() => settings().session.tabs.length).toBe(3);
     const projectGroup = settings().session.groups.find((item: any) => item.directory === project);
     const sessions = settings().session.tabs.filter((item: any) => item.groupId === projectGroup.id);
-    expect(sessions.map((item: any) => item.cwd)).toEqual([path.join(project, 'Development'), path.join(project, 'Testing')]);
-    expect(fs.readdirSync(project).sort()).toEqual(['Development', 'Testing', 'keep.txt']);
+    expect(sessions.map((item: any) => item.cwd)).toEqual([project, project]);
+    expect(sessions.every((item: any) => item.isProject)).toBe(true);
+    expect(fs.readdirSync(project)).toEqual(['keep.txt']);
     await page.screenshot({ path: testInfo.outputPath('linked-folder-sessions.png') });
     await page.getByRole('button', { name: 'Main directory settings', exact: true }).click();
     await folders.choose(nextMain, 'Change main directory');
@@ -161,6 +163,11 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await folders.closeProjectTerminals('Development');
     await page.locator('.vtab-name').getByText('Testing', { exact: true }).click();
     await folders.closeProjectTerminals('Testing');
+    await folders.projectAction('Development', 'Remove project…');
+    await page.getByRole('button', { name: 'Remove from Library', exact: true }).click();
+    await expect(page.locator('.vtab-name').getByText('Development', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.vtab-name').getByText('Testing', { exact: true })).toBeVisible();
+    expect(fs.readdirSync(project)).toEqual(['keep.txt']);
     await page.locator('.workspace-group-name').getByText('Project X', { exact: true }).click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Remove from Library…', exact: true }).click();
     await page.getByRole('button', { name: 'Remove from Library', exact: true }).click();
@@ -181,6 +188,18 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await expect(page.getByTestId('local-terminal-notice')).toContainText('Couldn’t start local terminal');
     await folders.choose(project, 'Locate folder');
     await expect(page.getByTestId('local-terminal-notice')).toHaveCount(0);
+    const repo = path.join(root, 'Repo');
+    const worktree = path.join(root, 'Feature');
+    execFileSync('git', ['init', repo]);
+    execFileSync('git', ['-C', repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'Initial']);
+    execFileSync('git', ['-C', repo, 'worktree', 'add', '-b', 'feature', worktree]);
+    await folders.choose(worktree, 'Add Library entry');
+    await page.getByRole('button', { name: 'Add project to Feature', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Project name' }).fill('Worktree review');
+    await page.getByRole('button', { name: 'Create project', exact: true }).click();
+    await expect(page.getByRole('img', { name: 'Worktree project' })).toBeVisible();
+    expect(fs.readdirSync(worktree)).toEqual(['.git']);
+    await page.screenshot({ path: testInfo.outputPath('library-worktree-project.png') });
   } finally {
     if (app) {
       const stopped = app.waitForEvent('close', { timeout: 5000 });

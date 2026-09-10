@@ -10,8 +10,9 @@ describe('serializePaneTree', () => {
   it('preserves a project with zero terminals across serialization and restoration', () => {
     const root: PaneNode = { id: 'empty', type: 'split', direction: 'vertical', children: [], sizes: [] };
     const saved = serializePaneTree(root);
-    const session = normalizeSession({ tabs: [{ id: 'project', title: 'Project', type: 'local', root: saved }], activeTabId: 'project' });
+    const session = normalizeSession({ tabs: [{ id: 'project', title: 'Project', type: 'local', isProject: true, root: saved }], activeTabId: 'project' });
     expect(session.tabs).toHaveLength(1);
+    expect(session.tabs[0].isProject).toBe(true);
     expect(getAllLeafIds(restorePaneTree(session.tabs[0].root)!)).toEqual([]);
     expect(restorePaneTree({ type: 'split', direction: 'vertical', children: [saved], sizes: [1] })).toBeNull();
   });

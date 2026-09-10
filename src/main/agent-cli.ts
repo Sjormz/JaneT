@@ -74,7 +74,12 @@ if (mode === '--codex-notify-forward') {
         send({ provider: 'codex', event: 'integration.status', available: !result.message && !override });
       }
     }
-  } catch {
+  } catch (error) {
+    const { code, syscall } = (error ?? {}) as NodeJS.ErrnoException;
+    activityDiagnostic('helper.setup-error', undefined, {
+      errorCode: typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,31}$/.test(code) ? code : undefined,
+      syscall: typeof syscall === 'string' && /^[a-zA-Z]{1,32}$/.test(syscall) ? syscall : undefined,
+    });
     process.stderr.write('[JaneT activity] Automatic setup could not safely update this configuration. The CLI will still start normally.\n');
     if (mode === '--setup-codex') send({ provider: 'codex', event: 'integration.status', available: false });
   }

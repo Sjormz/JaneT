@@ -1,3 +1,4 @@
+import { forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -13,12 +14,6 @@ function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(
     Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
   );
-}
-
-async function forceClose(app: ElectronApplication | undefined): Promise<void> {
-  if (!app) return;
-  try { await app.evaluate(({ app: electronApp }) => electronApp.exit(0)); } catch {}
-  await app.waitForEvent('close', { timeout: 5_000 }).catch(() => {});
 }
 
 function containsKeyOrText(value: unknown, text: string): boolean {

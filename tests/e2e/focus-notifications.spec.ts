@@ -1,3 +1,4 @@
+import { forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -20,12 +21,6 @@ function readDecisions(eventsPath: string): Array<Record<string, unknown>> {
   return fs.readFileSync(eventsPath, 'utf8').split(/\r?\n/).filter(Boolean)
     .map((line) => JSON.parse(line))
     .filter((event) => event.type === 'notification:decision');
-}
-
-async function forceClose(app: ElectronApplication | undefined): Promise<void> {
-  if (!app) return;
-  try { await app.evaluate(({ app: electronApp }) => electronApp.exit(0)); } catch {}
-  await app.waitForEvent('close', { timeout: 5_000 }).catch(() => {});
 }
 
 test('records focus decisions and project busy/unread activity without command or output', async ({}, testInfo) => {

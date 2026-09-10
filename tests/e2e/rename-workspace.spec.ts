@@ -1,3 +1,4 @@
+import { forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -54,15 +55,6 @@ async function launch(userData: string): Promise<ElectronApplication> {
     cwd: root,
     env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }),
   });
-}
-
-async function forceClose(app: ElectronApplication | undefined): Promise<void> {
-  if (!app) return;
-  const closed = app.waitForEvent('close', { timeout: 5_000 }).catch(() => {});
-  try {
-    await app.evaluate(({ app: electronApp }) => electronApp.exit(0));
-  } catch {}
-  await closed;
 }
 
 async function activeElementIs(page: Page, selector: string, index: number): Promise<boolean> {

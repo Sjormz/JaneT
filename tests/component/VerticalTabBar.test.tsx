@@ -51,6 +51,26 @@ function renderTabs(overrides?: Partial<React.ComponentProps<typeof VerticalTabB
 }
 
 describe('VerticalTabBar', () => {
+  it('marks linked worktree projects beneath their names, excluding the main checkout', async () => {
+    Object.defineProperty(window, 'janet', { configurable: true, value: { gitWorktrees: vi.fn().mockResolvedValue([
+      { path: 'C:/repo', bare: false, detached: false, head: 'main' },
+      { path: 'C:/repo-feature', bare: false, detached: false, head: 'feature' },
+    ]) } });
+    renderTabs({ tabs: [tabs[0], { ...tabs[0], id: 'feature', title: 'Feature', cwd: 'C:\\repo-feature\\src', isProject: true }] });
+    const badge = await screen.findByRole('img', { name: 'Worktree project' });
+    expect(badge.parentElement).toHaveTextContent('Feature');
+    expect(screen.getAllByRole('img', { name: 'Worktree project' })).toHaveLength(1);
+  });
+
+  it('removes a virtual Library project without offering folder deletion', () => {
+    const action = vi.fn();
+    renderTabs({ groups: [{ id: 'library', name: 'Repo', kind: 'folder', directory: 'C:/repo' }],
+      tabs: [{ ...tabs[0], groupId: 'library', isProject: true }], onWorkspaceAction: action });
+    fireEvent.contextMenu(screen.getByRole('button', { name: /Main app Local/ }));
+    expect(screen.queryByRole('menuitem', { name: 'Delete project…' })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Remove project…' }));
+    expect(action).toHaveBeenCalledWith('unlink', 'library', 'tab-1');
+  });
   it('uses the newly clicked parent when switching project creation between entries', async () => {
     const launch = vi.fn().mockResolvedValue(undefined);
     renderTabs({ groups: [

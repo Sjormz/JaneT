@@ -233,6 +233,7 @@ function createInitialAppState(settings: any): InitialAppState {
     const tab: TabInfo = {
       id: genId('tab'),
       title: saved.title,
+      isProject: saved.isProject,
       groupId: groups.some((group) => group.id === saved.groupId) ? saved.groupId : groups[0].id,
       type: saved.type,
       cwd: saved.cwd,
@@ -720,6 +721,7 @@ function AppInner({ initialSettings, persistSettings }: {
         return {
           id: tab.id,
           title: tab.title,
+          ...(tab.isProject ? { isProject: true } : {}),
           groupId: tab.groupId ?? groupsRef.current[0]?.id,
           type: tab.type,
           cwd: tab.cwd,
@@ -1884,6 +1886,7 @@ function AppInner({ initialSettings, persistSettings }: {
     const project = projectId ? tabsRef.current.find((tab) => tab.id === projectId && tab.groupId === groupId) : undefined;
     if (!group || (projectId && !project)) return;
     if (!project && !group.directory) action = 'unlink';
+    if (project?.isProject && group.kind === 'folder') action = 'unlink';
     const affected = tabsRef.current.filter((tab) => project ? tab.id === project.id : tab.groupId === group.id);
     if (affected.some((tab) => (editorDocuments.documentsByTab[tab.id] ?? []).some(isEditorDocumentDirty))) {
       setDirectoryActionError('Save or close changed editor files before deleting, keeping, or removing this entry.');
@@ -1942,7 +1945,7 @@ function AppInner({ initialSettings, persistSettings }: {
               }
             }
             if (result.warning) setDirectoryActionError(result.warning);
-          } else groupsRef.current = groupsRef.current.filter((entry) => entry.id !== groupId);
+          } else if (!project) groupsRef.current = groupsRef.current.filter((entry) => entry.id !== groupId);
           setGroups(groupsRef.current);
         } catch (error) {
           setDirectoryActionError(`${error instanceof Error ? error.message : String(error)} Any terminals stopped for this operation can be reopened.`);
@@ -2137,7 +2140,7 @@ function AppInner({ initialSettings, persistSettings }: {
         ? groupsRef.current.map((item) => item.id === group.id ? group : item) : [...groupsRef.current, group];
       groupsRef.current = nextGroups;
       setGroups(nextGroups);
-      directory = await window.janet.workspaceDirectory({ parent: group.directory!, ...(group.kind === 'folder' && !preset.createProject ? {} : { name: preset.name }) });
+      directory = await window.janet.workspaceDirectory({ parent: group.directory!, ...(group.kind === 'folder' ? {} : { name: preset.name }) });
       root = mapLeaves(root, (leaf) => leaf.terminalType === 'ssh' ? leaf : { ...leaf, cwd: leaf.cwd || directory });
     }
     if (tabsRef.current.length >= MAX_RESTORED_TABS || terminalCount() + countLeaves(root) > MAX_RESTORED_TERMINALS) {
@@ -2148,6 +2151,7 @@ function AppInner({ initialSettings, persistSettings }: {
       : [...current, group]);
     const tab: TabInfo = {
       id: genId('tab'), title: preset.name, groupId: group.id, type: 'local', cwd: directory, root,
+      ...(preset.createProject ? { isProject: true } : {}),
     };
     const nextTabs = [...tabsRef.current, tab];
     tabsRef.current = nextTabs;
