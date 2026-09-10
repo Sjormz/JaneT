@@ -296,7 +296,11 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
     }));
     await expect(page.locator('.leaf-awareness.needs-input')).toHaveText('Hermes · Needs input');
     await typeCommand(page, activeTerminals.nth(1), clearCommand);
-    // Keep input short on both platforms so its start marker survives the smallest pane.
+    // The smallest pane is only a few columns wide. Keep each invocation short
+    // so PSReadLine redraws cannot scroll its command-start marker out of view.
+    await typeCommand(page, activeTerminals.nth(1), process.platform === 'win32'
+      ? "function v($n) { 'V'+$n }"
+      : "v() { printf 'V%s\\n' \"$1\"; }");
     const failingCommand = process.platform === 'win32' ? 'cmd /c exit 1' : 'false';
     await typeCommand(page, activeTerminals.nth(1), failingCommand);
     await expect(activeTerminals.nth(1).locator('.terminal-command-failed'))
@@ -328,18 +332,19 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
         }
         // Bash redraws its prompt on resize; repeated reflows can scroll the old
         // command marker out of view. Keep this visual fixture in the viewport.
-        const markerSuffix = `${themes.indexOf(theme)}-${viewport.width}`;
+        const markerSuffix = `${themes.indexOf(theme) * viewports.length + viewports.indexOf(viewport)}`;
         const marker = `V${markerSuffix}`;
         await page.evaluate(({ id, command }) => window.janet.terminalWrite({
           id, data: `${command}\r`, userInput: true,
         }), {
           id: (await activeTerminals.nth(1).getAttribute('data-terminal-id'))!,
-          command: process.platform === 'win32'
-            ? `echo ('V'+'${markerSuffix}');${failingCommand}`
-            : `printf 'V%s\\n' '${markerSuffix}'; ${failingCommand}`,
+          command: `v ${markerSuffix}`,
         });
         await expect(activeTerminals.nth(1).locator('.xterm-rows')).toContainText(marker);
         await expect(page.locator('.terminal-leaf').nth(1).locator('.leaf-awareness')).toHaveText('Shell · Ready');
+        await page.evaluate(({ id, command }) => window.janet.terminalWrite({
+          id, data: `${command}\r`, userInput: true,
+        }), { id: (await activeTerminals.nth(1).getAttribute('data-terminal-id'))!, command: failingCommand });
         await expect(activeTerminals.nth(1).locator('.terminal-command-failed:visible').first()).toBeVisible();
         await tab(page, 'Active workspace').focus();
         await page.keyboard.press('Tab');

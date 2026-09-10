@@ -49,3 +49,15 @@ Windows validation used Node 22.23.2 and Python 3.12.14. Another 20 batches of 1
 The first full Electron run had 49 passes, five skips, and three failures: the narrow-pane fixture, a Source Control hover tooltip, and Hermes without an explicit Python path. After the fixture/environment corrections, each affected case passed twice with retries disabled. A second full run passed 51 cases with five skips but reproduced the hover failure. Six focused repetitions then failed three times. Temporary DOM/event diagnostics established that the first shell cwd report replaced the hovered Source Control with its repository-search state, destroying the tooltip timer. The test now waits for shell readiness before Source Control interactions; all tooltip assertions remain.
 
 With the shell-readiness wait, the Source Control case passed six consecutive runs with retries disabled. A final full local Electron run and current-head hosted checks are required before declaring validation complete.
+
+## Follow-up on repair commit `fc1b005`
+
+[CI run 34461910559](https://github.com/Sjormz/JaneT/actions/runs/34461910559) passed Linux and macOS. Windows passed its unit suite but failed `runs ordered workspace startup commands once per fresh terminal`: the injected "Failure gate" fixture was missing after reload, and the artifact showed the previous "Ordered startup second" session instead. The retry similarly lost "Ordered startup". The shared fixture helper wrote settings while the current renderer still had a debounced session autosave scheduled. It now pauses renderer timers during the seed/reload boundary and resumes them immediately afterward. Three focused repetitions passed with retries disabled; all shared callers remain in the full E2E validation.
+
+The local visual matrix also reproduced its missing visible marker after the initial shortening. Its captured terminal showed PSReadLine redraws filling the small pane and scrolling the command start offscreen. The fixture now emits its unique output marker with a short shell function, waits for that output, then executes the native failing command separately. This retains actual nonzero exit semantics and the visible-decoration assertion.
+
+The repair commit was pushed before local full-suite verification completed. That was a process mistake: the next update must finish local verification before pushing, then check the new hosted results. A running or partially passing suite must never be reported as a clean run.
+
+Final local verification for this follow-up: Windows, Node 22.23.2, Python 3.12.14; typecheck and production build passed; full unit/component suite (
+pm test -- --maxWorkers=4) passed 1,268 tests with eight skips; full Electron suite (
+px playwright test --config playwright.config.ts --retries=0) passed 52 tests with five skips. The visual matrix passed three focused repetitions and the startup-command case passed three focused repetitions, all with retries disabled. Hosted checks must still be verified on the new commit.

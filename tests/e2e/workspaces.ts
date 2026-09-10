@@ -47,12 +47,18 @@ export async function restoreWorkspaceFixture(page: Page, name: string, terminal
   }))), {}, { includeStartupCommands: true });
   const session = settings.session;
   const groups = session?.groups?.length ? session.groups : [{ id: 'fixture-group', name: groupName ?? 'Test work' }];
-  await page.evaluate(async ({ session, groups, root, name }) => {
-    await window.janet.setSettings({ session: { ...session, groups,
-      tabs: [...(session?.tabs ?? []).filter((tab: any) => tab.id !== 'fixture-restored'), { id: 'fixture-restored', title: name, groupId: groups[0].id, type: 'local', root }],
-      activeTabId: 'fixture-restored', tabsOpen: true,
-    } });
-  }, { session, groups, root, name });
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  // Freeze the old renderer's debounced autosave until reload discards it.
+  await page.clock.pauseAt(new Date());
+  try {
+    await page.evaluate(async ({ session, groups, root, name }) => {
+      await window.janet.setSettings({ session: { ...session, groups,
+        tabs: [...(session?.tabs ?? []).filter((tab: any) => tab.id !== 'fixture-restored'), { id: 'fixture-restored', title: name, groupId: groups[0].id, type: 'local', root }],
+        activeTabId: 'fixture-restored', tabsOpen: true,
+      } });
+    }, { session, groups, root, name });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+  } finally {
+    await page.clock.resume();
+  }
   await expect(page.locator('.vtab-name').getByText(name, { exact: true })).toBeVisible();
 }
