@@ -697,6 +697,8 @@ test('stages and commits changes from Source Control', async ({}, testInfo) => {
     }, 'janet-e2e-source-control-app-');
 
     await app.page.bringToFront();
+    // The first shell cwd report can replace Source Control while a hover is pending.
+    await expect(app.page.locator('textarea.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true');
     const sourceControl = app.page.locator('.git-tree');
     await expect(app.page.locator('.workspace-tools-following')).toHaveCount(0);
     await expect(sourceControl.getByRole('button', { name: 'Add worktree with new branch' })).toBeVisible({ timeout: 10_000 });

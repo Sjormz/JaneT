@@ -1,4 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test';
+import { forceClose } from './electronLifecycle';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -75,8 +76,7 @@ test('Kitty capability probes, chunked images and deletion traverse a real PTY',
     await page.keyboard.type('d');
     await expect.poll(redPixels).toBe(0);
   } finally {
-    await app.evaluate(({ app }) => app.exit(0)).catch(() => {});
-    await app.waitForEvent('close', { timeout: 5_000 }).catch(() => {});
+    await forceClose(app);
     fs.rmSync(userData, { recursive: true, force: true });
   }
 });

@@ -1,3 +1,4 @@
+import { forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -17,14 +18,6 @@ function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(
     Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
   );
-}
-
-async function forceClose(app: ElectronApplication | undefined): Promise<void> {
-  if (!app) return;
-  try {
-    await app.evaluate(({ app: electronApp }) => electronApp.exit(0));
-  } catch {}
-  await app.waitForEvent('close', { timeout: 5_000 }).catch(() => {});
 }
 
 function tab(page: Page, title: string): Locator {
@@ -303,8 +296,8 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
     }));
     await expect(page.locator('.leaf-awareness.needs-input')).toHaveText('Hermes · Needs input');
     await typeCommand(page, activeTerminals.nth(1), clearCommand);
-    // Keep POSIX input short so its command-start marker survives the smallest pane.
-    const failingCommand = process.platform === 'win32' ? 'node -e "process.exit(1)"' : 'false';
+    // Keep input short on both platforms so its start marker survives the smallest pane.
+    const failingCommand = process.platform === 'win32' ? 'cmd /c exit 1' : 'false';
     await typeCommand(page, activeTerminals.nth(1), failingCommand);
     await expect(activeTerminals.nth(1).locator('.terminal-command-failed'))
       .toHaveCount(1, { timeout: 15_000 });
@@ -342,7 +335,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
         }), {
           id: (await activeTerminals.nth(1).getAttribute('data-terminal-id'))!,
           command: process.platform === 'win32'
-            ? `Write-Output ('V' + '${markerSuffix}'); ${failingCommand}`
+            ? `echo ('V'+'${markerSuffix}');${failingCommand}`
             : `printf 'V%s\\n' '${markerSuffix}'; ${failingCommand}`,
         });
         await expect(activeTerminals.nth(1).locator('.xterm-rows')).toContainText(marker);

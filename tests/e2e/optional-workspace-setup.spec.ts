@@ -1,7 +1,8 @@
-import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
+import { test, expect, _electron as electron } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { forceClose } from './electronLifecycle';
 
 test('skips setup across restarts and enables workspace creation after choosing a folder', async ({}, testInfo) => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-optional-setup-'));
@@ -10,11 +11,6 @@ test('skips setup across restarts and enables workspace creation after choosing 
   const env = Object.fromEntries(Object.entries({ ...process.env, NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData })
     .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[0] !== 'ELECTRON_RUN_AS_NODE'));
   const launch = () => electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env });
-  const close = async (app: ElectronApplication) => {
-    const closed = app.waitForEvent('close', { timeout: 5_000 }).catch(() => { app.process().kill('SIGKILL'); });
-    void app.evaluate(({ app }) => app.exit(0)).catch(() => {});
-    await closed;
-  };
   let app = await launch();
   try {
     let page = await app.firstWindow({ timeout: 10_000 });
@@ -24,7 +20,7 @@ test('skips setup across restarts and enables workspace creation after choosing 
     await page.locator('.workspace-tabs-rail').screenshot({ path: testInfo.outputPath('setup-skipped.png') });
     await expect.poll(() => JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')).mainDirectorySetupSkipped).toBe(true);
     expect(JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')).mainDirectory).toBeNull();
-    await close(app);
+    await forceClose(app);
     app = await launch();
     page = await app.firstWindow({ timeout: 10_000 });
     await expect(page.getByRole('region', { name: 'Choose where to work' })).toBeVisible();
@@ -44,7 +40,7 @@ test('skips setup across restarts and enables workspace creation after choosing 
     await expect(page.getByRole('button', { name: /^First workspace/, expanded: true })).toBeVisible();
     expect(fs.statSync(path.join(workspaceRoot, 'First workspace')).isDirectory()).toBe(true);
   } finally {
-    await close(app);
+    await forceClose(app);
     fs.rmSync(userData, { recursive: true, force: true });
   }
 });

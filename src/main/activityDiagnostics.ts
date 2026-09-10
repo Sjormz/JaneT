@@ -4,7 +4,7 @@ import type { AgentLifecycleEvent } from '../renderer/terminalAwareness';
 
 /** Opt-in, bounded metadata only: never prompts, output, paths or capability URLs. */
 export function activityDiagnostic(stage: string, event?: AgentLifecycleEvent | null,
-  detail?: { connected?: boolean; child?: boolean; status?: number; sameSession?: boolean; sameTurn?: boolean }): void {
+  detail?: { connected?: boolean; child?: boolean; status?: number; sameSession?: boolean; sameTurn?: boolean; errorCode?: string; syscall?: string }): void {
   const target = process.env.JANET_ACTIVITY_DIAGNOSTICS;
   if (!target) return;
   try {

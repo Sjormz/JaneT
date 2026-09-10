@@ -1,3 +1,4 @@
+import { forceClose } from './electronLifecycle';
 import {
   test,
   expect,
@@ -59,14 +60,6 @@ function createUserData(cwd: string): string {
     },
   }, null, 2), 'utf8');
   return userData;
-}
-
-async function forceClose(app: ElectronApplication | undefined): Promise<void> {
-  if (!app) return;
-  try {
-    await app.evaluate(({ app: electronApp }) => electronApp.exit(0));
-  } catch {}
-  await app.waitForEvent('close', { timeout: 5_000 }).catch(() => {});
 }
 
 function removeFixture(directory: string | undefined, prefix: string): void {

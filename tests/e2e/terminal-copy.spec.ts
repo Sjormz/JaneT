@@ -1,3 +1,4 @@
+import { forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -44,14 +45,6 @@ function createUserData(): string {
     },
   }, null, 2), 'utf-8');
   return userData;
-}
-
-async function forceClose(app: ElectronApplication | undefined): Promise<void> {
-  if (!app) return;
-  try {
-    await app.evaluate(({ app: electronApp }) => electronApp.exit(0));
-  } catch {}
-  await app.waitForEvent('close', { timeout: 5_000 }).catch(() => {});
 }
 
 async function markerPosition(page: Page): Promise<{ x: number; y: number }> {

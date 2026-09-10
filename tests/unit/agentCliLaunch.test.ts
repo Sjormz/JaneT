@@ -33,11 +33,12 @@ describe('automatic agent launch runtime', () => {
       buildSync({ entryPoints: ['src/main/agent-cli.ts'], bundle: true, platform: 'node', outfile: helper });
       const codexHome = path.join(directory, 'home'); fs.mkdirSync(codexHome);
       fs.writeFileSync(path.join(codexHome, 'config.toml'), '# existing settings\nmodel = "test-model"\n');
-      const env = { ...process.env, ...await bridge.environment('batch'), CODEX_HOME: codexHome };
+      const diagnostics = path.join(directory, 'diagnostics.jsonl');
+      const env = { ...process.env, ...await bridge.environment('batch'), CODEX_HOME: codexHome, JANET_ACTIVITY_DIAGNOSTICS: diagnostics };
       const projects = Array.from({ length: 12 }, (_, i) => path.join(directory, `project ${i}`));
       projects.forEach(project => fs.mkdirSync(project));
       const outputs = await Promise.all(projects.map(project => run(process.execPath, [helper, '--setup-codex'], env, '', true, project)));
-      expect(outputs).toEqual(projects.map(() => ''));
+      expect(outputs, fs.existsSync(diagnostics) ? fs.readFileSync(diagnostics, 'utf8') : 'No setup diagnostics').toEqual(projects.map(() => ''));
       const configPath = path.join(codexHome, 'config.toml');
       const config = fs.readFileSync(configPath, 'utf8');
       expect(config).toContain('# existing settings');
@@ -45,7 +46,8 @@ describe('automatic agent launch runtime', () => {
       expect(parse(config).projects).toEqual(Object.fromEntries(projects.map(project => [project, { trust_level: 'trusted' }])));
       const hooks = JSON.parse(fs.readFileSync(path.join(codexHome, 'hooks.json'), 'utf8')).hooks;
       expect(Object.values(hooks).every(groups => (groups as unknown[]).length === 1)).toBe(true);
-      await Promise.all(projects.map(project => run(process.execPath, [helper, '--setup-codex'], env, '', true, project)));
+      const repeatedOutputs = await Promise.all(projects.map(project => run(process.execPath, [helper, '--setup-codex'], env, '', true, project)));
+      expect(repeatedOutputs, fs.existsSync(diagnostics) ? fs.readFileSync(diagnostics, 'utf8') : 'No setup diagnostics').toEqual(projects.map(() => ''));
       expect(fs.readFileSync(configPath, 'utf8')).toBe(config);
     } finally { bridge.close(); fs.rmSync(directory, { recursive: true, force: true }); }
   }, 25000);
@@ -113,6 +115,18 @@ describe('automatic agent launch runtime', () => {
       expect(events.map(event => event.event)).toEqual(['integration.status', 'integration.status', 'session.start', 'turn.start', 'turn.end', 'session.start', 'turn.start', 'turn.end']);
       expect(JSON.stringify(events)).not.toContain('secret');
       expect(events.at(-1)).toMatchObject({ provider: 'hermes', outcome: 'succeeded', id: 'terminal' });
+      const invalidHome = path.join(directory, 'not-a-directory');
+      const diagnostics = path.join(directory, 'setup-errors.jsonl');
+      fs.writeFileSync(invalidHome, 'private configuration');
+      expect(await run(process.execPath, [helper, '--setup-codex'], {
+        ...env, CODEX_HOME: invalidHome, JANET_ACTIVITY_DIAGNOSTICS: diagnostics,
+      })).toContain('Automatic setup could not safely update');
+      const diagnosticText = fs.readFileSync(diagnostics, 'utf8');
+      expect(diagnosticText).not.toContain(directory);
+      expect(diagnosticText).not.toContain('private configuration');
+      expect(diagnosticText.trim().split('\n').map(line => JSON.parse(line))).toContainEqual(
+        expect.objectContaining({ stage: 'helper.setup-error', errorCode: 'EEXIST', syscall: 'mkdir' }),
+      );
     } finally { bridge.close(); fs.rmSync(directory, { recursive: true, force: true }); }
   }, 25000);
 
