@@ -173,6 +173,7 @@ describe('buildShellInit', () => {
         ['', 'cmd /c exit 7', 'cmd /c exit 7 | Out-Null', 'Get-Item Z:\\definitely-missing -ErrorAction SilentlyContinue | cmd /c exit 0', 'Write-Output $(cmd /c exit 7) | Get-Item Z:\\definitely-missing -ErrorAction SilentlyContinue', 'cmd /c exit 7; Get-Item Z:\\definitely-missing -ErrorAction SilentlyContinue', 'Get-Item Z:\\definitely-missing -ErrorAction SilentlyContinue', '$null = 1', 'exit'],
         {
           ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'psmodulepath')),
+          TERM_PROGRAM: 'TestRunner',
           PSModulePath: join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'Modules'),
         },
       );
