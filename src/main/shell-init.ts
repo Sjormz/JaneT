@@ -7,9 +7,11 @@ export const STARTUP_READY_MARKER = '\x1b]777;janet-ready\x1b\\';
  * Returns a small shell-init snippet that, when sourced/eval'd by the
  * shell at startup:
  *
- * - emits an OSC 7 escape sequence (file://HOST/PATH) before every prompt,
- *   so JaneT can keep its cwd-aware UI in sync; and
- * - prepares agent activity hooks without changing graphics capabilities.
+   * - emits an OSC 7 escape sequence (file://HOST/PATH) before every prompt,
+   *   so JaneT can keep its cwd-aware UI in sync; and
+   * - prepares agent activity hooks; the Codex wrapper scopes its Kitty image
+   *   capability to the Codex process because Codex does not recognize JaneT
+   *   by name yet.
  *
  * The Hermes wrapper is installed only when `hermes` currently resolves to
  * an external command, so a user's alias or function is never replaced.
@@ -102,17 +104,28 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
     ].join('\n');
     if (!agentHelper) return ps;
     const helper = agentHelper.replace(/['\u2018\u2019]/g, quote => quote + quote);
-    return ps + '\n' + ['codex', 'hermes'].map(agent => [
+    const agents = ['codex', ...(agentHelper ? ['hermes'] : [])].map(agent => [
       `$__jt_cli = Get-Command ${agent} -ErrorAction SilentlyContinue`,
-      `if ($__jt_cli -and $__jt_cli.CommandType -in @('Application', 'ExternalScript') -and (Get-Command node -CommandType Application -ErrorAction SilentlyContinue)) {`,
+      `if ($__jt_cli -and $__jt_cli.CommandType -in @('Application', 'ExternalScript')${agent === 'codex' ? " -and ($env:TERM_PROGRAM -eq 'JaneT')" : ''}${agentHelper ? " -and (Get-Command node -CommandType Application -ErrorAction SilentlyContinue)" : ''}) {`,
       `  $global:__jt_${agent}_path = $__jt_cli.Source`,
       `  function global:${agent} {`,
-      `    & node '${helper}' --setup-${agent} @args`,
+      ...(agent === 'codex' ? [
+        "    $__jt_previous_term = $env:TERM",
+        "    $env:TERM = 'xterm-kitty'",
+        "    try {",
+      ] : []),
+      ...(agentHelper ? [`    & node '${helper}' --setup-${agent} @args`] : []),
       `    $global:__jt_state.UseNativeExitCode = $true`,
       `    if ($MyInvocation.ExpectingInput) { $input | & $global:__jt_${agent}_path @args } else { & $global:__jt_${agent}_path @args }`,
+      ...(agent === 'codex' ? [
+        "    } finally {",
+        "      if ($null -eq $__jt_previous_term) { Remove-Item Env:TERM -ErrorAction SilentlyContinue } else { $env:TERM = $__jt_previous_term }",
+        "    }",
+      ] : []),
       `  }`,
       `}`,
     ].join('\n')).join('\n');
+    return agents + '\n' + ps;
   }
 
   // Bash. The canonical PROMPT_COMMAND snippet — also used by VS Code.
@@ -160,6 +173,7 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "    command hermes \"$@\"",
       "  }",
       "fi",
+      agentWrapper(agentHelper, 'bash'),
       "__jt_debug() {",
       "  local __jt_status=$?",
       "  (( __jt_debug_guard )) && return \"$__jt_status\"",
@@ -173,7 +187,7 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "__jt_debug_guard=0",
       "trap '__jt_debug' DEBUG",
       "fi",
-    ].join('\n') + agentWrapper(agentHelper, 'bash');
+    ].join('\n');
   }
 
   // Zsh. The zsh-native way: a precmd hook.
@@ -266,11 +280,10 @@ function setupAgent(helper: string | undefined, agent: string, shell: string): s
 }
 
 function agentWrapper(helper: string | undefined, shell: string): string {
-  if (!helper) return '';
   const setup = setupAgent(helper, 'codex', shell);
-  if (shell === 'fish') return `\nif type -q codex; and test (type -t codex) = file\nfunction codex\n${setup}\ncommand codex $argv\nend\nend\n`;
+  if (shell === 'fish') return `\nif type -q codex; and test (type -t codex) = file\nfunction codex\n${setup}\nenv TERM=xterm-kitty command codex $argv\nend\nend\n`;
   const condition = shell === 'zsh'
     ? '(( $+commands[codex] && ! $+aliases[codex] && ! $+galiases[codex] && ! $+functions[codex] ))'
     : '[ "$(type -t codex 2>/dev/null)" = file ]';
-  return `\nif ${condition}; then\nfunction codex {\n${setup}\ncommand 'codex' "$@"\n}\nfi\n`;
+  return `\nif ${condition}; then\nfunction codex {\n${setup}\nTERM=xterm-kitty command 'codex' "$@"\n}\nfi\n`;
 }
