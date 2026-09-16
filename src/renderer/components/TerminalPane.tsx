@@ -44,12 +44,8 @@ import {
   type SemanticCommandStartedEvent,
 } from '../semanticCommands';
 import {
-  DISABLE_TERMINAL_MOUSE_TRACKING,
   inspectTerminalControlSequences,
   logTerminalDiagnostic,
-  restoreTerminalMouseTracking,
-  createMouseTrackingFilter,
-  type TerminalMouseTrackingMode,
 } from '../terminalDiagnostics';
 import type { TerminalLeaf } from '../types';
 import { decodeTerminalClipboard } from '../terminalClipboard';
@@ -166,11 +162,8 @@ export function updateTerminalStartingDirectory(id: string, cwd: string | undefi
 
 function createTerminalInteraction() {
   return {
-    selectionProtectionRef: { current: false },
-    protectedMouseTrackingRef: { current: 'none' as TerminalMouseTrackingMode },
-    protectedSelectionRef: { current: '' },
-    dragSelectionRef: { current: '' },
-    mouseTrackingFilterRef: { current: createMouseTrackingFilter() },
+    forcedSelectionRef: { current: false },
+    retainedSelectionRef: { current: '' },
     hoveredLinkRef: { current: null as string | null },
     linkGestureRef: { current: false },
   };
@@ -236,12 +229,10 @@ export default function TerminalPane({
   const componentMountedRef = useRef(false);
   const searchVisibleRef = useRef(false);
   const [interaction] = useState(() => terminalPaneCache.get(termId)?.interaction ?? createTerminalInteraction());
-  const { selectionProtectionRef, protectedMouseTrackingRef, protectedSelectionRef,
-    mouseTrackingFilterRef, hoveredLinkRef, linkGestureRef, dragSelectionRef } = interaction;
+  const { forcedSelectionRef, retainedSelectionRef, hoveredLinkRef, linkGestureRef } = interaction;
   const [clipboardError, setClipboardError] = useState<string | null>(null);
   const copyGestureAtRef = useRef(0);
   const [requestedClipboard, setRequestedClipboard] = useState<string | null>(null);
-  const suspendMouseTrackingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const diagnosticsEnabled = window.janet.terminalDiagnosticsEnabled === true;
   searchVisibleRef.current = searchVisible;
   const cachedForAgentListener = terminalPaneCache.get(termId);
@@ -352,12 +343,16 @@ export default function TerminalPane({
       const dims = { cols: term.cols, rows: term.rows };
       const last = lastResizeRef.current;
       if (last?.cols === dims.cols && last?.rows === dims.rows) return;
+      const resize = tabType === 'local'
+        ? window.janet.terminalResize({ id: termId, cols: dims.cols, rows: dims.rows })
+        : window.janet.sshResizeShell({ termId, ...sshDimensions(dims) });
       lastResizeRef.current = dims;
-      if (tabType === 'local') {
-        window.janet.terminalResize({ id: termId, cols: dims.cols, rows: dims.rows });
-      } else if (tabType === 'ssh') {
-        window.janet.sshResizeShell({ termId, ...sshDimensions(dims) });
-      }
+      void resize.catch((error: unknown) => {
+        if (lastResizeRef.current === dims) {
+          lastResizeRef.current = null;
+        }
+        console.warn('[JaneT] terminal resize failed:', error);
+      });
       term.refresh(0, Math.max(term.rows - 1, 0));
     } catch {}
   };
@@ -422,78 +417,19 @@ export default function TerminalPane({
         selectionLength: term.getSelection().length,
         buffer: term.buffer.active.type,
         mouseTracking: term.modes.mouseTrackingMode,
-        selectionProtected: selectionProtectionRef.current,
-      });
-    };
-    const beginSelectionProtection = () => {
-      if (
-        selectionProtectionRef.current
-        || term.modes.mouseTrackingMode === 'none'
-        || terminalPaneCache.get(termId)?.sshRetryPromise
-      ) return;
-      protectedMouseTrackingRef.current = term.modes.mouseTrackingMode;
-      protectedSelectionRef.current = '';
-      selectionProtectionRef.current = true;
-      // Let xterm's forced Shift-selection mousedown run while mouse tracking
-      // is still active, then suspend tracking before the first drag update.
-      suspendMouseTrackingTimerRef.current = setTimeout(() => {
-        suspendMouseTrackingTimerRef.current = null;
-        if (selectionProtectionRef.current) term.write(DISABLE_TERMINAL_MOUSE_TRACKING);
-      }, 0);
-      logTerminalDiagnostic(diagnosticsEnabled, termId, 'selection-protection-start', {
-        suspendedMouseTracking: protectedMouseTrackingRef.current,
-        buffer: term.buffer.active.type,
+        selectionSnapshotActive: forcedSelectionRef.current,
       });
     };
     const selectionMouseDownListener = (event: MouseEvent) => {
       if (event.button === 2) copyGestureAtRef.current = Date.now();
-      if (event.button === 0 && (event.shiftKey || event.altKey)) beginSelectionProtection();
+      if (event.button !== 0) return;
+      retainedSelectionRef.current = '';
+      forcedSelectionRef.current = /Mac|iPhone|iPad|iPod/i.test(navigator.platform)
+        ? event.altKey
+        : event.shiftKey;
     };
     container.addEventListener('mousedown', selectionMouseDownListener, true);
     mountCleanup.push(() => container.removeEventListener('mousedown', selectionMouseDownListener, true));
-    let dragStart: { column: number; row: number; x: number; y: number } | null = null;
-    const dragPosition = (event: MouseEvent) => {
-      const screen = container.querySelector('.xterm-screen');
-      const box = screen?.getBoundingClientRect();
-      if (!box?.width || !box.height) return null;
-      return {
-        column: Math.max(0, Math.min(term.cols, Math.round((event.clientX - box.left) * term.cols / box.width))),
-        row: term.buffer.active.viewportY + Math.max(0, Math.min(term.rows - 1, Math.floor((event.clientY - box.top) * term.rows / box.height))),
-      };
-    };
-    const captureDragStart = (event: MouseEvent) => {
-      if (event.button !== 0) return;
-      dragSelectionRef.current = '';
-      dragStart = null;
-      if (event.shiftKey || event.altKey || term.modes.mouseTrackingMode === 'none'
-        || !(event.target as Element).closest('.xterm-screen')) return;
-      const position = dragPosition(event);
-      if (position) dragStart = { ...position, x: event.clientX, y: event.clientY };
-    };
-    const captureDragEnd = (event: MouseEvent) => {
-      const start = dragStart;
-      dragStart = null;
-      if (!start || event.button !== 0 || Math.hypot(event.clientX - start.x, event.clientY - start.y) < 4) return;
-      const end = dragPosition(event);
-      if (!end) return;
-      const first = start.row * term.cols + start.column;
-      const last = end.row * term.cols + end.column;
-      const offset = Math.min(first, last);
-      // TUIs paint their own selection. Snapshot via xterm's Unicode/wrap-aware
-      // public API before mouse-up reaches the PTY and can trigger a redraw.
-      term.select(offset % term.cols, Math.floor(offset / term.cols), Math.abs(last - first));
-      dragSelectionRef.current = term.getSelection();
-      term.clearSelection();
-    };
-    const cancelDrag = () => { dragStart = null; };
-    container.addEventListener('mousedown', captureDragStart, true);
-    document.addEventListener('mouseup', captureDragEnd, true);
-    window.addEventListener('blur', cancelDrag);
-    mountCleanup.push(() => {
-      container.removeEventListener('mousedown', captureDragStart, true);
-      document.removeEventListener('mouseup', captureDragEnd, true);
-      window.removeEventListener('blur', cancelDrag);
-    });
     mountCleanup.push(term.parser.registerOscHandler(52, (data) => {
       const text = decodeTerminalClipboard(data);
       if (!text) return true;
@@ -544,14 +480,14 @@ export default function TerminalPane({
     }
     mountCleanup.push(term.onSelectionChange(() => {
       const selection = term.getSelection();
-      if (selection) protectedSelectionRef.current = selection;
-      else if (!selectionProtectionRef.current) protectedSelectionRef.current = '';
+      if (selection && forcedSelectionRef.current) retainedSelectionRef.current = selection;
+      else if (!selection && !forcedSelectionRef.current) retainedSelectionRef.current = '';
       logTerminalDiagnostic(diagnosticsEnabled, termId, 'selection-change', {
         selectionLength: selection.length,
-        retainedSelectionLength: protectedSelectionRef.current.length,
+        retainedSelectionLength: retainedSelectionRef.current.length,
         buffer: term.buffer.active.type,
         mouseTracking: term.modes.mouseTrackingMode,
-        selectionProtected: selectionProtectionRef.current,
+        selectionSnapshotActive: forcedSelectionRef.current,
       });
     }));
     mountCleanup.push(term.onResize(({ cols, rows }) => {
@@ -559,25 +495,9 @@ export default function TerminalPane({
         cols,
         rows,
         selectionLength: term.getSelection().length,
-        selectionProtected: selectionProtectionRef.current,
+        selectionSnapshotActive: forcedSelectionRef.current,
       });
     }));
-    const endSelectionProtection = (clearSelection: boolean) => {
-      if (!selectionProtectionRef.current) return;
-      if (suspendMouseTrackingTimerRef.current) {
-        clearTimeout(suspendMouseTrackingTimerRef.current);
-        suspendMouseTrackingTimerRef.current = null;
-      }
-      selectionProtectionRef.current = false;
-      const restore = restoreTerminalMouseTracking(protectedMouseTrackingRef.current);
-      if (restore) term.write(restore);
-      if (clearSelection) term.clearSelection();
-      protectedSelectionRef.current = '';
-      logTerminalDiagnostic(diagnosticsEnabled, termId, 'selection-protection-end', {
-        restoredMouseTracking: protectedMouseTrackingRef.current,
-      });
-      term.focus();
-    };
     const pasteClipboard = async () => {
       try {
         const contents = await window.janet.readTerminalClipboard();
@@ -588,8 +508,8 @@ export default function TerminalPane({
         }
         const text = typeof contents === 'string' ? contents : formatTerminalPathForPaste(contents.imagePath, startupShellDialect);
         if (text === null) throw new Error('Invalid clipboard image path');
-        dragSelectionRef.current = '';
-        endSelectionProtection(true);
+        retainedSelectionRef.current = '';
+        forcedSelectionRef.current = false;
         inputSource.userInput = true;
         term.paste(text);
         inputSource.userInput = false;
@@ -602,13 +522,16 @@ export default function TerminalPane({
     const copySelection = (selection: string) => {
       const copied = window.janet.copyTerminalText(selection);
       if (copied) {
-        endSelectionProtection(true);
+        const wasForcedSelection = forcedSelectionRef.current;
+        retainedSelectionRef.current = '';
+        forcedSelectionRef.current = false;
+        if (wasForcedSelection) term.clearSelection();
         setClipboardError(null);
       } else setClipboardError('Couldn’t copy the selection. Try a smaller selection.');
       return copied;
     };
     const contextMenuListener = (event: MouseEvent) => {
-      const selection = term.getSelection() || dragSelectionRef.current || (selectionProtectionRef.current ? protectedSelectionRef.current : '');
+      const selection = term.getSelection() || retainedSelectionRef.current;
       // A mouse-aware TUI owns its own selection and right-click copy gesture.
       if (!selection && term.modes.mouseTrackingMode !== 'none' && !event.shiftKey) {
         event.preventDefault();
@@ -633,7 +556,7 @@ export default function TerminalPane({
       }
       if (e.type === 'keydown' && e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey) && !e.altKey) {
         copyGestureAtRef.current = Date.now();
-        const selection = term.getSelection() || dragSelectionRef.current || (selectionProtectionRef.current ? protectedSelectionRef.current : '');
+        const selection = term.getSelection() || retainedSelectionRef.current;
         if (selection) {
           e.preventDefault();
           const copied = copySelection(selection);
@@ -641,22 +564,10 @@ export default function TerminalPane({
             copied,
             selectionLength: selection.length,
             retainedSelection: !term.hasSelection(),
-            selectionProtected: selectionProtectionRef.current,
+            selectionSnapshotActive: forcedSelectionRef.current,
           });
           return false;
         }
-      }
-      if (e.key === 'Escape' && selectionProtectionRef.current) {
-        e.preventDefault();
-        endSelectionProtection(true);
-        return false;
-      }
-      if (
-        e.type === 'keydown'
-        && selectionProtectionRef.current
-        && !['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)
-      ) {
-        endSelectionProtection(true);
       }
       if (matchesShortcut(e, currentBindings['search-toggle'])) {
         e.preventDefault();
@@ -695,10 +606,18 @@ export default function TerminalPane({
     // Xterm's onData also includes automatic terminal replies (DA/DSR/CPR),
     // so mark the synchronous keyboard/paste/input path separately. The main
     // process uses this bit to cancel pending startup only for real user input.
-    mountCleanup.push(term.onKey(() => { dragSelectionRef.current = ''; inputSource.userInput = true; }));
+    mountCleanup.push(term.onKey(() => {
+      retainedSelectionRef.current = '';
+      forcedSelectionRef.current = false;
+      inputSource.userInput = true;
+    }));
     const textarea = term.textarea;
     if (textarea && inputLabel) textarea.setAttribute('aria-label', inputLabel);
-    const markUserInput = () => { dragSelectionRef.current = ''; endSelectionProtection(true); inputSource.userInput = true; };
+    const markUserInput = () => {
+      retainedSelectionRef.current = '';
+      forcedSelectionRef.current = false;
+      inputSource.userInput = true;
+    };
     textarea?.addEventListener('paste', markUserInput, true);
     textarea?.addEventListener('input', markUserInput, true);
     mountCleanup.push(() => {
@@ -709,15 +628,8 @@ export default function TerminalPane({
     // closure while cached/detached so it cannot update an unmounted pane.
     mountCleanup.push(() => term.attachCustomKeyEventHandler(() => true));
     mountCleanup.push(() => {
-      if (suspendMouseTrackingTimerRef.current) {
-        clearTimeout(suspendMouseTrackingTimerRef.current);
-        suspendMouseTrackingTimerRef.current = null;
-      }
-      if (!selectionProtectionRef.current) return;
-      selectionProtectionRef.current = false;
-      const restore = restoreTerminalMouseTracking(protectedMouseTrackingRef.current);
-      if (restore) term.write(restore);
-      protectedSelectionRef.current = '';
+      retainedSelectionRef.current = '';
+      forcedSelectionRef.current = false;
     });
     termRef.current = term;
     fitAddonRef.current = fitAddon;
@@ -801,6 +713,9 @@ export default function TerminalPane({
       cursorBlink: true,
       cursorStyle: 'block',
       macOptionClickForcesSelection: true,
+      ...(tabType === 'local' && /Win/i.test(navigator.platform)
+        ? { windowsPty: { backend: 'conpty' } }
+        : {}),
       fontSize: fontSize || 14,
       fontFamily: fontFamily || DEFAULT_TERMINAL_FONT_FAMILY,
       lineHeight: 1.2,
@@ -890,8 +805,7 @@ export default function TerminalPane({
       return semanticCommands.handleOsc(data);
     }));
     lifetimeCleanup.push(semanticCommands);
-    const kittyGraphics = enableTerminalGraphics(term);
-    if (kittyGraphics) lifetimeCleanup.push(kittyGraphics);
+    enableTerminalGraphics(term);
     lifetimeCleanup.push(term.parser.registerOscHandler(777, (data) => {
       if (data === 'janet-ready') {
         startupMarked = true;
@@ -908,6 +822,10 @@ export default function TerminalPane({
       if (linkGestureRef.current && /^\x1b\[(?:<|M)/.test(data)) return;
       const userInput = inputSource.userInput;
       inputSource.userInput = false;
+      if (userInput) {
+        retainedSelectionRef.current = '';
+        forcedSelectionRef.current = false;
+      }
       if (userInput && terminalPaneCache.get(termId)?.broadcastInputListener?.(termId, data)) return;
       if (tabType === 'local') {
         window.janet.terminalWrite({ id: termId, data, userInput });
@@ -921,6 +839,10 @@ export default function TerminalPane({
       if (linkGestureRef.current && data.startsWith('\x1b[M')) return;
       const userInput = inputSource.userInput;
       inputSource.userInput = false;
+      if (userInput) {
+        retainedSelectionRef.current = '';
+        forcedSelectionRef.current = false;
+      }
       if (userInput && terminalPaneCache.get(termId)?.broadcastInputListener?.(termId, data, true)) return;
       if (tabType === 'local') {
         window.janet.terminalWriteBinary({ id: termId, data, userInput });
@@ -941,12 +863,9 @@ export default function TerminalPane({
           selectionLength: term.getSelection().length,
           buffer: term.buffer.active.type,
           mouseTracking: term.modes.mouseTrackingMode,
-          selectionProtected: selectionProtectionRef.current,
+          selectionSnapshotActive: forcedSelectionRef.current,
         });
-        const renderedData = mouseTrackingFilterRef.current(data, selectionProtectionRef.current, (mode) => {
-          protectedMouseTrackingRef.current = mode;
-        });
-        term.write(renderedData, () => {
+        term.write(data, () => {
           window.janet.terminalAcknowledgeOutput({ source, id, generation, sequence });
         });
       }
@@ -1148,13 +1067,8 @@ export default function TerminalPane({
     const previousDisableStdin = term.options.disableStdin;
     term.options.disableStdin = true;
     cached.inputSource.userInput = false;
-    if (suspendMouseTrackingTimerRef.current) {
-      clearTimeout(suspendMouseTrackingTimerRef.current);
-      suspendMouseTrackingTimerRef.current = null;
-    }
-    selectionProtectionRef.current = false;
-    protectedMouseTrackingRef.current = 'none';
-    protectedSelectionRef.current = '';
+    forcedSelectionRef.current = false;
+    retainedSelectionRef.current = '';
     publishSshNoticeState({ kind: 'reconnecting' });
     try {
       term.write(RESET_TERMINAL_FOR_NEW_SSH_SHELL, () => {

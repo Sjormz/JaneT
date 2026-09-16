@@ -2,8 +2,9 @@ import { test, expect, _electron as electron, type ElectronApplication } from '@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { forceClose } from './electronLifecycle';
 
-test('copies an ordinary drag selection from the installed Hermes TUI', async ({}, testInfo) => {
+test('copies a modifier drag selection from the installed Hermes TUI', async ({}, testInfo) => {
   test.skip(!process.env.JANET_TEST_HERMES, 'Requires an installed Hermes executable');
   test.setTimeout(90_000);
   const profile = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-hermes-copy-'));
@@ -49,15 +50,16 @@ test('copies an ordinary drag selection from the installed Hermes TUI', async ({
       throw new Error('Marker text range not found');
     }, marker);
     await app.evaluate(({ clipboard }) => clipboard.writeText('UNCHANGED'));
+    const modifier = process.platform === 'darwin' ? 'Alt' : 'Shift';
+    await page.keyboard.down(modifier);
     await page.mouse.move(rect.x + 1, rect.y + rect.height / 2);
     await page.mouse.down();
     await page.mouse.move(rect.x + rect.width - 1, rect.y + rect.height / 2, { steps: 20 });
     await page.mouse.up();
-    await page.keyboard.press('Control+Shift+C');
+    await page.keyboard.up(modifier);
     const screenshot = testInfo.outputPath('hermes-copy.png');
     await page.screenshot({ path: screenshot });
     await testInfo.attach('hermes-copy', { path: screenshot, contentType: 'image/png' });
-    await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toBe(marker);
     const width = await page.locator('.xterm-screen').evaluate((screen) => screen.clientWidth);
     await app.evaluate(({ BrowserWindow, clipboard }) => {
       clipboard.writeText('UNCHANGED_AFTER_REDRAW');
@@ -68,8 +70,7 @@ test('copies an ordinary drag selection from the installed Hermes TUI', async ({
     await page.keyboard.press('Control+Shift+C');
     await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toBe(marker);
   } finally {
-    if (app) await app.evaluate(({ app: application }) => application.exit(0)).catch(() => {});
-    if (app) await app.waitForEvent('close', { timeout: 5000 }).catch(() => {});
+    await forceClose(app);
     await fs.promises.rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 });

@@ -14,6 +14,7 @@ on:
 concurrency:
   group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
@@ -26,56 +27,87 @@ jobs:
   verify:
     name: Verify release candidate
     runs-on: ubuntu-latest
+    outputs:
+      source-sha: ${{ steps.source.outputs.sha }}
     steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-
-      - name: Apply release tooling recovery
-        if: github.event_name == 'workflow_dispatch'
+      - name: Validate release request
         shell: bash
         run: |
-          test "$GITHUB_REF" = "refs/heads/main"
-          git fetch --no-tags --depth=1 origin main
-          test "$GITHUB_SHA" = "$(git rev-parse FETCH_HEAD)"
-          git checkout "$GITHUB_SHA" -- .github/workflows/release.yml package.json scripts/verify-release-artifacts.mjs scripts/package-windows-conpty.cjs tests/unit/releaseTooling.test.ts
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            test "$GITHUB_REF" = "refs/heads/main"
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Verify tagged source is on main
+        id: source
+        shell: bash
+        run: |
+          SOURCE_SHA=$(git rev-parse HEAD)
+          test "$SOURCE_SHA" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          git merge-base --is-ancestor "$SOURCE_SHA" origin/main
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            test "$SOURCE_SHA" = "$GITHUB_SHA"
+          fi
+          echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
+      - name: Verify release versions before installing dependencies
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const assert = require('node:assert/strict');
+          const pkg = require('./package.json');
+          const lock = require('./package-lock.json');
+          assert.equal(process.env.RELEASE_TAG, `v${pkg.version}`, 'Tag/package version mismatch');
+          assert.equal(lock.version, pkg.version, 'Lockfile version mismatch');
+          assert.equal(lock.packages[''].version, pkg.version, 'Root lockfile version mismatch');
+          NODE
+
       - name: Install Linux desktop test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb
+
+      - uses: actions/setup-python@v6
+        id: python
+        with:
+          python-version: '3.12'
 
       - name: Install dependencies
         run: npm ci
         env:
           NODE_ENV: development
 
-      - name: Verify release tag matches package.json
-        shell: bash
-        run: |
-          TAG_VERSION="${RELEASE_TAG#v}"
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
-            echo "Tag $RELEASE_TAG does not match package.json version $PACKAGE_VERSION"
-            exit 1
-          fi
-
       - name: TypeScript check
         run: npm run typecheck
 
       - name: Run unit and component tests
         run: npm test
+        env:
+          JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
 
       - name: Build app
         run: npm run build
 
       - name: Run Electron e2e tests
-        run: xvfb-run --auto-servernum npm run test:e2e
+        run: xvfb-run --auto-servernum npx playwright test --config playwright.config.ts
+        env:
+          JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
+
+      - uses: actions/upload-artifact@v6
+        if: failure()
+        with:
+          name: release-electron-failure-linux
+          path: test-results/e2e
+          retention-days: 7
 
   package:
     name: Package (${{ matrix.os }})
@@ -97,16 +129,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
-
-      - name: Apply release tooling recovery
-        if: github.event_name == 'workflow_dispatch'
-        shell: bash
-        run: |
-          test "$GITHUB_REF" = "refs/heads/main"
-          git fetch --no-tags --depth=1 origin main
-          test "$GITHUB_SHA" = "$(git rev-parse FETCH_HEAD)"
-          git checkout "$GITHUB_SHA" -- .github/workflows/release.yml package.json scripts/verify-release-artifacts.mjs scripts/package-windows-conpty.cjs tests/unit/releaseTooling.test.ts
+          ref: ${{ needs.verify.outputs.source-sha }}
 
       - uses: actions/setup-node@v7
         with:
@@ -117,16 +140,6 @@ jobs:
         run: npm ci
         env:
           NODE_ENV: development
-
-      - name: Verify release tag matches package.json
-        shell: bash
-        run: |
-          TAG_VERSION="${RELEASE_TAG#v}"
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
-            echo "Tag $RELEASE_TAG does not match package.json version $PACKAGE_VERSION"
-            exit 1
-          fi
 
       - name: Build app
         run: npm run build
@@ -153,15 +166,51 @@ jobs:
             release/*.deb
             release/latest*.yml
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
   publish:
     name: Update GitHub release
-    needs: [package]
+    needs: [verify, package]
     runs-on: ubuntu-latest
+    # Serialize publication across versions, not only reruns of the same tag.
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: write
     steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Refuse published versions and updater downgrades
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.verify.outputs.source-sha }}
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const assert = require('node:assert/strict');
+          const { execFileSync } = require('node:child_process');
+          const api = (...args) => JSON.parse(execFileSync('gh', ['api', ...args], { encoding: 'utf8' }));
+          const repo = `repos/${process.env.GITHUB_REPOSITORY}`;
+          const tag = process.env.RELEASE_TAG;
+          const releases = api('--paginate', '--slurp', `${repo}/releases?per_page=100`).flat();
+          const candidate = tag.slice(1).split('.').map(BigInt);
+          for (const release of releases) {
+            if (release.draft) continue;
+            assert.notEqual(release.tag_name, tag, 'Already published; never overwrite a release');
+            if (release.prerelease || !/^v\d+\.\d+\.\d+$/.test(release.tag_name)) continue;
+            const published = release.tag_name.slice(1).split('.').map(BigInt);
+            const firstDifference = candidate.findIndex((part, index) => part !== published[index]);
+            assert(firstDifference >= 0 && candidate[firstDifference] > published[firstDifference],
+              `Refusing to publish ${tag} after ${release.tag_name}`);
+          }
+          // Resolve annotated and lightweight tags immediately before publication.
+          const commit = api(`${repo}/commits/${encodeURIComponent(`refs/tags/${tag}`)}`);
+          assert.equal(commit.sha, process.env.SOURCE_SHA, 'Release tag moved during the build');
+          NODE
+
       - name: Download build artifacts
         uses: actions/download-artifact@v8
         with:
@@ -175,6 +224,8 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           name: ${{ env.RELEASE_TAG }}
           generate_release_notes: true
+          # The action stages new releases as drafts until uploads finish.
+          # Only an unpublished failed draft may have its assets replaced.
           overwrite_files: true
           fail_on_unmatched_files: true
           files: |

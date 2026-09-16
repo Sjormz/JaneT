@@ -67,7 +67,8 @@ jobs:
           retention-days: 7
 
   durable-workspace-platforms:
-    name: Desktop smoke (${{ matrix.os }})
+    # Required-check context in main-approval-gate; keep this name stable.
+    name: Durable workspace (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

@@ -303,6 +303,24 @@ async function loadTerminalPane() {
   return import('../../src/renderer/components/TerminalPane');
 }
 
+describe('TerminalPane xterm platform options', () => {
+  it.each([
+    { name: 'Windows local', platform: 'Win32', tabType: 'local' as const, windowsPty: { backend: 'conpty' } },
+    { name: 'Windows SSH', platform: 'Win32', tabType: 'ssh' as const, windowsPty: undefined },
+    { name: 'Linux local', platform: 'Linux x86_64', tabType: 'local' as const, windowsPty: undefined },
+  ])('uses native ConPTY only for $name', async ({ platform, tabType, windowsPty }) => {
+    const originalPlatform = navigator.platform;
+    Object.defineProperty(navigator, 'platform', { configurable: true, value: platform });
+    try {
+      const { default: TerminalPane } = await loadTerminalPane();
+      render(<KeybindingsProvider><TerminalPane termId={`term-options-${platform}-${tabType}`} tabType={tabType} onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" /></KeybindingsProvider>);
+      expect(MockTerminal.instances.at(-1)?.options.windowsPty).toEqual(windowsPty);
+    } finally {
+      Object.defineProperty(navigator, 'platform', { configurable: true, value: originalPlatform });
+    }
+  });
+});
+
 describe('TerminalPane SSH reinitialization', () => {
   it("uses the pane label for xterm's helper input", async () => {
     const { default: TerminalPane } = await loadTerminalPane();
@@ -906,11 +924,11 @@ describe('TerminalPane SSH reinitialization', () => {
     }
   });
 
-  it('automatically protects a Shift-drag selection and copies it after a TUI clears the highlight', async () => {
+  it('uses native modifier selection and retains its text through a redraw', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
     render(
       <KeybindingsProvider>
-        <TerminalPane termId="term-protected-selection" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+        <TerminalPane termId="term-forced-selection" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
       </KeybindingsProvider>,
     );
 
@@ -922,16 +940,7 @@ describe('TerminalPane SSH reinitialization', () => {
       buttons: 1,
       shiftKey: true,
     });
-    await waitFor(() => expect(term.write).toHaveBeenCalledWith('\u001b[?9l\u001b[?1000l\u001b[?1002l\u001b[?1003l'));
-
-    act(() => terminalDataHandler?.({
-      source: 'local',
-      id: 'term-protected-selection',
-      data: `redraw\u001b[?1003h\u001b[?1006h`,
-      generation: 1,
-      sequence: 1,
-    }));
-    expect(term.write).toHaveBeenLastCalledWith('redraw\u001b[?1006h', expect.any(Function));
+    expect(term.write).not.toHaveBeenCalled();
 
     term.selection = 'retained TUI text';
     act(() => term.selectionChangeHandler?.());
@@ -951,23 +960,79 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(handled).toBe(false);
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(copyTerminalText).toHaveBeenCalledWith('retained TUI text');
-    expect(term.write).toHaveBeenCalledWith('\u001b[?1003h');
     expect(term.clearSelection).toHaveBeenCalled();
   });
 
-  it('protects TUI selection using the current pane after a cached remount', async () => {
+  it('matches xterm native selection modifiers on macOS', async () => {
+    const originalPlatform = navigator.platform;
+    Object.defineProperty(navigator, 'platform', { configurable: true, value: 'MacIntel' });
+    try {
+      const { default: TerminalPane } = await loadTerminalPane();
+      render(<KeybindingsProvider><TerminalPane termId="term-mac-selection" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" /></KeybindingsProvider>);
+      const term = MockTerminal.instances.at(-1)!;
+      const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
+      const container = document.querySelector('.terminal-container')!;
+
+      fireEvent.mouseDown(container, { button: 0, shiftKey: true, altKey: false });
+      term.selection = 'shift is not native on macOS';
+      act(() => term.selectionChangeHandler?.());
+      term.selection = '';
+      act(() => term.selectionChangeHandler?.());
+      expect(keyHandler({
+        type: 'keydown', key: 'c', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false,
+        preventDefault: vi.fn(),
+      })).toBe(true);
+      expect(copyTerminalText).not.toHaveBeenCalled();
+
+      fireEvent.mouseDown(container, { button: 0, shiftKey: false, altKey: true });
+      term.selection = 'Option is native on macOS';
+      act(() => term.selectionChangeHandler?.());
+      term.selection = '';
+      act(() => term.selectionChangeHandler?.());
+      expect(keyHandler({
+        type: 'keydown', key: 'c', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false,
+        preventDefault: vi.fn(),
+      })).toBe(false);
+      expect(copyTerminalText).toHaveBeenCalledWith('Option is native on macOS');
+    } finally {
+      Object.defineProperty(navigator, 'platform', { configurable: true, value: originalPlatform });
+    }
+  });
+
+  it('forwards ordinary mouse input from a mouse-aware TUI without rewriting it', async () => {
     const { default: TerminalPane } = await loadTerminalPane();
-    const pane = <KeybindingsProvider><TerminalPane termId="protected-remount" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" /></KeybindingsProvider>;
+    render(<KeybindingsProvider><TerminalPane termId="term-tui-mouse" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" /></KeybindingsProvider>);
+    const term = MockTerminal.instances.at(-1)!;
+    term.modes.mouseTrackingMode = 'any';
+    fireEvent.mouseDown(document.querySelector('.terminal-container')!, { button: 0 });
+    const output = '\x1b]0;literal\x1b[?1003h\x07';
+    act(() => terminalDataHandler?.({
+      source: 'local', id: 'term-tui-mouse', data: output, generation: 1, sequence: 1,
+    }));
+    expect(term.write).toHaveBeenCalledWith(output, expect.any(Function));
+    term.emitBinary('\x1b[Mabc');
+    expect(terminalWriteBinary).toHaveBeenCalledWith({ id: 'term-tui-mouse', data: '\x1b[Mabc', userInput: false });
+    expect(term.write).not.toHaveBeenCalledWith(expect.stringContaining('\u001b[?9l'));
+  });
+
+  it('clears the retained modifier selection when a cached pane remounts', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    const pane = <KeybindingsProvider><TerminalPane termId="term-selection-remount" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" /></KeybindingsProvider>;
     const first = render(pane);
     const term = MockTerminal.instances.at(-1)!;
+    fireEvent.mouseDown(document.querySelector('.terminal-container')!, { button: 0, shiftKey: true });
+    term.selection = 'stale selection';
+    act(() => term.selectionChangeHandler?.());
     first.unmount();
     render(pane);
-    expect(MockTerminal.instances.at(-1)).toBe(term);
-    term.modes.mouseTrackingMode = 'any';
-    fireEvent.mouseDown(document.querySelector('.terminal-container')!, { button: 0, shiftKey: true });
-    await waitFor(() => expect(term.write).toHaveBeenCalledWith('\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l'));
-    act(() => terminalDataHandler?.({ source: 'local', id: 'protected-remount', data: 'redraw\x1b[?1003h', generation: 1, sequence: 1 }));
-    expect(term.write).toHaveBeenLastCalledWith('redraw', expect.any(Function));
+    const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
+    copyTerminalText.mockClear();
+    term.selection = '';
+    expect(keyHandler({
+      type: 'keydown', key: 'c', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false,
+      preventDefault: vi.fn(),
+    })).toBe(true);
+    expect(copyTerminalText).not.toHaveBeenCalled();
   });
 
   it('cancels a link gesture released outside the pane or on window blur', async () => {
@@ -1101,6 +1166,11 @@ describe('TerminalPane SSH reinitialization', () => {
     );
 
     const term = MockTerminal.instances.at(-1)!;
+    fireEvent.mouseDown(document.querySelector('.terminal-container')!, { button: 0, shiftKey: true });
+    term.selection = 'stale forced selection';
+    act(() => term.selectionChangeHandler?.());
+    term.selection = '';
+    act(() => term.selectionChangeHandler?.());
     const text = 'docker compose logs -f';
     act(() => window.dispatchEvent(new CustomEvent('janet:terminal-paste-request', {
       detail: { termId: 'term-snippet', text },
@@ -1109,6 +1179,12 @@ describe('TerminalPane SSH reinitialization', () => {
     expect(term.paste).toHaveBeenCalledWith(text);
     expect(terminalWrite).toHaveBeenCalledWith({ id: 'term-snippet', data: text, userInput: true });
     expect(term.paste).not.toHaveBeenCalledWith(`${text}\n`);
+    const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
+    expect(keyHandler({
+      type: 'keydown', key: 'c', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false,
+      preventDefault: vi.fn(),
+    })).toBe(true);
+    expect(copyTerminalText).not.toHaveBeenCalled();
   });
 
   it('pastes a requested snippet into the active SSH shell without adding Enter', async () => {
@@ -1250,6 +1326,95 @@ describe('TerminalPane SSH reinitialization', () => {
 
       expect(sshResizeShell).toHaveBeenCalledWith({ termId: 'term-ssh-resize', cols: 73, rows: 19 });
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries dimensions after a closed resize IPC call', async () => {
+    vi.useFakeTimers();
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { default: TerminalPane } = await loadTerminalPane();
+      render(
+        <KeybindingsProvider>
+          <TerminalPane
+            termId="term-resize-retry"
+            tabType="local"
+            onReady={vi.fn()}
+            onRemoved={vi.fn()}
+            themeName="tokyo-night"
+          />
+        </KeybindingsProvider>,
+      );
+
+      await vi.runAllTimersAsync();
+      const term = MockTerminal.instances[0];
+      const fit = MockAddonFit.instances[0];
+      fit.proposeDimensions.mockReturnValue({ cols: 132, rows: 37 });
+      fit.fit.mockImplementation(() => term.resize(132, 37));
+      terminalResize.mockClear();
+      terminalResize.mockRejectedValueOnce(new Error('closed'));
+
+      MockResizeObserver.instances[0].trigger();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(terminalResize).toHaveBeenCalledTimes(1);
+      expect(warning).toHaveBeenCalledWith('[JaneT] terminal resize failed:', expect.any(Error));
+
+      MockResizeObserver.instances[0].trigger();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(terminalResize).toHaveBeenCalledTimes(2);
+    } finally {
+      warning.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not skip a resize when dimensions return while a newer request is pending', async () => {
+    vi.useFakeTimers();
+    let resolvePending!: () => void;
+    try {
+      const { default: TerminalPane } = await loadTerminalPane();
+      render(
+        <KeybindingsProvider>
+          <TerminalPane
+            termId="term-resize-race"
+            tabType="local"
+            onReady={vi.fn()}
+            onRemoved={vi.fn()}
+            themeName="tokyo-night"
+          />
+        </KeybindingsProvider>,
+      );
+
+      await vi.runAllTimersAsync();
+      const term = MockTerminal.instances[0];
+      const fit = MockAddonFit.instances[0];
+      let dimensions = { cols: 100, rows: 30 };
+      fit.proposeDimensions.mockImplementation(() => dimensions);
+      fit.fit.mockImplementation(() => term.resize(dimensions.cols, dimensions.rows));
+      terminalResize.mockClear();
+      terminalResize.mockImplementation((...args: unknown[]) => {
+        const [{ cols }] = args as [{ cols: number }];
+        if (cols === 120) return new Promise<void>((resolve) => { resolvePending = resolve; });
+        return Promise.resolve();
+      });
+
+      MockResizeObserver.instances[0].trigger();
+      await vi.advanceTimersByTimeAsync(50);
+      dimensions = { cols: 120, rows: 30 };
+      MockResizeObserver.instances[0].trigger();
+      await vi.advanceTimersByTimeAsync(50);
+      dimensions = { cols: 100, rows: 30 };
+      MockResizeObserver.instances[0].trigger();
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(terminalResize).toHaveBeenCalledTimes(3);
+      expect(terminalResize).toHaveBeenNthCalledWith(1, { id: 'term-resize-race', cols: 100, rows: 30 });
+      expect(terminalResize).toHaveBeenNthCalledWith(2, { id: 'term-resize-race', cols: 120, rows: 30 });
+      expect(terminalResize).toHaveBeenNthCalledWith(3, { id: 'term-resize-race', cols: 100, rows: 30 });
+      resolvePending();
+    } finally {
+      terminalResize.mockImplementation(() => Promise.resolve());
       vi.useRealTimers();
     }
   });
