@@ -171,6 +171,7 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "    command hermes \"$@\"",
       "  }",
       "fi",
+      agentWrapper(agentHelper, 'bash'),
       "__jt_debug() {",
       "  local __jt_status=$?",
       "  (( __jt_debug_guard )) && return \"$__jt_status\"",
@@ -184,7 +185,7 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "__jt_debug_guard=0",
       "trap '__jt_debug' DEBUG",
       "fi",
-    ].join('\n') + agentWrapper(agentHelper, 'bash');
+    ].join('\n');
   }
 
   // Zsh. The zsh-native way: a precmd hook.
