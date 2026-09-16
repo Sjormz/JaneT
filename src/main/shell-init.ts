@@ -103,7 +103,7 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "}",
     ].join('\n');
     const helper = agentHelper?.replace(/['\u2018\u2019]/g, quote => quote + quote);
-    return ps + '\n' + ['codex', ...(agentHelper ? ['hermes'] : [])].map(agent => [
+    const agents = ['codex', ...(agentHelper ? ['hermes'] : [])].map(agent => [
       `$__jt_cli = Get-Command ${agent} -ErrorAction SilentlyContinue`,
       `if ($__jt_cli -and $__jt_cli.CommandType -in @('Application', 'ExternalScript')${agentHelper ? " -and (Get-Command node -CommandType Application -ErrorAction SilentlyContinue)" : ''}) {`,
       `  $global:__jt_${agent}_path = $__jt_cli.Source`,
@@ -124,6 +124,7 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       `  }`,
       `}`,
     ].join('\n')).join('\n');
+    return agents + '\n' + ps;
   }
 
   // Bash. The canonical PROMPT_COMMAND snippet — also used by VS Code.
