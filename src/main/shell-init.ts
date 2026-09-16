@@ -124,7 +124,7 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       `  }`,
       `}`,
     ].join('\n')).join('\n');
-    return agents + '\n' + ps;
+    return agents + '\n' + ps + '\n$null = $true';
   }
 
   // Bash. The canonical PROMPT_COMMAND snippet — also used by VS Code.
