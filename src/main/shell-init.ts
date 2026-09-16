@@ -105,7 +105,7 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
     const helper = agentHelper?.replace(/['\u2018\u2019]/g, quote => quote + quote);
     const agents = ['codex', ...(agentHelper ? ['hermes'] : [])].map(agent => [
       `$__jt_cli = Get-Command ${agent} -ErrorAction SilentlyContinue`,
-      `if ($__jt_cli -and $__jt_cli.CommandType -in @('Application', 'ExternalScript')${agentHelper ? " -and (Get-Command node -CommandType Application -ErrorAction SilentlyContinue)" : ''}) {`,
+      `if ($__jt_cli -and $__jt_cli.CommandType -in @('Application', 'ExternalScript')${agent === 'codex' ? " -and ($env:TERM_PROGRAM -eq 'JaneT')" : ''}${agentHelper ? " -and (Get-Command node -CommandType Application -ErrorAction SilentlyContinue)" : ''}) {`,
       `  $global:__jt_${agent}_path = $__jt_cli.Source`,
       `  function global:${agent} {`,
       ...(agent === 'codex' ? [
