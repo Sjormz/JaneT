@@ -77,6 +77,12 @@ describe('buildShellInit', () => {
       expect(init).toBeTruthy();
     });
 
+    it('keeps the Codex graphics wrapper when activity setup is unavailable', () => {
+      const init = buildShellInit('powershell.exe');
+      expect(init).toContain('function global:codex');
+      expect(init).toContain("$env:TERM = 'xterm-kitty'");
+    });
+
     it('returns a non-empty init for pwsh.exe (PowerShell 7+)', () => {
       const init = buildShellInit('pwsh.exe');
       expect(init).toBeTruthy();
