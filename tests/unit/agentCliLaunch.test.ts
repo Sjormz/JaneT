@@ -139,7 +139,7 @@ describe('automatic agent launch runtime', () => {
       fs.writeFileSync(path.join(directory, 'codex.ps1'), '[Console]::WriteLine(($args | ConvertTo-Json -Compress)); [Console]::WriteLine("TERM=$env:TERM"); $global:LASTEXITCODE = 37');
       const script = path.join(directory, 'test.ps1');
       fs.writeFileSync(script, `${buildShellInit('powershell.exe', helper)}\ncodex 'a b' 'quote"value' --resume\n[Console]::WriteLine("EXIT=$LASTEXITCODE")\n[Console]::WriteLine("TERM_AFTER=$env:TERM")\n`);
-      const env = { ...process.env, ...await bridge.environment('ps'), TERM: 'xterm-256color', CODEX_HOME: path.join(directory, 'codex-home'), PATH: directory + path.delimiter + process.env.PATH };
+      const env = { ...process.env, ...await bridge.environment('ps'), TERM: 'xterm-256color', TERM_PROGRAM: 'JaneT', CODEX_HOME: path.join(directory, 'codex-home'), PATH: directory + path.delimiter + process.env.PATH };
       const output = await run('powershell.exe', ['-NoProfile', '-File', script], env);
       expect(output).toContain('["a b","quote\\"value","--resume"]');
       expect(output).toContain('TERM=xterm-kitty');
