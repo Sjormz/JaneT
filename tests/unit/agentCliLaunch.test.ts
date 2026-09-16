@@ -136,13 +136,15 @@ describe('automatic agent launch runtime', () => {
     try {
       const helper = path.join(directory, 'helper.cjs');
       buildSync({ entryPoints: ['src/main/agent-cli.ts'], bundle: true, platform: 'node', outfile: helper });
-      fs.writeFileSync(path.join(directory, 'codex.ps1'), '[Console]::WriteLine(($args | ConvertTo-Json -Compress)); $global:LASTEXITCODE = 37');
+      fs.writeFileSync(path.join(directory, 'codex.ps1'), '[Console]::WriteLine(($args | ConvertTo-Json -Compress)); [Console]::WriteLine("TERM=$env:TERM"); $global:LASTEXITCODE = 37');
       const script = path.join(directory, 'test.ps1');
-      fs.writeFileSync(script, `${buildShellInit('powershell.exe', helper)}\ncodex 'a b' 'quote"value' --resume\n[Console]::WriteLine("EXIT=$LASTEXITCODE")\n`);
-      const env = { ...process.env, ...await bridge.environment('ps'), CODEX_HOME: path.join(directory, 'codex-home'), PATH: directory + path.delimiter + process.env.PATH };
+      fs.writeFileSync(script, `${buildShellInit('powershell.exe', helper)}\ncodex 'a b' 'quote"value' --resume\n[Console]::WriteLine("EXIT=$LASTEXITCODE")\n[Console]::WriteLine("TERM_AFTER=$env:TERM")\n`);
+      const env = { ...process.env, ...await bridge.environment('ps'), TERM: 'xterm-256color', CODEX_HOME: path.join(directory, 'codex-home'), PATH: directory + path.delimiter + process.env.PATH };
       const output = await run('powershell.exe', ['-NoProfile', '-File', script], env);
       expect(output).toContain('["a b","quote\\"value","--resume"]');
+      expect(output).toContain('TERM=xterm-kitty');
       expect(output).toContain('EXIT=37');
+      expect(output).toContain('TERM_AFTER=xterm-256color');
       expect(fs.existsSync(path.join(env.CODEX_HOME, 'hooks.json'))).toBe(true);
       fs.writeFileSync(path.join(directory, 'codex.ps1'), '$input | ForEach-Object { [Console]::WriteLine("INPUT=$_") }');
       fs.writeFileSync(script, `${buildShellInit('powershell.exe', helper)}\n'prompt from pipe' | codex -\n`);

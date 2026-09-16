@@ -360,6 +360,12 @@ describe('buildShellInit', () => {
       expect(init).not.toContain('hermes() {');
     });
 
+    it('scopes Kitty capability to Codex instead of changing the shell identity', () => {
+      const init = buildShellInit('bash');
+      expect(init).toContain("TERM=xterm-kitty command 'codex' \"$@\"");
+      expect(init).not.toContain('KITTY_WINDOW_ID');
+    });
+
     it.skipIf(!existsSync(bash))('emits one lifecycle per command in a real interactive Bash', async () => {
       const initDir = mkdtempSync(join(tmpdir(), 'janet-bash-semantic-'));
       const rcPath = join(initDir, 'bashrc');
@@ -492,6 +498,7 @@ describe('buildShellInit', () => {
       const init = buildShellInit('fish');
       expect(init).toContain('command hermes $argv');
       expect(init).not.toContain('JANET_KITTY_GRAPHICS');
+      expect(init).toContain('env TERM=xterm-kitty command codex $argv');
     });
   });
 
