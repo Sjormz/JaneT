@@ -1,4 +1,4 @@
-import { test, expect, _electron as electron } from '@playwright/test';
+import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import { forceClose } from './electronLifecycle';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -7,7 +7,7 @@ import sharp from 'sharp';
 
 test('Kitty capability probes, chunked images and deletion traverse a real PTY', async () => {
   test.setTimeout(60_000);
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-graphics-e2e-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-graphics-e2e-'));
   const fixture = path.join(userData, 'graphics.cjs');
   const png = (await sharp({ create: {
     width: 8, height: 8, channels: 4, background: { r: 255, g: 0, b: 0, alpha: 1 },
@@ -49,13 +49,15 @@ test('Kitty capability probes, chunked images and deletion traverse a real PTY',
   }));
   const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData };
   delete env.ELECTRON_RUN_AS_NODE;
-  const app = await electron.launch({
-    args: ['.'], cwd: path.resolve(__dirname, '../..'),
-    env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
-  });
+  delete env.ELECTRON_NO_ATTACH_CONSOLE;
+  let app: ElectronApplication | undefined;
   try {
+    app = await electron.launch({
+      args: ['.'], cwd: path.resolve(__dirname, '../..'),
+      env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+    });
     const page = await app.firstWindow();
-    await expect(page.locator('.xterm-rows')).toContainText('GRAPHICS_ENV=true', { timeout: 20_000 });
+    await expect(page.locator('.xterm-rows')).toContainText('GRAPHICS_ENV=false', { timeout: 20_000 });
     await expect(page.locator('.xterm-rows')).toContainText('PROBE_OK');
     const redPixels = () => page.locator('canvas.xterm-image-layer-top').evaluateAll(canvases => {
       let count = 0;

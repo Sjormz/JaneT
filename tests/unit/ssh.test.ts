@@ -642,6 +642,7 @@ describe('SSHManager', () => {
     expect(mocks.shellMock).not.toHaveBeenCalled();
     expect(mocks.execMock.mock.calls[1][0]).toContain("exec '/bin/bash' --rcfile");
     expect(mocks.execMock.mock.calls[1][0]).toContain(']133;C');
+    expect(mocks.execMock.mock.calls[1][0]).not.toContain('KITTY_WINDOW_ID');
     expect(mocks.execMock.mock.calls[1][1]).toEqual({
       pty: { cols: 80, rows: 24, term: 'xterm-256color' },
     });

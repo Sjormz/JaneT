@@ -266,9 +266,8 @@ export class TerminalManager {
     if (activityEnv?.JANET_ACTIVITY_URL) env.JANET_ACTIVITY_URL = activityEnv.JANET_ACTIVITY_URL;
     // Remove the legacy app-specific opt-in. Graphics now belong to the PTY.
     delete env.JANET_KITTY_GRAPHICS;
-    // Advertise Kitty graphics to clients (including Codex) that use this
-    // capability hint instead of probing. Keep portable xterm terminfo.
-    env.KITTY_WINDOW_ID = id;
+    // A JaneT PTY is not a Kitty window; do not inherit a parent Kitty id.
+    delete env.KITTY_WINDOW_ID;
     // Do not inherit a different emulator's transport or file-transfer hints.
     delete env.WEZTERM_PANE;
     delete env.WEZTERM_EXECUTABLE;

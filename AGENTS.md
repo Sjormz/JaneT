@@ -2,6 +2,13 @@
 
 Read `CONTRIBUTING.md` and `.github/workflows/ci.yml` before changing or validating code. The workflow is the source of truth for the current runtime, platforms, and test selection.
 
+## Shipping requests
+
+For "let's ship this", "get this out to prod", or a JaneT release request, read
+`.agents/skills/ship-janet/SKILL.md` and follow the existing PR-to-tag release flow.
+Preparation, review, dry-run, or skill-authoring requests do not authorize
+publishing. Never bypass required reviews or rewrite published tags/assets.
+
 ## Before opening or updating a PR
 
 - Use the CI Node major (currently 22), and record `node --version`. A pass on another supported major is useful evidence, not CI parity.

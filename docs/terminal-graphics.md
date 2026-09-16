@@ -1,10 +1,11 @@
 # Terminal graphics
 
 The shared xterm image addon handles direct Kitty graphics in local and SSH
-panes. JaneT advertises `KITTY_WINDOW_ID` in local terminals and integrated
-remote Bash shells, while retaining `TERM=xterm-256color` for portable terminfo.
-Other remote shells can use protocol queries; clients relying only on environment
-hints may need `export KITTY_WINDOW_ID=janet-ssh` in that remote shell.
+panes. JaneT keeps `TERM=xterm-256color` and `TERM_PROGRAM=JaneT` for portable
+terminal identity and does not fabricate a Kitty window ID. Clients that require
+the real `KITTY_WINDOW_ID` environment hint may not auto-enable graphics,
+including affected Codex versions; capability behavior remains client-specific.
+See [Codex's pet capability detection](https://github.com/openai/codex/blob/main/codex-rs/tui/src/pets/image_protocol.rs).
 
 Windows uses node-pty's bundled ConPTY because older OS ConPTY versions discard
 Kitty APC sequences. A regression exercises queries, chunked image transmission
@@ -17,12 +18,14 @@ npx playwright test --config playwright.config.ts tests/e2e/terminal-graphics.sp
 
 Kitty support requires pinned xterm prerelease packages. It is not full Kitty
 protocol conformance: the addon lacks animation commands, filesystem/shared-memory
-transfers and complete placement/deletion semantics. JaneT retains its bounded
-Unicode PNG placement fallback for Hermes. SIXEL and iTerm images are disabled.
-Multiplexers still need their own passthrough support; Codex disables pets in tmux.
+transfers and complete placement/deletion semantics. JaneT uses the addon's
+direct image path; Unicode placeholder placements (`U=1`) are unsupported and
+not interpreted. SIXEL and iTerm images are disabled.
+Multiplexers still need their own passthrough support; Codex's automatic pet
+protocol selection rejects tmux and Zellij.
 
-Images are limited to 16 million pixels, 8 MiB per Kitty sequence and 32 MiB of
-addon storage per terminal. The older Unicode fallback has its own smaller bounds.
+Images are limited to 16,777,216 pixels each, an 8 MiB Kitty image-size limit and 32 MB of
+addon storage per terminal.
 
 The renderer's `script-src` CSP permits `wasm-unsafe-eval` for the packaged
 WebAssembly base64 decoder. JavaScript `eval` and new remote script sources

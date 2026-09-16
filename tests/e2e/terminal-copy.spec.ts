@@ -18,13 +18,13 @@ function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
   );
 }
 
-function createUserData(): string {
+function createUserData(keybindings: Record<string, string> = { 'close-tab': 'Ctrl+C' }): string {
   const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), USER_DATA_PREFIX));
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'left',
-    keybindings: { 'close-tab': 'Ctrl+C' },
+    keybindings,
     workspaceTabs: [],
     session: {
       tabs: [{
@@ -59,7 +59,7 @@ async function markerPosition(page: Page): Promise<{ x: number; y: number }> {
   return { x: box!.x + 72, y: box!.y + box!.height / 2 };
 }
 
-async function dragMarker(page: Page, forceSelection = true): Promise<void> {
+async function dragMarker(page: Page, beforeMouseDown?: () => Promise<void>): Promise<void> {
   const rows = page.locator('.xterm-rows > div');
   const texts = await rows.allInnerTexts();
   const index = texts.findIndex((line) => line.trim() === MARKER);
@@ -67,13 +67,14 @@ async function dragMarker(page: Page, forceSelection = true): Promise<void> {
   const box = await rows.nth(index).boundingBox();
   expect(box).not.toBeNull();
   const y = box!.y + box!.height / 2;
-  const modifier = process.platform === 'darwin' ? 'Alt' : 'Shift';
-  if (forceSelection) await page.keyboard.down(modifier);
   await page.mouse.move(box!.x + 1, y);
+  await beforeMouseDown?.();
+  const modifier = process.platform === 'darwin' ? 'Alt' : 'Shift';
+  await page.keyboard.down(modifier);
   await page.mouse.down();
   await page.mouse.move(box!.x + box!.width - 2, y, { steps: 12 });
   await page.mouse.up();
-  if (forceSelection) await page.keyboard.up(modifier);
+  await page.keyboard.up(modifier);
 }
 
 async function selectMarker(page: Page, position: { x: number; y: number }): Promise<void> {
@@ -179,8 +180,8 @@ test('copies from an alternate-screen TUI that owns all-motion mouse tracking', 
   }
 });
 
-test('retains an ordinary TUI drag through a redraw without turning copy into interrupt', async () => {
-  const userData = createUserData();
+test('retains a modifier TUI selection through a redraw without turning copy into interrupt', async () => {
+  const userData = createUserData({});
   let app: ElectronApplication | undefined;
   try {
     app = await electron.launch({ args: ['.'], cwd: root, env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }) });
@@ -192,23 +193,40 @@ test('retains an ordinary TUI drag through a redraw without turning copy into in
     }, { id: termId, data });
     await app.evaluate(({ ipcMain }) => {
       (globalThis as any).__copyInput = [];
+      (globalThis as any).__copyBinary = [];
       ipcMain.removeHandler('terminal:write');
+      ipcMain.removeHandler('terminal:writeBinary');
       ipcMain.handle('terminal:write', (_event, { data }) => { (globalThis as any).__copyInput.push(data); });
+      ipcMain.handle('terminal:writeBinary', (_event, { data }) => { (globalThis as any).__copyBinary.push(data); });
     });
     await output(`\x1b[?1049h\x1b[?1003h\x1b[?1006h${MARKER}\r\n`);
-    const position = await markerPosition(page);
-    await dragMarker(page, false);
+    await markerPosition(page);
+    await page.locator('.terminal-container textarea').focus();
+    await dragMarker(page, () => app!.evaluate(() => {
+      (globalThis as any).__copyInput = [];
+      (globalThis as any).__copyBinary = [];
+    }));
+    const forcedDragInput = await app.evaluate(() => ({
+      input: (globalThis as any).__copyInput,
+      binary: (globalThis as any).__copyBinary,
+    }));
+    expect(forcedDragInput.input).toEqual([]);
+    expect(forcedDragInput.binary).toEqual([]);
     await output('\x1b[2J\x1b[HREDRAW_REPLACEMENT');
     await expect(page.locator('.xterm-rows')).toContainText('REDRAW_REPLACEMENT');
     await page.keyboard.press('Control+Shift+C');
     await expect.poll(async () => (await app!.evaluate(({ clipboard }) => clipboard.readText())).trim()).toBe(MARKER);
     await app.evaluate(({ clipboard }) => clipboard.writeText('UNCHANGED'));
-    await page.mouse.click(position.x, position.y);
-    await page.keyboard.press('Control+Shift+C');
+    await page.keyboard.press('Control+C');
+    await expect.poll(() => app!.evaluate(() => (globalThis as any).__copyInput)).toContain('\x03');
     expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toBe('UNCHANGED');
+    await app.evaluate(() => {
+      (globalThis as any).__copyInput = [];
+      (globalThis as any).__copyBinary = [];
+    });
     await output(`\x1b[2J\x1b[H${MARKER}\r\n`);
     await markerPosition(page);
-    await dragMarker(page, false);
+    await dragMarker(page);
     await page.keyboard.type('x');
     await page.keyboard.press('Control+Shift+C');
     expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toBe('UNCHANGED');

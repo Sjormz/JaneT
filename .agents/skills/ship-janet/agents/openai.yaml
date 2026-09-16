@@ -1,0 +1,6 @@
+interface:
+  display_name: "Ship JaneT"
+  short_description: "Verify, review, version and publish a JaneT release"
+  default_prompt: "Use $ship-janet to ship the scoped JaneT changes through the verified PR and release flow."
+policy:
+  allow_implicit_invocation: true

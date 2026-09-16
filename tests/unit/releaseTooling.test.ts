@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -10,6 +11,23 @@ const projectRoot = path.resolve(import.meta.dirname, '../..');
 
 async function loadScript(name: string): Promise<any> {
   return import(pathToFileURL(path.join(projectRoot, 'scripts', name)).href);
+}
+
+function runWorkflowGuard(program: string, requireBody: string, env: Record<string, string>) {
+  // Actions runs these guards in plain Node, not Vitest's source-mapped realm.
+  const result = spawnSync(process.execPath, ['--input-type=commonjs', '-e', `
+    const nativeRequire = require;
+    const injectedRequire = (id) => { ${requireBody} };
+    try {
+      new Function('require', 'process', ${JSON.stringify(program)})(injectedRequire, { env: ${JSON.stringify(env)} });
+    } catch (error) {
+      console.error(error.message);
+      process.exitCode = 1;
+    }
+  `], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr || `Guard exited with status ${result.status}`);
+  return result.stdout;
 }
 
 function writeWindowsReleaseFixture(releaseRoot: string, version = '1.2.3') {
@@ -155,7 +173,7 @@ describe('release tooling', () => {
     const releaseGuide = fs.readFileSync(path.join(projectRoot, 'docs', 'release.md'), 'utf8');
 
     expect(releaseGuide).toContain(`locks \`node-pty\` ${packageJson.dependencies['node-pty']}`);
-    expect(releaseGuide).toContain('upstream race fix #922');
+    expect(releaseGuide).toContain('Windows handle fix from #922');
     expect(releaseGuide).toContain('PR #885');
     expect(releaseGuide).not.toContain('locks `node-pty` 1.1.0');
   });
@@ -454,16 +472,9 @@ describe('release tooling', () => {
     expect(() => nativeMacRuntime('/release', 'riscv64')).toThrow(/No packaged macOS runtime matches/);
   });
 
-  it('backports and verifies node-pty Windows ConPTY startup hardening', async () => {
+  it('verifies the node-pty Windows worker path and ConPTY payload', async () => {
     const {
       APP_ASAR_WORKER_REWRITE,
-      CONPTY_DEFERRED_CONNECT_MARKER,
-      CONPTY_PID_REFRESH_MARKER,
-      CONPTY_PROCESS_LIST_MARKER,
-      patchNodePtyConsoleListAgentSource,
-      patchNodePtyWindowsAgentSource,
-      patchNodePtyWindowsSources,
-      patchNodePtyWindowsTerminalSource,
       patchNodePtyWindowsWorkerSource,
     } = await loadScript('patch-node-pty-windows-worker.mjs');
     const { validateWindowsPtyRuntime } = await loadScript('verify-release-artifacts.mjs');
@@ -473,12 +484,6 @@ describe('release tooling', () => {
     expect(patched).toContain(APP_ASAR_WORKER_REWRITE);
     expect(patchNodePtyWindowsWorkerSource(patched)).toBe(patched);
     expect(() => patchNodePtyWindowsWorkerSource('unknown worker implementation')).toThrow(/expected worker path resolver/);
-    expect(() => patchNodePtyWindowsAgentSource('unknown agent implementation')).toThrow(/expected Conout worker readiness block/);
-    expect(() => patchNodePtyWindowsTerminalSource('unknown terminal implementation')).toThrow(/expected ready_datapipe handler/);
-    expect(() => patchNodePtyConsoleListAgentSource('unknown helper implementation')).toThrow(/expected console process-list agent call/);
-    expect(() => patchNodePtyWindowsAgentSource(`// ${CONPTY_DEFERRED_CONNECT_MARKER}`)).toThrow(/Incomplete node-pty Windows agent patch/);
-    expect(() => patchNodePtyWindowsTerminalSource(`// ${CONPTY_PID_REFRESH_MARKER}`)).toThrow(/Incomplete node-pty Windows terminal patch/);
-    expect(() => patchNodePtyConsoleListAgentSource(`// ${CONPTY_PROCESS_LIST_MARKER}`)).toThrow(/Incomplete node-pty Windows console-list agent patch/);
 
     const installedLibRoot = path.join(projectRoot, 'node_modules', 'node-pty', 'lib');
     const installedNodePtyRoot = path.dirname(installedLibRoot);
@@ -493,14 +498,9 @@ describe('release tooling', () => {
     expect(installedConptySource).toContain('static std::mutex g_ptyHandlesMutex;');
     expect(installedConptySource).toContain('std::atomic<int> ptyCounter{0};');
     expect(installedConptySource).not.toContain('assert(remove_pty_baton');
-    const installedSources = {
-      worker: fs.readFileSync(path.join(installedLibRoot, 'windowsConoutConnection.js'), 'utf8'),
-      agent: fs.readFileSync(path.join(installedLibRoot, 'windowsPtyAgent.js'), 'utf8'),
-      terminal: fs.readFileSync(path.join(installedLibRoot, 'windowsTerminal.js'), 'utf8'),
-      consoleListAgent: fs.readFileSync(path.join(installedLibRoot, 'conpty_console_list_agent.js'), 'utf8'),
-    };
-    expect(installedSources.worker).toContain(APP_ASAR_WORKER_REWRITE);
-    expect(patchNodePtyWindowsSources(installedSources)).toEqual(installedSources);
+    const installedWorker = fs.readFileSync(path.join(installedLibRoot, 'windowsConoutConnection.js'), 'utf8');
+    expect(installedWorker).toContain(APP_ASAR_WORKER_REWRITE);
+    expect(patchNodePtyWindowsWorkerSource(installedWorker)).toBe(installedWorker);
 
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-windows-worker-'));
     const nodePtyRoot = path.join(fixtureRoot, 'node-pty');
@@ -514,21 +514,11 @@ describe('release tooling', () => {
       fs.mkdirSync(path.join(prebuildRoot, 'conpty'));
       for (const file of ['conpty.dll', 'OpenConsole.exe']) fs.writeFileSync(path.join(prebuildRoot, 'conpty', file), file);
       fs.writeFileSync(path.join(libRoot, 'windowsConoutConnection.js'), legacy);
-      for (const fileName of ['windowsPtyAgent.js', 'windowsTerminal.js', 'conpty_console_list_agent.js']) {
-        fs.writeFileSync(path.join(libRoot, fileName), 'unpatched');
-      }
       expect(() => validateWindowsPtyRuntime({ nodePtyRoot }))
         .toThrow(/cannot resolve app\.asar\.unpacked/);
-      for (const [name, fileName] of [
-        ['worker', 'windowsConoutConnection.js'],
-        ['agent', 'windowsPtyAgent.js'],
-        ['terminal', 'windowsTerminal.js'],
-        ['consoleListAgent', 'conpty_console_list_agent.js'],
-      ] as const) {
-        fs.writeFileSync(path.join(libRoot, fileName), installedSources[name]);
-      }
+      fs.writeFileSync(path.join(libRoot, 'windowsConoutConnection.js'), installedWorker);
       fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: '1.1.0' }));
-      expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).toThrow(/race fix #922/);
+      expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).toThrow(/ConPTY fix #922/);
       fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: '1.2.0-beta.14' }));
 
       fs.rmSync(path.join(prebuildRoot, 'conpty.node'));
@@ -696,20 +686,86 @@ module.exports = {
     ]);
   });
 
-  it('uses protected main release tooling when recovering an existing tag', () => {
-    const workflow = fs.readFileSync(path.join(projectRoot, '.github', 'workflows', 'release.yml'), 'utf8');
-    const recovery = [
-      '      - name: Apply release tooling recovery',
-      "        if: github.event_name == 'workflow_dispatch'",
-      '        shell: bash',
-      '        run: |',
-      '          test "$GITHUB_REF" = "refs/heads/main"',
-      '          git fetch --no-tags --depth=1 origin main',
-      '          test "$GITHUB_SHA" = "$(git rev-parse FETCH_HEAD)"',
-      '          git checkout "$GITHUB_SHA" -- .github/workflows/release.yml package.json scripts/verify-release-artifacts.mjs scripts/package-windows-conpty.cjs tests/unit/releaseTooling.test.ts',
-    ].join('\n');
+  it('keeps protected check names and builds a single verified release commit', () => {
+    const require = createRequire(import.meta.url);
+    const builderRequire = createRequire(require.resolve('electron-builder/package.json'));
+    const appBuilderRequire = createRequire(builderRequire.resolve('app-builder-lib/package.json'));
+    const { load } = appBuilderRequire('js-yaml');
+    const readWorkflow = (file: string) => load(fs.readFileSync(path.join(projectRoot, '.github/workflows', file), 'utf8'));
+    const ci = readWorkflow('ci.yml');
+    expect(ci.jobs.verify.name).toBe('Verify');
+    expect(ci.jobs['durable-workspace-platforms'].name).toBe('Durable workspace (${{ matrix.os }})');
+    const workflow = readWorkflow('release.yml');
+    const steps = workflow.jobs.verify.steps;
+    const request = steps.find((step: any) => step.name === 'Validate release request');
+    expect(steps.indexOf(request)).toBeLessThan(steps.findIndex((step: any) => step.uses?.startsWith('actions/checkout@')));
+    expect(request.run).toContain('^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$');
+    expect(request.run).toContain('test "$GITHUB_REF" = "refs/heads/main"');
+    const checkout = steps.find((step: any) => step.uses?.startsWith('actions/checkout@'));
+    expect(checkout.with).toMatchObject({ ref: 'refs/tags/${{ env.RELEASE_TAG }}', 'fetch-depth': 0 });
+    const source = steps.find((step: any) => step.id === 'source');
+    expect(source.run).toContain('git merge-base --is-ancestor "$SOURCE_SHA" origin/main');
+    expect(source.run).toContain('test "$SOURCE_SHA" = "$GITHUB_SHA"');
+    expect(workflow.jobs.verify.outputs['source-sha']).toBe('${{ steps.source.outputs.sha }}');
+    expect(workflow.jobs.package.needs).toContain('verify');
+    expect(workflow.jobs.package.steps[0].with.ref).toBe('${{ needs.verify.outputs.source-sha }}');
+    expect(workflow.jobs.publish.needs).toEqual(['verify', 'package']);
+    expect(workflow.concurrency.queue).toBe('max');
+    expect(workflow.jobs.publish.concurrency).toEqual({ group: 'release-publish', 'cancel-in-progress': false, queue: 'max' });
+    expect(JSON.stringify(workflow)).not.toContain('git checkout');
+    for (const name of ['Run unit and component tests', 'Run Electron e2e tests']) {
+      expect(steps.find((step: any) => step.name === name).env.JANET_TEST_PYTHON)
+        .toBe('${{ steps.python.outputs.python-path }}');
+    }
+    expect(steps.find((step: any) => step.name === 'Run Electron e2e tests').run)
+      .toBe('xvfb-run --auto-servernum npx playwright test --config playwright.config.ts');
+    const versions = steps.find((step: any) => step.name === 'Verify release versions before installing dependencies');
+    expect(steps.indexOf(versions)).toBeLessThan(steps.findIndex((step: any) => step.run === 'npm ci'));
+    const program = versions.run.match(/<<'NODE'\n([\s\S]*?)\nNODE/)[1];
+    const check = (tag: string, lockVersion = '1.2.3', rootVersion = lockVersion) => runWorkflowGuard(program, `
+      if (id === './package.json') return { version: '1.2.3' };
+      if (id === './package-lock.json') return ${JSON.stringify({ version: lockVersion, packages: { '': { version: rootVersion } } })};
+      return nativeRequire(id);
+    `, { RELEASE_TAG: tag },
+    );
+    expect(() => check('v1.2.3')).not.toThrow();
+    expect(() => check('v1.2.4')).toThrow(/Tag\/package/);
+    expect(() => check('v1.2.3', '1.2.2')).toThrow(/Lockfile version/);
+    expect(() => check('v1.2.3', '1.2.3', '1.2.2')).toThrow(/Root lockfile/);
+  });
 
-    expect(workflow.replaceAll('\r\n', '\n').split(recovery)).toHaveLength(3);
+  it('refuses public release rewrites, version downgrades and moved tags before uploading', () => {
+    const require = createRequire(import.meta.url);
+    const builderRequire = createRequire(require.resolve('electron-builder/package.json'));
+    const appBuilderRequire = createRequire(builderRequire.resolve('app-builder-lib/package.json'));
+    const { load } = appBuilderRequire('js-yaml');
+    const workflow = load(fs.readFileSync(path.join(projectRoot, '.github/workflows/release.yml'), 'utf8'));
+    const steps = workflow.jobs.publish.steps;
+    const guard = steps.find((step: any) => step.name === 'Refuse published versions and updater downgrades');
+    expect(steps.indexOf(guard)).toBeLessThan(steps.findIndex((step: any) => step.uses?.startsWith('softprops/')));
+    expect(guard.env.SOURCE_SHA).toBe('${{ needs.verify.outputs.source-sha }}');
+    const program = guard.run.match(/<<'NODE'\n([\s\S]*?)\nNODE/)[1];
+    const check = (releases: object[], sha = 'verified-sha', failApi = false, tag = 'v1.2.3') => runWorkflowGuard(program, `
+      if (id !== 'node:child_process') return nativeRequire(id);
+      return { execFileSync(command, args) {
+        if (command !== 'gh') throw new Error('Expected GitHub CLI');
+        if (${JSON.stringify(failApi)}) throw new Error('API unavailable');
+        return JSON.stringify(args.includes('--slurp') ? ${JSON.stringify([releases])} : ${JSON.stringify({ sha })});
+      } };
+    `, { RELEASE_TAG: tag, GITHUB_REPOSITORY: 'owner/repo', SOURCE_SHA: 'verified-sha' },
+    );
+    expect(() => check([])).not.toThrow();
+    expect(() => check([{ tag_name: 'v1.2.3', draft: true }])).not.toThrow();
+    expect(() => check([{ tag_name: 'v1.2.2', draft: false }])).not.toThrow();
+    expect(() => check([{ tag_name: 'v1.9.9', draft: false }], 'verified-sha', false, 'v1.10.0')).not.toThrow();
+    expect(() => check([{ tag_name: 'v2.0.0-beta.1', draft: false, prerelease: true }])).not.toThrow();
+    expect(() => check([{ tag_name: 'v1.2.3', draft: false }])).toThrow(/Already published/);
+    expect(() => check([{ tag_name: 'v1.2.3', draft: false, prerelease: true }])).toThrow(/Already published/);
+    for (const tag of ['v1.2.4', 'v1.3.0', 'v2.0.0']) {
+      expect(() => check([{ tag_name: tag, draft: false }])).toThrow(/Refusing to publish/);
+    }
+    expect(() => check([], 'moved-sha')).toThrow(/tag moved/);
+    expect(() => check([], 'verified-sha', true)).toThrow(/API unavailable/);
   });
 
   it('packages macOS releases for Apple Silicon only without DMG blockmaps', () => {

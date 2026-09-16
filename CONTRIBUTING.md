@@ -22,7 +22,7 @@ Renderer edits hot-reload. Main/preload edits rebuild, but do not restart Electr
 
 The Hermes integration test needs Python 3. If it is not on PATH, set `JANET_TEST_PYTHON` to the Python executable (an absolute path is supported). CI provisions Python explicitly. PowerShell tests use the system module path rather than inheriting another application's PSReadLine.
 
-To check the actual installed `hermes --tui` copy gesture on Windows, build JaneT, set `JANET_TEST_HERMES=1` in the test process environment, and run `npx playwright test tests/e2e/hermes-copy.spec.ts --repeat-each=3`. Hermes must already be installed and on PATH. This opt-in check uses temporary JaneT/Hermes profiles, no conversation prompts, and tests ordinary drag then Ctrl+Shift+C before and after a resize redraw. The regular terminal-copy suite also covers redraw retention without requiring Hermes.
+To check the actual installed `hermes --tui` copy gesture on Windows, build JaneT, set `JANET_TEST_HERMES=1` in the test process environment, and run `npx playwright test tests/e2e/hermes-copy.spec.ts --repeat-each=3`. Hermes must already be installed and on PATH. This opt-in check uses temporary JaneT/Hermes profiles, no conversation prompts, and tests Shift-drag then Ctrl+Shift+C after a resize redraw. On macOS the native gesture is Option-drag. The regular terminal-copy suite also covers redraw retention without requiring Hermes.
 
 ## Validation
 
