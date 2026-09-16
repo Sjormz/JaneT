@@ -82,7 +82,13 @@ export function installCodexActivity(directory: string, helperPath: string, proj
   for (;;) {
     try { lock = fs.openSync(lockPath, 'wx', 0o600); break; }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      // Windows can report EPERM while another process owns the exclusive
+      // create/open window. This is a private lock path and the wait is
+      // bounded; unrelated permission failures still surface when no wait is
+      // allowed.
+      if (code !== 'EEXIST' && code !== 'EPERM') throw error;
+      if (code === 'EPERM' && Date.now() >= deadline) throw error;
       if (Date.now() >= deadline) return { message: 'JaneT activity setup is already running or its lock remains from an interrupted setup. Codex will open unchanged.' };
       // This runs in the standalone setup helper, never the Electron UI process.
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
