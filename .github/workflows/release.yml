@@ -24,8 +24,8 @@ env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
-  verify:
-    name: Verify release candidate
+  prepare:
+    name: Prepare release candidate
     runs-on: ubuntu-latest
     outputs:
       source-sha: ${{ steps.source.outputs.sha }}
@@ -58,7 +58,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
 
       - name: Verify release versions before installing dependencies
         run: |
@@ -70,6 +69,20 @@ jobs:
           assert.equal(lock.version, pkg.version, 'Lockfile version mismatch');
           assert.equal(lock.packages[''].version, pkg.version, 'Root lockfile version mismatch');
           NODE
+
+  verify:
+    name: Verify release candidate
+    needs: [prepare]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.source-sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Install Linux desktop test dependencies
         run: |
@@ -111,7 +124,7 @@ jobs:
 
   package:
     name: Package (${{ matrix.os }})
-    needs: [verify]
+    needs: [prepare]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -129,12 +142,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.verify.outputs.source-sha }}
+          ref: ${{ needs.prepare.outputs.source-sha }}
 
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
@@ -170,7 +182,7 @@ jobs:
 
   publish:
     name: Update GitHub release
-    needs: [verify, package]
+    needs: [prepare, verify, package]
     runs-on: ubuntu-latest
     # Serialize publication across versions, not only reruns of the same tag.
     concurrency:
@@ -187,7 +199,7 @@ jobs:
       - name: Refuse published versions and updater downgrades
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ needs.verify.outputs.source-sha }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source-sha }}
         run: |
           node --input-type=commonjs <<'NODE'
           const assert = require('node:assert/strict');

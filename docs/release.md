@@ -12,14 +12,16 @@ When a `v*` tag is pushed, `.github/workflows/release.yml`:
    on `main`. Manual dispatch must originate from `main`.
 2. Verifies the tag matches `package.json` and both lockfile version fields
    before installing dependencies.
-3. Runs the release verification gate on Ubuntu:
+3. After the lightweight preparation job, runs the release verification gate on
+   Ubuntu and all three platform packaging jobs in parallel:
    - `npm run typecheck`
    - `npm test`
    - `npm run build`
    - full Playwright E2E under Xvfb, using the build already produced
    - Python 3.12's exact executable for Hermes tests, matching CI
-4. Builds release artifacts on Linux, macOS, and Windows from the verified
-   commit SHA, not a freshly resolved mutable tag.
+4. Builds release artifacts on Linux, macOS, and Windows from the prepared
+   commit SHA, not a freshly resolved mutable tag; publication waits for both
+   verification and packaging to pass.
 5. Verifies the exact installer/update-metadata set and starts a real PTY with
    each runner's packaged Electron runtime.
 6. Verifies the Apple Silicon macOS build uses an ad-hoc code signature.
@@ -28,6 +30,10 @@ When a `v*` tag is pushed, `.github/workflows/release.yml`:
 8. Uploads installers and update metadata. The release action stages a new
    release as a draft until uploads finish; only an unpublished draft may have
    its assets replaced on retry.
+
+After the small prepare job validates the tag, version and source SHA, full
+verification and the three platform package jobs run in parallel. Publication
+still waits for both paths to succeed.
 
 The app uses `electron-updater` with GitHub Releases, so the generated `latest*.yml` assets must stay attached to the release.
 Temporary Actions artifacts used between the package and publish jobs expire
@@ -97,6 +103,28 @@ display names because those names are required-check contexts. Change workflow
 names and live rules together only with explicit authorization. The skill must
 not use a bypass actor or `gh pr merge --admin` to get around these gates.
 
+## Label-gated automatic release handoff
+
+Create the repository label `release` once, then apply it to a reviewed PR only
+when that PR also contains the intended version update. After such a PR is
+merged to `main`, `.github/workflows/release-handoff.yml`:
+
+1. Confirms the PR was merged with the `release` label.
+2. Treats an unchanged package version as a no-op.
+3. Requires a strict version increase with matching package and lockfile root
+   versions.
+4. Waits for `Verify`, both durable-workspace platform checks and CodeQL to
+   succeed on the exact merge SHA.
+5. Rechecks published versions, releases and tags, then creates one annotated
+   tag on that merge SHA without forcing or moving another tag.
+6. Explicitly dispatches `release.yml` for the tag. The Actions token's tag push
+   is not assumed to start another workflow.
+
+Merged PRs without the label do nothing. A labeled PR without a version change
+also does nothing. Any invalid version, failed check, existing tag/release or
+API failure stops before publication. The manual process below remains the
+recovery path when the automatic handoff is unavailable.
+
 ## Recommended PR-only release flow
 
 The repository skill at [`.agents/skills/ship-janet/SKILL.md`](../.agents/skills/ship-janet/SKILL.md)
@@ -116,7 +144,7 @@ unrelated commits. Use a scoped branch or clean worktree. Fetch main and tags
 without forcing existing tags. Review all changes since the latest published
 stable version, including work already merged but not yet released.
 
-### 2. Create a release branch
+### 2. Prepare the release version in a PR
 
 Choose the right semver bump:
 
@@ -130,8 +158,11 @@ normally needs no app release; an explicit request to publish it uses patch.
 Reuse an already-correct unreleased version bump. Check that the version is
 newer than published versions and the tag is not already used for another SHA.
 
+Create the release PR from a normal scoped branch; no special release branch is
+required for the label handoff. Add the `release` label before merging when the
+PR is intended to publish.
+
 ```bash
-git switch -c release/vX.Y.Z
 npm version patch --no-git-tag-version
 ```
 
@@ -162,6 +193,7 @@ investigation. Record command results, counts, skips and untested platforms.
 
 Stage only the reviewed scope, including both version files. Commit, push the
 scoped branch and create/update a PR with version rationale and test evidence.
+Add the `release` label when this PR is intended to publish.
 Read live required checks and reviews; inspect the current PR head SHA. Wait
 for required independent approval and passing checks. Auto-merge is not assumed
 available. A missing human approval is a blocker, not permission to bypass.
@@ -170,9 +202,11 @@ Merge with `gh pr merge <number> --squash --match-head-commit <verified-head-sha
 Read back the merged PR and its `mergeCommit.oid`; do not assume a successful
 command means an auto-queued PR already merged.
 
-### 5. Tag the merged `main` commit
+### 5. Tag the merged `main` commit (manual fallback)
 
-Fetch main again. Verify the exact merge SHA is on origin/main, its package and
+Normally the label handoff performs this step. Use it manually only if the
+handoff was intentionally omitted or failed before tagging. Fetch main again.
+Verify the exact merge SHA is on origin/main, its package and
 lock versions agree, and CI/CodeQL for that SHA passed. If main advanced, inspect
 what would be excluded; never silently tag new unreviewed code. Recheck remote
 tags and concurrent releases before tagging.

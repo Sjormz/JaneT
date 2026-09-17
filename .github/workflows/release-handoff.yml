@@ -1,0 +1,45 @@
+name: Release handoff
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [closed]
+
+concurrency:
+  group: release-handoff
+  cancel-in-progress: false
+  queue: max
+
+permissions: {}
+
+jobs:
+  handoff:
+    name: Handoff release label
+    if: >-
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      checks: read
+      contents: write
+    steps:
+      - name: Check out trusted handoff code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          path: trusted
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Validate merged release and start workflow
+        working-directory: trusted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          LABELS_JSON: ${{ toJSON(github.event.pull_request.labels) }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: node scripts/release-handoff.mjs
