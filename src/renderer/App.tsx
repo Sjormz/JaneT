@@ -2217,16 +2217,18 @@ function AppInner({ initialSettings, persistSettings }: {
     () => activeTab && sidebarTerminalId ? findLeaf(activeTab.root, sidebarTerminalId) : null,
     [activeTab, sidebarTerminalId],
   );
-  const requestRenamePane = useCallback(() => {
-    if (!sidebarTerminalId || !sidebarLeaf) return;
+  const requestRenamePane = useCallback((leafId = sidebarTerminalId) => {
+    const leaf = activeTab && leafId ? findLeaf(activeTab.root, leafId) : null;
+    if (!activeTab || !leafId || !leaf) return;
+    terminalFocusTarget(leafId)?.focus();
     setRenameTarget({
       kind: 'pane',
       tabId: (activeTab?.id ?? ""),
-      leafId: sidebarTerminalId,
-      terminalId: sidebarTerminalId,
-      initialValue: displayPaneTitle(sidebarLeaf, (activeTab?.type ?? "local")),
+      leafId,
+      terminalId: leafId,
+      initialValue: displayPaneTitle(leaf, activeTab.type),
     });
-  }, [(activeTab?.id ?? ""), (activeTab?.type ?? "local"), sidebarLeaf, sidebarTerminalId]);
+  }, [activeTab, sidebarTerminalId]);
 
   const requestRenameTab = useCallback(() => {
     if (!activeTab) return;
@@ -2862,6 +2864,7 @@ function AppInner({ initialSettings, persistSettings }: {
                 transportByTerminal={transportByTerminal}
                 onAddTerminals={() => setAddTerminalsTabId(activeTab.id)}
                 onClosePane={(leafId) => requestClosePane((activeTab?.id ?? ""), leafId)}
+                onRenamePane={requestRenamePane}
                 onResizePane={(splitId, dividerIndex, leftFraction) => handleResizePane((activeTab?.id ?? ""), splitId, dividerIndex, leftFraction)}
                 onMovePane={(draggedLeafId, targetLeafId, side) => handleMovePane((activeTab?.id ?? ""), draggedLeafId, targetLeafId, side)}
                 draggedLeafId={draggedPaneId}

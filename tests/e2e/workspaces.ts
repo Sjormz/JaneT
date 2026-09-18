@@ -18,9 +18,11 @@ export async function createWorkspace(page: Page, name: string, terminals: Array
     await page.getByRole('button', { name: 'New workspace', exact: true }).click();
     await page.getByRole('textbox', { name: 'Workspace name' }).fill(newGroup);
     await page.getByRole('dialog', { name: 'Create workspace', exact: true }).getByRole('button', { name: 'Create workspace', exact: true }).click();
-    await page.getByRole('button', { name: `Add project to ${newGroup}`, exact: true }).click();
+    await page.getByRole('button', { name: newGroup, exact: true }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Add project', exact: true }).click();
   } else {
-    await page.getByRole('button', { name: /^Add project to / }).first().click();
+    await page.locator('.workspace-group-toggle').first().click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Add project', exact: true }).click();
   }
   await page.getByRole('textbox', { name: 'Project name' }).fill(name);
   await page.getByRole('button', { name: /Add terminals/ }).click();

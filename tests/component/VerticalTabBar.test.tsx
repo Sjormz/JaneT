@@ -77,27 +77,32 @@ describe('VerticalTabBar', () => {
       { id: 'work', name: 'Work', directory: '/work' },
       { id: 'library', name: 'Library parent', directory: '/repos', kind: 'folder' },
     ], onWorkspaceTabLaunch: launch });
-    fireEvent.click(screen.getByRole('button', { name: 'Add project to Work' }));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Work' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add project' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Test' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add project to Library parent' }));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Library parent' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add project' }));
     expect(screen.getByRole('button', { name: 'Create project' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
     await waitFor(() => expect(launch).toHaveBeenCalledWith(expect.objectContaining({ name: 'Test' }), expect.objectContaining({ id: 'library' })));
   });
-  it.each([undefined, 'folder'] as const)('creates projects from their parent link (%s)', async kind => {
+  it.each([undefined, 'folder'] as const)('creates projects from their parent context menu (%s)', async kind => {
     const launch = vi.fn().mockResolvedValue(undefined);
     renderTabs({ groups: [{ id: 'parent', name: 'Parent', directory: '/parent', kind }], onWorkspaceTabLaunch: launch });
-    fireEvent.click(screen.getByRole('button', { name: 'Add project to Parent' }));
+    expect(screen.queryByRole('button', { name: /Add project to/ })).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Parent' }), { key: 'F10', shiftKey: true });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add project' }));
     expect(screen.queryByRole('combobox')).toBeNull();
     fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Child' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
     await waitFor(() => expect(launch).toHaveBeenCalledWith(expect.objectContaining({ name: 'Child', createProject: true, terminalCount: 0 }), expect.objectContaining({ id: 'parent', kind })));
-    expect(screen.getByRole('button', { name: 'Add project to Parent' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add project to/ })).not.toBeInTheDocument();
   });
   it('creates a project without terminals by default', () => {
     const launch = vi.fn();
     renderTabs({ onWorkspaceTabLaunch: launch });
-    fireEvent.click(screen.getByRole('button', { name: /Add project to My workspaces/i }));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'My workspaces' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add project' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Later' } });
     expect(screen.getByRole('button', { name: /Add terminals/ })).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('spinbutton')).toBeNull();
@@ -213,7 +218,8 @@ describe('VerticalTabBar', () => {
   it.each(['Terminal', 'Codex', 'Hermes', 'Claude', 'Custom'])('runs %s in every local project terminal', (choice) => {
     const launch = vi.fn();
     renderTabs({ onWorkspaceTabLaunch: launch });
-    fireEvent.click(screen.getByRole('button', { name: /Add project to My workspaces/i }));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'My workspaces' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add project' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Development' } });
     fireEvent.click(screen.getByRole('button', { name: /Add terminals/ }));
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Initial terminals' }), { target: { value: '5' } });
@@ -236,7 +242,8 @@ describe('VerticalTabBar', () => {
 
   it('cancels inline project creation without a modal', () => {
     renderTabs();
-    fireEvent.click(screen.getByRole('button', { name: 'Add project to My workspaces' }));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'My workspaces' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add project' }));
     expect(screen.getByRole('heading', { name: 'Create project' })).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -510,7 +517,8 @@ describe('VerticalTabBar', () => {
 
   it('validates the count and custom command before creation', () => {
     renderTabs();
-    fireEvent.click(screen.getByRole('button', { name: /Add project to My workspaces/i }));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'My workspaces' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add project' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Dev' } });
     fireEvent.click(screen.getByRole('button', { name: /Add terminals/ }));
     const count = screen.getByRole('spinbutton', { name: 'Initial terminals' });
@@ -566,7 +574,8 @@ describe('VerticalTabBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New workspace' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Workspace name' }), { target: { value: 'Research' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Add project to Research' }));
+    fireEvent.contextMenu(await screen.findByRole('button', { name: 'Research' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add project' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Experiment' } });
     fireEvent.click(screen.getByRole('button', { name: /Add terminals/ }));
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Initial terminals' }), { target: { value: '3' } });
@@ -579,7 +588,8 @@ describe('VerticalTabBar', () => {
 
   it('reduces the shared terminal count without discarding configuration', () => {
     renderTabs();
-    fireEvent.click(screen.getByRole('button', { name: 'Add project to My workspaces' }));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'My workspaces' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add project' }));
     fireEvent.click(screen.getByRole('button', { name: /Add terminals/ }));
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Initial terminals' }), { target: { value: '3' } });
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Initial terminals' }), { target: { value: '1' } });

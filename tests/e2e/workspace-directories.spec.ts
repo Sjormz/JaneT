@@ -14,7 +14,8 @@ class FolderSessions {
     await this.page.getByRole('button', { name: button, exact: true }).click();
   }
   async start(folder: string, name: string, count: number) {
-    await this.page.getByRole('button', { name: `Add project to ${folder}` }).click();
+    await this.page.getByRole('button', { exact: true, name: `${folder}` }).click({ button: 'right' });
+    await this.page.getByRole('menuitem', { name: 'Add project', exact: true }).click();
     await this.page.getByRole('textbox', { name: 'Project name' }).fill(name);
     await this.page.getByRole('button', { name: /Add terminals/ }).click();
     await this.page.getByRole('spinbutton', { name: 'Initial terminals' }).fill(String(count));
@@ -194,7 +195,8 @@ test('sets up a main directory and restores independent linked-folder sessions',
     execFileSync('git', ['-C', repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'Initial']);
     execFileSync('git', ['-C', repo, 'worktree', 'add', '-b', 'feature', worktree]);
     await folders.choose(worktree, 'Add Library entry');
-    await page.getByRole('button', { name: 'Add project to Feature', exact: true }).click();
+    await page.getByRole('button', { name: 'Feature', exact: true }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Add project', exact: true }).click();
     await page.getByRole('textbox', { name: 'Project name' }).fill('Worktree review');
     await page.getByRole('button', { name: 'Create project', exact: true }).click();
     await expect(page.getByRole('img', { name: 'Worktree project' })).toBeVisible();

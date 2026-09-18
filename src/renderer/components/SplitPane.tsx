@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useRef } from 'react';
-import { flushSync } from 'react-dom';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal, flushSync } from 'react-dom';
 import {
   getAllLeafIds, PaneDropSide, PaneNode, SplitNode, TerminalLeaf,
 } from '../types';
@@ -41,6 +41,7 @@ interface SplitPaneProps {
   transportByTerminal?: Record<string, TerminalTransportStatus>;
   onAddTerminals: () => void;
   onClosePane: (leafId: string) => void;
+  onRenamePane?: (leafId: string) => void;
   onResizePane: (splitId: string, dividerIndex: number, leftFraction: number) => void;
   onMovePane: (draggedLeafId: string, targetLeafId: string, side: PaneDropSide) => void;
   draggedLeafId?: string | null;
@@ -93,6 +94,7 @@ function TerminalPaneLeaf({
   isActive,
   onAddTerminals,
   onClose,
+  onRenamePane,
   onToggleMaximize,
   draggedLeafId,
   dropTarget,
@@ -133,6 +135,7 @@ function TerminalPaneLeaf({
   isActive?: boolean;
   onAddTerminals?: () => void;
   onClose: () => void;
+  onRenamePane?: (leafId: string) => void;
   onToggleMaximize: () => void;
   onMovePane: (draggedLeafId: string, targetLeafId: string, side: PaneDropSide) => void;
   draggedLeafId?: string | null;
@@ -156,6 +159,29 @@ function TerminalPaneLeaf({
   totalPaneCount: number;
 }) {
   const leafType = leaf.terminalType ?? tabType;
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!menu || !menuRef.current) return;
+    const rect = menuRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(menu.x, window.innerWidth - rect.width));
+    const y = Math.max(0, Math.min(menu.y, window.innerHeight - rect.height));
+    if (x !== menu.x || y !== menu.y) setMenu({ x, y });
+    menuRef.current.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+  }, [menu]);
+  useEffect(() => {
+    if (!menu) return;
+    const closeOutside = (event: Event) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenu(null);
+    };
+    document.addEventListener('pointerdown', closeOutside, true);
+    document.addEventListener('contextmenu', closeOutside, true);
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside, true);
+      document.removeEventListener('contextmenu', closeOutside, true);
+    };
+  }, [menu]);
   const PaneTypeIcon = leafType === 'ssh' ? SSHIcon : TerminalTabIcon;
   const paneTypeLabel = leafType === 'ssh' ? 'SSH' : 'Local terminal';
   const storedTitle = leaf.title?.trim();
@@ -213,6 +239,21 @@ function TerminalPaneLeaf({
     >
       <div
         className="terminal-leaf-header"
+        ref={headerRef}
+        tabIndex={onRenamePane ? 0 : undefined}
+        aria-label={`${paneTitle} heading`}
+        aria-haspopup={onRenamePane ? 'menu' : undefined}
+        onContextMenu={(event) => {
+          if (!onRenamePane) return;
+          event.preventDefault();
+          setMenu({ x: event.clientX, y: event.clientY });
+        }}
+        onKeyDown={(event) => {
+          if (!onRenamePane || (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10'))) return;
+          event.preventDefault();
+          const rect = event.currentTarget.getBoundingClientRect();
+          setMenu({ x: rect.left, y: rect.bottom });
+        }}
         draggable={!isMaximized}
         onDragStart={(event) => {
           if ((event.target as HTMLElement).closest('button, .broadcast-toggle')) {
@@ -261,6 +302,28 @@ function TerminalPaneLeaf({
           </Tooltip>
         </div>
       </div>
+      {menu && createPortal(
+        <div ref={menuRef} className="vtab-context-menu" role="menu" aria-label={`Actions for ${paneTitle}`}
+          style={{ left: menu.x, top: menu.y }}
+          onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setMenu(null); }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              event.stopPropagation();
+              setMenu(null);
+              headerRef.current?.focus();
+            } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+              event.preventDefault();
+              event.currentTarget.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+            }
+          }}
+        >
+          <button type="button" role="menuitem" onClick={() => {
+            setMenu(null);
+            onRenamePane?.(leaf.id);
+          }}>Rename</button>
+        </div>, document.body,
+      )}
       <div className="terminal-leaf-body">
         <TerminalPane
           termId={leaf.id}
@@ -438,6 +501,7 @@ export default function SplitPane(props: SplitPaneProps) {
     transportByTerminal,
     onAddTerminals,
     onClosePane,
+    onRenamePane,
     onResizePane,
     onMovePane,
     draggedLeafId,
@@ -483,6 +547,7 @@ export default function SplitPane(props: SplitPaneProps) {
         isActive={activeTerminalId === node.id}
         onAddTerminals={onAddTerminals}
         onClose={() => onClosePane(node.id)}
+        onRenamePane={onRenamePane}
         onToggleMaximize={() => onToggleMaximizePane(node.id)}
         onMovePane={onMovePane}
         draggedLeafId={draggedLeafId}
@@ -534,6 +599,7 @@ export default function SplitPane(props: SplitPaneProps) {
             transportByTerminal={transportByTerminal}
             onAddTerminals={onAddTerminals}
             onClosePane={onClosePane}
+            onRenamePane={onRenamePane}
             onResizePane={onResizePane}
             onMovePane={onMovePane}
             draggedLeafId={draggedLeafId}
@@ -599,6 +665,7 @@ export default function SplitPane(props: SplitPaneProps) {
               transportByTerminal={transportByTerminal}
               onAddTerminals={onAddTerminals}
               onClosePane={onClosePane}
+              onRenamePane={onRenamePane}
               onResizePane={onResizePane}
               onMovePane={onMovePane}
               draggedLeafId={draggedLeafId}

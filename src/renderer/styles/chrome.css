@@ -173,8 +173,6 @@
   cursor: pointer;
 }
 .workspace-optional-terminals:hover { background: var(--control-hover); color: var(--text-primary); }
-.workspace-add-project-link { display: flex; align-items: center; gap: 6px; margin: 6px 0 4px 8px; padding: 7px 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
-.workspace-add-project-link:hover { color: var(--text-accent); background: var(--control-hover); }
 .workspace-creation-fields { display: flex; flex-direction: column; gap: 16px; border: 0; padding: 0; margin: 0; min-width: 0; }
 .workspace-creation-fields .form-field { min-width: 0; }
 .workspace-creation-fields .form-input { width: 100%; }
