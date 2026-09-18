@@ -48,7 +48,8 @@ test('creates grouped live workspaces and restores them after closing without a 
     expect(fs.existsSync(path.join(userData, 'Research', 'Experiments'))).toBe(true);
     expect(fs.existsSync(path.join(userData, 'Archive', 'Review'))).toBe(true);
     await page.screenshot({ path: testInfo.outputPath('grouped-workspaces.png') });
-    await page.getByRole('button', { name: 'Add project to Archive', exact: true }).click();
+    await page.getByRole('button', { name: 'Archive', exact: true }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Add project', exact: true }).click();
     await page.getByRole('button', { name: /Add terminals/ }).click();
     await page.getByRole('spinbutton', { name: 'Initial terminals' }).fill('4');
     await page.screenshot({ path: testInfo.outputPath('workspace-creation.png') });

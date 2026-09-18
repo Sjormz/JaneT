@@ -258,7 +258,8 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
     reports.push(await measureCompactTargets(page, 'settings'));
     await page.getByRole('button', { name: 'Hide settings' }).click();
 
-    await page.getByRole('button', { name: /^Add project to / }).first().click();
+    await page.locator('.workspace-group-toggle').first().click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Add project', exact: true }).click();
     const presetDialog = page.locator('.project-creation-content');
     await expect(presetDialog).toBeVisible();
     await presetDialog.getByRole('button', { name: /Add terminals/ }).click();

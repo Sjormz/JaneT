@@ -696,7 +696,12 @@ module.exports = {
     expect(ci.jobs.verify.name).toBe('Verify');
     expect(ci.jobs['durable-workspace-platforms'].name).toBe('Durable workspace (${{ matrix.os }})');
     const workflow = readWorkflow('release.yml');
-    const steps = workflow.jobs.verify.steps;
+    expect(workflow.jobs.prepare.name).toBe('Prepare release candidate');
+    expect(workflow.jobs.verify.needs).toEqual(['prepare']);
+    expect(workflow.jobs.package.needs).toEqual(['prepare']);
+    expect(workflow.jobs.publish.needs).toEqual(['prepare', 'verify', 'package']);
+    const steps = workflow.jobs.prepare.steps;
+    const verifySteps = workflow.jobs.verify.steps;
     const request = steps.find((step: any) => step.name === 'Validate release request');
     expect(steps.indexOf(request)).toBeLessThan(steps.findIndex((step: any) => step.uses?.startsWith('actions/checkout@')));
     expect(request.run).toContain('^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$');
@@ -706,21 +711,22 @@ module.exports = {
     const source = steps.find((step: any) => step.id === 'source');
     expect(source.run).toContain('git merge-base --is-ancestor "$SOURCE_SHA" origin/main');
     expect(source.run).toContain('test "$SOURCE_SHA" = "$GITHUB_SHA"');
-    expect(workflow.jobs.verify.outputs['source-sha']).toBe('${{ steps.source.outputs.sha }}');
-    expect(workflow.jobs.package.needs).toContain('verify');
-    expect(workflow.jobs.package.steps[0].with.ref).toBe('${{ needs.verify.outputs.source-sha }}');
-    expect(workflow.jobs.publish.needs).toEqual(['verify', 'package']);
+    expect(workflow.jobs.prepare.outputs['source-sha']).toBe('${{ steps.source.outputs.sha }}');
+    expect(workflow.jobs.verify.steps[0].with.ref).toBe('${{ needs.prepare.outputs.source-sha }}');
+    expect(workflow.jobs.package.steps[0].with.ref).toBe('${{ needs.prepare.outputs.source-sha }}');
     expect(workflow.concurrency.queue).toBe('max');
     expect(workflow.jobs.publish.concurrency).toEqual({ group: 'release-publish', 'cancel-in-progress': false, queue: 'max' });
     expect(JSON.stringify(workflow)).not.toContain('git checkout');
     for (const name of ['Run unit and component tests', 'Run Electron e2e tests']) {
-      expect(steps.find((step: any) => step.name === name).env.JANET_TEST_PYTHON)
+      expect(verifySteps.find((step: any) => step.name === name).env.JANET_TEST_PYTHON)
         .toBe('${{ steps.python.outputs.python-path }}');
     }
-    expect(steps.find((step: any) => step.name === 'Run Electron e2e tests').run)
+    expect(verifySteps.find((step: any) => step.name === 'Run Electron e2e tests').run)
       .toBe('xvfb-run --auto-servernum npx playwright test --config playwright.config.ts');
     const versions = steps.find((step: any) => step.name === 'Verify release versions before installing dependencies');
-    expect(steps.indexOf(versions)).toBeLessThan(steps.findIndex((step: any) => step.run === 'npm ci'));
+    expect(versions).toBeDefined();
+    expect(steps.some((step: any) => step.run === 'npm ci')).toBe(false);
+    expect(verifySteps.some((step: any) => step.run === 'npm ci')).toBe(true);
     const program = versions.run.match(/<<'NODE'\n([\s\S]*?)\nNODE/)[1];
     const check = (tag: string, lockVersion = '1.2.3', rootVersion = lockVersion) => runWorkflowGuard(program, `
       if (id === './package.json') return { version: '1.2.3' };
@@ -743,7 +749,7 @@ module.exports = {
     const steps = workflow.jobs.publish.steps;
     const guard = steps.find((step: any) => step.name === 'Refuse published versions and updater downgrades');
     expect(steps.indexOf(guard)).toBeLessThan(steps.findIndex((step: any) => step.uses?.startsWith('softprops/')));
-    expect(guard.env.SOURCE_SHA).toBe('${{ needs.verify.outputs.source-sha }}');
+    expect(guard.env.SOURCE_SHA).toBe('${{ needs.prepare.outputs.source-sha }}');
     const program = guard.run.match(/<<'NODE'\n([\s\S]*?)\nNODE/)[1];
     const check = (releases: object[], sha = 'verified-sha', failApi = false, tag = 'v1.2.3') => runWorkflowGuard(program, `
       if (id !== 'node:child_process') return nativeRequire(id);
@@ -766,6 +772,76 @@ module.exports = {
     }
     expect(() => check([], 'moved-sha')).toThrow(/tag moved/);
     expect(() => check([], 'verified-sha', true)).toThrow(/API unavailable/);
+  });
+
+  it('gates automatic releases on a merged release label and exact checks', async () => {
+    const workflow = fs.readFileSync(path.join(projectRoot, '.github/workflows/release-handoff.yml'), 'utf8');
+    expect(workflow).toContain('pull_request_target:');
+    expect(workflow).toContain('types: [closed]');
+    expect(workflow).toContain('github.event.pull_request.merged == true');
+    expect(workflow).toContain("contains(github.event.pull_request.labels.*.name, 'release')");
+    expect(workflow).toContain('ref: ${{ github.event.pull_request.base.sha }}');
+    expect(workflow).toContain('path: trusted');
+    expect(workflow).not.toContain('ref: ${{ github.event.pull_request.merge_commit_sha }}');
+    expect(workflow).not.toContain('path: candidate');
+    expect(workflow).toContain('working-directory: trusted');
+    expect(workflow).toContain('actions: write');
+    expect(workflow).toContain('contents: write');
+    expect(workflow).toContain('run: node scripts/release-handoff.mjs');
+
+    const handoff = await loadScript('release-handoff.mjs');
+    expect(handoff.GITHUB_ACTIONS_APP_ID).toBe(15368);
+    expect(handoff.requiredChecks).toEqual([
+      'Verify',
+      'Durable workspace (macos-latest)',
+      'Durable workspace (windows-latest)',
+      'Analyze JavaScript/TypeScript',
+    ]);
+    expect(handoff.candidateTag(
+      { version: '1.2.3' },
+      { version: '1.2.4' },
+      { version: '1.2.4', packages: { '': { version: '1.2.4' } } },
+    )).toEqual({ version: '1.2.4', tag: 'v1.2.4' });
+    expect(handoff.candidateTag(
+      { version: '1.2.3' },
+      { version: '1.2.3' },
+      { version: '1.2.3', packages: { '': { version: '1.2.3' } } },
+    )).toBeNull();
+    expect(() => handoff.candidateTag(
+      { version: '1.2.3' },
+      { version: '1.2.4' },
+      { version: '1.2.3', packages: { '': { version: '1.2.4' } } },
+    )).toThrow(/lockfile/i);
+    expect(() => handoff.candidateTag(
+      { version: '1.2.3' },
+      { version: '1.2.2' },
+      { version: '1.2.2', packages: { '': { version: '1.2.2' } } },
+    )).toThrow(/not newer/);
+    expect(() => handoff.candidateTag(
+      { version: '1.2.3' },
+      { version: '1.2.4-beta.1' },
+      { version: '1.2.4-beta.1', packages: { '': { version: '1.2.4-beta.1' } } },
+    )).toThrow(/stable version/);
+    const script = fs.readFileSync(path.join(projectRoot, 'scripts/release-handoff.mjs'), 'utf8');
+    for (const name of handoff.requiredChecks) expect(script).toContain(`'${name}'`);
+    expect(script).toContain('/check-runs?per_page=100');
+    expect(script).toContain('/git/matching-refs/tags/');
+    expect(script.match(/validatePublicationState\(repo, candidate\.tag, candidate\.version\);/g)).toHaveLength(2);
+    expect(script).toContain("['tag', '-a', candidate.tag, mergeSha");
+    expect(script).toContain("['push', 'origin', `refs/tags/${candidate.tag}`]");
+    expect(script).toContain("['workflow', 'run', 'release.yml'");
+  });
+
+  it('selects only the latest GitHub Actions check run for each required name', async () => {
+    const handoff = await loadScript('release-handoff.mjs');
+    const selectedChecks = handoff.selectRequiredChecks([
+      { name: 'Verify', id: 10, app: { id: 15368 }, status: 'completed', conclusion: 'success' },
+      { name: 'Verify', id: 20, app: { id: 999 }, status: 'completed', conclusion: 'failure' },
+      { name: 'Analyze JavaScript/TypeScript', id: 30, app: { id: 15368 }, status: 'completed', conclusion: 'success' },
+      { name: 'Analyze JavaScript/TypeScript', id: 40, app: { id: 15368 }, status: 'completed', conclusion: 'success' },
+    ]);
+    expect(selectedChecks[0]).toEqual(expect.objectContaining({ id: 10 }));
+    expect(selectedChecks[3]).toEqual(expect.objectContaining({ id: 40 }));
   });
 
   it('packages macOS releases for Apple Silicon only without DMG blockmaps', () => {

@@ -1418,6 +1418,35 @@ describe('split panes in the app', () => {
     expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: secondId });
   });
 
+  it.each(['right-click', 'keyboard'] as const)('renames the clicked pane through its %s heading menu', async (method) => {
+    render(<App />);
+    await splitFromPalette();
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    const [firstTerminal, secondTerminal] = screen.getAllByTestId(/terminal-/);
+    const firstPane = firstTerminal.closest('.terminal-leaf')!;
+    const secondPane = secondTerminal.closest('.terminal-leaf')!;
+    const heading = secondPane.querySelector<HTMLElement>('.terminal-leaf-header')!;
+    act(() => within(firstTerminal).getByRole('textbox').focus());
+
+    const openMenu = () => method === 'right-click'
+      ? fireEvent.contextMenu(heading, { clientX: 200, clientY: 100 })
+      : fireEvent.keyDown(heading, { key: 'F10', shiftKey: true });
+    openMenu();
+    expect(screen.getByRole('menuitem', { name: 'Rename' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Rename' }), { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(heading).toHaveFocus();
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Rename terminal' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Terminal name' }), { target: { value: 'Logs' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(secondPane.querySelector('.leaf-title-text')).toHaveTextContent('Logs'));
+    expect(firstPane.querySelector('.leaf-title-text')).toHaveTextContent('Terminal');
+    await waitFor(() => expect(within(secondTerminal).getByRole('textbox')).toHaveFocus());
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
   it('renames the focused pane with F2 and returns focus to its terminal', async () => {
     render(<App />);
 

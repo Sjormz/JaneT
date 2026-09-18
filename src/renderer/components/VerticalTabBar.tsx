@@ -441,9 +441,6 @@ export default function VerticalTabBar({
             </div>
           );
         })}
-            <button className="workspace-add-project-link" onClick={() => { setProjectParentId(group.id);
-              setCreationKind('workspace'); setCreationError(''); onCreatorOpenChange(true);
-            }} aria-label={'Add project to ' + group.name}><PlusIcon size="xs" />Add project</button>
             </div>
           </section>;
         })}</React.Fragment>)}
@@ -469,6 +466,11 @@ export default function VerticalTabBar({
           }}
         >
           {tabMenu.group && <>
+            <button role="menuitem" onClick={() => {
+              setProjectParentId(tabMenu.group!.id);
+              closeTabMenu();
+              setCreationKind('workspace'); setCreationError(''); onCreatorOpenChange(true);
+            }}>Add project</button>
             {tabMenu.group.kind !== 'folder' && <button role="menuitem" onClick={() => { setEditingGroupId(tabMenu.group!.id); setDraftTitle(tabMenu.group!.name); closeTabMenu(); }}>Rename workspace</button>}
             <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const group = tabMenu.group!; closeTabMenu(); onWorkspaceAction?.(group.kind === 'folder' || !group.directory ? 'unlink' : 'delete', group.id); }}>{tabMenu.group.kind === 'folder' ? 'Remove from Library…' : !tabMenu.group.directory ? 'Remove workspace…' : 'Delete workspace…'}</button>
           </>}

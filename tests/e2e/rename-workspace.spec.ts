@@ -90,8 +90,9 @@ test('renames the focused pane and active tab without interrupting xterm input',
     await expect(terminalInputs.nth(1)).toHaveAttribute('aria-label', 'Right — Local terminal pane');
 
     const secondInput = terminals.nth(1).locator('.xterm-helper-textarea');
-    await secondInput.focus();
-    await page.keyboard.press('F2');
+    await terminalInputs.nth(0).focus();
+    await page.locator('.terminal-leaf-header').nth(1).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
     const paneDialog = page.getByRole('dialog', { name: 'Rename terminal' });
     await expect(paneDialog).toBeVisible();
     const paneName = paneDialog.getByRole('textbox', { name: 'Terminal name' });
