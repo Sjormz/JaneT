@@ -43,8 +43,6 @@ const snapshot = (path: string, content = 'hello\n') => ({
 const api = {
   fsReadTextFile: vi.fn(),
   fsWriteTextFile: vi.fn(),
-  sshReadTextFile: vi.fn(),
-  sshWriteTextFile: vi.fn(),
   gitDiff: vi.fn(),
 };
 
@@ -61,15 +59,6 @@ beforeEach(() => {
       requestedPath: request.requestedPath,
       resolvedPath: request.resolvedPath,
       revision: revision('b'.repeat(64)),
-    },
-  }));
-  api.sshReadTextFile.mockResolvedValue({ ok: true, value: snapshot('/srv/app.ts') });
-  api.sshWriteTextFile.mockImplementation(async (request) => ({
-    ok: true,
-    value: {
-      requestedPath: request.requestedPath,
-      resolvedPath: request.resolvedPath,
-      revision: revision('c'.repeat(64)),
     },
   }));
   api.gitDiff.mockResolvedValue({
@@ -183,34 +172,6 @@ describe('useEditorDocuments', () => {
       hasUtf8Bom: false,
     }));
     expect(controller.dirtyDocuments).toHaveLength(0);
-  });
-
-  it('binds remote reads and writes to the exact SSH connection generation', async () => {
-    let key = '';
-    await act(async () => {
-      key = await controller.openDocument('tab-ssh', {
-        kind: 'ssh',
-        sessionId: 'session-1',
-        connectionId: 'generation-7',
-        path: '/srv/app.ts',
-        label: 'dev@example.com',
-      });
-    });
-    expect(api.sshReadTextFile).toHaveBeenCalledWith({
-      sessionId: 'session-1',
-      connectionId: 'generation-7',
-      remotePath: '/srv/app.ts',
-    });
-
-    await act(async () => {
-      controller.updateDocumentContent(key, 'remote edit\n');
-      await controller.saveDocument(key);
-    });
-    expect(api.sshWriteTextFile).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 'session-1',
-      connectionId: 'generation-7',
-      content: 'remote edit\n',
-    }));
   });
 
   it('surfaces a conflict and only sends overwrite after explicit retry', async () => {

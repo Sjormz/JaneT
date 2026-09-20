@@ -4,7 +4,7 @@ import CommandHistoryPicker from '../../src/renderer/components/CommandHistoryPi
 
 const entries = [
   { id: 'local-ok', command: 'npm test', startedAt: 1, durationMs: 2, exitCode: 0, context: { kind: 'local' as const, cwd: '/repo' } },
-  { id: 'ssh-fail', command: 'deploy', startedAt: 2, durationMs: 3, exitCode: 1, context: { kind: 'ssh' as const, label: 'prod' } },
+  { id: 'local-fail', command: 'deploy', startedAt: 2, durationMs: 3, exitCode: 1, context: { kind: 'local' as const, cwd: '/deploy' } },
 ];
 
 describe('CommandHistoryPicker', () => {
@@ -56,10 +56,10 @@ describe('CommandHistoryPicker', () => {
     expect(screen.queryByLabelText('Outcome')).toBeNull();
   });
 
-  it('searches command text and SSH labels', () => {
+  it('searches command text', () => {
     render(<CommandHistoryPicker visible entries={entries} onClose={() => {}} onSelect={() => {}} />);
     expect(screen.getByRole('dialog', { name: 'Command history' })).toBeTruthy();
-    fireEvent.change(screen.getByRole('combobox', { name: 'Search command history' }), { target: { value: 'prod' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search command history' }), { target: { value: 'deploy' } });
     expect(screen.getByRole('option', { name: /deploy/ })).toBeTruthy();
     expect(screen.queryByRole('option', { name: /npm test/ })).toBeNull();
   });

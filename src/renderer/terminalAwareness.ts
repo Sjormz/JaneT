@@ -1,6 +1,6 @@
 export type AgentPhase = 'ready' | 'running' | 'needs-input' | 'connecting';
 export type TurnOutcome = 'succeeded' | 'failed' | 'interrupted';
-export type TerminalTransportStatus = 'exited' | 'disconnected';
+export type TerminalTransportStatus = 'exited';
 export type AgentEventName =
   | 'session.start'
   | 'turn.start'
@@ -46,8 +46,7 @@ export type AgentStatusKind =
   | 'failed'
   | 'interrupted'
   | 'exited'
-  | 'unavailable'
-  | 'disconnected';
+  | 'unavailable';
 
 export interface AgentStatus {
   kind: AgentStatusKind;
@@ -65,7 +64,6 @@ const STATUS_PRIORITY: Record<AgentStatusKind, number> = {
   interrupted: 3,
   finished: 2,
   exited: 1,
-  disconnected: 1,
   ready: 0,
 };
 
@@ -105,7 +103,6 @@ export function terminalStatus(
   transport?: TerminalTransportStatus,
 ): AgentStatus | undefined {
   if (transport === 'exited') return { kind: 'exited', label: 'Exited' };
-  if (transport === 'disconnected') return { kind: 'disconnected', label: 'SSH disconnected' };
   return awareness ? agentStatus(awareness) : undefined;
 }
 

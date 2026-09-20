@@ -97,6 +97,23 @@ beforeEach(() => {
 });
 
 describe('TerminalManager', () => {
+  it('enforces local capacity and releases it when a terminal exits', async () => {
+    const { TerminalManager } = await loadTerminalManager();
+    const { NativeTerminalCapacity } = await import('../../src/main/terminalCapacity');
+    mocks.spawnMock.mockImplementation(() => new MockPty());
+    const manager = new TerminalManager({ capacity: new NativeTerminalCapacity(1) });
+    try {
+      manager.create('first', undefined, 'powershell.exe', () => {});
+      expect(() => manager.create('second', undefined, 'powershell.exe', () => {})).toThrow(/terminal limit/i);
+      expect(mocks.spawnMock).toHaveBeenCalledTimes(1);
+      (mocks.spawnMock.mock.results[0].value as MockPty).emitExit();
+      manager.create('second', undefined, 'powershell.exe', () => {});
+      expect(mocks.spawnMock).toHaveBeenCalledTimes(2);
+    } finally {
+      manager.cleanup();
+    }
+  });
+
   it('rejects a missing absolute Unix shell before node-pty reports a false start', async () => {
     const { TerminalManager } = await loadTerminalManager();
     const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
@@ -579,7 +596,7 @@ describe('TerminalManager', () => {
     expect(fs.existsSync(zdotdir)).toBe(false);
   });
 
-  it('does not inherit another terminal emulator\'s graphics capabilities', async () => {
+  it('advertises Kitty compatibility without inheriting another emulator\'s session', async () => {
     vi.stubEnv('TERM_PROGRAM', 'vscode');
     vi.stubEnv('KITTY_WINDOW_ID', '77');
     vi.stubEnv('WEZTERM_PANE', '8');
@@ -595,7 +612,7 @@ describe('TerminalManager', () => {
 
       const env = mocks.spawnMock.mock.calls[0][2].env;
       expect(mocks.spawnMock.mock.calls[0][2].useConptyDll).toBe(process.platform === 'win32');
-      expect(env).toMatchObject({ TERM: 'xterm-256color', TERM_PROGRAM: 'JaneT' });
+      expect(env).toMatchObject({ TERM: 'xterm-256color', TERM_PROGRAM: 'kitty' });
       expect(env).not.toHaveProperty('KITTY_WINDOW_ID');
       expect(env).not.toHaveProperty('WEZTERM_PANE');
       expect(env).not.toHaveProperty('ITERM_SESSION_ID');

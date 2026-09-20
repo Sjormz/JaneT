@@ -1,7 +1,7 @@
 {
   "name": "janet",
-  "version": "0.11.5",
-  "description": "A focused cross-platform terminal workspace with SSH, file browsing, and Git tools",
+  "version": "0.12.0",
+  "description": "A focused cross-platform terminal workspace with file browsing and Git tools",
   "desktopName": "janet",
   "main": "dist/main/index.js",
   "engines": {
@@ -19,7 +19,6 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "npm run build && playwright test --config playwright.config.ts",
-    "test:e2e:ssh-local": "npm run build && playwright test --config playwright.config.ts tests/e2e/ssh-local.spec.ts",
     "test:watch": "vitest",
     "start": "npx electron dist/main/index.js",
     "dist": "npm run build && npx electron-builder",
@@ -48,8 +47,7 @@
       "!dist/renderer/**/*.map"
     ],
     "asarUnpack": [
-      "node_modules/node-pty/**",
-      "node_modules/ssh2/**"
+      "node_modules/node-pty/**"
     ],
     "win": {
       "target": [
@@ -148,8 +146,8 @@
       "artifactName": "${productName}-${version}-linux-x64.${ext}",
       "maintainer": "sjorm <sjorm@users.noreply.github.com>",
       "category": "TerminalEmulator",
-      "synopsis": "A focused terminal workspace for local and SSH work",
-      "description": "JaneT combines local terminals, SSH, file browsing, and Git tools in one focused workspace",
+      "synopsis": "A focused workspace for local terminals",
+      "description": "JaneT combines local terminals, file browsing, and Git tools in one focused workspace",
       "executableName": "janet",
       "syncDesktopName": true
     },
@@ -162,7 +160,6 @@
   },
   "keywords": [
     "terminal",
-    "ssh",
     "file-explorer",
     "git"
   ],
@@ -183,8 +180,6 @@
     "react-dom": "^19.2.8",
     "simple-git": "^3.36.0",
     "smol-toml": "1.7.2",
-    "ssh2": "^1.17.0",
-    "ssh2-sftp-client": "^12.1.1",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
@@ -196,8 +191,6 @@
     "@types/node": "^26.1.2",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
-    "@types/ssh2": "^1.15.0",
-    "@types/ssh2-sftp-client": "^9.0.0",
     "@vitejs/plugin-react": "^6.0.5",
     "electron": "^43.2.0",
     "electron-builder": "^26.0.0",

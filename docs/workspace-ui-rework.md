@@ -1,5 +1,7 @@
 # Workspace UI rework
 
+Historical review: built-in SSH/SFTP support was removed on 2026-09-19; references below describe the earlier implementation.
+
 ## Final behavior ? 2026-09-08
 
 - Workspaces and Library have matching section headers and separate plus buttons. Workspaces adds a workspace; Library links a parent directory. Each expanded parent always offers Add project.

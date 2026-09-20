@@ -3,7 +3,7 @@ import {
   // Titlebar / window
   Minus, Square, Copy, X,
   // Sidebar sections
-  FolderTree, KeyRound, GitBranch, Settings as SettingsIcon,
+  FolderTree, GitBranch, Settings as SettingsIcon,
   // Sidebar actions
   Plus, RefreshCw, ArrowLeft, Eye, EyeOff, X as XIcon,
   ChevronRight, ChevronDown, ChevronsUpDown,
@@ -20,8 +20,6 @@ import {
   Search, SearchX, ArrowUp, ArrowDown, ArrowRight, Undo2,
   Pencil, Trash2, Sliders, Type, CodeXml,
   ChevronsRight, ChevronsDown, ChevronsUp, ChevronsLeft,
-  // SSH
-  Plug, Unplug, Server,
   // Command palette / shortcuts
   Command, CornerDownLeft,
   // Theme
@@ -87,7 +85,6 @@ export const CloseIcon = make(X);
 
 // Sidebar / activity
 export const FilesIcon = make(FolderTree);
-export const SSHIcon = make(KeyRound);
 export const SourceControlIcon = make(GitBranch);
 export const SettingsIconCmp = make(SettingsIcon);
 
@@ -147,10 +144,6 @@ export const ChevronsDownIcon = make(ChevronsDown);
 export const ChevronsUpIcon = make(ChevronsUp);
 export const ChevronsLeftIcon = make(ChevronsLeft);
 
-// SSH
-export const PlugIcon = make(Plug);
-export const UnplugIcon = make(Unplug);
-export const ServerIcon = make(Server);
 export const MoreIcon = make(MoreHorizontal);
 export const ListIcon = make(List);
 

@@ -108,7 +108,6 @@
   letter-spacing: 1px;
 }
 .status-context-mark { width: 5px; height: 10px; border: 1px solid var(--text-accent); border-radius: 2px; }
-.status-context.is-remote .status-context-mark { border-color: var(--yellow); background: var(--yellow); }
 .app-status .status-left { flex: 1; gap: 14px; min-width: 0; overflow: hidden; }
 .app-status .status-item { white-space: nowrap; min-width: 0; }
 .app-status .status-cwd { background: none; border-radius: 0; padding: 0; max-width: min(48vw, 620px); flex-shrink: 1; }

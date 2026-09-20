@@ -27,7 +27,6 @@ interface GitBranchInfo {
 
 interface GitTreeProps {
   cwdReady: boolean;
-  isRemote: boolean;
   repoPath: string | null;
   status: GitStatusResult | null;
   searching: boolean;
@@ -82,7 +81,6 @@ interface DialogState {
 
 export default function GitTree({
   cwdReady,
-  isRemote,
   repoPath,
   status,
   searching,
@@ -159,7 +157,7 @@ export default function GitTree({
   useRefreshTask({
     key: `git-details:${repoPath || 'none'}`,
     intervalMs: 10_000,
-    enabled: Boolean(repoPath) && cwdReady && !isRemote,
+    enabled: Boolean(repoPath) && cwdReady,
     run: () => repoPath ? loadGitDetails(repoPath) : undefined,
   });
 
@@ -392,7 +390,6 @@ export default function GitTree({
   const toggle = (section: Section) => setExpanded((prev) => ({ ...prev, [section]: !prev[section] }));
 
   if (searching) return shell('Searching for Git repositories…');
-  if (isRemote) return shell('Source Control is available for local terminals', 'Open a local terminal in a Git repository to manage changes, branches, and worktrees.');
   if (!repoPath) return shell('No Git repository found', 'Open a local terminal in a Git repository to see changes, branches, and worktrees.');
 
   const conflictedPaths = new Set(status?.conflicted || []);

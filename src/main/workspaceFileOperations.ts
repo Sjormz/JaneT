@@ -27,9 +27,9 @@ async function plainDirectory(value: string): Promise<string> {
   return actual;
 }
 
-function rebaseTree(node: SavedPaneNode, source: string, target: string, type: 'local' | 'ssh'): SavedPaneNode {
-  if (node.type === 'split') return { ...node, children: node.children.map((child) => rebaseTree(child, source, target, type)) };
-  return (node.terminalType ?? type) === 'ssh' ? node : { ...node, cwd: rebaseDirectory(node.cwd, source, target) };
+function rebaseTree(node: SavedPaneNode, source: string, target: string): SavedPaneNode {
+  if (node.type === 'split') return { ...node, children: node.children.map((child) => rebaseTree(child, source, target)) };
+  return { ...node, cwd: rebaseDirectory(node.cwd, source, target) };
 }
 
 // Hash files as streams, including hidden files. Never follow links into external trees.
@@ -104,7 +104,7 @@ export class WorkspaceFileOperations {
       for (const tab of session.tabs.filter((tab) => !affected.includes(tab))) {
         if (tab.cwd && contains(source, path.resolve(tab.cwd))) throw new Error('Another session uses this directory. Close that session first.');
         const usesSource = (node: SavedPaneNode): boolean => node.type === 'split' ? node.children.some(usesSource)
-          : (node.terminalType ?? tab.type) !== 'ssh' && Boolean(node.cwd && contains(source, path.resolve(node.cwd)));
+          : Boolean(node.cwd && contains(source, path.resolve(node.cwd)));
         if (usesSource(tab.root)) throw new Error('Another terminal uses this directory. Close that session first.');
       }
       this.dependencies.release(source);
@@ -150,7 +150,7 @@ export class WorkspaceFileOperations {
       }
       const libraryId = `folder-${randomUUID()}`;
       const next: SavedSession = { ...session, groups: [...groups, { id: libraryId, kind: 'folder', name: project.title, directory: target }],
-        tabs: session.tabs.map((tab) => tab.id === project.id ? { ...tab, groupId: libraryId, cwd: target, root: rebaseTree(tab.root, source, target, tab.type) } : tab) };
+        tabs: session.tabs.map((tab) => tab.id === project.id ? { ...tab, groupId: libraryId, cwd: target, root: rebaseTree(tab.root, source, target) } : tab) };
       try { this.dependencies.setSession(next); }
       catch (error) { throw new Error(`Could not save the Library entry. Original files remain at ${source}; the verified copy remains at ${target}. ${String(error)}`); }
       this.dependencies.release(source);

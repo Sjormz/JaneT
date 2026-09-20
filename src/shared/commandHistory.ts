@@ -2,11 +2,9 @@ export const MAX_COMMAND_HISTORY_ENTRIES = 256;
 export const MAX_COMMAND_HISTORY_ID_LENGTH = 64;
 export const MAX_COMMAND_HISTORY_COMMAND_LENGTH = 64 * 1024;
 export const MAX_COMMAND_HISTORY_CWD_LENGTH = 8_192;
-export const MAX_COMMAND_HISTORY_SSH_LABEL_LENGTH = 512;
 
 export type CommandHistoryContext =
-  | { kind: 'local'; cwd: string }
-  | { kind: 'ssh'; label: string };
+  { kind: 'local'; cwd: string };
 
 export interface CommandHistoryEntry {
   id: string;
@@ -19,7 +17,6 @@ export interface CommandHistoryEntry {
 
 const ENTRY_KEYS = new Set(['id', 'command', 'startedAt', 'durationMs', 'exitCode', 'context']);
 const LOCAL_CONTEXT_KEYS = new Set(['kind', 'cwd']);
-const SSH_CONTEXT_KEYS = new Set(['kind', 'label']);
 
 type DataValues = Record<string, unknown>;
 
@@ -54,11 +51,8 @@ function validatedContext(value: unknown): CommandHistoryContext | null {
       && values.cwd.length <= MAX_COMMAND_HISTORY_CWD_LENGTH
       ? { kind: 'local', cwd: values.cwd } : null;
   }
-  const sshValues = ownDataValues(value, SSH_CONTEXT_KEYS);
-  return sshValues?.kind === 'ssh'
-    && typeof sshValues.label === 'string' && sshValues.label.length > 0
-    && sshValues.label.length <= MAX_COMMAND_HISTORY_SSH_LABEL_LENGTH
-    ? { kind: 'ssh', label: sshValues.label } : null;
+
+  return null;
 }
 
 function validatedEntry(value: unknown): CommandHistoryEntry | null {
@@ -92,9 +86,7 @@ export function cloneCommandHistoryEntry(entry: CommandHistoryEntry): CommandHis
     startedAt: entry.startedAt,
     durationMs: entry.durationMs,
     ...(entry.exitCode === undefined ? {} : { exitCode: entry.exitCode }),
-    context: entry.context.kind === 'local'
-      ? { kind: 'local', cwd: entry.context.cwd }
-      : { kind: 'ssh', label: entry.context.label },
+    context: { kind: 'local', cwd: entry.context.cwd },
   };
 }
 
@@ -132,5 +124,5 @@ export function isValidCommandHistory(value: unknown): value is CommandHistoryEn
 }
 
 export function commandHistoryContextLabel(context: CommandHistoryContext): string {
-  return context.kind === 'local' ? context.cwd : context.label;
+  return context.cwd;
 }

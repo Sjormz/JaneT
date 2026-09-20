@@ -152,7 +152,7 @@ describe('release tooling', () => {
     const readme = fs.readFileSync(path.join(projectRoot, 'README.md'), 'utf8');
 
     expect(readme).not.toContain('Keep active terminal and SSH work running when the window closes');
-    expect(readme).toContain('Closing JaneT ends its managed local and SSH terminal sessions');
+    expect(readme).toContain('Closing JaneT ends its managed local terminal sessions');
     expect(readme).toContain('Restarting restores the saved workspace structure into fresh shells');
     expect(readme).toContain('startup commands run again');
     expect(readme).toContain('Agent lifecycle status is bounded metadata, not an authenticated security signal');
@@ -195,7 +195,7 @@ describe('release tooling', () => {
         outfile: 'dist/main/agent-cli.cjs',
         bundle: true,
         platform: 'node',
-        external: ['electron', 'node-pty', 'ssh2', 'ssh2-sftp-client', 'simple-git'],
+        external: ['electron', 'node-pty', 'simple-git'],
       }),
       expect.objectContaining({
         absWorkingDir: projectRoot,
@@ -203,7 +203,7 @@ describe('release tooling', () => {
         outfile: 'dist/main/index.js',
         bundle: true,
         platform: 'node',
-        external: ['electron', 'node-pty', 'ssh2', 'ssh2-sftp-client', 'simple-git'],
+        external: ['electron', 'node-pty', 'simple-git'],
       }),
       expect.objectContaining({
         absWorkingDir: projectRoot,
@@ -211,7 +211,7 @@ describe('release tooling', () => {
         outfile: 'dist/main/preload.js',
         bundle: true,
         platform: 'node',
-        external: ['electron', 'node-pty', 'ssh2', 'ssh2-sftp-client', 'simple-git'],
+        external: ['electron', 'node-pty', 'simple-git'],
       }),
     ]);
 

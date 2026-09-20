@@ -112,7 +112,7 @@ describe('GitTree live refresh', () => {
     render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath={'C:\\x\\y'}
         status={{ ...cleanStatus, current: 'feature/cleanup' }}
         searching={false}
@@ -144,7 +144,7 @@ describe('GitTree live refresh', () => {
     render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="C:/repo"
         status={cleanStatus}
         searching={false}
@@ -178,7 +178,7 @@ describe('GitTree live refresh', () => {
 
   it('puts worktrees first and keeps create actions compact in their section headers', async () => {
     gitDetails.mockResolvedValue(details('main'));
-    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={cleanStatus} searching={false} />);
+    render(<GitTree cwdReady repoPath="/repo" status={cleanStatus} searching={false} />);
 
     const worktrees = await screen.findByRole('button', { name: /Worktrees/ });
     const worktreeSection = worktrees.closest('.git-section')!;
@@ -213,7 +213,7 @@ describe('GitTree live refresh', () => {
       files: [{ path: 'staged.ts', working_dir: ' ', index: 'M', staged: true, unstaged: false }],
       modified: ['staged.ts'],
     };
-    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+    render(<GitTree cwdReady repoPath="/repo" status={status} searching={false} />);
 
     await screen.findByRole('button', { name: /Worktrees/ });
     const stagedSection = screen.getByRole('button', { name: /Staged Changes/ }).closest('.git-section');
@@ -232,7 +232,7 @@ describe('GitTree live refresh', () => {
       ],
       modified: ['working.ts', 'staged.ts'],
     };
-    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+    render(<GitTree cwdReady repoPath="/repo" status={status} searching={false} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
     await waitFor(() => expect(gitStage).toHaveBeenCalledWith({ repoPath: '/repo', paths: ['working.ts'] }));
@@ -265,7 +265,7 @@ describe('GitTree live refresh', () => {
       files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
       modified: ['working.ts'],
     };
-    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+    render(<GitTree cwdReady repoPath="/repo" status={status} searching={false} />);
 
     const row = screen.getByRole('button', { name: 'Open working-tree diff for working.ts' });
     const openDialog = () => {
@@ -291,7 +291,7 @@ describe('GitTree live refresh', () => {
       files: [{ path: 'notes.txt', working_dir: '?', index: '?', staged: false, unstaged: true }],
       created: ['notes.txt'],
     };
-    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+    render(<GitTree cwdReady repoPath="/repo" status={status} searching={false} />);
 
     const row = screen.getByRole('button', { name: 'Open working-tree diff for notes.txt' });
     fireEvent.contextMenu(row);
@@ -320,7 +320,7 @@ describe('GitTree live refresh', () => {
     render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="/repo"
         status={status}
         searching={false}
@@ -361,7 +361,7 @@ describe('GitTree live refresh', () => {
       files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
       modified: ['working.ts'],
     };
-    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+    render(<GitTree cwdReady repoPath="/repo" status={status} searching={false} />);
 
     const row = screen.getByRole('button', { name: 'Open working-tree diff for working.ts' });
     const openDialog = () => {
@@ -388,7 +388,7 @@ describe('GitTree live refresh', () => {
     render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="/repo"
         status={status}
         searching={false}
@@ -419,7 +419,7 @@ describe('GitTree live refresh', () => {
     const view = render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="/repo"
         status={status}
         searching={false}
@@ -432,7 +432,7 @@ describe('GitTree live refresh', () => {
     view.rerender(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="/other-repo"
         status={status}
         searching={false}
@@ -468,7 +468,7 @@ describe('GitTree live refresh', () => {
     };
 
     try {
-      render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+      render(<GitTree cwdReady repoPath="/repo" status={status} searching={false} />);
       fireEvent.contextMenu(screen.getByRole('button', { name: 'Open working-tree diff for working.ts' }), {
         clientX: 310,
         clientY: 190,
@@ -489,14 +489,14 @@ describe('GitTree live refresh', () => {
       files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
       modified: ['working.ts'],
     };
-    const view = render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+    const view = render(<GitTree cwdReady repoPath="/repo" status={status} searching={false} />);
 
     fireEvent.contextMenu(screen.getByRole('button', { name: 'Open working-tree diff for working.ts' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Revert changes' }));
     expect(screen.getByRole('dialog', { name: 'Revert changes in working.ts?' })).toBeInTheDocument();
 
     await act(async () => {
-      view.rerender(<GitTree cwdReady isRemote={false} repoPath="/other-repo" status={status} searching={false} />);
+      view.rerender(<GitTree cwdReady repoPath="/other-repo" status={status} searching={false} />);
     });
 
     expect(screen.queryByRole('dialog', { name: 'Revert changes in working.ts?' })).not.toBeInTheDocument();
@@ -517,7 +517,7 @@ describe('GitTree live refresh', () => {
       created: ['new.ts'],
       conflicted: ['conflict.ts'],
     };
-    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+    render(<GitTree cwdReady repoPath="/repo" status={status} searching={false} />);
 
     fireEvent.contextMenu(screen.getByRole('button', { name: 'Open working-tree diff for tracked.ts' }));
     expect(screen.getByRole('menuitem', { name: 'Revert changes' })).toBeInTheDocument();
@@ -555,7 +555,7 @@ describe('GitTree live refresh', () => {
       ],
       modified: ['working.ts', 'staged.ts'],
     };
-    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+    render(<GitTree cwdReady repoPath="/repo" status={status} searching={false} />);
 
     const message = screen.getByLabelText('Commit message');
     fireEvent.change(message, { target: { value: 'Keep this message' } });
@@ -583,7 +583,7 @@ describe('GitTree live refresh', () => {
       files: [{ path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true }],
       modified: ['working.ts'],
     };
-    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />);
+    render(<GitTree cwdReady repoPath="/repo" status={status} searching={false} />);
 
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
@@ -609,15 +609,15 @@ describe('GitTree live refresh', () => {
       modified: ['working.ts'],
     };
     const view = render(
-      <GitTree cwdReady isRemote={false} repoPath="/one" status={status} searching={false} />,
+      <GitTree cwdReady repoPath="/one" status={status} searching={false} />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
     act(() => {
-      view.rerender(<GitTree cwdReady isRemote={false} repoPath="/two" status={status} searching={false} />);
+      view.rerender(<GitTree cwdReady repoPath="/two" status={status} searching={false} />);
     });
     act(() => {
-      view.rerender(<GitTree cwdReady isRemote={false} repoPath="/one" status={status} searching={false} />);
+      view.rerender(<GitTree cwdReady repoPath="/one" status={status} searching={false} />);
     });
     fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
 
@@ -635,13 +635,13 @@ describe('GitTree live refresh', () => {
       modified: ['working.ts'],
     };
     const view = render(
-      <GitTree cwdReady isRemote={false} repoPath="/one" status={status} searching={false} />,
+      <GitTree cwdReady repoPath="/one" status={status} searching={false} />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
     invalidate.mockClear();
 
     act(() => {
-      view.rerender(<GitTree cwdReady isRemote={false} repoPath="/two" status={cleanStatus} searching={false} />);
+      view.rerender(<GitTree cwdReady repoPath="/two" status={cleanStatus} searching={false} />);
     });
     await act(async () => finishStage(true));
 
@@ -660,7 +660,7 @@ describe('GitTree live refresh', () => {
       modified: ['working.ts'],
     };
     const view = render(
-      <GitTree cwdReady isRemote={false} repoPath="/repo" status={status} searching={false} />,
+      <GitTree cwdReady repoPath="/repo" status={status} searching={false} />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
     invalidate.mockClear();
@@ -686,7 +686,7 @@ describe('GitTree live refresh', () => {
     const first = render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="/repo"
         status={status}
         searching={false}
@@ -699,7 +699,7 @@ describe('GitTree live refresh', () => {
     render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="/repo"
         status={status}
         searching={false}
@@ -722,7 +722,7 @@ describe('GitTree live refresh', () => {
     const view = render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="/repo"
         status={cleanStatus}
         searching={false}
@@ -754,7 +754,7 @@ describe('GitTree live refresh', () => {
     const view = render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="/repo"
         status={cleanStatus}
         searching={false}
@@ -765,7 +765,7 @@ describe('GitTree live refresh', () => {
     view.rerender(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="/repo"
         status={{ ...cleanStatus, current: 'feature/heartbeat' }}
         searching={false}
@@ -791,7 +791,7 @@ describe('GitTree live refresh', () => {
     const view = render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="/repo"
         status={conflictedStatus}
         searching={false}
@@ -821,7 +821,7 @@ describe('GitTree live refresh', () => {
     const view = render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="/repo"
         status={mixedStatus}
         searching={false}
@@ -864,7 +864,7 @@ describe('GitTree live refresh', () => {
     const view = render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="/repo"
         status={renamedStatus}
         searching={false}
@@ -899,7 +899,7 @@ describe('GitTree live refresh', () => {
     const view = render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="/repo"
         status={deletedStatus}
         searching={false}
@@ -933,7 +933,7 @@ describe('GitTree live refresh', () => {
     const view = render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="/repo"
         status={changedStatus}
         searching={false}
@@ -978,7 +978,7 @@ describe('GitTree live refresh', () => {
     const view = render(
       <GitTree
         cwdReady
-        isRemote={false}
+
         repoPath="C:/repo"
         status={changedStatus}
         searching={false}
@@ -1024,7 +1024,7 @@ describe('GitTree live refresh', () => {
 describe('GitTree destructive actions', () => {
   it('keeps branch deletion behind the dialog and restores its opener on Escape', async () => {
     gitDetails.mockResolvedValue(destructiveDetails);
-    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={cleanStatus} searching={false} />);
+    render(<GitTree cwdReady repoPath="/repo" status={cleanStatus} searching={false} />);
 
     const opener = await screen.findByRole('button', { name: 'Delete branch feature/cleanup' });
     act(() => opener.focus());
@@ -1051,7 +1051,7 @@ describe('GitTree destructive actions', () => {
 
   it('keeps worktree removal behind cancel and forwards explicit force confirmation', async () => {
     gitDetails.mockResolvedValue(destructiveDetails);
-    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={cleanStatus} searching={false} />);
+    render(<GitTree cwdReady repoPath="/repo" status={cleanStatus} searching={false} />);
 
     const opener = await screen.findByRole('button', { name: 'Remove worktree repo-feature' });
     fireEvent.click(opener);
@@ -1080,7 +1080,7 @@ describe('GitTree destructive actions', () => {
 
   it('focuses Cancel and keeps pruning behind a descriptive confirmation', async () => {
     gitDetails.mockResolvedValue(destructiveDetails);
-    render(<GitTree cwdReady isRemote={false} repoPath="/repo" status={cleanStatus} searching={false} />);
+    render(<GitTree cwdReady repoPath="/repo" status={cleanStatus} searching={false} />);
 
     const openPruneDialog = () => {
       fireEvent.click(screen.getByRole('button', { name: 'Worktree actions' }));

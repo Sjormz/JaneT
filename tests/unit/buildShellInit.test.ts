@@ -5,7 +5,6 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import pty from 'node-pty';
 import { buildShellInit, STARTUP_READY_MARKER } from '../../src/main/shell-init';
-import { remoteBashCommand } from '../../src/main/ssh';
 
 const OSC_A = '\x1b]133;A\x1b\\';
 const OSC_B = '\x1b]133;B\x1b\\';
@@ -77,10 +76,9 @@ describe('buildShellInit', () => {
       expect(init).toBeTruthy();
     });
 
-    it('keeps the Codex graphics wrapper when activity setup is unavailable', () => {
+    it('does not wrap Codex when activity setup is unavailable', () => {
       const init = buildShellInit('powershell.exe');
-      expect(init).toContain('function global:codex');
-      expect(init).toContain("$env:TERM = 'xterm-kitty'");
+      expect(init).not.toContain('function global:codex');
     });
 
     it('returns a non-empty init for pwsh.exe (PowerShell 7+)', () => {
@@ -248,12 +246,12 @@ describe('buildShellInit', () => {
         : fixture;
       const tmux = join(fixture, process.platform === 'win32' ? 'tmux.exe' : 'tmux');
       writeFileSync(tmux, '#!/bin/sh\nprintf __JANET_FAKE_TMUX__\nexit 1\n');
-      writeFileSync(join(fixture, '.bash_profile'), `export PATH='${fixturePath}':"$PATH"\nPS1='$ '\n`);
+      writeFileSync(join(fixture, 'bashrc'), `export PATH='${fixturePath}':"$PATH"\nPS1='$ '\n${buildShellInit('bash')}\n`);
       chmodSync(tmux, 0o755);
       try {
         const output = await runPromptSequence(
           bash,
-          ['-c', remoteBashCommand(bash)],
+          ['--noprofile', '--rcfile', `${fixturePath}/bashrc`, '-i'],
           ['tmux attach', 'exit 0'],
           { ...process.env, HOME: fixturePath },
         );
@@ -367,10 +365,11 @@ describe('buildShellInit', () => {
       expect(init).not.toContain('hermes() {');
     });
 
-    it('scopes Kitty capability to Codex instead of changing the shell identity', () => {
-      const init = buildShellInit('bash');
-      expect(init).toContain("TERM=xterm-kitty command 'codex' \"$@\"");
-      expect(init).not.toContain('KITTY_WINDOW_ID');
+    it.each(['bash', 'zsh', 'fish', 'powershell.exe'])('keeps %s activity wrappers independent of terminal identity', (shell) => {
+      expect(buildShellInit(shell)).not.toContain('function codex');
+      const init = buildShellInit(shell, '/tmp/agent-helper.cjs');
+      expect(init).toContain('--setup-codex');
+      expect(init).not.toContain('TERM');
     });
 
     it.skipIf(!existsSync(bash))('emits one lifecycle per command in a real interactive Bash', async () => {
@@ -505,7 +504,6 @@ describe('buildShellInit', () => {
       const init = buildShellInit('fish');
       expect(init).toContain('command hermes $argv');
       expect(init).not.toContain('JANET_KITTY_GRAPHICS');
-      expect(init).toContain('env TERM=xterm-kitty command codex $argv');
     });
   });
 

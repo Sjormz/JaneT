@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { isWorkspaceGroup, MAX_WORKSPACE_GROUPS, normalizeWorkspaceGroups, type WorkspaceGroup } from '../shared/workspaceGroups';
-import { app, safeStorage } from 'electron';
+import { app } from 'electron';
 import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
 import type { StartupShellDialect } from '../shared/startupCommands';
 import {
@@ -26,9 +26,8 @@ import {
 export interface SavedPaneLeaf {
   type: 'leaf';
   title?: string;
-  terminalType?: 'local' | 'ssh';
+  terminalType?: 'local';
   cwd?: string;
-  sshProfileId?: string;
   startupCommands?: string[];
   startupShellDialect?: StartupShellDialect;
 }
@@ -47,9 +46,8 @@ export interface SavedTab {
   groupId?: string;
   id: string;
   title: string;
-  type: 'local' | 'ssh';
+  type: 'local';
   cwd?: string;
-  sshProfileId?: string;
   selectedPanePath?: number[];
   maximizedPanePath?: number[];
   root: SavedPaneNode;
@@ -61,7 +59,7 @@ export interface SavedSession {
   activeTabId: string | null;
   sidebarOpen: boolean;
   tabsOpen: boolean;
-  sidebarSection: 'files' | 'ssh' | 'git' | 'settings';
+  sidebarSection: 'files' | 'git' | 'settings';
 }
 
 export type ThemeName = 'tokyo-night' | 'dracula' | 'one-dark' | 'solarized-light' | 'gruvbox';
@@ -199,58 +197,20 @@ export interface AppSettings {
   keybindings: Record<string, string>;
   snippets: Snippet[];
   commandHistory: CommandHistoryEntry[];
-  sshProfiles: Array<{
-    id: string;
-    host: string;
-    port: number;
-    username?: string;
-    auth: 'password' | 'key';
-    password?: string;
-    privateKey?: string;
-    jumpHostProfileId?: string;
-  }>;
   workspaceTabs: Array<{
     id: string;
     name: string;
-    type: 'local' | 'ssh';
+    type: 'local';
     cwd?: string;
-    sshProfileId?: string;
     root?: SavedPaneNode;
     terminalCount: number;
     splitDirection: 'horizontal' | 'vertical';
   }>;
-  /** SHA-256 SSH host-key fingerprints, keyed by normalized host and port. */
-  sshHostKeys: Record<string, string>;
   gitWorktreeBaseDir: string;
   gitWorktreeNameTemplate: string;
   /** Last-known open workspace. Restored on next launch. */
   session: SavedSession;
 }
-
-interface StoredSecretV1 {
-  version: 1;
-  scheme: 'electron-safe-storage';
-  ciphertext: string;
-}
-
-type StoredSSHProfile = Omit<AppSettings['sshProfiles'][number], 'password' | 'privateKey'> & {
-  passwordSecret?: StoredSecretV1;
-  privateKeySecret?: StoredSecretV1;
-  /** Legacy pre-v1 field. It is decrypted only when safeStorage is available. */
-  passwordEncrypted?: string;
-  /** Legacy pre-v1 field. It is decrypted only when safeStorage is available. */
-  privateKeyEncrypted?: string;
-  /** Legacy plaintext fields are read once and migrated on the next save. */
-  password?: string;
-  privateKey?: string;
-};
-
-type StoredSSHSecrets = Pick<StoredSSHProfile,
-  'passwordSecret' | 'privateKeySecret' | 'passwordEncrypted' | 'privateKeyEncrypted'>;
-
-type StoredAppSettings = Omit<AppSettings, 'sshProfiles'> & {
-  sshProfiles: StoredSSHProfile[];
-};
 
 const EMPTY_SESSION: SavedSession = {
   tabs: [],
@@ -268,18 +228,13 @@ const MAX_SAVED_TITLE_LENGTH = 256;
 const MAX_WORKSPACE_STRING_LENGTH = 8_192;
 const MAX_SETTINGS_COLLECTION_ITEMS = 256;
 const MAX_KEYBINDINGS = 64;
-const MAX_SSH_SECRET_LENGTH = 100_000;
-const MAX_SSH_SECRET_CIPHERTEXT_LENGTH = 512 * 1024;
 const WORKSPACE_PRESET_KEYS = new Set([
-  'id', 'name', 'type', 'cwd', 'sshProfileId', 'root', 'terminalCount', 'splitDirection',
+  'id', 'name', 'type', 'cwd', 'root', 'terminalCount', 'splitDirection',
 ]);
 const SAVED_PANE_LEAF_KEYS = new Set([
-  'type', 'title', 'terminalType', 'cwd', 'sshProfileId', 'startupCommands', 'startupShellDialect',
+  'type', 'title', 'terminalType', 'cwd', 'startupCommands', 'startupShellDialect',
 ]);
 const SAVED_PANE_SPLIT_KEYS = new Set(['type', 'direction', 'sizes', 'children']);
-const SSH_PROFILE_KEYS = new Set([
-  'id', 'host', 'port', 'username', 'auth', 'password', 'privateKey', 'jumpHostProfileId',
-]);
 const SAVED_SESSION_KEYS = new Set([
   'groups',
   'tabs', 'activeTabId', 'sidebarOpen', 'tabsOpen', 'sidebarSection',
@@ -287,7 +242,7 @@ const SAVED_SESSION_KEYS = new Set([
 const SAVED_TAB_KEYS = new Set([
   'isProject',
   'groupId',
-  'id', 'title', 'type', 'cwd', 'sshProfileId', 'selectedPanePath', 'maximizedPanePath', 'root',
+  'id', 'title', 'type', 'cwd', 'selectedPanePath', 'maximizedPanePath', 'root',
 ]);
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -302,9 +257,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   keybindings: { ...PLATFORM_DEFAULT_KEYBINDINGS },
   snippets: [],
   commandHistory: [],
-  sshProfiles: [],
   workspaceTabs: [],
-  sshHostKeys: {},
   gitWorktreeBaseDir: '../',
   gitWorktreeNameTemplate: '{repo}-{branch}',
   session: EMPTY_SESSION,
@@ -313,7 +266,6 @@ const DEFAULT_SETTINGS: AppSettings = {
 export class SettingsManager {
   private filePath: string;
   private cache: AppSettings;
-  private storedSshSecrets = new Map<string, StoredSSHSecrets>();
   private lastValidBytes: Buffer | undefined;
   private recoveryRequired = false;
   private previousAvailable = false;
@@ -331,11 +283,9 @@ export class SettingsManager {
       keybindings: { ...this.cache.keybindings },
       snippets: this.cache.snippets.map((snippet) => ({ ...snippet })),
       commandHistory: cloneCommandHistory(this.cache.commandHistory),
-      sshProfiles: this.cache.sshProfiles.map((profile) => ({ ...profile })),
       workspaceTabs: this.cache.workspaceTabs
         .map(cloneWorkspaceTabPreset)
         .filter((preset): preset is AppSettings['workspaceTabs'][number] => Boolean(preset)),
-      sshHostKeys: { ...this.cache.sshHostKeys },
       session: cloneSavedSession(this.cache.session),
     };
   }
@@ -356,7 +306,6 @@ export class SettingsManager {
       fs.writeFileSync(tempPath, bytes, { flush: true });
       fs.renameSync(tempPath, this.filePath);
       this.cache = loaded.settings;
-      this.captureStoredSecrets(loaded.sshProfiles);
       this.lastValidBytes = bytes;
       this.recoveryRequired = false;
       this.previousAvailable = false;
@@ -378,7 +327,6 @@ export class SettingsManager {
       fs.writeFileSync(tempPath, bytes, { flush: true });
       fs.renameSync(tempPath, this.filePath);
       this.cache = loaded.settings;
-      this.captureStoredSecrets(loaded.sshProfiles);
       this.lastValidBytes = bytes;
       this.recoveryRequired = false;
       this.previousAvailable = false;
@@ -405,76 +353,23 @@ export class SettingsManager {
       commandHistory: updates.commandHistory === undefined
         ? this.cache.commandHistory
         : cloneCommandHistory(updates.commandHistory),
-      sshProfiles: updates.sshProfiles === undefined
-        ? this.cache.sshProfiles
-        : updates.sshProfiles.map(({ password, privateKey, ...profile }) => profile.auth === 'password'
-          ? { ...profile, ...(password === undefined ? {} : { password }) }
-          : { ...profile, ...(privateKey === undefined ? {} : { privateKey }) }),
       workspaceTabs: updates.workspaceTabs === undefined
         ? this.cache.workspaceTabs
         : updates.workspaceTabs.map(cloneWorkspaceTabPreset)
           .filter((preset): preset is AppSettings['workspaceTabs'][number] => Boolean(preset)),
-      sshHostKeys: updates.sshHostKeys === undefined ? this.cache.sshHostKeys : { ...updates.sshHostKeys },
       session: updates.session === undefined ? this.cache.session : cloneSavedSession(updates.session),
     };
-    if (!this.save(previous.sshProfiles)) {
+    if (!this.save()) {
       this.cache = previous;
       throw new Error('Could not persist settings');
     }
     return this.get();
   }
 
-  getSshHostKey(host: string, port: number): string | undefined {
-    return this.cache.sshHostKeys[sshHostKeyId(host, port)];
-  }
-
-  rememberSshHostKey(host: string, port: number, fingerprint: string): void {
-    const key = sshHostKeyId(host, port);
-    const existing = this.cache.sshHostKeys[key];
-    if (existing && existing !== fingerprint) {
-      throw new Error(`SSH host key changed for ${host}:${port}`);
-    }
-    if (existing === fingerprint) return;
-    const previousHostKeys = this.cache.sshHostKeys;
-    this.cache = {
-      ...this.cache,
-      sshHostKeys: { ...this.cache.sshHostKeys, [key]: fingerprint },
-    };
-    if (!this.save()) {
-      this.cache = { ...this.cache, sshHostKeys: previousHostKeys };
-      throw new Error(`Could not persist SSH host key for ${host}:${port}`);
-    }
-  }
-
-  migrateSshHostKey(
-    host: string,
-    port: number,
-    expectedFingerprint: string,
-    fingerprint: string,
-  ): void {
-    const key = sshHostKeyId(host, port);
-    const existing = this.cache.sshHostKeys[key];
-    if (existing === fingerprint) return;
-    if (existing !== expectedFingerprint) {
-      throw new Error(`SSH host key changed for ${host}:${port}`);
-    }
-
-    const previousHostKeys = this.cache.sshHostKeys;
-    this.cache = {
-      ...this.cache,
-      sshHostKeys: { ...this.cache.sshHostKeys, [key]: fingerprint },
-    };
-    if (!this.save()) {
-      this.cache = { ...this.cache, sshHostKeys: previousHostKeys };
-      throw new Error(`Could not migrate SSH host key for ${host}:${port}`);
-    }
-  }
-
   private load(): AppSettings {
     try {
       const raw = fs.readFileSync(this.filePath);
       const loaded = this.parse(raw.toString('utf8'));
-      this.captureStoredSecrets(loaded.sshProfiles);
       this.lastValidBytes = raw;
       return loaded.settings;
     } catch (err) {
@@ -486,12 +381,12 @@ export class SettingsManager {
     }
   }
 
-  private parse(raw: string): { settings: AppSettings; sshProfiles: StoredSSHProfile[] } {
+  private parse(raw: string): { settings: AppSettings } {
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('Invalid settings');
     }
-    const storedSettings = parsed as Partial<StoredAppSettings>;
+    const storedSettings = Object.fromEntries(Object.entries(parsed).filter(([key]) => Object.hasOwn(DEFAULT_SETTINGS, key))) as Partial<AppSettings>;
     const storedKeybindings = isBoundedStringRecord(storedSettings.keybindings, MAX_KEYBINDINGS, 256, 256)
       ? storedSettings.keybindings
       : {};
@@ -516,9 +411,8 @@ export class SettingsManager {
       notificationThresholdSeconds: isValidNotificationThreshold(storedSettings.notificationThresholdSeconds)
         ? storedSettings.notificationThresholdSeconds
         : 10,
-      sshProfiles: normalizeStoredSshProfiles(storedSettings.sshProfiles),
-    } as StoredAppSettings;
-    return { settings: this.deserialize(stored), sshProfiles: stored.sshProfiles };
+    } as AppSettings;
+    return { settings: this.deserialize(stored) };
   }
 
   private hasValidPrevious(): boolean {
@@ -540,7 +434,7 @@ export class SettingsManager {
     }
   }
 
-  private save(previousSshProfiles = this.cache.sshProfiles): boolean {
+  private save(): boolean {
     if (this.recoveryRequired) return false;
     const tempPath = `${this.filePath}.tmp`;
     const previousPath = `${this.filePath}.previous`;
@@ -550,7 +444,7 @@ export class SettingsManager {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      const serialized = this.serialize(this.cache, previousSshProfiles);
+      const serialized = this.cache;
       const bytes = Buffer.from(JSON.stringify(serialized, null, 2), 'utf8');
       if (this.lastValidBytes) {
         fs.writeFileSync(previousTempPath, this.lastValidBytes, { flush: true });
@@ -559,7 +453,6 @@ export class SettingsManager {
       fs.writeFileSync(tempPath, bytes, { flush: true });
       fs.renameSync(tempPath, this.filePath);
       this.lastValidBytes = bytes;
-      this.captureStoredSecrets(serialized.sshProfiles);
       // ponytail: Node cannot fsync directories on Windows; add it if Node exposes a supported primitive.
       this.syncDirectory();
       return true;
@@ -571,60 +464,12 @@ export class SettingsManager {
     }
   }
 
-  private serialize(
-    settings: AppSettings,
-    previousSshProfiles: AppSettings['sshProfiles'],
-  ): StoredAppSettings {
-    const previousProfiles = new Map(previousSshProfiles.map((profile) => [profile.id, profile]));
-    return {
-      ...settings,
-      sshProfiles: settings.sshProfiles.map((profile) => {
-        const { password, privateKey, ...publicProfile } = profile;
-        const stored: StoredSSHProfile = { ...publicProfile };
-        const previous = this.storedSshSecrets.get(profile.id);
-        const previousProfile = previousProfiles.get(profile.id);
-        const passwordSecret = password
-          ? (password === previousProfile?.password && previous?.passwordSecret) || protectSecret(password)
-          : undefined;
-        const privateKeySecret = privateKey
-          ? (privateKey === previousProfile?.privateKey && previous?.privateKeySecret) || protectSecret(privateKey)
-          : undefined;
-        if (password && !passwordSecret) throw new Error('Could not protect SSH password');
-        if (privateKey && !privateKeySecret) throw new Error('Could not protect SSH private key');
-        if (passwordSecret) stored.passwordSecret = passwordSecret;
-        else if (password === undefined && profile.auth === 'password') {
-          if (previous?.passwordSecret) stored.passwordSecret = previous.passwordSecret;
-          else if (previous?.passwordEncrypted) stored.passwordEncrypted = previous.passwordEncrypted;
-        }
-        if (privateKeySecret) stored.privateKeySecret = privateKeySecret;
-        else if (privateKey === undefined && profile.auth === 'key') {
-          if (previous?.privateKeySecret) stored.privateKeySecret = previous.privateKeySecret;
-          else if (previous?.privateKeyEncrypted) stored.privateKeyEncrypted = previous.privateKeyEncrypted;
-        }
-        return stored;
-      }),
-    };
-  }
-
-  private deserialize(settings: StoredAppSettings): AppSettings {
-    const profiles = Array.isArray(settings.sshProfiles) ? settings.sshProfiles : [];
+  private deserialize(settings: AppSettings): AppSettings {
     return {
       ...settings,
       fontFamily: normalizeTerminalFontFamily(settings.fontFamily),
       snippets: normalizeSnippets(settings.snippets),
       commandHistory: normalizeCommandHistory(settings.commandHistory),
-      sshHostKeys: isStringRecord(settings.sshHostKeys) ? { ...settings.sshHostKeys } : {},
-      sshProfiles: profiles.map((profile) => ({
-        id: profile.id,
-        host: profile.host,
-        port: normalizeStoredSshPort(profile.port),
-        username: profile.username,
-        auth: profile.auth,
-        ...(profile.jumpHostProfileId ? { jumpHostProfileId: profile.jumpHostProfileId } : {}),
-        ...(profile.auth === 'password'
-          ? { password: profile.password ?? unprotectSecret(profile.passwordSecret) ?? decryptLegacySecret(profile.passwordEncrypted) }
-          : { privateKey: profile.privateKey ?? unprotectSecret(profile.privateKeySecret) ?? decryptLegacySecret(profile.privateKeyEncrypted) }),
-      })),
       workspaceTabs: (Array.isArray(settings.workspaceTabs) ? settings.workspaceTabs : [])
         .map(cloneWorkspaceTabPreset)
         .filter((preset): preset is AppSettings['workspaceTabs'][number] => Boolean(preset))
@@ -633,15 +478,6 @@ export class SettingsManager {
     };
   }
 
-  private captureStoredSecrets(profiles: StoredSSHProfile[]): void {
-    this.storedSshSecrets.clear();
-    if (!Array.isArray(profiles)) return;
-    for (const profile of profiles) {
-      this.storedSshSecrets.set(profile.id, profile.auth === 'password'
-        ? { passwordSecret: profile.passwordSecret, passwordEncrypted: profile.passwordEncrypted }
-        : { privateKeySecret: profile.privateKeySecret, privateKeyEncrypted: profile.privateKeyEncrypted });
-    }
-  }
 }
 
 function cloneWorkspaceTabPreset(value: unknown): AppSettings['workspaceTabs'][number] | undefined {
@@ -650,9 +486,11 @@ function cloneWorkspaceTabPreset(value: unknown): AppSettings['workspaceTabs'][n
   if (
     typeof preset.id !== 'string'
     || typeof preset.name !== 'string'
-    || (preset.type !== 'local' && preset.type !== 'ssh')
+    || preset.type !== 'local'
   ) return undefined;
-  const root = cloneSavedPaneNode(preset.root);
+  const migration = { pruned: false };
+  const root = cloneSavedPaneNode(preset.root, migration);
+  if (!root && migration.pruned) return undefined;
   const terminalCount = Number.isFinite(preset.terminalCount)
     ? Math.max(1, Math.min(MAX_SAVED_PANE_LEAVES, Math.floor(Number(preset.terminalCount))))
     : 1;
@@ -661,92 +499,30 @@ function cloneWorkspaceTabPreset(value: unknown): AppSettings['workspaceTabs'][n
     name: preset.name,
     type: preset.type,
     ...(typeof preset.cwd === 'string' ? { cwd: preset.cwd } : {}),
-    ...(typeof preset.sshProfileId === 'string' ? { sshProfileId: preset.sshProfileId } : {}),
     ...(root ? { root } : {}),
     terminalCount,
     splitDirection: preset.splitDirection === 'horizontal' ? 'horizontal' : 'vertical',
   };
 }
 
-function normalizeStoredSshPort(port: unknown): number {
-  return Number.isInteger(port) && Number(port) > 0 && Number(port) <= 65_535 ? Number(port) : 22;
-}
-
-function normalizeStoredSshProfiles(value: unknown): StoredSSHProfile[] {
-  if (!Array.isArray(value)) return [];
-  const ids = new Set<string>();
-  const profiles: StoredSSHProfile[] = [];
-  for (const candidate of value.slice(0, MAX_SETTINGS_COLLECTION_ITEMS)) {
-    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
-    const profile = candidate as Partial<StoredSSHProfile>;
-    if (
-      typeof profile.id !== 'string' || !profile.id || profile.id.length > 256
-      || ids.has(profile.id)
-      || typeof profile.host !== 'string' || !profile.host || profile.host.length > 255
-      || (profile.auth !== 'password' && profile.auth !== 'key')
-    ) continue;
-    ids.add(profile.id);
-    profiles.push({
-      id: profile.id,
-      host: profile.host,
-      port: normalizeStoredSshPort(profile.port),
-      auth: profile.auth,
-      ...(typeof profile.username === 'string' && profile.username.length <= 256
-        ? { username: profile.username }
-        : {}),
-      ...(typeof profile.jumpHostProfileId === 'string' && profile.jumpHostProfileId.length <= 256
-        ? { jumpHostProfileId: profile.jumpHostProfileId }
-        : {}),
-      ...(typeof profile.password === 'string' && profile.password.length <= MAX_SSH_SECRET_LENGTH
-        ? { password: profile.password }
-        : {}),
-      ...(typeof profile.privateKey === 'string' && profile.privateKey.length <= MAX_SSH_SECRET_LENGTH
-        ? { privateKey: profile.privateKey }
-        : {}),
-      ...(isStoredSecret(profile.passwordSecret) ? { passwordSecret: profile.passwordSecret } : {}),
-      ...(isStoredSecret(profile.privateKeySecret) ? { privateKeySecret: profile.privateKeySecret } : {}),
-      ...(isBoundedCiphertext(profile.passwordEncrypted) ? { passwordEncrypted: profile.passwordEncrypted } : {}),
-      ...(isBoundedCiphertext(profile.privateKeyEncrypted) ? { privateKeyEncrypted: profile.privateKeyEncrypted } : {}),
-    });
-  }
-  const validIds = new Set(profiles.map(({ id }) => id));
-  const validProfiles = profiles.map((profile) => profile.jumpHostProfileId === profile.id || !validIds.has(profile.jumpHostProfileId ?? '')
-    ? (({ jumpHostProfileId: _invalid, ...rest }) => rest)(profile)
-    : profile);
-  const cyclicIds = findCyclicJumpHostProfiles(validProfiles);
-  return validProfiles.map((profile) => {
-    if (!cyclicIds.has(profile.id)) return profile;
-    const sanitized: StoredSSHProfile = { ...profile };
-    delete sanitized.jumpHostProfileId;
-    return sanitized;
-  });
-}
-
-function isStoredSecret(value: unknown): value is StoredSecretV1 {
-  return Boolean(value)
-    && typeof value === 'object'
-    && (value as Partial<StoredSecretV1>).version === 1
-    && (value as Partial<StoredSecretV1>).scheme === 'electron-safe-storage'
-    && isBoundedCiphertext((value as Partial<StoredSecretV1>).ciphertext);
-}
-
-function isBoundedCiphertext(value: unknown): value is string {
-  return typeof value === 'string' && value.length <= MAX_SSH_SECRET_CIPHERTEXT_LENGTH;
-}
-
 function cloneSavedTab(value: unknown): SavedTab | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const tab = value as Partial<SavedTab>;
-  const root = cloneSavedPaneNode(tab.root);
+  const migration = { pruned: false };
+  let root = cloneSavedPaneNode(tab.root, migration);
+  if (!root && migration.pruned && tab.isProject && tab.type === 'local') {
+    root = { type: 'split', direction: 'vertical', children: [], sizes: [] };
+  }
   if (
     !root
     || typeof tab.id !== 'string'
     || typeof tab.title !== 'string'
     || tab.title.length > MAX_SAVED_TITLE_LENGTH
-    || (tab.type !== 'local' && tab.type !== 'ssh')
+    || tab.type !== 'local'
   ) return undefined;
-  const selectedPanePath = cloneSavedPanePath(tab.selectedPanePath, root);
-  const maximizedPanePath = cloneSavedPanePath(tab.maximizedPanePath, root);
+  // Removing an unsupported pane shifts indexes; do not select a different sibling by accident.
+  const selectedPanePath = migration.pruned ? undefined : cloneSavedPanePath(tab.selectedPanePath, root);
+  const maximizedPanePath = migration.pruned ? undefined : cloneSavedPanePath(tab.maximizedPanePath, root);
   return {
     id: tab.id,
     ...(typeof tab.groupId === 'string' && tab.groupId.length <= 256 ? { groupId: tab.groupId } : {}),
@@ -754,7 +530,6 @@ function cloneSavedTab(value: unknown): SavedTab | undefined {
     title: tab.title,
     type: tab.type,
     ...(typeof tab.cwd === 'string' ? { cwd: tab.cwd } : {}),
-    ...(typeof tab.sshProfileId === 'string' ? { sshProfileId: tab.sshProfileId } : {}),
     ...(selectedPanePath !== undefined ? { selectedPanePath } : {}),
     ...(maximizedPanePath !== undefined ? { maximizedPanePath } : {}),
     root,
@@ -792,8 +567,7 @@ function cloneSavedSession(value: unknown): SavedSession {
     activeTabId: typeof session.activeTabId === 'string' ? session.activeTabId : null,
     sidebarOpen: typeof session.sidebarOpen === 'boolean' ? session.sidebarOpen : EMPTY_SESSION.sidebarOpen,
     tabsOpen: typeof session.tabsOpen === 'boolean' ? session.tabsOpen : EMPTY_SESSION.tabsOpen,
-    sidebarSection: session.sidebarSection === 'ssh'
-      || session.sidebarSection === 'git'
+    sidebarSection: session.sidebarSection === 'git'
       || session.sidebarSection === 'settings'
       ? session.sidebarSection
       : 'files',
@@ -830,7 +604,7 @@ function isValidRuntimeSession(value: unknown): boolean {
       && (typeof session.activeTabId !== 'string' || session.activeTabId.length > 256))
     || typeof session.sidebarOpen !== 'boolean'
     || typeof session.tabsOpen !== 'boolean'
-    || !['files', 'ssh', 'git', 'settings'].includes(session.sidebarSection as string)
+    || !['files', 'git', 'settings'].includes(session.sidebarSection as string)
   ) return false;
   let terminalCount = 0;
   for (const value of session.tabs) {
@@ -844,11 +618,9 @@ function isValidRuntimeSession(value: unknown): boolean {
       || tab.title.length > 256
       || (tab.groupId !== undefined && (typeof tab.groupId !== 'string' || tab.groupId.length > 256))
       || (tab.isProject !== undefined && typeof tab.isProject !== 'boolean')
-      || (tab.type !== 'local' && tab.type !== 'ssh')
+      || tab.type !== 'local'
       || (tab.cwd !== undefined
         && (typeof tab.cwd !== 'string' || tab.cwd.length > MAX_WORKSPACE_STRING_LENGTH))
-      || (tab.sshProfileId !== undefined
-        && (typeof tab.sshProfileId !== 'string' || tab.sshProfileId.length > 256))
     ) return false;
     const leaves = validateRuntimePaneTree(tab.root, MAX_SAVED_SESSION_TERMINALS - terminalCount);
     if (leaves === null) return false;
@@ -877,11 +649,9 @@ function validateRuntimePaneTree(root: unknown, leafLimit: number): number | nul
         ||
         (candidate.title !== undefined
           && (typeof candidate.title !== 'string' || candidate.title.length > 256))
-        || (candidate.terminalType !== undefined && candidate.terminalType !== 'local' && candidate.terminalType !== 'ssh')
+        || (candidate.terminalType !== undefined && candidate.terminalType !== 'local')
         || (candidate.cwd !== undefined
           && (typeof candidate.cwd !== 'string' || candidate.cwd.length > MAX_WORKSPACE_STRING_LENGTH))
-        || (candidate.sshProfileId !== undefined
-          && (typeof candidate.sshProfileId !== 'string' || candidate.sshProfileId.length > 256))
         || (candidate.startupCommands !== undefined
           && !isValidRuntimeStartupCommands(candidate.startupCommands))
         || (candidate.startupShellDialect !== undefined && !isStartupShellDialect(candidate.startupShellDialect))
@@ -906,16 +676,17 @@ function validateRuntimePaneTree(root: unknown, leafLimit: number): number | nul
   return leaves;
 }
 
-function cloneSavedPaneNode(node: unknown): SavedPaneNode | undefined {
-  const budget = { nodesRemaining: MAX_SAVED_PANE_NODES, leavesRemaining: MAX_SAVED_PANE_LEAVES, exceeded: false };
+function cloneSavedPaneNode(node: unknown, migration = { pruned: false }): SavedPaneNode | undefined {
+  const budget = { nodesRemaining: MAX_SAVED_PANE_NODES, leavesRemaining: MAX_SAVED_PANE_LEAVES, exceeded: false, pruned: false };
   const cloned = cloneSavedPaneNodeWithinBudget(node, 0, budget);
+  migration.pruned = budget.pruned && !budget.exceeded;
   return budget.exceeded ? undefined : cloned;
 }
 
 function cloneSavedPaneNodeWithinBudget(
   node: unknown,
   depth: number,
-  budget: { nodesRemaining: number; leavesRemaining: number; exceeded: boolean },
+  budget: { nodesRemaining: number; leavesRemaining: number; exceeded: boolean; pruned: boolean },
 ): SavedPaneNode | undefined {
   if (depth > MAX_SAVED_PANE_DEPTH || budget.nodesRemaining <= 0) {
     budget.exceeded = true;
@@ -930,17 +701,18 @@ function cloneSavedPaneNodeWithinBudget(
       return { type: 'split', direction: candidate.direction === 'horizontal' ? 'horizontal' : 'vertical', children: [], sizes: [] };
     }
     const children: SavedPaneNode[] = [];
-    for (const child of Array.isArray(candidate.children) ? candidate.children : []) {
+    const sizes: number[] = [];
+    const sourceChildren = Array.isArray(candidate.children) ? candidate.children : [];
+    for (const [index, child] of sourceChildren.entries()) {
       const cloned = cloneSavedPaneNodeWithinBudget(child, depth + 1, budget);
-      if (cloned) children.push(cloned);
+      if (cloned) {
+        children.push(cloned);
+        const size = Array.isArray(candidate.sizes) ? candidate.sizes[index] : undefined;
+        sizes.push(typeof size === 'number' && Number.isFinite(size) && size > 0 ? size : 1);
+      } else budget.pruned = true;
       if (budget.exceeded) break;
     }
     if (children.length === 0) return undefined;
-    const sizes = Array.isArray(candidate.sizes)
-      && candidate.sizes.length === children.length
-      && candidate.sizes.every((size) => typeof size === 'number' && Number.isFinite(size))
-      ? [...candidate.sizes] as number[]
-      : new Array<number>(children.length).fill(1);
     return {
       type: 'split',
       direction: candidate.direction === 'horizontal' ? 'horizontal' : 'vertical',
@@ -949,26 +721,17 @@ function cloneSavedPaneNodeWithinBudget(
     };
   }
   if (candidate.type !== 'leaf') return undefined;
+  if (candidate.terminalType !== undefined && candidate.terminalType !== 'local') {
+    budget.pruned = true;
+    return undefined;
+  }
   if (budget.leavesRemaining <= 0) {
     budget.exceeded = true;
     return undefined;
   }
   budget.leavesRemaining -= 1;
-  const terminalType = candidate.terminalType === 'ssh' || candidate.terminalType === 'local'
-    ? candidate.terminalType
-    : undefined;
-  const hasExplicitStartupDialect = candidate.startupShellDialect !== undefined
-    && candidate.startupShellDialect !== null
-    && candidate.startupShellDialect !== '';
-  const startupShellDialect = isStartupShellDialect(candidate.startupShellDialect)
-    ? candidate.startupShellDialect
-    : undefined;
-  const validStartupDialect = startupShellDialect !== undefined;
-  const startupCommands = terminalType === 'ssh'
-    && hasExplicitStartupDialect
-    && !validStartupDialect
-    ? []
-    : sanitizeStartupCommands(candidate.startupCommands);
+  const terminalType = candidate.terminalType === 'local' ? 'local' : undefined;
+  const startupCommands = sanitizeStartupCommands(candidate.startupCommands);
   return {
     type: 'leaf',
     ...(typeof candidate.title === 'string'
@@ -978,65 +741,10 @@ function cloneSavedPaneNodeWithinBudget(
       : {}),
     ...(terminalType ? { terminalType } : {}),
     ...(typeof candidate.cwd === 'string' && candidate.cwd ? { cwd: candidate.cwd } : {}),
-    ...(typeof candidate.sshProfileId === 'string' && candidate.sshProfileId
-      ? { sshProfileId: candidate.sshProfileId }
-      : {}),
     ...(startupCommands.length > 0 ? { startupCommands } : {}),
-    ...(startupCommands.length > 0 && terminalType === 'ssh'
-      ? { startupShellDialect: validStartupDialect ? startupShellDialect : 'posix' }
-      : startupCommands.length > 0 && validStartupDialect
-        ? { startupShellDialect }
-      : {}),
+    ...(startupCommands.length > 0 && isStartupShellDialect(candidate.startupShellDialect)
+      ? { startupShellDialect: candidate.startupShellDialect } : {}),
   };
-}
-
-function protectSecret(secret: string): StoredSecretV1 | undefined {
-  if (!safeStorage?.isEncryptionAvailable()) {
-    console.warn('[settings] safeStorage unavailable; SSH credential was not persisted');
-    return undefined;
-  }
-  try {
-    return {
-      version: 1,
-      scheme: 'electron-safe-storage',
-      ciphertext: Buffer.from(safeStorage.encryptString(secret)).toString('base64'),
-    };
-  } catch (error) {
-    console.warn('[settings] safeStorage encryption failed; SSH credential was not persisted', error);
-    return undefined;
-  }
-}
-
-function unprotectSecret(secret: StoredSecretV1 | undefined): string | undefined {
-  if (!secret || secret.version !== 1 || secret.scheme !== 'electron-safe-storage' || !secret.ciphertext) {
-    return undefined;
-  }
-  if (!safeStorage?.isEncryptionAvailable()) return undefined;
-  try {
-    const decrypted = safeStorage.decryptString(Buffer.from(secret.ciphertext, 'base64'));
-    return decrypted.length <= MAX_SSH_SECRET_LENGTH ? decrypted : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function decryptLegacySecret(secret: string | undefined): string | undefined {
-  if (!secret || !safeStorage?.isEncryptionAvailable()) return undefined;
-  try {
-    const decrypted = safeStorage.decryptString(Buffer.from(secret, 'base64'));
-    return decrypted.length <= MAX_SSH_SECRET_LENGTH ? decrypted : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function sshHostKeyId(host: string, port: number): string {
-  return `${host.trim().toLowerCase()}:${port}`;
-}
-
-function isStringRecord(value: unknown): value is Record<string, string> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value) &&
-    Object.values(value as Record<string, unknown>).every((entry) => typeof entry === 'string');
 }
 
 function isBoundedStringRecord(
@@ -1110,7 +818,7 @@ function parseSettingsUpdate(value: unknown): Partial<AppSettings> | undefined {
     const allowedKeys = new Set<keyof AppSettings>([
       'mainDirectory', 'mainDirectorySetupSkipped', 'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets',
       'commandHistory', 'notificationsEnabled', 'notificationThresholdSeconds',
-      'sshProfiles', 'workspaceTabs', 'gitWorktreeBaseDir',
+      'workspaceTabs', 'gitWorktreeBaseDir',
       'gitWorktreeNameTemplate', 'session',
     ]);
     const updates: Record<string, unknown> = Object.create(null);
@@ -1151,11 +859,6 @@ function isValidSettingsUpdate(updates: Partial<AppSettings>): boolean {
       && updates.snippets.every(isValidRuntimeSnippet)
       && hasUniqueSnippetIdentities(updates.snippets)))
     && (updates.commandHistory === undefined || isValidCommandHistory(updates.commandHistory))
-    && (updates.sshProfiles === undefined || (Array.isArray(updates.sshProfiles)
-      && updates.sshProfiles.length <= MAX_SETTINGS_COLLECTION_ITEMS
-      && updates.sshProfiles.every(isValidSshProfile)
-      && hasValidJumpHostReferences(updates.sshProfiles)
-      && hasUniqueIds(updates.sshProfiles)))
     && (updates.workspaceTabs === undefined || (Array.isArray(updates.workspaceTabs)
       && updates.workspaceTabs.length <= MAX_SAVED_SESSION_TABS
       && updates.workspaceTabs.every(isValidRuntimeWorkspacePreset)
@@ -1187,63 +890,13 @@ function isValidRuntimeWorkspacePreset(value: unknown): boolean {
     Object.keys(preset).some((key) => !WORKSPACE_PRESET_KEYS.has(key))
     || typeof preset.id !== 'string' || !preset.id || preset.id.length > 256
     || typeof preset.name !== 'string' || !preset.name.trim() || preset.name.length > 256
-    || (preset.type !== 'local' && preset.type !== 'ssh')
+    || preset.type !== 'local'
     || !Number.isInteger(preset.terminalCount)
     || Number(preset.terminalCount) < 1
     || Number(preset.terminalCount) > MAX_SAVED_PANE_LEAVES
     || (preset.splitDirection !== 'horizontal' && preset.splitDirection !== 'vertical')
     || (preset.cwd !== undefined && (typeof preset.cwd !== 'string' || preset.cwd.length > MAX_WORKSPACE_STRING_LENGTH))
-    || (preset.sshProfileId !== undefined
-      && (typeof preset.sshProfileId !== 'string' || preset.sshProfileId.length > 256))
   ) return false;
   return preset.root === undefined
     || validateRuntimePaneTree(preset.root, MAX_SAVED_PANE_LEAVES) !== null;
-}
-
-function isValidSshProfile(value: unknown): value is AppSettings['sshProfiles'][number] {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const profile = value as Partial<AppSettings['sshProfiles'][number]>;
-  return !Object.keys(value).some((key) => !SSH_PROFILE_KEYS.has(key))
-    && typeof profile.id === 'string' && profile.id.length <= 256
-    && typeof profile.host === 'string' && profile.host.length <= 255
-    && Number.isInteger(profile.port)
-    && Number(profile.port) > 0
-    && Number(profile.port) <= 65_535
-    && (profile.auth === 'password' || profile.auth === 'key')
-    && (profile.username === undefined
-      || (typeof profile.username === 'string' && profile.username.length <= 256))
-    && (profile.password === undefined
-      || (typeof profile.password === 'string' && profile.password.length <= MAX_SSH_SECRET_LENGTH))
-    && (profile.privateKey === undefined
-      || (typeof profile.privateKey === 'string' && profile.privateKey.length <= MAX_SSH_SECRET_LENGTH))
-    && (profile.jumpHostProfileId === undefined
-      || (typeof profile.jumpHostProfileId === 'string' && profile.jumpHostProfileId.length <= 256));
-}
-
-function findCyclicJumpHostProfiles(profiles: ReadonlyArray<{ id: string; jumpHostProfileId?: string }>): Set<string> {
-  const next = new Map(profiles.map(({ id, jumpHostProfileId }) => [id, jumpHostProfileId]));
-  const cyclic = new Set<string>();
-  for (const { id } of profiles) {
-    const path: string[] = [];
-    const seen = new Map<string, number>();
-    let current: string | undefined = id;
-    while (current !== undefined && next.has(current) && !cyclic.has(current)) {
-      const start = seen.get(current);
-      if (start !== undefined) {
-        for (const cycleId of path.slice(start)) cyclic.add(cycleId);
-        break;
-      }
-      seen.set(current, path.length);
-      path.push(current);
-      current = next.get(current);
-    }
-  }
-  return cyclic;
-}
-
-function hasValidJumpHostReferences(profiles: AppSettings['sshProfiles']): boolean {
-  const ids = new Set(profiles.map(({ id }) => id));
-  return profiles.every(({ id, jumpHostProfileId }) => jumpHostProfileId === undefined
-    || (jumpHostProfileId !== id && ids.has(jumpHostProfileId)))
-    && findCyclicJumpHostProfiles(profiles).size === 0;
 }

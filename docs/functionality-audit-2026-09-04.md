@@ -1,5 +1,7 @@
 # JaneT functionality and code audit
 
+Historical review: built-in SSH/SFTP support was removed on 2026-09-19; references below describe the earlier implementation.
+
 Date: 2026-09-04. Scope: current working tree, including the uncommitted UI changes. This is an audit and proposed plan, not an implementation or release certification.
 
 ## Overall assessment

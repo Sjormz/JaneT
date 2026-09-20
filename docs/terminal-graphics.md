@@ -1,12 +1,11 @@
 # Terminal graphics
 
-The shared xterm image addon handles direct Kitty graphics in local and SSH
-panes. JaneT keeps `TERM=xterm-256color` and `TERM_PROGRAM=JaneT` for portable
-terminal identity and does not fabricate a Kitty window ID. The generated
-`codex` shell command scopes `TERM=xterm-kitty` to that child process only,
-because current Codex auto-detection does not recognize JaneT even though the
-JaneT xterm image addon accepts the direct Kitty image stream. Other commands
-keep the portable JaneT identity.
+The shared xterm image addon handles direct Kitty graphics in terminal panes.
+Local PTYs advertise `TERM_PROGRAM=kitty` at
+startup so applications, including Codex pets, can select that protocol without
+per-command environment overrides. `TERM=xterm-256color` remains portable;
+JaneT does not fabricate a Kitty window ID. This is a compatibility identity,
+not full Kitty emulation: the supported graphics subset is described below.
 See [Codex's pet capability detection](https://github.com/openai/codex/blob/main/codex-rs/tui/src/pets/image_protocol.rs).
 
 Windows uses node-pty's bundled ConPTY because older OS ConPTY versions discard

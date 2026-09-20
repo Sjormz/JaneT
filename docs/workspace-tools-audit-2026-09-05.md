@@ -1,5 +1,7 @@
 # Workspace tools audit — 5 September 2026
 
+Historical review: built-in SSH/SFTP support was removed on 2026-09-19; references below describe the earlier implementation.
+
 ## Verdict and scope
 
 The basic architecture is appropriate, but this section is **not yet consistently correct across shells, operating systems and failure states**. Retain the existing shell integration and refresh coordinator; repair their boundary cases rather than replacing them with prompt scraping or repeated injected `pwd` commands.

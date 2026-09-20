@@ -9,7 +9,6 @@ export type TextFileErrorCode =
   | 'INVALID_UTF8'
   | 'PERMISSION_DENIED'
   | 'CONFLICT'
-  | 'STALE_SSH_SESSION'
   | 'SAFE_REPLACE_UNAVAILABLE'
   | 'IO';
 
@@ -51,23 +50,6 @@ export interface ReadLocalTextFileRequest {
 }
 
 export interface WriteLocalTextFileRequest {
-  requestedPath: string;
-  resolvedPath: string;
-  expectedRevision: TextFileRevision;
-  content: string;
-  hasUtf8Bom: boolean;
-  overwrite?: boolean;
-}
-
-export interface ReadSSHTextFileRequest {
-  sessionId: string;
-  connectionId: string;
-  remotePath: string;
-}
-
-export interface WriteSSHTextFileRequest {
-  sessionId: string;
-  connectionId: string;
   requestedPath: string;
   resolvedPath: string;
   expectedRevision: TextFileRevision;

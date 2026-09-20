@@ -1,13 +1,9 @@
 import React, { useId, useState } from 'react';
-import { SavedSSHProfile, WorkspaceTabPreset, createWorkspaceRoot, genId } from '../types';
+import { WorkspaceTabPreset, createWorkspaceRoot, genId } from '../types';
 import { serializePaneTree } from '../sessionRestore';
 import { MinusIcon, PlusIcon, TerminalTabIcon, CodeIcon } from '../icons';
 import { MAX_STARTUP_COMMAND_LENGTH, sanitizeStartupCommands } from '../../shared/startupCommands';
 import { type WorkspaceGroup } from '../../shared/workspaceGroups';
-
-export function sshProfileLabel(profile: SavedSSHProfile) {
-  return `${profile.username ? `${profile.username}@` : ''}${profile.host}:${profile.port}`;
-}
 
 const launchers = ['default', 'codex', 'hermes', 'claude', 'custom'] as const;
 const launcherLabels = { default: 'Terminal', codex: 'Codex', hermes: 'Hermes', claude: 'Claude', custom: 'Custom' };

@@ -39,7 +39,6 @@ function makeProps(overrides: Partial<SidebarProps> = {}): SidebarProps {
     onExpandedChange: vi.fn(),
     explorerSource,
     cwdReady: true,
-    isRemote: false,
     gitRepository: {
       repoPath: '/workspace/janet',
       status: null,
@@ -212,7 +211,6 @@ describe('Sidebar project tools', () => {
         {...makeProps({
           section: 'git',
           cwdReady: false,
-          isRemote: true,
           gitRepository: {
             repoPath: '/workspace/repository',
             status,
@@ -227,7 +225,6 @@ describe('Sidebar project tools', () => {
 
     expect(childSpies.gitTree).toHaveBeenLastCalledWith(expect.objectContaining({
       cwdReady: false,
-      isRemote: true,
       repoPath: '/workspace/repository',
       status,
       searching: true,

@@ -1,26 +1,17 @@
 import React, { useEffect, useState } from "react";
-import { SessionInfo } from "../types";
-import { ArrowDownIcon, ArrowUpIcon, CircleDotIcon, CircleIcon, FolderIcon, SourceControlIcon } from "../icons";
+import { ArrowDownIcon, ArrowUpIcon, CircleIcon, FolderIcon, SourceControlIcon } from "../icons";
 import { formatGitStatusTitle, GitStatusSummary } from "../gitStatus";
 import Tooltip from './Tooltip';
 
 interface StatusBarProps {
-  sshSessions: SessionInfo[];
   /** The cwd of the focused terminal. */
   cwd: string;
   gitStatus?: GitStatusSummary | null;
-  /** True if the active tab is an SSH tab. */
-  isRemote?: boolean;
-  /** SSH host, if applicable — used in the status display. */
-  remoteHost?: string;
 }
 
 export default function StatusBar({
-  sshSessions,
   cwd,
   gitStatus,
-  isRemote,
-  remoteHost,
 }: StatusBarProps) {
   const [version, setVersion] = useState('');
 
@@ -30,25 +21,12 @@ export default function StatusBar({
 
   return (
     <footer className="status-bar app-status" aria-label="Workspace status">
-      <span className={`status-context ${isRemote ? 'is-remote' : ''}`}>
+      <span className="status-context">
         <span className="status-context-mark" aria-hidden="true" />
-        {isRemote ? 'REMOTE' : 'LOCAL'}
+        LOCAL
       </span>
       <div className="status-left">
-        {sshSessions.length > 0 && (
-          <span className="status-item">
-            <CircleDotIcon size="xs" className="status-ssh-dot" />
-            {sshSessions.length} SSH connection{sshSessions.length === 1 ? '' : 's'}
-          </span>
-        )}
-        {isRemote && remoteHost ? (
-          <Tooltip label={`Connected to ${remoteHost}; working directory unavailable`} placement="top">
-            <span className="status-item status-cwd status-cwd-remote" aria-label={`SSH connection to ${remoteHost}; working directory unavailable`}>
-              <FolderIcon size="xs" />
-              <span>SSH · {remoteHost}</span>
-            </span>
-          </Tooltip>
-        ) : cwd && (
+        {cwd && (
           <Tooltip label={cwd} placement="top">
             <span className="status-item status-cwd" aria-label={`Working directory: ${cwd}`}>
               <FolderIcon size="xs" />

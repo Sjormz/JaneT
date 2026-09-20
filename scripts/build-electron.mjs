@@ -9,8 +9,6 @@ const require = createRequire(import.meta.url);
 const electronExternals = [
   'electron',
   'node-pty',
-  'ssh2',
-  'ssh2-sftp-client',
   'simple-git',
 ];
 
