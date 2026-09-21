@@ -30,7 +30,6 @@ interface LoadedDirectory {
 
 interface DirectorySnapshot extends LoadedDirectory {
   entries: FileEntry[];
-  connectionId?: string;
 }
 
 interface DirectoryError {
@@ -65,9 +64,9 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
   currentPathRef.current = currentPath;
   sourceKeyRef.current = source.key;
 
-  const localCwd = source.kind === 'local' ? source.cwd : '';
+  const localCwd = source.cwd;
   useEffect(() => {
-    if (source.kind !== 'local' || !source.cwd) return;
+    if (!source.cwd) return;
     setNavigationBySource((current) => {
       const previous = current[source.key];
       if (previous?.currentPath === source.cwd) return current;
@@ -78,8 +77,7 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
     });
   }, [localCwd, source.key, source.kind]);
 
-  // Never leave entries, status, or pending results visible across filesystems
-  // or across a disconnect/reconnect boundary for the same SSH source.
+  // Ignore pending results when the focused terminal or its directory changes.
   useEffect(() => {
     requestGeneration.current += 1;
     lastLoaded.current = null;
@@ -92,7 +90,7 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
     reason: RefreshReason = 'manual',
   ) => {
     if (!source.ready) return;
-    if (source.kind === 'local' && !dirPath) return;
+    if (!dirPath) return;
 
     const prior = lastLoaded.current;
     if (
@@ -110,21 +108,8 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
     setDirectoryError(null);
 
     try {
-      let result: FileEntry[];
-      let resolvedPath = requestedPath;
-      let connectionId: string | undefined;
-      if (source.kind === 'ssh') {
-        const listing = await window.janet.sshListDir({
-          sessionId: source.sessionId,
-          ...(requestedPath ? { remotePath: requestedPath } : {}),
-          showHidden,
-        });
-        result = listing.entries;
-        resolvedPath = listing.resolvedPath;
-        connectionId = listing.connectionId;
-      } else {
-        result = await window.janet.fsListDir({ dirPath: requestedPath, showHidden });
-      }
+      const resolvedPath = requestedPath;
+      const result = await window.janet.fsListDir({ dirPath: requestedPath, showHidden });
 
       if (
         generation !== requestGeneration.current ||
@@ -135,25 +120,15 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
       }
 
       lastLoaded.current = { sourceKey, path: resolvedPath, showHidden };
-      if (source.kind === 'ssh' && resolvedPath !== requestedPath) {
-        setNavigationBySource((current) => {
-          const previous = current[sourceKey] ?? { currentPath: requestedPath, history: [] };
-          if (previous.currentPath !== requestedPath) return current;
-          return {
-            ...current,
-            [sourceKey]: { ...previous, currentPath: resolvedPath },
-          };
-        });
-      }
       setSnapshot((current) => {
         if (
           current?.sourceKey === sourceKey && current.path === resolvedPath &&
-          current.showHidden === showHidden && current.connectionId === connectionId &&
+          current.showHidden === showHidden &&
           fileEntriesEqual(current.entries, result)
         ) {
           return current;
         }
-        return { sourceKey, path: resolvedPath, showHidden, entries: result, connectionId };
+        return { sourceKey, path: resolvedPath, showHidden, entries: result };
       });
     } catch (loadError) {
       if (
@@ -187,7 +162,7 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
   useRefreshTask({
     key: refreshKey,
     intervalMs: 5_000,
-    enabled: source.ready && (source.kind === 'ssh' || Boolean(currentPath)),
+    enabled: source.ready && Boolean(currentPath),
     run: (reason) => loadDirectory(currentPath, reason),
   });
 
@@ -221,8 +196,8 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
     });
   };
 
-  const pathSegments = currentPath.split(source.kind === 'ssh' ? '/' : /[/\\]/).filter(Boolean);
-  const ready = source.ready && (source.kind === 'ssh' || Boolean(currentPath));
+  const pathSegments = currentPath.split(/[/\\]/).filter(Boolean);
+  const ready = source.ready && Boolean(currentPath);
   const snapshotMatches = Boolean(
     ready && snapshot?.sourceKey === source.key && snapshot.path === currentPath &&
     snapshot.showHidden === showHidden,
@@ -271,17 +246,11 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
         </div>
       </div>
 
-      {source.kind === 'ssh' && (
-        <div className="explorer-remote-notice" role="status">
-          Files on <strong>{source.label}</strong>
-        </div>
-      )}
-
       {showLocation && <div id={locationId} className="explorer-breadcrumb" role="navigation" aria-label="Folder location">
         {currentPath.startsWith('/') && (
           <button className="crumb" onClick={() => navigateTo('/')} aria-label="Open filesystem root">/</button>
         )}
-        {source.kind === 'local' && currentPath.match(/^[A-Z]:/) && (
+        {currentPath.match(/^[A-Z]:/) && (
           <button
             className="crumb drive-crumb"
             onClick={() => navigateTo(currentPath.substring(0, 3))}
@@ -293,10 +262,10 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
           const pathSoFar = currentPath.startsWith('/')
             ? `/${pathSegments.slice(0, index + 1).join('/')}`
             : pathSegments.slice(0, index + 1).join(
-              source.kind === 'local' && currentPath.includes('\\') ? '\\' : '/',
+              currentPath.includes('\\') ? '\\' : '/',
             );
           const isDrive = /^[A-Z]:?$/i.test(segment);
-          if (source.kind === 'local' && isDrive && index === 0) return null;
+          if (isDrive && index === 0) return null;
           return (
             <span className="crumb-part" key={pathSoFar}>
               {(!currentPath.startsWith('/') || index > 0) && <span className="crumb-sep">/</span>}
@@ -309,15 +278,8 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
       </div>}
 
       <div className="explorer-tree" aria-busy={loading}>
-        {!source.ready && source.kind === 'local' && (
+        {!source.ready && (
           <div className="explorer-loading" role="status">Starting terminal…</div>
-        )}
-        {!source.ready && source.kind === 'ssh' && (
-          <div className="explorer-loading" role="status">
-            {source.connectionState === 'disconnected'
-              ? `Reconnect ${source.label} to browse its files.`
-              : `Connecting to files on ${source.label}…`}
-          </div>
         )}
         {loading && <div className="explorer-loading" role="status">Loading…</div>}
         {error && (
@@ -349,9 +311,7 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
                 path: entry.path,
                 entryKind: entry.isDirectory ? 'directory' : 'file',
                 origin: 'explorer',
-                filesystem: source.kind === 'ssh'
-                  ? { kind: 'ssh', sessionId: source.sessionId }
-                  : { kind: 'local' },
+                filesystem: { kind: 'local' },
               });
               if (!started) {
                 endTerminalPathDrag();
@@ -393,18 +353,7 @@ export default function FileExplorer({ source, onCopyTerminalPath, onOpenFile }:
                   aria-label={`Open file ${entry.name}`}
                   onClick={() => {
                     if (!onOpenFile) return;
-                    if (source.kind === 'ssh') {
-                      if (!snapshot?.connectionId) return;
-                      onOpenFile({
-                        kind: 'ssh',
-                        sessionId: source.sessionId,
-                        connectionId: snapshot.connectionId,
-                        path: entry.path,
-                        label: source.label,
-                      });
-                    } else {
-                      onOpenFile({ kind: 'local', path: entry.path });
-                    }
+                    onOpenFile({ kind: 'local', path: entry.path });
                   }}
                   {...dragProps}
                 >

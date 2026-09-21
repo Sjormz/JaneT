@@ -74,7 +74,7 @@ For delivery diagnosis, start JaneT with `JANET_ACTIVITY_DIAGNOSTICS` pointing t
 
 - Background/detached jobs are not individual foreground commands. Use a foreground `wait`/job-wait command if you need a shell completion notification, or an explicit agent lifecycle adapter. No background-process polling is installed.
 - A long-lived uninstrumented TUI is a running shell command, not an AI task. Hermes hooks must be accepted and enabled; its open process alone cannot identify response completion.
-- Local PowerShell with PSReadLine, Bash, Zsh and Fish use existing shell hooks. cmd/unsupported shells and overwritten prompt hooks cannot provide reliable command activity. SSH automatic injection currently covers detected Bash; other remote shells require compatible OSC 133 integration. The Codex loopback helper is **local-only**; SSH/WSL/container hosts are not automatically bridged.
+- Local PowerShell with PSReadLine, Bash, Zsh and Fish use existing shell hooks. cmd/unsupported shells and overwritten prompt hooks cannot provide reliable command activity. The Codex loopback helper is **local-only**; SSH/WSL/container hosts are not automatically bridged.
 - Codex hooks are observations, not a complete runtime state API. A denied/blocked hook or request may leave attention/busy until the next observed event. Internal errors without a completion or interrupt event are not inferred from output. A `notify` completion means the turn ended, not that every tool succeeded.
 - Nested independently integrated shells share a terminal stream; there is no authenticated stack of shell OSC sessions. The host never interprets status events as permission to execute a command.
 

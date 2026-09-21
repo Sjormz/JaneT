@@ -1,24 +1,24 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { TabInfo, SavedSSHProfile, WorkspaceTabPreset, countLeaves, genId, type PaneNode, type TerminalLeaf } from '../types';
+import { TabInfo, WorkspaceTabPreset, countLeaves, genId, type PaneNode, type TerminalLeaf } from '../types';
 import {
   XCloseIcon,
   ChevronsLeftIcon, PlusIcon, ChevronRightIcon, ChevronDownIcon,
 } from '../icons';
-import WorkspaceForm, { sshProfileLabel } from './WorkspaceForm';
+import WorkspaceForm from './WorkspaceForm';
 import { useModalFocus } from '../useModalFocus';
+import MotionPresence from './MotionPresence';
 import Tooltip from './Tooltip';
 import MainDirectory from './MainDirectory';
 import RenameDialog from './RenameDialog';
 import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, isWorkspaceProject, rebaseDirectory, type WorkspaceGroup } from '../../shared/workspaceGroups';
 import type { AgentStatus } from '../terminalAwareness';
-import type { SSHLocalForwardStatus } from '../../main/ssh';
 import type { GitWorktreeInfo } from '../../shared/gitWorktrees';
 
 interface VerticalTabBarProps {
+  visible?: boolean;
   tabs: TabInfo[];
   activeTabId: string;
-  sshProfiles: SavedSSHProfile[];
   groups?: WorkspaceGroup[];
   mainDirectory?: string | null;
   onMainDirectoryChange?: (directory: string) => Promise<void>;
@@ -51,9 +51,9 @@ function workspaceLeaves(root: PaneNode): TerminalLeaf[] {
 }
 
 export default function VerticalTabBar({
+  visible = true,
   tabs,
   activeTabId,
-  sshProfiles,
   groups = [DEFAULT_WORKSPACE_GROUP],
   mainDirectory,
   onMainDirectoryChange,
@@ -87,7 +87,7 @@ export default function VerticalTabBar({
   const [folderBusy, setFolderBusy] = useState(false);
   const [missingDirectories, setMissingDirectories] = useState<Set<string>>(new Set());
   const [worktreeDirectories, setWorktreeDirectories] = useState<Set<string>>(new Set());
-  const projectDirectories = JSON.stringify([...new Set(tabs.filter(tab => tab.type !== 'ssh' && tab.cwd).map(tab => tab.cwd!))]);
+  const projectDirectories = JSON.stringify([...new Set(tabs.filter(tab => tab.cwd).map(tab => tab.cwd!))]);
   useEffect(() => {
     let cancelled = false;
     const check = async () => {
@@ -132,18 +132,6 @@ export default function VerticalTabBar({
     setTabMenu(null);
     if (opener?.isConnected) opener.focus();
   };
-  const [forwardTarget, setForwardTarget] = useState<{ tabId: string; sessionId: string } | null>(null);
-  const [forwards, setForwards] = useState<SSHLocalForwardStatus[]>([]);
-  const [localPort, setLocalPort] = useState('0');
-  const [destinationHost, setDestinationHost] = useState('');
-  const [destinationPort, setDestinationPort] = useState('');
-  const [forwardError, setForwardError] = useState('');
-  const forwardModalRef = useRef<HTMLDivElement>(null);
-  const forwardRequestRef = useRef(0);
-  const forwardDialogRef = useRef(0);
-  const mountedRef = useRef(true);
-  const tabsRef = useRef(tabs);
-  tabsRef.current = tabs;
   const workspaceModalRef = useRef<HTMLDivElement>(null);
   const workspaceAddButtonRef = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => {
@@ -172,15 +160,6 @@ export default function VerticalTabBar({
       document.removeEventListener('keydown', closeOnEscape);
     };
   }, [tabMenu]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      forwardRequestRef.current += 1;
-      forwardDialogRef.current += 1;
-    };
-  }, []);
 
   const startRename = (tab: TabInfo) => {
     setEditingTabId(tab.id);
@@ -261,59 +240,6 @@ export default function VerticalTabBar({
     } finally { setCreating(false); }
   };
 
-  const closeForwardDialog = () => {
-    forwardRequestRef.current += 1;
-    forwardDialogRef.current += 1;
-    setForwardTarget(null);
-    setForwards([]);
-    setForwardError('');
-  };
-  const isCurrentForwardTarget = (target: { tabId: string; sessionId: string }) => {
-    const tab = tabsRef.current.find((candidate) => candidate.id === target.tabId);
-    return tab?.type === 'ssh' && tab.sshSessionId === target.sessionId && tab.sshShellReady === true;
-  };
-  const openForwardDialog = (tab: TabInfo) => {
-    if (tab.type !== 'ssh' || !tab.sshSessionId || tab.sshShellReady !== true) return;
-    const target = { tabId: tab.id, sessionId: tab.sshSessionId };
-    forwardDialogRef.current += 1;
-    const request = ++forwardRequestRef.current;
-    setForwardTarget(target); setForwards([]); setForwardError('');
-    void window.janet.sshListLocalForwards({ sessionId: target.sessionId }).then((listed) => {
-      if (forwardRequestRef.current === request && isCurrentForwardTarget(target)) setForwards(listed);
-    }).catch((error) => {
-      if (forwardRequestRef.current === request && isCurrentForwardTarget(target)) setForwardError(error instanceof Error ? error.message : String(error));
-    });
-  };
-  useEffect(() => {
-    if (forwardTarget && !isCurrentForwardTarget(forwardTarget)) closeForwardDialog();
-  }, [tabs, forwardTarget]);
-  useModalFocus({ open: forwardTarget !== null, containerRef: forwardModalRef, onClose: closeForwardDialog, initialFocusSelector: 'input' });
-  const createForward = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const target = forwardTarget;
-    const parsedLocalPort = Number(localPort), parsedDestinationPort = Number(destinationPort);
-    if (!target || !isCurrentForwardTarget(target)) return closeForwardDialog();
-    if (!Number.isInteger(parsedLocalPort) || parsedLocalPort < 0 || parsedLocalPort > 65535 || !destinationHost || !Number.isInteger(parsedDestinationPort) || parsedDestinationPort < 1 || parsedDestinationPort > 65535) return setForwardError('Enter a valid host and ports.');
-    const request = ++forwardRequestRef.current; setForwardError('');
-    try {
-      const started = await window.janet.sshStartLocalForward({ sessionId: target.sessionId, request: { id: crypto.randomUUID(), localPort: parsedLocalPort, destinationHost, destinationPort: parsedDestinationPort } });
-      if (!mountedRef.current || forwardRequestRef.current !== request || !isCurrentForwardTarget(target)) {
-        void window.janet.sshStopLocalForward({ sessionId: target.sessionId, id: started.id }).catch(() => {});
-        return;
-      }
-      setForwards((current) => [...current.filter((item) => item.id !== started.id), started]);
-    } catch (error) { if (forwardRequestRef.current === request && isCurrentForwardTarget(target)) setForwardError(error instanceof Error ? error.message : String(error)); }
-  };
-  const stopForward = async (forward: SSHLocalForwardStatus) => {
-    const target = forwardTarget;
-    if (!target || !isCurrentForwardTarget(target)) return closeForwardDialog();
-    const dialog = forwardDialogRef.current; setForwardError('');
-    try {
-      await window.janet.sshStopLocalForward({ sessionId: target.sessionId, id: forward.id });
-      if (forwardDialogRef.current === dialog && isCurrentForwardTarget(target)) setForwards((current) => current.filter((item) => item.id !== forward.id));
-    } catch (error) { if (forwardDialogRef.current === dialog && isCurrentForwardTarget(target)) setForwardError(error instanceof Error ? error.message : String(error)); }
-  };
-
   const workspaceModalOpen = creatorOpen;
   const projectPage = creationKind === 'workspace';
   const projectPageHost = document.getElementById('workspace-main');
@@ -325,7 +251,7 @@ export default function VerticalTabBar({
   });
 
   return (
-    <div className="vtab-bar workspace-tabs-rail" role="group" aria-label="Workspaces">
+    <div className="vtab-bar workspace-tabs-rail" role="group" aria-label="Workspaces" hidden={!visible} style={visible ? undefined : { display: 'none' }}>
 
       <div className="vtab-list workspace-group-list">
       <div className="vtab-header">
@@ -361,22 +287,10 @@ export default function VerticalTabBar({
           const isActive = tab.id === activeTabId;
           const isWorktree = Boolean(tab.cwd && worktreeDirectories.has(tab.cwd));
           const leaves = workspaceLeaves(tab.root);
-          const sshCount = leaves.filter((leaf) => (leaf.terminalType ?? tab.type) === 'ssh').length;
-          const isSSH = leaves.length > 0 && sshCount === leaves.length;
           const editing = editingTabId === tab.id;
           const dirty = dirtyTabIds.has(tab.id);
           const awareness = awarenessByTab[tab.id];
-          const profileId = tab.sshProfileId ?? leaves[0]?.sshProfileId;
-          const sshProfile = profileId
-            ? sshProfiles.find((profile) => profile.id === profileId)
-            : undefined;
-          const locationLabel = sshCount > 0 && !isSSH
-            ? `Local + SSH · ${leaves.length} terminals`
-            : leaves.length > 1
-              ? `${isSSH ? 'SSH' : 'Local'} · ${leaves.length} terminals`
-              : isSSH
-            ? `SSH · ${sshProfile ? sshProfileLabel(sshProfile) : 'Saved session'}`
-            : `Local · ${compactLocalTabLabel(tab.cwd ?? leaves[0]?.cwd)}`;
+          const locationLabel = leaves.length > 1 ? `Local · ${leaves.length} terminals` : `Local · ${compactLocalTabLabel(tab.cwd ?? leaves[0]?.cwd)}`;
           const subLabel = awareness?.label ?? locationLabel;
 
           return (
@@ -387,7 +301,7 @@ export default function VerticalTabBar({
               data-tab-id={tab.id}
               aria-label={`${tab.title} ${subLabel}${isWorktree ? ', Worktree project' : ''}${dirty ? ', unsaved editor changes' : ''}`}
               tabIndex={0}
-              className={`vtab-item ${isActive ? 'active' : ''} ${isSSH ? 'ssh' : ''}`}
+              className={`vtab-item ${isActive ? 'active' : ''}`}
               onClick={() => !editing && onSelectTab(tab.id)}
               onContextMenu={(event) => {
                 if (editing) return;
@@ -450,7 +364,7 @@ export default function VerticalTabBar({
         <ChevronsLeftIcon size="sm" /><span>Collapse sidebar</span>
       </button>
 
-      {tabMenu && createPortal(
+      {createPortal(<MotionPresence>{tabMenu &&
         <div
           ref={tabMenuRef}
           className="vtab-context-menu"
@@ -478,43 +392,23 @@ export default function VerticalTabBar({
           <button role="menuitem" onClick={() => { startRename(tabMenu.tab!); closeTabMenu(); }}>
             {isWorkspaceProject(tabMenu.tab, groups) ? 'Rename project' : 'Rename session'}
           </button>
-          {tabMenu.tab.type === 'ssh' && tabMenu.tab.sshSessionId && tabMenu.tab.sshShellReady === true && (
-            <button role="menuitem" onClick={() => { openForwardDialog(tabMenu.tab!); closeTabMenu(); }}>Manage local forwards</button>
-          )}
           {isWorkspaceProject(tabMenu.tab, groups) && <>
             {groups.find(group => group.id === tabMenu.tab!.groupId)?.kind !== 'folder' && <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const tab = tabMenu.tab!; closeTabMenu(); onWorkspaceAction?.('keep', tab.groupId!, tab.id); }}>Keep in Library…</button>}
             <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const tab = tabMenu.tab!; closeTabMenu(); onWorkspaceAction?.(tab.isProject && groups.find(group => group.id === tab.groupId)?.kind === 'folder' ? 'unlink' : 'delete', tab.groupId!, tab.id); }}>{tabMenu.tab.isProject && groups.find(group => group.id === tabMenu.tab!.groupId)?.kind === 'folder' ? 'Remove project…' : 'Delete project…'}</button>
           </>}
           <button role="menuitem" disabled={isWorkspaceProject(tabMenu.tab, groups) && countLeaves(tabMenu.tab.root) === 0} onClick={() => { const id = tabMenu.tab!.id; closeTabMenu(); onCloseTab(id); }}>{isWorkspaceProject(tabMenu.tab, groups) ? 'Close all terminals…' : 'Close session'}</button>
           </>}
-        </div>,
+        </div>}</MotionPresence>,
         document.body,
-      )}
-      {forwardTarget && createPortal(
-        <div className="workspace-modal-overlay" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeForwardDialog(); }}>
-          <div ref={forwardModalRef} className="workspace-modal ssh-forward-modal" role="dialog" aria-modal="true" aria-labelledby="ssh-forward-title">
-            <div className="workspace-modal-header"><h2 id="ssh-forward-title">SSH local forwards</h2><button onClick={closeForwardDialog} aria-label="Close SSH local forwards"><XCloseIcon size="sm" /></button></div>
-            <form className="ssh-forward-form" onSubmit={createForward}>
-              <label>Local port<input aria-label="Local port" type="number" min="0" max="65535" required value={localPort} onChange={(event) => setLocalPort(event.target.value)} /></label>
-              <label>Destination host<input aria-label="Destination host" required value={destinationHost} onChange={(event) => setDestinationHost(event.target.value)} /></label>
-              <label>Destination port<input aria-label="Destination port" type="number" min="1" max="65535" required value={destinationPort} onChange={(event) => setDestinationPort(event.target.value)} /></label>
-              <button type="submit" className="connect-btn">Create forward</button>
-            </form>
-            {forwardError && <div className="form-error" role="alert">{forwardError}</div>}
-            <div className="ssh-forward-list" aria-label="Active local forwards">{forwards.length === 0 ? <p>No active forwards</p> : forwards.map((forward) => (
-              <div className="ssh-forward-row" key={forward.id}><span><strong>{forward.bindHost}:{forward.localPort}</strong> → {forward.destinationHost}:{forward.destinationPort}</span><button type="button" onClick={() => void stopForward(forward)} aria-label={`Stop forward ${forward.bindHost}:${forward.localPort}`}>Stop</button></div>
-            ))}</div>
-          </div>
-        </div>, document.body,
       )}
       <RenameDialog open={editingGroupId !== null} title="Rename workspace" inputLabel="Workspace name" initialValue={draftTitle}
         fallbackFocus={() => workspaceAddButtonRef.current} onCancel={() => setEditingGroupId(null)}
         onSave={async (name) => { if (editingGroupId) { if (onRenameGroup) await onRenameGroup(editingGroupId, name); else onGroupsChange(groups.map((item) => item.id === editingGroupId ? { ...item, name } : item)); } setEditingGroupId(null); }} />
-      {directoryOpen && createPortal(<div className="workspace-modal-overlay"><div ref={directoryDialogRef} className="workspace-modal" role="dialog" aria-modal="true" aria-label="Main directory settings">
+      {createPortal(<MotionPresence>{directoryOpen && <div className="workspace-modal-overlay"><div ref={directoryDialogRef} className="workspace-modal" role="dialog" aria-modal="true" aria-label="Main directory settings">
         <div className="workspace-modal-header"><h2>Workspace location</h2><button aria-label="Close main directory settings" onClick={() => setDirectoryOpen(false)}><XCloseIcon size="sm" /></button></div>
         <MainDirectory directory={mainDirectory ?? null} onChange={async (directory) => { await onMainDirectoryChange?.(directory); setDirectoryOpen(false); }} />
-      </div></div>, document.body)}
-      {workspaceModalOpen && createPortal(
+      </div></div>}</MotionPresence>, document.body)}
+      {createPortal(<MotionPresence>{workspaceModalOpen &&
         <div
           className={projectPage ? "empty-project-setup workspace-creation-page" : "workspace-modal-overlay"}
           role="presentation"
@@ -550,7 +444,7 @@ export default function VerticalTabBar({
               onSubmit={createWorkspace}
             />}
           </div>
-        </div>,
+        </div>}</MotionPresence>,
         projectPage && projectPageHost ? projectPageHost : document.body,
       )}
     </div>

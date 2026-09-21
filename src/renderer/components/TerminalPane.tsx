@@ -18,7 +18,6 @@ export function runCleanup(entries: unknown[]): void {
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon, type ISearchOptions } from '@xterm/addon-search';
 import SearchOverlay from './SearchOverlay';
-import SSHConnectionNotice from './SSHConnectionNotice';
 import { getTheme, ThemeName } from '../themes';
 import { useKeybindings } from '../KeybindingsContext';
 import { matchesShortcut } from '../keybindings';
@@ -53,10 +52,8 @@ import '@xterm/xterm/css/xterm.css';
 
 interface TerminalPaneProps {
   termId: string;
-  tabType: 'local' | 'ssh';
+  tabType: 'local';
   inputLabel?: string;
-  sshSessionId?: string;
-  sshSessionLabel?: string;
   onReady: (termId: string) => void;
   onRemoved: (termId: string) => void;
   themeName?: string;
@@ -73,22 +70,14 @@ interface TerminalPaneProps {
   startupCommands?: string[];
   startupShellDialect?: TerminalLeaf['startupShellDialect'];
   hasSession?: boolean;
-  sshShellReady?: boolean;
-  sshConnectionLost?: boolean;
-  onSshShellReady?: (termId: string, sessionId: string) => void;
-  onSshShellFailed?: (termId: string, sessionId: string) => void;
-  onSshRetry?: (termId: string, dimensions: { cols: number; rows: number }) => void | Promise<void>;
 }
 
-type SshNoticeState = React.ComponentProps<typeof SSHConnectionNotice>['state'];
 type LocalSpawnState =
   | { kind: 'starting' | 'ready' | 'retrying' }
   | { kind: 'error'; message: string };
 type TerminalPathDropState = 'valid' | 'invalid' | null;
 
 const INVALID_PATH_DROP_NOTICE_MS = 1_200;
-// ponytail: xterm 6 has no public non-erasing reset; replace this sequence when it adds one.
-const RESET_TERMINAL_FOR_NEW_SSH_SHELL = '\x18\x1b[?47l\x1b[!p\x1b[?9;1000;1002;1003;1006;1016;2026l';
 
 const SEARCH_OPTIONS: ISearchOptions = {
   decorations: {
@@ -98,13 +87,6 @@ const SEARCH_OPTIONS: ISearchOptions = {
     activeMatchColorOverviewRuler: '#e0af68',
   },
 };
-
-function sshDimensions(dims: { cols: number; rows: number } | undefined | null) {
-  return {
-    cols: dims?.cols || 80,
-    rows: dims?.rows || 24,
-  };
-}
 
 function repaintTerminal(term: Terminal, fitAddon: FitAddon): void {
   try { fitAddon.fit(); } catch {}
@@ -131,15 +113,7 @@ interface CachedTerminalPane {
   searchAddon: SearchAddon;
   hasActiveSearch: boolean;
   cleanup: unknown[];
-  tabType: 'local' | 'ssh';
-  sshSessionId?: string;
-  sshShellReady: boolean;
-  sshRetryPromise: Promise<void> | null;
-  sshRetryOpenedShell: boolean;
-  sshNoticeState: SshNoticeState;
-  sshNoticeListener: ((state: SshNoticeState) => void) | null;
-  sshShellReadyListener: TerminalPaneProps['onSshShellReady'];
-  sshShellFailedListener: TerminalPaneProps['onSshShellFailed'];
+  tabType: 'local';
   localSpawnState: LocalSpawnState;
   localSpawnRequest: Parameters<typeof window.janet.terminalCreate>[0] | null;
   localSpawnListener: ((state: LocalSpawnState) => void) | null;
@@ -183,8 +157,6 @@ export default function TerminalPane({
   termId,
   tabType,
   inputLabel,
-  sshSessionId,
-  sshSessionLabel,
   onReady,
   onRemoved,
   themeName,
@@ -201,11 +173,6 @@ export default function TerminalPane({
   startupCommands,
   startupShellDialect,
   hasSession,
-  sshShellReady = true,
-  sshConnectionLost = false,
-  onSshShellReady,
-  onSshShellFailed,
-  onSshRetry,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -213,15 +180,11 @@ export default function TerminalPane({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
-  const sshNoticeAttemptRef = useRef(0);
   const pathDropNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState({ resultIndex: 0, resultCount: 0 });
-  const [sshNoticeState, setSshNoticeState] = useState<SshNoticeState>(
-    () => terminalPaneCache.get(termId)?.sshNoticeState ?? { kind: 'hidden' },
-  );
   const [localSpawnState, setLocalSpawnState] = useState<LocalSpawnState>(
     () => terminalPaneCache.get(termId)?.localSpawnState ?? { kind: 'starting' },
   );
@@ -237,8 +200,6 @@ export default function TerminalPane({
   searchVisibleRef.current = searchVisible;
   const cachedForAgentListener = terminalPaneCache.get(termId);
   if (cachedForAgentListener) {
-    cachedForAgentListener.sshShellReadyListener = onSshShellReady;
-    cachedForAgentListener.sshShellFailedListener = onSshShellFailed;
     cachedForAgentListener.localSpawnReadyListener = onReady;
     cachedForAgentListener.agentEventListener = onAgentEvent ?? null;
     cachedForAgentListener.semanticCommandStartedListener.current = onSemanticCommandStarted;
@@ -255,17 +216,6 @@ export default function TerminalPane({
     };
   }, []);
 
-  const publishSshNoticeState = useCallback((next: SshNoticeState) => {
-    const cached = terminalPaneCache.get(termId);
-    if (cached) {
-      cached.sshNoticeState = next;
-      if (cached.sshNoticeListener) cached.sshNoticeListener(next);
-      else if (componentMountedRef.current) setSshNoticeState(next);
-    } else if (componentMountedRef.current) {
-      setSshNoticeState(next);
-    }
-  }, [termId]);
-
   const publishLocalSpawnState = useCallback((next: LocalSpawnState) => {
     const cached = terminalPaneCache.get(termId);
     if (cached) {
@@ -280,18 +230,6 @@ export default function TerminalPane({
 
   const kbBindingsRef = useRef(kbBindings);
   kbBindingsRef.current = kbBindings;
-
-  useEffect(() => {
-    if (tabType !== 'ssh') {
-      publishSshNoticeState({ kind: 'hidden' });
-    } else if (sshConnectionLost) {
-      if (terminalPaneCache.get(termId)?.sshNoticeState.kind !== 'error') {
-        publishSshNoticeState({ kind: 'closed' });
-      }
-    } else if (!sshShellReady) {
-      publishSshNoticeState({ kind: 'reconnecting' });
-    }
-  }, [publishSshNoticeState, sshConnectionLost, tabType, sshSessionId, sshShellReady]);
 
   const clearSearchSelection = () => {
     searchAddonRef.current?.clearDecorations();
@@ -343,9 +281,7 @@ export default function TerminalPane({
       const dims = { cols: term.cols, rows: term.rows };
       const last = lastResizeRef.current;
       if (last?.cols === dims.cols && last?.rows === dims.rows) return;
-      const resize = tabType === 'local'
-        ? window.janet.terminalResize({ id: termId, cols: dims.cols, rows: dims.rows })
-        : window.janet.sshResizeShell({ termId, ...sshDimensions(dims) });
+      const resize = window.janet.terminalResize({ id: termId, cols: dims.cols, rows: dims.rows });
       lastResizeRef.current = dims;
       void resize.catch((error: unknown) => {
         if (lastResizeRef.current === dims) {
@@ -356,7 +292,6 @@ export default function TerminalPane({
       term.refresh(0, Math.max(term.rows - 1, 0));
     } catch {}
   };
-
 
   const doSearch = (query: string, dir: 'next' | 'prev' = 'next') => {
     if (!query || !searchAddonRef.current) {
@@ -502,10 +437,6 @@ export default function TerminalPane({
       try {
         const contents = await window.janet.readTerminalClipboard();
         if (termRef.current !== term || term.options.disableStdin) return;
-        if (typeof contents !== 'string' && tabType !== 'local') {
-          setClipboardError('Upload the image to the SSH host before pasting its remote path.');
-          return;
-        }
         const text = typeof contents === 'string' ? contents : formatTerminalPathForPaste(contents.imagePath, startupShellDialect);
         if (text === null) throw new Error('Invalid clipboard image path');
         retainedSelectionRef.current = '';
@@ -640,25 +571,10 @@ export default function TerminalPane({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    let effectActive = true;
 
     const cached = terminalPaneCache.get(termId);
-    const retryMadeShellReady = Boolean(
-      cached?.sshRetryOpenedShell
-      && cached.tabType === 'ssh'
-      && !cached.sshShellReady
-      && sshShellReady,
-    );
-    if (
-      cached &&
-      cached.tabType === tabType &&
-      cached.sshSessionId === sshSessionId &&
-      (cached.sshShellReady === sshShellReady || retryMadeShellReady)
-    ) {
-      cached.sshShellReady = sshShellReady;
-      if (retryMadeShellReady) cached.sshRetryOpenedShell = false;
+    if (cached) {
       const { term, fitAddon, searchAddon } = cached;
-      cached.sshNoticeListener = setSshNoticeState;
       cached.localSpawnListener = setLocalSpawnState;
       cached.localSpawnReadyListener = onReady;
       cached.semanticCommandStartedListener.current = onSemanticCommandStarted;
@@ -676,20 +592,13 @@ export default function TerminalPane({
       const repaintTimer = setTimeout(() => repaintTerminal(term, fitAddon), 0);
       const mountCleanup = attachTerminal(container, term, fitAddon, searchAddon, 0, cached.inputSource, cached.semanticCommands);
       mountCleanup.push(() => clearTimeout(repaintTimer));
-      if (tabType !== 'ssh') {
-        publishSshNoticeState({ kind: 'hidden' });
-      }
-      if (tabType === 'ssh' || cached.localSpawnState.kind === 'ready') onReady(termId);
+      if (cached.localSpawnState.kind === 'ready') onReady(termId);
 
       return () => {
-        effectActive = false;
         runCleanup(mountCleanup);
         term.element?.remove();
         onRemoved(termId);
         const currentCache = terminalPaneCache.get(termId);
-        if (currentCache?.sshNoticeListener === setSshNoticeState) {
-          currentCache.sshNoticeListener = null;
-        }
         if (currentCache?.localSpawnListener === setLocalSpawnState) {
           currentCache.localSpawnListener = null;
         }
@@ -705,15 +614,13 @@ export default function TerminalPane({
       };
     }
 
-    if (cached) disposeCachedTerminal(termId);
-
     const resolvedTheme = themeName ? getTheme(themeName as ThemeName).xterm : undefined;
 
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: 'block',
       macOptionClickForcesSelection: true,
-      ...(tabType === 'local' && /Win/i.test(navigator.platform)
+      ...(/Win/i.test(navigator.platform)
         ? { windowsPty: { backend: 'conpty' } }
         : {}),
       fontSize: fontSize || 14,
@@ -827,11 +734,7 @@ export default function TerminalPane({
         forcedSelectionRef.current = false;
       }
       if (userInput && terminalPaneCache.get(termId)?.broadcastInputListener?.(termId, data)) return;
-      if (tabType === 'local') {
-        window.janet.terminalWrite({ id: termId, data, userInput });
-      } else if (tabType === 'ssh') {
-        window.janet.sshWriteShell({ sessionId: sshSessionId, termId, data, userInput });
-      }
+      window.janet.terminalWrite({ id: termId, data, userInput });
     });
     lifetimeCleanup.push(disposable);
 
@@ -844,18 +747,12 @@ export default function TerminalPane({
         forcedSelectionRef.current = false;
       }
       if (userInput && terminalPaneCache.get(termId)?.broadcastInputListener?.(termId, data, true)) return;
-      if (tabType === 'local') {
-        window.janet.terminalWriteBinary({ id: termId, data, userInput });
-      } else {
-        window.janet.sshWriteShellBinary({ sessionId: sshSessionId, termId, data, userInput });
-      }
+      window.janet.terminalWriteBinary({ id: termId, data, userInput });
     });
     lifetimeCleanup.push(binaryDisposable);
 
     const cleanupListener = window.janet.onTerminalData(({ source, id, data, generation, sequence }) => {
       if (id === termId && source === tabType) {
-        sshNoticeAttemptRef.current += 1;
-        publishSshNoticeState({ kind: 'hidden' });
         const controls = diagnosticsEnabled ? inspectTerminalControlSequences(data) : [];
         logTerminalDiagnostic(diagnosticsEnabled, termId, 'terminal-output', {
           bytes: data.length,
@@ -873,7 +770,7 @@ export default function TerminalPane({
     lifetimeCleanup.push(cleanupListener);
 
     const localSpawnRequest: Parameters<typeof window.janet.terminalCreate>[0] | null =
-      tabType === 'local' && !hasSession
+      !hasSession
         ? {
             id: termId,
             cwd: initialCwd,
@@ -882,38 +779,7 @@ export default function TerminalPane({
           }
         : null;
 
-    if (tabType === 'ssh' && sshSessionId && sshShellReady) {
-      const noticeAttempt = ++sshNoticeAttemptRef.current;
-      publishSshNoticeState({ kind: 'waiting' });
-      const dims = sshDimensions(fitAddon.proposeDimensions());
-      const openShell = window.janet.sshCreateShell({
-        id: sshSessionId,
-        termId,
-        cols: dims.cols,
-        rows: dims.rows,
-        ...(startupCommands?.length ? { startupCommands } : {}),
-        ...(startupShellDialect ? { startupShellDialect } : {}),
-      });
-      openShell.then(() => {
-        const currentCache = terminalPaneCache.get(termId);
-        if (currentCache?.term !== term || currentCache.sshSessionId !== sshSessionId) return;
-        currentCache.sshShellReadyListener?.(termId, sshSessionId);
-        if (!effectActive) return;
-        onReady(termId);
-        term.focus();
-      }).catch((err: any) => {
-        const currentCache = terminalPaneCache.get(termId);
-        if (currentCache?.term !== term || currentCache.sshSessionId !== sshSessionId) return;
-        const message = err?.message || 'connection may have dropped';
-        if (sshNoticeAttemptRef.current === noticeAttempt) {
-          const errorState: SshNoticeState = { kind: 'error', message };
-          publishSshNoticeState(errorState);
-          term.write('\x0d\x0a\x1b[31mSSH shell failed to open: ' + message + '\x1b[0m\x0d\x0a');
-        }
-        currentCache.sshShellFailedListener?.(termId, sshSessionId);
-        if (effectActive) onReady(termId);
-      });
-    } else if (hasSession) {
+    if (hasSession) {
       onReady(termId);
     } else if (localSpawnRequest) {
       window.janet.terminalCreate(localSpawnRequest).then(() => {
@@ -930,7 +796,6 @@ export default function TerminalPane({
         });
       });
     }
-
 
     const mountCleanup = attachTerminal(container, term, fitAddon, searchAddon, 100, inputSource, semanticCommands);
 
@@ -965,20 +830,8 @@ export default function TerminalPane({
       hasActiveSearch: false,
       cleanup: lifetimeCleanup,
       tabType,
-      sshSessionId,
-      sshShellReady,
-      sshRetryPromise: null,
-      sshRetryOpenedShell: false,
-      sshNoticeState: tabType !== 'ssh'
-        ? { kind: 'hidden' }
-        : sshShellReady
-          ? { kind: 'waiting' }
-          : { kind: 'reconnecting' },
-      sshNoticeListener: setSshNoticeState,
-      sshShellReadyListener: onSshShellReady,
-      sshShellFailedListener: onSshShellFailed,
-      localSpawnState: tabType === 'local' && !hasSession ? { kind: 'starting' } : { kind: 'ready' },
-      localSpawnRequest: tabType === 'local' && !hasSession ? localSpawnRequest : null,
+      localSpawnState: !hasSession ? { kind: 'starting' } : { kind: 'ready' },
+      localSpawnRequest: !hasSession ? localSpawnRequest : null,
       localSpawnListener: setLocalSpawnState,
       localSpawnReadyListener: onReady,
       agentEventListener: onAgentEvent ?? null,
@@ -991,14 +844,10 @@ export default function TerminalPane({
     });
 
     return () => {
-      effectActive = false;
       runCleanup(mountCleanup);
       term.element?.remove();
       onRemoved(termId);
       const currentCache = terminalPaneCache.get(termId);
-      if (currentCache?.sshNoticeListener === setSshNoticeState) {
-        currentCache.sshNoticeListener = null;
-      }
       if (currentCache?.localSpawnListener === setLocalSpawnState) {
         currentCache.localSpawnListener = null;
       }
@@ -1012,7 +861,7 @@ export default function TerminalPane({
       fitAddonRef.current = null;
       searchAddonRef.current = null;
     };
-  }, [termId, tabType, sshSessionId, sshShellReady, initialCwd, onReady, onRemoved, onFocus, onCwdChange, onSshShellReady, onSshShellFailed]);
+  }, [termId, tabType, initialCwd, onReady, onRemoved, onFocus, onCwdChange]);
 
   useEffect(() => {
     if (inputLabel) termRef.current?.textarea?.setAttribute('aria-label', inputLabel);
@@ -1048,73 +897,6 @@ export default function TerminalPane({
     }, 50);
     return () => clearTimeout(timer);
   }, []);
-
-  const retrySshShell = () => {
-    if (!onSshRetry) return;
-    const term = termRef.current;
-    const cached = terminalPaneCache.get(termId);
-    if (!term || cached?.term !== term || cached.tabType !== 'ssh' || cached.sshRetryPromise) return;
-    const noticeAttempt = ++sshNoticeAttemptRef.current;
-    const dimensions = sshDimensions(fitAddonRef.current?.proposeDimensions());
-    let resolveRetry!: () => void;
-    let rejectRetry!: (reason?: unknown) => void;
-    const retryPromise = new Promise<void>((resolve, reject) => {
-      resolveRetry = resolve;
-      rejectRetry = reject;
-    });
-    cached.sshRetryPromise = retryPromise;
-    cached.sshRetryOpenedShell = true;
-    const previousDisableStdin = term.options.disableStdin;
-    term.options.disableStdin = true;
-    cached.inputSource.userInput = false;
-    forcedSelectionRef.current = false;
-    retainedSelectionRef.current = '';
-    publishSshNoticeState({ kind: 'reconnecting' });
-    try {
-      term.write(RESET_TERMINAL_FOR_NEW_SSH_SHELL, () => {
-        const currentCache = terminalPaneCache.get(termId);
-        if (currentCache?.term !== term || currentCache.sshRetryPromise !== retryPromise) {
-          rejectRetry(new Error('Reconnect cancelled'));
-          return;
-        }
-        try {
-          Promise.resolve(onSshRetry(termId, dimensions)).then(resolveRetry, rejectRetry);
-        } catch (error) {
-          rejectRetry(error);
-        }
-      });
-    } catch (error) {
-      rejectRetry(error);
-    }
-    retryPromise
-      .then(() => {
-        const currentCache = terminalPaneCache.get(termId);
-        if (
-          currentCache?.term !== term ||
-          currentCache.sshRetryPromise !== retryPromise ||
-          sshNoticeAttemptRef.current !== noticeAttempt
-        ) return;
-        publishSshNoticeState({ kind: 'waiting' });
-      })
-      .catch((err: any) => {
-        const currentCache = terminalPaneCache.get(termId);
-        if (
-          currentCache?.term !== term ||
-          currentCache.sshRetryPromise !== retryPromise ||
-          sshNoticeAttemptRef.current !== noticeAttempt
-        ) return;
-        currentCache.sshRetryOpenedShell = false;
-        publishSshNoticeState({ kind: 'error', message: err?.message || 'Reconnect failed' });
-      })
-      .finally(() => {
-        cached.inputSource.userInput = false;
-        try { term.options.disableStdin = previousDisableStdin; } catch {}
-        const currentCache = terminalPaneCache.get(termId);
-        if (currentCache?.term === term && currentCache.sshRetryPromise === retryPromise) {
-          currentCache.sshRetryPromise = null;
-        }
-      });
-  };
 
   const retryLocalTerminal = () => {
     const term = termRef.current;
@@ -1160,9 +942,7 @@ export default function TerminalPane({
     }
   };
 
-  const pathDropTarget = tabType === 'local'
-    ? { kind: 'local' as const }
-    : { kind: 'ssh' as const, sessionId: sshSessionId };
+  const pathDropTarget = { kind: 'local' as const };
 
   const clearPathDropNoticeTimer = () => {
     if (!pathDropNoticeTimerRef.current) return;
@@ -1174,9 +954,8 @@ export default function TerminalPane({
     if (Array.from(event.dataTransfer.types).includes('Files')) {
       event.preventDefault();
       event.stopPropagation();
-      const valid = tabType === 'local';
-      event.dataTransfer.dropEffect = valid ? 'copy' : 'none';
-      setPathDropState(valid ? 'valid' : 'invalid');
+      event.dataTransfer.dropEffect = 'copy';
+      setPathDropState('valid');
       return;
     }
     if (!hasTerminalPathDrag(event.dataTransfer)) return;
@@ -1197,10 +976,6 @@ export default function TerminalPane({
       event.stopPropagation();
       clearPathDropNoticeTimer();
       setPathDropState(null);
-      if (tabType !== 'local') {
-        setClipboardError('Upload files to the SSH host before pasting their remote paths.');
-        return;
-      }
       const cached = terminalPaneCache.get(termId);
       if (!cached || cached.term.options.disableStdin) return;
       try {
@@ -1273,11 +1048,11 @@ export default function TerminalPane({
       }}
       onDrop={handleTerminalPathDrop}
     >
-      {clipboardError && <div className="ssh-terminal-notice is-error" role="alert">
+      {clipboardError && <div className="terminal-notice is-error" role="alert">
         <span>{clipboardError}</span>
         <button type="button" onClick={() => setClipboardError(null)}>Dismiss</button>
       </div>}
-      {requestedClipboard !== null && <div className="ssh-terminal-notice" role="status">
+      {requestedClipboard !== null && <div className="terminal-notice" role="status">
         <span>This terminal wants to replace your clipboard ({requestedClipboard.length.toLocaleString()} characters).</span>
         <button type="button" onClick={() => {
           if (window.janet.copyTerminalText(requestedClipboard)) setRequestedClipboard(null);
@@ -1292,40 +1067,34 @@ export default function TerminalPane({
       )}
       {(localSpawnState.kind === 'error' || localSpawnState.kind === 'retrying') && (
         <div
-          className={`ssh-terminal-notice${localSpawnState.kind === 'error' ? ' is-error' : ''}`}
+          className={`terminal-notice${localSpawnState.kind === 'error' ? ' is-error' : ''}`}
           data-testid="local-terminal-notice"
           role={localSpawnState.kind === 'error' ? 'alert' : 'status'}
           aria-live={localSpawnState.kind === 'error' ? 'assertive' : 'polite'}
         >
-          <div className="ssh-terminal-notice-text">
-            <div className="ssh-terminal-notice-title">
+          <div className="terminal-notice-text">
+            <div className="terminal-notice-title">
               {localSpawnState.kind === 'error' ? 'Couldn’t start local terminal' : 'Starting local terminal'}
             </div>
-            <div className="ssh-terminal-notice-subtitle">
+            <div className="terminal-notice-subtitle">
               {localSpawnState.kind === 'error'
                 ? 'Retry to start this terminal in the same pane.'
                 : 'Starting the terminal process.'}
             </div>
             {localSpawnState.kind === 'error' && (
-              <div className="ssh-terminal-notice-message">{localSpawnState.message}</div>
+              <div className="terminal-notice-message">{localSpawnState.message}</div>
             )}
             {localSpawnState.kind === 'error' && (
-              <div className="ssh-terminal-notice-actions">
-                <button type="button" className="ssh-notice-action primary" onClick={retryLocalTerminal}>
+              <div className="terminal-notice-actions">
+                <button type="button" className="terminal-notice-action primary" onClick={retryLocalTerminal}>
                   Retry
                 </button>
-                <button type="button" className="ssh-notice-action" onClick={() => void locateLocalDirectory()}>Locate folder</button>
+                <button type="button" className="terminal-notice-action" onClick={() => void locateLocalDirectory()}>Locate folder</button>
               </div>
             )}
           </div>
         </div>
       )}
-      <SSHConnectionNotice
-        state={sshNoticeState}
-        label={sshSessionLabel}
-        onDismiss={() => publishSshNoticeState({ kind: 'hidden' })}
-        onRetry={onSshRetry ? retrySshShell : undefined}
-      />
       <SearchOverlay
         query={searchQuery}
         results={searchResults}

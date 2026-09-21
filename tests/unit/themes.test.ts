@@ -77,6 +77,18 @@ describe('themes', () => {
     }
   });
 
+  it('keeps accent-button text legible when switching between all themes', () => {
+    const root = document.documentElement;
+    const originalStyle = root.style.cssText;
+    try {
+      for (const name of [...themeNames, 'tokyo-night'] as const) {
+        applyCssTheme(getTheme(name).css);
+        expect(contrastRatio(root.style.getPropertyValue('--on-accent'),
+          root.style.getPropertyValue('--text-accent'))).toBeGreaterThanOrEqual(4.5);
+      }
+    } finally { root.style.cssText = originalStyle; }
+  });
+
   it('keeps secondary sidebar text legible in every theme', () => {
     const textToken = 'text-secondary';
     const sidebarSurfaceTokens = [...globalCss.matchAll(/([^{}]+)\{([^{}]*)\}/gs)]

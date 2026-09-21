@@ -5,7 +5,6 @@ import packageMetadata from '../../package.json';
 import { TerminalManager } from './terminal';
 import { AgentActivityBridge } from './agentActivityBridge';
 import * as fs from 'node:fs';
-import { SSHManager } from './ssh';
 import { isAllowedExternalUrl } from './externalUrls';
 import { FileSystemManager } from './filesystem';
 import { GitManager } from './git';
@@ -13,15 +12,12 @@ import { SettingsManager } from './settings';
 import { requireDirectory, createWorkspaceDirectory, renameWorkspaceDirectory } from './workspaceDirectories';
 import { WorkspaceFileOperations } from './workspaceFileOperations';
 import { sendRendererEvent } from './rendererEvents';
-import type { SSHListDirParams } from '../shared/files';
 import type {
   ReadLocalTextFileRequest,
-  ReadSSHTextFileRequest,
   TextFileResult,
   TextFileSnapshot,
   TextFileWriteValue,
   WriteLocalTextFileRequest,
-  WriteSSHTextFileRequest,
 } from '../shared/textFiles';
 import {
   createRendererProtocolHandler,
@@ -37,13 +33,11 @@ import {
   type WorkspacePrepareForCloseDecision,
 } from './workspaceLifecycle';
 import { NativeTerminalCapacity } from './terminalCapacity';
-import { registerSSHLocalForwardHandlers } from './sshLocalForwardIpc';
 import { parseCommandNotificationPayload, type CommandNotificationPayload } from '../shared/commandNotifications';
 
 let mainWindow: electron.BrowserWindow | null = null;
 let initializeUpdaterForWindow: ((window: electron.BrowserWindow) => void) | null = null;
 let terminalManager: TerminalManager;
-let sshManager: SSHManager;
 let fsManager: FileSystemManager;
 let gitManager: GitManager;
 let settingsManager: SettingsManager;
@@ -71,6 +65,11 @@ export function notificationActivationKey(argv: string[]): string | undefined {
 
 const e2eEventsPath = process.env.JANET_E2E_EVENTS_PATH;
 const e2eRemoteDebuggingPort = process.env.JANET_E2E_REMOTE_DEBUGGING_PORT;
+
+if (process.env.NODE_ENV === 'test' && process.env.JANET_E2E_USER_DATA_DIR) {
+  // E2E runners may not expose a usable GPU; keep Electron tests software-rendered.
+  electron.app.commandLine.appendSwitch('disable-gpu');
+}
 
 if (e2eRemoteDebuggingPort) {
   electron.app.commandLine.appendSwitch('remote-debugging-port', e2eRemoteDebuggingPort);
@@ -151,7 +150,6 @@ export function copyTerminalTextToClipboard(
 async function stopWorkspaceResources(): Promise<void> {
   await terminalManager.stopAll();
   fsManager.cleanup();
-  sshManager.cleanup();
 }
 
 async function stopWorkspaceResourcesAfterHidingWindow(): Promise<void> {
@@ -254,9 +252,8 @@ function deliverCommandNotification(value: unknown): boolean {
       if (!notificationProtocolRegistered) throw new Error('Could not register notification activation');
     }
     const seconds = Math.round(payload.durationMs / 1000);
-    const where = payload.context.kind === 'ssh' ? ` on ${payload.context.hostLabel}` : '';
     const title = payload.outcome === 'failure' ? 'Command failed' : payload.outcome === 'success' ? 'Command finished' : 'Command completed';
-    const body = `${payload.tabLabel} · ${payload.paneLabel}${where} (${seconds}s)`;
+    const body = `${payload.tabLabel} · ${payload.paneLabel} (${seconds}s)`;
     const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     if (payload.target) notificationTargets.set(key, payload.target);
     while (notificationTargets.size > 128) notificationTargets.delete(notificationTargets.keys().next().value!);
@@ -404,31 +401,6 @@ electron.app.whenReady().then(() => {
   fsManager = new FileSystemManager();
   gitManager = new GitManager();
   settingsManager = new SettingsManager();
-  sshManager = new SSHManager({
-    lookup: (host, port) => settingsManager.getSshHostKey(host, port),
-    remember: (host, port, fingerprint) => settingsManager.rememberSshHostKey(host, port, fingerprint),
-    migrate: (host, port, expectedFingerprint, fingerprint) => (
-      settingsManager.migrateSshHostKey(host, port, expectedFingerprint, fingerprint)
-    ),
-  }, async (host, port, fingerprint) => {
-    const window = mainWindow;
-    if (!window || window.isDestroyed()) return false;
-
-    const { response } = await electron.dialog.showMessageBox(window, {
-      type: 'warning',
-      title: 'New SSH host',
-      message: `Trust and connect to ${host}:${port}?`,
-      detail: `Verify this SHA-256 fingerprint before continuing:\n\n${fingerprint}`,
-      buttons: ['Trust and connect', 'Cancel'],
-      defaultId: 1,
-      cancelId: 1,
-      noLink: true,
-    });
-    return response === 0;
-  }, (event) => {
-    sendRendererEvent(mainWindow, 'ssh:onConnectionClosed', event);
-  }, terminalCapacity);
-
   workspaceLifecycle = new WorkspaceLifecycleController({
     requestClosePreparation: requestRendererClosePreparation,
     stopAll: stopWorkspaceResourcesAfterHidingWindow,
@@ -500,7 +472,6 @@ electron.app.on('window-all-closed', () => {
   terminalManager.cleanup();
   agentActivityBridge.close();
   fsManager.cleanup();
-  sshManager.cleanup();
   if (process.platform !== 'darwin') {
     electron.app.quit();
   }
@@ -542,16 +513,12 @@ function registerIpcHandlers() {
     if (!isTrustedSender(event) || !acknowledgement || typeof acknowledgement !== 'object') return;
     const { source, id, generation, sequence } = acknowledgement as Record<string, unknown>;
     if (
-      (source !== 'local' && source !== 'ssh')
+      source !== 'local'
       || typeof id !== 'string'
       || !Number.isSafeInteger(generation)
       || !Number.isSafeInteger(sequence)
     ) return;
-    if (source === 'local') {
-      terminalManager.acknowledgeOutput(id, generation as number, sequence as number);
-    } else {
-      sshManager.acknowledgeOutput(id, generation as number, sequence as number);
-    }
+    terminalManager.acknowledgeOutput(id, generation as number, sequence as number);
   });
 
   // === Terminal IPC ===
@@ -590,74 +557,6 @@ function registerIpcHandlers() {
     agentActivityBridge.remove(id);
     terminalManager.destroy(id);
   });
-
-  // === SSH IPC ===
-  handle('ssh:connect', async (event, { id, host, port, username, auth, password, privateKey, jumpHost }) => {
-    recordE2eEvent({ type: 'ssh:connect:start', id, host, port, username });
-    await sshManager.connect(id, { host, port, username, auth, password, privateKey, jumpHost });
-    recordE2eEvent({ type: 'ssh:connect:done', id });
-    return { connected: true };
-  });
-
-  handle('ssh:createShell', (event, {
-    id, termId, cols, rows, startupCommands, startupShellDialect,
-  }) => {
-    recordE2eEvent({ type: 'ssh:createShell:start', id, termId, cols, rows });
-    const shell = sshManager.createShell(
-      id,
-      termId,
-      { cols, rows },
-      startupCommands,
-      startupShellDialect,
-    );
-    shell.onData((data, output) => {
-      return sendRendererEvent(mainWindow, 'terminal:onData', { source: 'ssh', id: termId, data, ...output });
-    });
-    return shell.ready.then(() => ({ connected: true }));
-  });
-
-  handle('ssh:writeShell', (event, { sessionId, termId, data, userInput }) => {
-    sshManager.writeShell(termId, data, sessionId, userInput !== false);
-  });
-  handle('ssh:writeShellBinary', (event, { sessionId, termId, data, userInput }) => {
-    sshManager.writeShellBinary(termId, data, sessionId, userInput !== false);
-  });
-
-  handle('ssh:destroyShell', (event, { sessionId, termId }) => {
-    return sshManager.destroyShell(termId, sessionId);
-  });
-
-  handle('ssh:resizeShell', (event, { termId, cols, rows }) => {
-    sshManager.resizeShell(termId, cols, rows);
-  });
-
-  handle('ssh:listDir', async (event, params: SSHListDirParams) => {
-    return await sshManager.listDir(params?.sessionId, params?.remotePath, params?.showHidden);
-  });
-
-  handle('ssh:readTextFile', async (
-    event,
-    request: ReadSSHTextFileRequest,
-  ): Promise<TextFileResult<TextFileSnapshot>> => {
-    return await sshManager.readTextFile(request);
-  });
-
-  handle('ssh:writeTextFile', async (
-    event,
-    request: WriteSSHTextFileRequest,
-  ): Promise<TextFileResult<TextFileWriteValue>> => {
-    return await sshManager.writeTextFile(request);
-  });
-
-  handle('ssh:disconnect', async (event, { id }) => {
-    await sshManager.disconnect(id);
-  });
-
-  handle('ssh:listConnections', () => {
-    return sshManager.listConnections();
-  });
-
-  registerSSHLocalForwardHandlers(handle, sshManager);
 
   // === File System IPC ===
   handle('fs:listDir', async (event, { dirPath, showHidden }) => {

@@ -396,7 +396,7 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     await expect(workspaceTools.getByRole('tab', { name: 'Source Control' })).toHaveAttribute('aria-selected', 'true');
 
     await page.getByRole('button', { name: 'Hide settings' }).click();
-    // Sidebar SSH entry points are intentionally deferred; project creation still supports SSH.
+    // Built-in SSH entry points have been removed.
     await expect(tabsPanel.getByRole('button', { name: 'SSH connections' })).toHaveCount(0);
     await expect(page.locator('#vtab-ssh-connections')).toHaveCount(0);
 

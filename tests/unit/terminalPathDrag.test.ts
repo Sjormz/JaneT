@@ -89,18 +89,11 @@ describe('terminal path drag payloads', () => {
     expect(readTerminalPathDragData(unsupported)).toBeNull();
   });
 
-  it('matches local paths locally and SSH paths only to the same session', () => {
-    const remoteFile: TerminalPathDragPayload = {
-      ...localFile,
-      path: '/srv/project/src/main.ts',
-      filesystem: { kind: 'ssh', sessionId: 'ssh-primary' },
-    };
-
+  it('accepts local paths and rejects legacy remote payloads', () => {
     expect(canDropTerminalPath(localFile, { kind: 'local' })).toBe(true);
-    expect(canDropTerminalPath(localFile, { kind: 'ssh', sessionId: 'ssh-primary' })).toBe(false);
-    expect(canDropTerminalPath(remoteFile, { kind: 'local' })).toBe(false);
-    expect(canDropTerminalPath(remoteFile, { kind: 'ssh', sessionId: 'ssh-primary' })).toBe(true);
-    expect(canDropTerminalPath(remoteFile, { kind: 'ssh', sessionId: 'ssh-other' })).toBe(false);
+    const transfer = dataTransferStub();
+    transfer.setData(TERMINAL_PATH_MIME, JSON.stringify({ ...localFile, filesystem: { kind: 'ssh', sessionId: 'old' } }));
+    expect(readTerminalPathDragData(transfer)).toBeNull();
   });
 });
 

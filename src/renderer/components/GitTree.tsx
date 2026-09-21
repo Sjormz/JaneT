@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import MotionPresence from './MotionPresence';
 import {
   RefreshIcon, ChevronDownIcon, ChevronRightIcon, PlusIcon,
   GitCommitIcon, SourceControlIcon as GitBranchIcon, GitMergeIcon,
@@ -27,7 +28,6 @@ interface GitBranchInfo {
 
 interface GitTreeProps {
   cwdReady: boolean;
-  isRemote: boolean;
   repoPath: string | null;
   status: GitStatusResult | null;
   searching: boolean;
@@ -82,7 +82,6 @@ interface DialogState {
 
 export default function GitTree({
   cwdReady,
-  isRemote,
   repoPath,
   status,
   searching,
@@ -159,7 +158,7 @@ export default function GitTree({
   useRefreshTask({
     key: `git-details:${repoPath || 'none'}`,
     intervalMs: 10_000,
-    enabled: Boolean(repoPath) && cwdReady && !isRemote,
+    enabled: Boolean(repoPath) && cwdReady,
     run: () => repoPath ? loadGitDetails(repoPath) : undefined,
   });
 
@@ -392,7 +391,6 @@ export default function GitTree({
   const toggle = (section: Section) => setExpanded((prev) => ({ ...prev, [section]: !prev[section] }));
 
   if (searching) return shell('Searching for Git repositories…');
-  if (isRemote) return shell('Source Control is available for local terminals', 'Open a local terminal in a Git repository to manage changes, branches, and worktrees.');
   if (!repoPath) return shell('No Git repository found', 'Open a local terminal in a Git repository to see changes, branches, and worktrees.');
 
   const conflictedPaths = new Set(status?.conflicted || []);
@@ -653,19 +651,20 @@ export default function GitTree({
         ))}
       </GitSection>
 
-      {dialog?.repoPath === repoPath && createPortal(
+      {createPortal(
               <GitDialog
-                title={dialog.title}
-                description={dialog.description}
-                fields={dialog.fields}
-                confirmLabel={dialog.confirmLabel}
-                destructive={dialog.destructive}
+                open={Boolean(dialog && dialog.repoPath === repoPath)}
+                title={dialog?.title ?? ''}
+                description={dialog?.description}
+                fields={dialog?.fields ?? []}
+                confirmLabel={dialog?.confirmLabel ?? ''}
+                destructive={dialog?.destructive}
                 busy={busy}
                 repoPath={repoPath}
                 worktreeBaseDir={worktreeBaseDir}
                 worktreeTemplate={worktreeTemplate}
                 onSubmit={(values) => {
-                  if (dialog.repoPath !== activeRepoPath.current) {
+                  if (!dialog || dialog.repoPath !== activeRepoPath.current) {
                     setDialog(null);
                     return;
                   }
@@ -995,7 +994,7 @@ function GitFile({ repoPath, path, originalPath, kind, wd, index, depth, onCopyT
           </button>
         </Tooltip>
       )}
-      {menu && createPortal(
+      {createPortal(<MotionPresence>{menu &&
         <div
           ref={menuRef}
           className="vtab-context-menu git-file-context-menu"
@@ -1063,14 +1062,15 @@ function GitFile({ repoPath, path, originalPath, kind, wd, index, depth, onCopyT
           <span className="sr-only" role="status" aria-live="polite">
             {copyFailed ? `Couldn't copy path for ${path}` : ''}
           </span>
-        </div>,
+        </div>}</MotionPresence>,
         document.body,
       )}
     </div>
   );
 }
 
-function GitDialog({ title, description, fields, confirmLabel, destructive, busy, repoPath, worktreeBaseDir, worktreeTemplate, onSubmit, onCancel }: {
+function GitDialog({ open, title, description, fields, confirmLabel, destructive, busy, repoPath, worktreeBaseDir, worktreeTemplate, onSubmit, onCancel }: {
+  open: boolean;
   title: string;
   description?: string;
   fields: DialogField[];
@@ -1092,8 +1092,11 @@ function GitDialog({ title, description, fields, confirmLabel, destructive, busy
   const dialogId = useId();
   const titleId = `${dialogId}-title`;
   const descriptionId = `${dialogId}-description`;
+  useEffect(() => {
+    if (open) setValues(Object.fromEntries(fields.map(field => [field.key, field.defaultValue || ''])));
+  }, [open, fields]);
   useModalFocus({
-    open: true,
+    open,
     containerRef: dialogRef,
     onClose: onCancel,
     initialFocusSelector: destructive
@@ -1118,7 +1121,7 @@ function GitDialog({ title, description, fields, confirmLabel, destructive, busy
   };
 
   return (
-    <div className="git-dialog-overlay" onClick={onCancel}>
+    <MotionPresence>{open && <div className="git-dialog-overlay" onClick={onCancel}>
       <div
         ref={dialogRef}
         className="git-dialog"
@@ -1155,6 +1158,6 @@ function GitDialog({ title, description, fields, confirmLabel, destructive, busy
           </div>
         </form>
       </div>
-    </div>
+    </div>}</MotionPresence>
   );
 }

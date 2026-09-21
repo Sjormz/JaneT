@@ -9,13 +9,6 @@ export type EditorResource =
       path: string;
     }
   | {
-      kind: 'ssh';
-      sessionId: string;
-      connectionId: string;
-      path: string;
-      label: string;
-    }
-  | {
       kind: 'git-diff';
       repoPath: string;
       path: string;
@@ -50,8 +43,7 @@ export interface TabDocumentWorkspace {
 
 export function editorResourceKey(resource: EditorResource): string {
   if (resource.kind === 'local') return `local:${resource.path}`;
-  if (resource.kind === 'git-diff') return `git-diff:${resource.repoPath}:${resource.side}:${resource.path}`;
-  return `ssh:${resource.sessionId}:${resource.connectionId}:${resource.path}`;
+  return `git-diff:${resource.repoPath}:${resource.side}:${resource.path}`;
 }
 
 export function editorResourceTitle(resource: EditorResource): string {
@@ -64,16 +56,7 @@ export function editorResourceTitle(resource: EditorResource): string {
 
 export function editorModelUri(resource: EditorResource, resolvedPath = resource.path): string {
   if (resource.kind === 'local') return resolvedPath;
-  if (resource.kind === 'git-diff') {
-    return `janet-git-diff://${resource.side}/${encodeURIComponent(resource.path)}?repo=${encodeURIComponent(resource.repoPath)}`;
-  }
-  const session = encodeURIComponent(resource.sessionId);
-  const path = resolvedPath
-    .split('/')
-    .filter(Boolean)
-    .map((segment) => encodeURIComponent(segment))
-    .join('/');
-  return `janet-ssh://${session}/${path}?connection=${encodeURIComponent(resource.connectionId)}`;
+  return `janet-git-diff://${resource.side}/${encodeURIComponent(resource.path)}?repo=${encodeURIComponent(resource.repoPath)}`;
 }
 
 /**
@@ -84,9 +67,6 @@ export function editorModelUri(resource: EditorResource, resolvedPath = resource
 export function editorDocumentModelUri(document: EditorDocument): string {
   const resolvedPath = document.resolvedPath || document.resource.path;
   const owner = encodeURIComponent(document.ownerTabId);
-  if (document.resource.kind === 'ssh') {
-    return `${editorModelUri(document.resource, resolvedPath)}&owner=${owner}`;
-  }
   if (document.resource.kind === 'git-diff') {
     return `${editorModelUri(document.resource, resolvedPath)}&owner=${owner}`;
   }

@@ -6,9 +6,8 @@ import { isStartupShellDialect, sanitizeStartupCommands } from '../shared/startu
 export interface SavedPaneLeaf {
   type: 'leaf';
   title?: string;
-  terminalType?: 'local' | 'ssh';
+  terminalType?: 'local';
   cwd?: string;
-  sshProfileId?: string;
   startupCommands?: string[];
   startupShellDialect?: StartupShellDialect;
 }
@@ -27,9 +26,8 @@ export interface SavedTab {
   groupId?: string;
   id: string;
   title: string;
-  type: 'local' | 'ssh';
+  type: 'local';
   cwd?: string;
-  sshProfileId?: string;
   selectedPanePath?: PanePath;
   maximizedPanePath?: PanePath;
   root: SavedPaneNode;
@@ -41,10 +39,10 @@ export interface SavedSession {
   activeTabId: string | null;
   sidebarOpen: boolean;
   tabsOpen: boolean;
-  sidebarSection: 'files' | 'ssh' | 'git' | 'settings';
+  sidebarSection: 'files' | 'git' | 'settings';
 }
 
-const VALID_SECTIONS = new Set(['files', 'ssh', 'git', 'settings']);
+const VALID_SECTIONS = new Set(['files', 'git', 'settings']);
 export const MAX_RESTORED_TABS = 64;
 export const MAX_RESTORED_TERMINALS = 64;
 export const MAX_SAVED_TITLE_LENGTH = 256;
@@ -103,11 +101,8 @@ export function serializePaneTree(
       ...(node.title ? { title: node.title } : {}),
       ...(node.terminalType ? { terminalType: node.terminalType } : {}),
       ...(cwdByTerminal[node.id] ?? node.cwd ? { cwd: cwdByTerminal[node.id] ?? node.cwd } : {}),
-      ...(node.sshProfileId ? { sshProfileId: node.sshProfileId } : {}),
       ...(startupCommands.length > 0 ? { startupCommands } : {}),
-      ...(startupCommands.length > 0 && node.terminalType === 'ssh'
-        ? { startupShellDialect: isStartupShellDialect(node.startupShellDialect) ? node.startupShellDialect : 'posix' }
-        : startupCommands.length > 0 && isStartupShellDialect(node.startupShellDialect)
+      ...(startupCommands.length > 0 && isStartupShellDialect(node.startupShellDialect)
           ? { startupShellDialect: node.startupShellDialect }
         : {}),
     };
@@ -146,43 +141,34 @@ function restorePaneTreeWithinBudget(
   budget.remaining -= 1;
   const node = saved as {
     type?: string; title?: string; direction?: string; sizes?: unknown; children?: unknown;
-    terminalType?: string; cwd?: string; sshProfileId?: string;
+    terminalType?: string; cwd?: string;
     startupCommands?: unknown; startupShellDialect?: unknown;
   };
 
   if (node.type === 'leaf') {
+    if (node.terminalType !== undefined && node.terminalType !== 'local') return null;
     if (budget.leavesRemaining <= 0) {
       budget.exceeded = true;
       return null;
     }
     budget.leavesRemaining -= 1;
-    const hasExplicitStartupDialect = node.startupShellDialect !== undefined
-      && node.startupShellDialect !== null
-      && node.startupShellDialect !== '';
     const startupShellDialect = isStartupShellDialect(node.startupShellDialect)
       ? node.startupShellDialect
       : undefined;
     const validStartupDialect = startupShellDialect !== undefined;
-    const startupCommands = node.terminalType === 'ssh'
-      && hasExplicitStartupDialect
-      && !validStartupDialect
-      ? []
-      : sanitizeStartupCommands(node.startupCommands);
+    const startupCommands = sanitizeStartupCommands(node.startupCommands);
     const leaf: TerminalLeaf = {
       id: genId(prefix),
       type: 'leaf',
       ...(typeof node.title === 'string' && node.title.length <= MAX_SAVED_TITLE_LENGTH
         ? { title: node.title }
         : {}),
-      terminalType: node.terminalType === 'ssh' || node.terminalType === 'local' ? node.terminalType : undefined,
+      terminalType: node.terminalType === 'local' ? 'local' : undefined,
       cwd: typeof node.cwd === 'string' ? node.cwd : undefined,
-      sshProfileId: typeof node.sshProfileId === 'string' ? node.sshProfileId : undefined,
       ...(startupCommands.length > 0 ? { startupCommands } : {}),
       ...(startupCommands.length > 0 && validStartupDialect
         ? { startupShellDialect }
-        : startupCommands.length > 0 && node.terminalType === 'ssh'
-          ? { startupShellDialect: 'posix' }
-          : {}),
+        : {}),
     };
     return leaf;
   }
@@ -253,7 +239,6 @@ export function normalizeSession(raw: unknown): SavedSession {
         title: tab.title,
         type: tab.type,
         ...(typeof tab.cwd === 'string' ? { cwd: tab.cwd } : {}),
-        ...(typeof tab.sshProfileId === 'string' ? { sshProfileId: tab.sshProfileId } : {}),
         ...(selectedPanePath !== undefined ? { selectedPanePath } : {}),
         ...(maximizedPanePath !== undefined ? { maximizedPanePath } : {}),
         root: tab.root,
@@ -291,8 +276,9 @@ function countSavedPaneLeaves(root: unknown, limit: number): number | null {
     if (!node || typeof node !== 'object' || depth > MAX_PANE_TREE_DEPTH) return null;
     nodes += 1;
     if (nodes > MAX_PANE_TREE_NODES) return null;
-    const candidate = node as { type?: unknown; children?: unknown };
+    const candidate = node as { type?: unknown; terminalType?: unknown; children?: unknown };
     if (candidate.type === 'leaf') {
+      if (candidate.terminalType !== undefined && candidate.terminalType !== 'local') return null;
       leaves += 1;
       if (leaves > limit) return null;
     } else if (candidate.type === 'split' && Array.isArray(candidate.children) && (candidate.children.length > 0 || depth === 0)) {
@@ -311,6 +297,6 @@ function isValidSavedTab(value: unknown): value is SavedTab {
   return (
     typeof tab.id === 'string' && tab.id.length > 0 &&
     typeof tab.title === 'string' && tab.title.length <= MAX_SAVED_TITLE_LENGTH &&
-    (tab.type === 'local' || tab.type === 'ssh')
+    tab.type === 'local'
   );
 }

@@ -28,17 +28,11 @@ const rendererMocks = vi.hoisted(() => ({
   shortcutEditorProps: null as any,
   sidebarProps: null as any,
   verticalTabBarProps: null as any,
-  sshManagerProps: null as any,
   prepareForCloseHandler: null as null | ((request: {
     requestId: string;
     reason: 'window-close' | 'application-quit' | 'update-install';
   }) => void | Promise<void>),
-  sshConnectionClosedHandler: null as null | ((event: { id: string; reason: string }) => void),
   terminalExitHandler: null as null | ((event: { id: string; exitCode: number; signal: number }) => void),
-  sshRetryHandlers: new Map<string, (
-    termId: string,
-    dimensions: { cols: number; rows: number },
-  ) => void | Promise<void>>(),
   cwdChangeHandlers: new Map<string, (termId: string, cwd: string) => void>(),
   agentEventHandlers: new Map<string, (event: AgentLifecycleEvent) => void>(),
   semanticCommandStartedHandlers: new Map<string, (event: SemanticCommandStartedEvent) => void>(),
@@ -48,7 +42,6 @@ const rendererMocks = vi.hoisted(() => ({
   inputLabels: new Map<string, string>(),
 }));
 
-vi.mock('../../src/renderer/components/SSHManager', () => ({ default: (props: any) => { rendererMocks.sshManagerProps = props; return <div />; } }));
 vi.mock('../../src/renderer/components/Titlebar', () => ({
   default: (props: any) => {
     rendererMocks.titlebarProps = props;
@@ -104,16 +97,7 @@ vi.mock('../../src/renderer/components/Sidebar', () => ({
     );
   },
 }));
-vi.mock('../../src/renderer/components/StatusBar', () => ({
-  default: ({ sshSessions }: {
-    sshSessions: unknown[];
-  }) => (
-    <div
-      data-testid="statusbar"
-      data-ssh-count={sshSessions.length}
-    />
-  ),
-}));
+vi.mock('../../src/renderer/components/StatusBar', () => ({ default: () => <div data-testid="statusbar" /> }));
 vi.mock('../../src/renderer/components/CommandPalette', () => ({
   default: ({ actions }: { actions: Array<{
     id: string;
@@ -174,18 +158,12 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     hasSession,
     initialCwd,
     tabType,
-    sshSessionId,
-    sshShellReady = true,
-    sshConnectionLost = false,
     startupCommands,
     startupShellDialect,
     onReady,
     onRemoved,
-    onSshShellReady,
-    onSshShellFailed,
     onCwdChange,
     onFocus,
-    onSshRetry,
     onAgentEvent,
     onSemanticCommandStarted,
     onSemanticCommandCancelled,
@@ -196,22 +174,13 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     termId: string;
     hasSession?: boolean;
     initialCwd?: string;
-    tabType?: 'local' | 'ssh';
-    sshSessionId?: string;
-    sshShellReady?: boolean;
-    sshConnectionLost?: boolean;
+    tabType?: 'local';
     startupCommands?: string[];
     startupShellDialect?: 'posix' | 'fish' | 'powershell';
     onReady?: (id: string) => void;
     onRemoved?: (id: string) => void;
-    onSshShellReady?: (id: string, sessionId: string) => void;
-    onSshShellFailed?: (id: string, sessionId: string) => void;
     onCwdChange?: (id: string, cwd: string) => void;
     onFocus?: (id: string) => void;
-    onSshRetry?: (
-      id: string,
-      dimensions: { cols: number; rows: number },
-    ) => void | Promise<void>;
     onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
     onSemanticCommandStarted?: (termId: string, event: SemanticCommandStartedEvent) => void;
     onSemanticCommandCancelled?: (termId: string, event: SemanticCommandStartedEvent) => void;
@@ -220,7 +189,6 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     inputLabel?: string;
   }) {
     let effectActive = true;
-    if (onSshRetry) rendererMocks.sshRetryHandlers.set(termId, onSshRetry);
     if (onCwdChange) rendererMocks.cwdChangeHandlers.set(termId, onCwdChange);
     if (onAgentEvent) rendererMocks.agentEventHandlers.set(termId, (event) => onAgentEvent(termId, event));
     if (onSemanticCommandStarted) rendererMocks.semanticCommandStartedHandlers.set(termId, (event) => onSemanticCommandStarted(termId, event));
@@ -243,22 +211,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
 
     React.useEffect(() => {
       if (!hasSession) {
-        if (tabType === 'ssh') {
-          if (sshSessionId && sshShellReady) {
-            window.janet.sshCreateShell({
-              id: sshSessionId,
-              termId,
-              cols: 80,
-              rows: 24,
-              ...(startupCommands?.length ? { startupCommands } : {}),
-              ...(startupShellDialect ? { startupShellDialect } : {}),
-            }).then(
-              () => onSshShellReady?.(termId, sshSessionId),
-              () => onSshShellFailed?.(termId, sshSessionId),
-            );
-            onReady?.(termId);
-          }
-        } else if (tabType === 'local') {
+        if (tabType === 'local') {
           const create = window.janet.terminalCreate({
             id: termId,
             cwd: initialCwd,
@@ -284,7 +237,7 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
         onReady?.(termId);
       }
       return () => { effectActive = false; };
-    }, [termId, hasSession, initialCwd, tabType, sshSessionId, sshShellReady, startupCommands, startupShellDialect, onReady, onSshShellReady, onSshShellFailed]);
+    }, [termId, hasSession, initialCwd, tabType, startupCommands, startupShellDialect, onReady]);
 
     return (
       <div
@@ -292,7 +245,6 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
         data-testid={`terminal-${termId}`}
         data-terminal-focus-target
         data-terminal-id={termId}
-        data-ssh-connection-lost={sshConnectionLost ? 'true' : 'false'}
         onFocus={() => onFocus?.(termId)}
       >
         {termId}
@@ -325,9 +277,7 @@ beforeEach(() => {
   rendererMocks.sidebarProps = null;
   rendererMocks.verticalTabBarProps = null;
   rendererMocks.prepareForCloseHandler = null;
-  rendererMocks.sshConnectionClosedHandler = null;
   rendererMocks.terminalExitHandler = null;
-  rendererMocks.sshRetryHandlers.clear();
   rendererMocks.cwdChangeHandlers.clear();
   rendererMocks.agentEventHandlers.clear();
   rendererMocks.semanticCommandStartedHandlers.clear();
@@ -390,21 +340,6 @@ beforeEach(() => {
       rendererMocks.terminalExitHandler = callback;
       return () => {
         if (rendererMocks.terminalExitHandler === callback) rendererMocks.terminalExitHandler = null;
-      };
-    }),
-    sshConnect: vi.fn().mockResolvedValue({ connected: true }),
-    sshCreateShell: vi.fn().mockResolvedValue(undefined),
-    sshWriteShell: vi.fn(),
-    sshWriteShellBinary: vi.fn(),
-    sshResizeShell: vi.fn(),
-    sshDestroyShell: vi.fn().mockResolvedValue(true),
-    sshDisconnect: vi.fn().mockResolvedValue(undefined),
-    onSSHConnectionClosed: vi.fn((callback: (event: { id: string; reason: string }) => void) => {
-      rendererMocks.sshConnectionClosedHandler = callback;
-      return () => {
-        if (rendererMocks.sshConnectionClosedHandler === callback) {
-          rendererMocks.sshConnectionClosedHandler = null;
-        }
       };
     }),
     onPrepareForClose: vi.fn((callback: typeof rendererMocks.prepareForCloseHandler) => {
@@ -487,7 +422,7 @@ describe('split panes in the app', () => {
     expect(creations.every(request => request.cwd === '/home/test/project')).toBe(true);
     expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
   });
-  it('passes the existing local and SSH pane names to their terminal inputs', async () => {
+  it('passes the local pane names to their terminal inputs', async () => {
     const noop = vi.fn();
     const baseProps = {
       tabId: 'named-inputs',
@@ -515,10 +450,10 @@ describe('split panes in the app', () => {
     rerender(
       <SplitPane
         {...baseProps}
-        node={{ type: 'leaf', id: 'ssh-input', terminalType: 'ssh', title: 'Deploy' }}
+        node={{ type: 'leaf', id: 'second-input', terminalType: 'local', title: 'Deploy' }}
       />,
     );
-    expect(rendererMocks.inputLabels.get('ssh-input')).toBe('Deploy — SSH pane');
+    expect(rendererMocks.inputLabels.get('second-input')).toBe('Deploy — Local terminal pane');
   });
 
   it('propagates semantic commands from nested and maximized leaves with explicit tab ownership', () => {
@@ -1479,8 +1414,6 @@ describe('split panes in the app', () => {
     expect(secondTerminal).toBeInTheDocument();
     expect(window.janet.terminalCreate).not.toHaveBeenCalled();
     expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
-    expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
-    expect(window.janet.sshDestroyShell).not.toHaveBeenCalled();
 
     await act(() => new Promise((resolve) => setTimeout(resolve, 700)));
     const settingsCalls = vi.mocked(window.janet.setSettings).mock.calls;
@@ -1618,7 +1551,6 @@ describe('split panes in the app', () => {
 
     await waitFor(() => expect(rendererMocks.paletteActions).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'sidebar-files', keywords: ['files', 'project'] }),
-      expect.objectContaining({ id: 'sidebar-ssh', keywords: ['connect', 'remote'] }),
       expect.objectContaining({ id: 'settings-toggle', keywords: ['preferences'] }),
       expect.objectContaining({
         id: 'new-workspace',
@@ -1905,12 +1837,8 @@ describe('split panes in the app', () => {
       expect(rendererMocks.sidebarProps.section).toBe('files');
       expect(rendererMocks.sidebarProps.expanded).toBe(true);
     });
-
-    act(() => {
-      rendererMocks.paletteActions.find((action) => action.id === 'sidebar-ssh')!.handler();
-    });
     await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: 'SSH connections' })).toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: 'SSH connections' })).toBeNull();
     });
 
     act(() => {
@@ -1945,28 +1873,6 @@ describe('split panes in the app', () => {
       expect(screen.queryByRole('button', { name: 'Mock tool content' })).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Mock workspace tool' })).toHaveFocus();
     });
-  });
-
-  it('migrates a previously open SSH sidebar into the Tabs connection view', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {},
-      workspaceTabs: [],
-      session: {
-        tabs: [],
-        sidebarOpen: true,
-        tabsOpen: false,
-        sidebarSection: 'ssh',
-      },
-    }));
-
-    render(<App />);
-
-    await waitFor(() => {
-      expect(rendererMocks.sidebarProps?.expanded).toBe(false);
-      expect(screen.getByRole('dialog', { name: 'SSH connections' })).toBeInTheDocument();
-      expect(rendererMocks.titlebarProps?.settingsOpen).toBe(false);
-    });
-    expect(screen.getByTestId('vertical-tab-bar')).toBeInTheDocument();
   });
 
   it('migrates a previously open Settings sidebar into the titlebar popover', async () => {
@@ -2226,30 +2132,6 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(divider).toHaveAttribute('aria-valuenow', '10'));
   });
 
-  it('shows an untyped legacy split leaf with its inherited SSH fallback name', () => {
-    render(
-      <SplitPane
-        node={{ id: 'legacy-ssh-leaf', type: 'leaf', title: 'terminal' }}
-        tabId="legacy-ssh-tab"
-        tabType="ssh"
-        sshShellReady={false}
-        onTerminalReady={vi.fn()}
-        onTerminalRemoved={vi.fn()}
-        onAddTerminals={vi.fn()}
-        onClosePane={vi.fn()}
-        onResizePane={vi.fn()}
-        onMovePane={vi.fn()}
-        onPaneDragStart={vi.fn()}
-        onPaneDragOver={vi.fn()}
-        onPaneDragEnd={vi.fn()}
-        onToggleMaximizePane={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText('SSH')).toBeInTheDocument();
-    expect(screen.getByLabelText('SSH — SSH pane')).toBeInTheDocument();
-  });
-
   it('shows the current agent phase in the owning pane header', () => {
     const awareness: AgentAwareness = {
       provider: 'hermes', sessionId: 'session-1', phase: 'needs-input', phaseChangedAt: 10,
@@ -2365,8 +2247,7 @@ describe('split panes in the app', () => {
     }));
   });
 
-  it('passes each preset pane startup sequence to its matching local or SSH backend', async () => {
-    const sshProfileId = 'forge@box.local:22:password';
+  it('passes each preset pane startup sequence to its matching local backend', async () => {
     const preset = {
       id: 'workspace-startup',
       name: 'Forge workspace',
@@ -2384,8 +2265,7 @@ describe('split panes in the app', () => {
           },
           {
             type: 'leaf' as const,
-            terminalType: 'ssh' as const,
-            sshProfileId,
+            terminalType: 'local' as const,
             startupCommands: ['hermes doctor', 'hermes -p forge --tui'],
             startupShellDialect: 'posix' as const,
           },
@@ -2397,14 +2277,6 @@ describe('split panes in the app', () => {
     window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [preset],
-      sshProfiles: [{
-        id: sshProfileId,
-        host: 'box.local',
-        port: 22,
-        username: 'forge',
-        auth: 'password',
-        password: 'secret',
-      }],
     }));
 
     render(<App />);
@@ -2414,7 +2286,6 @@ describe('split panes in the app', () => {
       expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1);
     });
     (window.janet.terminalCreate as any).mockClear();
-    (window.janet.sshCreateShell as any).mockClear();
 
     await act(async () => {
       await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
@@ -2425,13 +2296,12 @@ describe('split panes in the app', () => {
         cwd: '/repo',
         startupCommands: ['npm install', 'npm run dev'],
       }));
-      expect(window.janet.sshCreateShell).toHaveBeenCalledWith(expect.objectContaining({
+      expect(window.janet.terminalCreate).toHaveBeenCalledWith(expect.objectContaining({
         startupCommands: ['hermes doctor', 'hermes -p forge --tui'],
         startupShellDialect: 'posix',
       }));
     });
     expect(window.janet.terminalWrite).not.toHaveBeenCalled();
-    expect(window.janet.sshWriteShell).not.toHaveBeenCalled();
 
     await waitFor(() => {
       const sessionUpdates = (window.janet.setSettings as any).mock.calls
@@ -2452,168 +2322,6 @@ describe('split panes in the app', () => {
     expect(launchedTab).toBeTruthy();
     expect(launchedTab.groupId).toBe('default');
     expect(rendererMocks.verticalTabBarProps.onSaveWorkspaceTab).toBeUndefined();
-  });
-
-  it('launches every terminal from a rootless legacy SSH preset', async () => {
-    const sshProfileId = 'legacy@box.local:22:password';
-    const preset = {
-      id: 'legacy-remote-workspace',
-      name: 'Legacy remote workspace',
-      type: 'ssh' as const,
-      sshProfileId,
-      terminalCount: 2,
-      splitDirection: 'horizontal' as const,
-    };
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {},
-      workspaceTabs: [preset],
-      sshProfiles: [{
-        id: sshProfileId,
-        host: 'box.local',
-        port: 22,
-        username: 'legacy',
-        auth: 'password',
-        password: 'secret',
-      }],
-    }));
-
-    render(<App />);
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
-    await act(async () => {});
-    const connectionCallStart = (window.janet.sshConnect as any).mock.calls.length;
-    const shellCallStart = (window.janet.sshCreateShell as any).mock.calls.length;
-
-    await act(async () => {
-      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
-    });
-
-    await waitFor(() => {
-      const launchedTab = rendererMocks.verticalTabBarProps.tabs.find(
-        (tab: { title: string }) => tab.title === preset.name,
-      );
-      const sessionIds = launchedTab.root.children.map((leaf: { sshSessionId: string }) => leaf.sshSessionId);
-      const connectionIds = (window.janet.sshConnect as any).mock.calls
-        .slice(connectionCallStart).map((call: any[]) => call[0].id);
-      const shellIds = (window.janet.sshCreateShell as any).mock.calls
-        .slice(shellCallStart).map((call: any[]) => call[0].id);
-      expect(sessionIds).toHaveLength(2);
-      expect([...connectionIds].sort()).toEqual([...sessionIds].sort());
-      expect([...shellIds].sort()).toEqual([...sessionIds].sort());
-    });
-    expect((window.janet.sshConnect as any).mock.calls.map((call: any[]) => call[0]))
-      .toEqual(expect.arrayContaining([
-        expect.objectContaining({ host: 'box.local', username: 'legacy' }),
-        expect.objectContaining({ host: 'box.local', username: 'legacy' }),
-      ]));
-  });
-
-  it('preserves a fresh preset SSH pane with a missing profile as unavailable remote state', async () => {
-    const preset = {
-      id: 'missing-remote-workspace',
-      name: 'Missing remote workspace',
-      type: 'local' as const,
-      terminalCount: 1,
-      splitDirection: 'vertical' as const,
-      root: {
-        type: 'leaf' as const,
-        terminalType: 'ssh' as const,
-        sshProfileId: 'missing-profile',
-        startupCommands: ['remote-only-command'],
-        startupShellDialect: 'posix' as const,
-      },
-    };
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {}, workspaceTabs: [preset], sshProfiles: [],
-    }));
-
-    render(<App />);
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
-    await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalled());
-    (window.janet.terminalCreate as any).mockClear();
-
-    await act(async () => {
-      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
-    });
-
-    await waitFor(() => {
-      const launched = rendererMocks.verticalTabBarProps.tabs.find(
-        (tab: { title: string }) => tab.title === preset.name,
-      );
-      expect(launched?.root).toMatchObject({
-        terminalType: 'ssh',
-        sshProfileId: 'missing-profile',
-        startupCommands: ['remote-only-command'],
-        startupShellDialect: 'posix',
-      });
-      expect(screen.getByTestId(`terminal-${launched.root.id}`))
-        .toHaveAttribute('data-ssh-connection-lost', 'true');
-    });
-    expect(window.janet.sshConnect).not.toHaveBeenCalled();
-    expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
-    expect(window.janet.terminalCreate).not.toHaveBeenCalled();
-    const launched = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { title: string }) => tab.title === preset.name,
-    );
-    expect(rendererMocks.sshRetryHandlers.get(launched.root.id)).toBeTypeOf('function');
-  });
-
-  it('preserves a fresh preset SSH pane when its connection fails', async () => {
-    const sshProfileId = 'offline@box.local:22:password';
-    const preset = {
-      id: 'offline-remote-workspace',
-      name: 'Offline remote workspace',
-      type: 'local' as const,
-      terminalCount: 1,
-      splitDirection: 'vertical' as const,
-      root: {
-        type: 'leaf' as const,
-        terminalType: 'ssh' as const,
-        sshProfileId,
-        startupCommands: ['remote-only-command'],
-        startupShellDialect: 'posix' as const,
-      },
-    };
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {},
-      workspaceTabs: [preset],
-      sshProfiles: [{
-        id: sshProfileId, host: 'box.local', port: 22, username: 'offline',
-        auth: 'password', password: 'secret',
-      }],
-    }));
-    (window.janet.sshConnect as any).mockRejectedValueOnce(new Error('offline'));
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    try {
-      render(<App />);
-      await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
-      await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalled());
-      (window.janet.terminalCreate as any).mockClear();
-
-      await act(async () => {
-        await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
-      });
-
-      await waitFor(() => {
-        const launched = rendererMocks.verticalTabBarProps.tabs.find(
-          (tab: { title: string }) => tab.title === preset.name,
-        );
-        expect(launched?.root).toMatchObject({
-          terminalType: 'ssh', sshProfileId,
-          startupCommands: ['remote-only-command'], startupShellDialect: 'posix',
-        });
-        expect(screen.getByTestId(`terminal-${launched.root.id}`))
-          .toHaveAttribute('data-ssh-connection-lost', 'true');
-      });
-      expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
-      expect(window.janet.terminalCreate).not.toHaveBeenCalled();
-      const launched = rendererMocks.verticalTabBarProps.tabs.find(
-        (tab: { title: string }) => tab.title === preset.name,
-      );
-      expect(rendererMocks.sshRetryHandlers.get(launched.root.id)).toBeTypeOf('function');
-    } finally {
-      consoleError.mockRestore();
-    }
   });
 
   it('restores startup commands with a saved session and reruns them in fresh terminals', async () => {
@@ -2808,1482 +2516,6 @@ describe('split panes in the app', () => {
     await splitFromPalette();
 
     expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
-  });
-
-  it('restores a saved SSH tab, connects it, then binds a single shell', async () => {
-    const sessionUuid = '7f81f492-7008-4e40-b558-1c0ca27d1b46';
-    const randomUuid = vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(sessionUuid);
-    const sshProfileId = 'pckpr@box.local:22:password';
-    const profile = {
-      id: sshProfileId,
-      host: 'box.local',
-      port: 22,
-      username: 'pckpr',
-      auth: 'password' as const,
-      password: 'secret',
-    };
-    let resolveConnect: ((value?: unknown) => void) | undefined;
-    let connectResolved = false;
-    window.janet.sshConnect = vi.fn().mockImplementation(() => new Promise((resolve) => {
-      resolveConnect = (value?: unknown) => {
-        connectResolved = true;
-        resolve(value);
-      };
-    }));
-    window.janet.sshCreateShell = vi.fn().mockImplementation(() => {
-      expect(connectResolved).toBe(true);
-      return Promise.resolve({ connected: true });
-    });
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {},
-      workspaceTabs: [],
-      sshProfiles: [profile],
-      session: {
-        tabs: [
-          {
-            id: 'ssh-1',
-            title: 'box',
-            type: 'ssh',
-            sshProfileId,
-            root: {
-              type: 'leaf',
-              startupCommands: ['hermes doctor', 'hermes --tui'],
-              startupShellDialect: 'posix',
-            },
-          },
-        ],
-        activeTabId: 'ssh-1',
-        sidebarOpen: true,
-        tabsOpen: true,
-        sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-
-    // The SSH tab should mount a single terminal...
-    await waitFor(() => {
-      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
-    });
-
-    // The xterm mounts first, but shell creation waits until the SSH
-    // transport exists. Otherwise restored panes race ssh:createShell
-    // against ssh:connect and can fail with "session not found".
-    await waitFor(() => expect(window.janet.sshConnect).toHaveBeenCalledTimes(1));
-    const pendingSessionId = (window.janet.sshConnect as any).mock.calls[0][0].id as string;
-    expect(randomUuid).toHaveBeenCalledOnce();
-    expect(pendingSessionId).toBe(`ssh-${sessionUuid}`);
-    randomUuid.mockRestore();
-    expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
-      kind: 'ssh',
-      sessionId: pendingSessionId,
-      label: 'pckpr@box.local:22',
-      connectionState: 'connecting',
-      ready: false,
-    }));
-    expect(rendererMocks.sidebarProps.explorerSource).not.toHaveProperty('cwd', '/home/test');
-
-    resolveConnect?.({ connected: true });
-
-    await waitFor(() => {
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1);
-    });
-
-    const connectArgs = (window.janet.sshConnect as any).mock.calls[0][0] as any;
-    const shellArgs = (window.janet.sshCreateShell as any).mock.calls[0][0] as any;
-    expect(connectArgs.id).toBe(`ssh-${sessionUuid}`);
-    expect(shellArgs.id).toBe(connectArgs.id);
-    expect(shellArgs).toMatchObject({
-      startupCommands: ['hermes doctor', 'hermes --tui'],
-      startupShellDialect: 'posix',
-    });
-    act(() => rendererMocks.semanticCommandStartedHandlers.get(shellArgs.termId)!({
-      command: 'tmux attach', startedAt: 10,
-    }));
-    await waitFor(() => expect(historyUpdates()).toHaveLength(1));
-    act(() => rendererMocks.paletteActions.find((action) => action.id === 'history-toggle')!.handler());
-    const historyDialog = await screen.findByRole('dialog', { name: 'Command history' });
-    expect(within(historyDialog).getByRole('option', { name: /tmux attach.*running/i }))
-      .toBeInTheDocument();
-    expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
-      kind: 'ssh',
-      sessionId: connectArgs.id,
-      connectionState: 'ready',
-      ready: true,
-    }));
-    const emitAgentEvent = rendererMocks.agentEventHandlers.get(shellArgs.termId)!;
-    act(() => {
-      emitAgentEvent({
-        version: 1, provider: 'hermes', event: 'session.start', sessionId: 'agent-session-1',
-      });
-      emitAgentEvent({
-        version: 1, provider: 'hermes', event: 'attention.request',
-        sessionId: 'agent-session-1', turnId: 'turn-1',
-      });
-    });
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[
-      rendererMocks.verticalTabBarProps.activeTabId
-    ]).toMatchObject({ kind: 'needs-input', label: 'Hermes · Needs input' }));
-
-    act(() => rendererMocks.paletteActions.find(action => action.id === 'sidebar-ssh')!.handler());
-    act(() => {
-      rendererMocks.sshManagerProps.onProfilesChange([{ ...profile, host: 'renamed-box.local' }]);
-    });
-    await waitFor(() => {
-      expect(rendererMocks.verticalTabBarProps.sshProfiles[0].host).toBe('renamed-box.local');
-    });
-    expect(window.janet.sshConnect).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      rendererMocks.sshConnectionClosedHandler?.({ id: connectArgs.id, reason: 'transport reset' });
-    });
-    await waitFor(() => {
-      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
-        kind: 'ssh',
-        sessionId: connectArgs.id,
-        connectionState: 'disconnected',
-        ready: false,
-      }));
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-    });
-    expect(screen.getByTestId(`terminal-${shellArgs.termId}`)).toHaveAttribute(
-      'data-ssh-connection-lost',
-      'true',
-    );
-    expect(within(historyDialog).getByRole('option', { name: /tmux attach/i }))
-      .not.toHaveAccessibleName(/running/i);
-    expect(rendererMocks.verticalTabBarProps.awarenessByTab[
-      rendererMocks.verticalTabBarProps.activeTabId
-    ])
-      .toMatchObject({ kind: 'disconnected', label: 'SSH disconnected' });
-    expect(screen.getByText('SSH disconnected')).toHaveClass('leaf-awareness', 'disconnected');
-    expect(screen.getByRole('status', { name: 'Terminal status announcements' }))
-      .toHaveTextContent('SSH disconnected');
-    expect(window.janet.sshConnect).toHaveBeenCalledTimes(1);
-
-    const retry = rendererMocks.sshRetryHandlers.get(shellArgs.termId);
-    expect(retry).toBeTruthy();
-    (window.janet.sshCreateShell as any).mockRejectedValueOnce(new Error('session not found'));
-    (window.janet.sshConnect as any)
-      .mockRejectedValueOnce(new Error('host offline'))
-      .mockResolvedValue({ connected: true });
-
-    await act(async () => {
-      await expect(Promise.resolve(retry?.(shellArgs.termId, { cols: 73, rows: 19 })))
-        .rejects.toThrow('host offline');
-    });
-    expect(window.janet.sshCreateShell).toHaveBeenLastCalledWith(expect.objectContaining({
-      termId: shellArgs.termId,
-      cols: 73,
-      rows: 19,
-    }));
-    expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
-    expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
-      connectionState: 'disconnected',
-      ready: false,
-    }));
-
-    (window.janet.sshCreateShell as any)
-      .mockRejectedValueOnce(new Error('session not found'))
-      .mockRejectedValueOnce(new Error('replacement shell unavailable'));
-    await act(async () => {
-      await expect(retry!(shellArgs.termId, { cols: 73, rows: 19 }))
-        .rejects.toThrow('replacement shell unavailable');
-    });
-    expect(window.janet.sshCreateShell).toHaveBeenLastCalledWith(expect.objectContaining({
-      termId: shellArgs.termId,
-      cols: 73,
-      rows: 19,
-    }));
-    expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
-      connectionState: 'disconnected',
-      ready: false,
-    }));
-    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-    expect(screen.getByTestId(`terminal-${shellArgs.termId}`))
-      .toHaveAttribute('data-ssh-connection-lost', 'true');
-    expect(rendererMocks.verticalTabBarProps.awarenessByTab[
-      rendererMocks.verticalTabBarProps.activeTabId
-    ]).toMatchObject({ kind: 'disconnected', label: 'SSH disconnected' });
-    expect(rendererMocks.verticalTabBarProps.tabs[0]).toMatchObject({
-      type: 'ssh',
-      sshProfileId,
-      root: {
-        startupCommands: ['hermes doctor', 'hermes --tui'],
-        startupShellDialect: 'posix',
-      },
-    });
-    expect(rendererMocks.verticalTabBarProps.tabs[0].root.terminalType).not.toBe('local');
-    expect(rendererMocks.sshRetryHandlers.get(shellArgs.termId)).toBe(retry);
-
-    (window.janet.sshCreateShell as any).mockRejectedValueOnce(new Error('session not found'));
-    await act(async () => {
-      await retry?.(shellArgs.termId, { cols: 0, rows: 0 });
-    });
-    await waitFor(() => {
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(6);
-      expect(window.janet.sshConnect).toHaveBeenCalledTimes(4);
-      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
-        connectionState: 'ready',
-        ready: true,
-      }));
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-      expect(rendererMocks.verticalTabBarProps.awarenessByTab[
-        rendererMocks.verticalTabBarProps.activeTabId
-      ]).toMatchObject({ kind: 'ready', label: 'Hermes · Ready' });
-    });
-    expect(window.janet.sshCreateShell).toHaveBeenLastCalledWith(expect.objectContaining({
-      termId: shellArgs.termId,
-      cols: 80,
-      rows: 24,
-    }));
-
-    act(() => {
-      emitAgentEvent({
-        version: 1, provider: 'hermes', event: 'session.start',
-        sessionId: 'agent-session-no-event',
-      });
-      emitAgentEvent({
-        version: 1, provider: 'hermes', event: 'attention.request',
-        sessionId: 'agent-session-no-event', turnId: 'turn-no-event',
-      });
-    });
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[
-      rendererMocks.verticalTabBarProps.activeTabId
-    ]).toMatchObject({ kind: 'needs-input', label: 'Hermes · Needs input' }));
-    act(() => {
-      rendererMocks.sshConnectionClosedHandler?.({ id: connectArgs.id, reason: 'transport reset' });
-    });
-    (window.janet.sshCreateShell as any).mockRejectedValueOnce(new Error('session not found'));
-    await act(async () => {
-      await retry?.(shellArgs.termId, { cols: 120, rows: 40 });
-    });
-    await waitFor(() => {
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(8);
-      expect(window.janet.sshConnect).toHaveBeenCalledTimes(5);
-      expect(rendererMocks.verticalTabBarProps.awarenessByTab[
-        rendererMocks.verticalTabBarProps.activeTabId
-      ]).toMatchObject({ kind: 'ready', label: 'Hermes · Ready' });
-    });
-
-    act(() => {
-      emitAgentEvent({
-        version: 1, provider: 'hermes', event: 'session.start',
-        sessionId: 'agent-session-pending',
-      });
-      emitAgentEvent({
-        version: 1, provider: 'hermes', event: 'attention.request',
-        sessionId: 'agent-session-pending', turnId: 'turn-pending',
-      });
-    });
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[
-      rendererMocks.verticalTabBarProps.activeTabId
-    ]).toMatchObject({ kind: 'needs-input', label: 'Hermes · Needs input' }));
-    act(() => {
-      rendererMocks.sshConnectionClosedHandler?.({ id: connectArgs.id, reason: 'transport reset' });
-    });
-    const replacementShell = deferred<{ connected: true }>();
-    (window.janet.sshCreateShell as any)
-      .mockRejectedValueOnce(new Error('session not found'))
-      .mockImplementationOnce(() => replacementShell.promise);
-    let successfulRetry!: Promise<void>;
-    await act(async () => {
-      successfulRetry = Promise.resolve(retry?.(shellArgs.termId, { cols: 120, rows: 40 }));
-      await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(10));
-      emitAgentEvent({
-        version: 1, provider: 'hermes', event: 'turn.start',
-        sessionId: 'agent-session-pending', turnId: 'turn-fresh',
-      });
-      replacementShell.resolve({ connected: true });
-      await successfulRetry;
-    });
-    await waitFor(() => {
-      expect(window.janet.sshConnect).toHaveBeenCalledTimes(6);
-      expect(rendererMocks.verticalTabBarProps.awarenessByTab[
-        rendererMocks.verticalTabBarProps.activeTabId
-      ]).toMatchObject({ kind: 'running', label: 'Hermes · Running · 1 busy', busyCount: 1 });
-    });
-  });
-
-  it('keeps a restored SSH session disconnected when its initial shell fails', async () => {
-    const sshProfileId = 'pckpr@box.local:22:password';
-    const initialShell = deferred<{ connected: true }>();
-    window.janet.sshCreateShell = vi.fn().mockReturnValue(initialShell.promise);
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {},
-      workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId,
-        host: 'box.local',
-        port: 22,
-        username: 'pckpr',
-        auth: 'password',
-        password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'failed-shell',
-          title: 'box',
-          type: 'ssh',
-          sshProfileId,
-          root: {
-            type: 'leaf',
-            startupCommands: ['hermes doctor'],
-            startupShellDialect: 'posix',
-          },
-        }],
-        activeTabId: 'failed-shell',
-        sidebarOpen: true,
-        tabsOpen: true,
-        sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-
-    await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
-    const shell = (window.janet.sshCreateShell as any).mock.calls[0][0];
-    const emitAgentEvent = rendererMocks.agentEventHandlers.get(shell.termId)!;
-    act(() => {
-      emitAgentEvent({
-        version: 1, provider: 'hermes', event: 'session.start', sessionId: 'current-session',
-      });
-    });
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps.awarenessByTab[
-      rendererMocks.verticalTabBarProps.activeTabId
-    ]).toMatchObject({ kind: 'ready', label: 'Hermes · Ready' }));
-    act(() => {
-      emitAgentEvent({
-        version: 1, provider: 'hermes', event: 'attention.request',
-        sessionId: 'stale-session', turnId: 'stale-turn',
-      });
-    });
-    expect(screen.getByRole('status', { name: 'Terminal status announcements' }))
-      .toBeEmptyDOMElement();
-    await act(async () => {
-      initialShell.reject(new Error('initial shell unavailable'));
-      await initialShell.promise.catch(() => {});
-    });
-    await waitFor(() => {
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
-        connectionState: 'disconnected',
-        ready: false,
-      }));
-    });
-    expect(shell).toMatchObject({
-      startupCommands: ['hermes doctor'],
-      startupShellDialect: 'posix',
-    });
-    expect(rendererMocks.sshRetryHandlers.get(shell.termId)).toBeTruthy();
-    expect(screen.getByTestId(`terminal-${shell.termId}`)).toHaveAttribute(
-      'data-ssh-connection-lost',
-      'true',
-    );
-    expect(screen.getByRole('status', { name: 'Terminal status announcements' }))
-      .toBeEmptyDOMElement();
-  });
-
-  it('does not publish initial SSH readiness after its transport closes', async () => {
-    const sshProfileId = 'late-initial@box.local:22:password';
-    const initialShell = deferred<{ connected: true }>();
-    window.janet.sshCreateShell = vi.fn().mockReturnValue(initialShell.promise);
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {}, workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId, host: 'box.local', port: 22, username: 'late-initial',
-        auth: 'password', password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'late-initial-shell', title: 'late initial host', type: 'ssh', sshProfileId,
-          root: { type: 'leaf' },
-        }],
-        activeTabId: 'late-initial-shell', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-    await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
-    const shell = (window.janet.sshCreateShell as any).mock.calls[0][0];
-
-    act(() => {
-      rendererMocks.sshConnectionClosedHandler?.({ id: shell.id, reason: 'transport reset' });
-    });
-    await waitFor(() => {
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
-        connectionState: 'disconnected',
-        ready: false,
-      }));
-    });
-
-    await act(async () => {
-      initialShell.resolve({ connected: true });
-      await initialShell.promise;
-    });
-    await waitFor(() => {
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
-        connectionState: 'disconnected',
-        ready: false,
-      }));
-    });
-    expect(screen.getByTestId(`terminal-${shell.termId}`))
-      .toHaveAttribute('data-ssh-connection-lost', 'true');
-  });
-
-  it('does not publish stale initial readiness while reconnecting a closed transport', async () => {
-    const sshProfileId = 'stale-initial@box.local:22:password';
-    const initialShell = deferred<{ connected: true }>();
-    const replacementShell = deferred<{ connected: true }>();
-    window.janet.sshCreateShell = vi.fn()
-      .mockReturnValueOnce(initialShell.promise)
-      .mockRejectedValueOnce(new Error('session not found'))
-      .mockReturnValueOnce(replacementShell.promise);
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {}, workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId, host: 'box.local', port: 22, username: 'stale-initial',
-        auth: 'password', password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'stale-initial-shell', title: 'stale initial host', type: 'ssh', sshProfileId,
-          root: { type: 'leaf' },
-        }],
-        activeTabId: 'stale-initial-shell', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-    await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
-    const shell = (window.janet.sshCreateShell as any).mock.calls[0][0];
-    act(() => {
-      rendererMocks.sshConnectionClosedHandler?.({ id: shell.id, reason: 'transport reset' });
-    });
-    await waitFor(() => expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0'));
-
-    const retry = rendererMocks.sshRetryHandlers.get(shell.termId);
-    expect(retry).toBeTruthy();
-    let retryPromise!: Promise<void>;
-    act(() => {
-      retryPromise = Promise.resolve(retry?.(shell.termId, { cols: 120, rows: 40 }));
-    });
-    await waitFor(() => {
-      expect(window.janet.sshConnect).toHaveBeenCalledTimes(2);
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(3);
-    });
-
-    await act(async () => {
-      initialShell.resolve({ connected: true });
-      await initialShell.promise;
-    });
-    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-    expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
-      connectionState: 'disconnected',
-      ready: false,
-    }));
-
-    await act(async () => {
-      replacementShell.resolve({ connected: true });
-      await retryPromise;
-    });
-    await waitFor(() => {
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
-        connectionState: 'ready',
-        ready: true,
-      }));
-    });
-  });
-
-  it('does not withdraw replacement readiness when the stale initial shell fails', async () => {
-    const sshProfileId = 'stale-failure@box.local:22:password';
-    const initialShell = deferred<{ connected: true }>();
-    window.janet.sshCreateShell = vi.fn()
-      .mockReturnValueOnce(initialShell.promise)
-      .mockRejectedValueOnce(new Error('session not found'))
-      .mockResolvedValueOnce({ connected: true });
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {}, workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId, host: 'box.local', port: 22, username: 'stale-failure',
-        auth: 'password', password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'stale-initial-failure', title: 'stale failure host', type: 'ssh', sshProfileId,
-          root: { type: 'leaf' },
-        }],
-        activeTabId: 'stale-initial-failure', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-    await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
-    const shell = (window.janet.sshCreateShell as any).mock.calls[0][0];
-    act(() => {
-      rendererMocks.sshConnectionClosedHandler?.({ id: shell.id, reason: 'transport reset' });
-    });
-    await waitFor(() => expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0'));
-
-    const retry = rendererMocks.sshRetryHandlers.get(shell.termId);
-    expect(retry).toBeTruthy();
-    await act(async () => {
-      await retry?.(shell.termId, { cols: 120, rows: 40 });
-    });
-    await waitFor(() => {
-      expect(window.janet.sshConnect).toHaveBeenCalledTimes(2);
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(3);
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-    });
-
-    await act(async () => {
-      initialShell.reject(new Error('old transport closed'));
-      await initialShell.promise.catch(() => {});
-    });
-    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-    expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
-      connectionState: 'ready',
-      ready: true,
-    }));
-  });
-
-  it('withdraws initial SSH readiness when its only healthy sibling closes', async () => {
-    const sshProfileId = 'shared-initial@box.local:22:password';
-    window.janet.sshCreateShell = vi.fn()
-      .mockResolvedValueOnce({ connected: true })
-      .mockRejectedValueOnce(new Error('initial shell unavailable'));
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {}, workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId, host: 'box.local', port: 22, username: 'shared-initial',
-        auth: 'password', password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'shared-initial-shell', title: 'shared initial host', type: 'ssh', sshProfileId,
-          root: {
-            type: 'split', direction: 'vertical', sizes: [1, 1],
-            children: [{ type: 'leaf' }, { type: 'leaf' }],
-          },
-        }],
-        activeTabId: 'shared-initial-shell', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-
-    await waitFor(() => {
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-    });
-    const restored = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { title: string }) => tab.title === 'shared initial host',
-    );
-    const healthyLeaf = restored.root.children[0];
-    const failedLeaf = restored.root.children[1];
-    expect(screen.getByTestId(`terminal-${failedLeaf.id}`))
-      .toHaveAttribute('data-ssh-connection-lost', 'false');
-
-    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal)/i })[0]);
-    await confirmPendingAction(/^close pane$/i);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-      expect(screen.getByTestId(`terminal-${failedLeaf.id}`))
-        .toHaveAttribute('data-ssh-connection-lost', 'true');
-    });
-    expect(window.janet.sshDestroyShell).toHaveBeenCalledWith({
-      sessionId: restored.sshSessionId,
-      termId: healthyLeaf.id,
-    });
-    expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
-  });
-
-  it('preserves a restored SSH tab with a missing profile as unavailable remote state', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {},
-      workspaceTabs: [],
-      sshProfiles: [],
-      session: {
-        tabs: [{
-          id: 'missing-ssh',
-          title: 'removed host',
-          type: 'ssh',
-          sshProfileId: 'removed-profile',
-          root: {
-            type: 'leaf',
-            terminalType: 'ssh',
-            sshProfileId: 'removed-profile',
-            startupCommands: ['rm -rf remote-build'],
-            startupShellDialect: 'posix',
-          },
-        }],
-        activeTabId: 'missing-ssh',
-        sidebarOpen: true,
-        tabsOpen: true,
-        sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-
-    await waitFor(() => {
-      const restored = rendererMocks.verticalTabBarProps.tabs.find(
-        (tab: { title: string }) => tab.title === 'removed host',
-      );
-      expect(restored).toMatchObject({ type: 'ssh', sshProfileId: 'removed-profile' });
-      expect(restored.root).toMatchObject({
-        terminalType: 'ssh', sshProfileId: 'removed-profile',
-        startupCommands: ['rm -rf remote-build'], startupShellDialect: 'posix',
-      });
-      expect(screen.getByTestId(`terminal-${restored.root.id}`))
-        .toHaveAttribute('data-ssh-connection-lost', 'true');
-    });
-    expect(window.janet.terminalCreate).not.toHaveBeenCalled();
-    expect(window.janet.sshConnect).not.toHaveBeenCalled();
-    expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
-    const restored = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { title: string }) => tab.title === 'removed host',
-    );
-    expect(rendererMocks.sshRetryHandlers.get(restored.root.id)).toBeTypeOf('function');
-    expect(screen.getByRole('status', { name: 'Terminal status announcements' }))
-      .toBeEmptyDOMElement();
-  });
-
-  it('keeps an established SSH tab disconnected when replacement shell creation fails', async () => {
-    const sshProfileId = 'retry@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {}, workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId, host: 'box.local', port: 22, username: 'retry',
-        auth: 'password', password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'retry-ssh', title: 'retry host', type: 'ssh', sshProfileId,
-          root: {
-            type: 'leaf', terminalType: 'ssh', sshProfileId,
-            startupCommands: ['remote-only-command'], startupShellDialect: 'posix',
-          },
-        }],
-        activeTabId: 'retry-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-    await waitFor(() => {
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1);
-      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
-        connectionState: 'ready', ready: true,
-      }));
-    });
-    const restored = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { title: string }) => tab.title === 'retry host',
-    );
-    const restoredSessionId = restored.sshSessionId;
-    expect(restoredSessionId).toBeTruthy();
-    const retry = rendererMocks.sshRetryHandlers.get(restored.root.id)!;
-    const retryShell = deferred<{ connected: true }>();
-    (window.janet.sshCreateShell as any)
-      .mockImplementationOnce(() => retryShell.promise)
-      .mockRejectedValueOnce(new Error('replacement shell unavailable'));
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    try {
-      let retryPromise!: Promise<void>;
-      await act(async () => {
-        retryPromise = Promise.resolve(retry(restored.root.id, { cols: 120, rows: 40 }));
-        await Promise.resolve();
-      });
-      await waitFor(() => expect(screen.getByTestId(`terminal-${restored.root.id}`))
-        .toHaveAttribute('data-ssh-connection-lost', 'true'));
-      expect(screen.getByRole('status', { name: 'Terminal status announcements' }))
-        .toBeEmptyDOMElement();
-
-      await act(async () => {
-        retryShell.reject(new Error('stale shell'));
-        await expect(retryPromise)
-          .rejects.toThrow('replacement shell unavailable');
-      });
-      expect(rendererMocks.sidebarProps.explorerSource).toEqual(expect.objectContaining({
-        connectionState: 'disconnected', ready: false,
-      }));
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-      expect(screen.getByTestId(`terminal-${restored.root.id}`))
-        .toHaveAttribute('data-ssh-connection-lost', 'true');
-      expect(rendererMocks.verticalTabBarProps.tabs[0]).toMatchObject({
-        type: 'ssh', sshProfileId, sshSessionId: restoredSessionId,
-        root: {
-          terminalType: 'ssh', sshProfileId,
-          startupCommands: ['remote-only-command'], startupShellDialect: 'posix',
-        },
-      });
-      expect(rendererMocks.sshRetryHandlers.get(restored.root.id)).toBe(retry);
-      expect(screen.getByRole('status', { name: 'Terminal status announcements' }))
-        .toHaveTextContent('retry host · SSH — SSH pane · SSH disconnected');
-    } finally {
-      consoleError.mockRestore();
-    }
-  });
-
-  it('does not restore SSH status when a direct retry finishes after its sole owner closes', async () => {
-    const sshProfileId = 'late-sole@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {}, workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId, host: 'box.local', port: 22, username: 'late-sole',
-        auth: 'password', password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'late-sole-ssh', title: 'late sole host', type: 'ssh', sshProfileId,
-          root: { type: 'leaf', terminalType: 'ssh', sshProfileId },
-        }],
-        activeTabId: 'late-sole-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-    await waitFor(() => {
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1);
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-    });
-    const restored = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { title: string }) => tab.title === 'late sole host',
-    );
-    const retry = rendererMocks.sshRetryHandlers.get(restored.root.id)!;
-    let resolveRetryShell!: (value: { connected: true }) => void;
-    (window.janet.sshCreateShell as any).mockImplementationOnce(() => new Promise((resolve) => {
-      resolveRetryShell = resolve;
-    }));
-
-    let retryPromise!: Promise<void>;
-    await act(async () => {
-      retryPromise = Promise.resolve(retry(restored.root.id, { cols: 120, rows: 40 }));
-      await Promise.resolve();
-    });
-    expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
-
-    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal)/i }));
-    await confirmPendingAction(/^close tab$/i);
-    await waitFor(() => {
-      expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: restored.sshSessionId });
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-    });
-
-    await act(async () => {
-      resolveRetryShell({ connected: true });
-      await retryPromise;
-    });
-    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-  });
-
-  it('does not reconnect after closing the sole owner cancels its direct retry', async () => {
-    const sshProfileId = 'cancelled-retry@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {}, workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId, host: 'box.local', port: 22, username: 'cancelled-retry',
-        auth: 'password', password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'cancelled-retry-ssh', title: 'cancelled retry host', type: 'ssh', sshProfileId,
-          root: { type: 'leaf', terminalType: 'ssh', sshProfileId },
-        }],
-        activeTabId: 'cancelled-retry-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-    await waitFor(() => {
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1);
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-    });
-    const restored = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { title: string }) => tab.title === 'cancelled retry host',
-    );
-    const retry = rendererMocks.sshRetryHandlers.get(restored.root.id)!;
-    const retryShell = deferred<{ connected: true }>();
-    (window.janet.sshCreateShell as any).mockImplementationOnce(() => retryShell.promise);
-
-    let retryPromise!: Promise<void>;
-    await act(async () => {
-      retryPromise = Promise.resolve(retry(restored.root.id, { cols: 120, rows: 40 }));
-      await Promise.resolve();
-    });
-    expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
-
-    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal)/i }));
-    await confirmPendingAction(/^close tab$/i);
-    await waitFor(() => {
-      expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: restored.sshSessionId });
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-    });
-
-    await act(async () => {
-      retryShell.reject(new Error(`SSH connection ${restored.sshSessionId} was closed`));
-      await retryPromise;
-    });
-    expect(window.janet.sshConnect).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-  });
-
-  it('does not restore SSH status when a replacement shell finishes after its sole owner closes', async () => {
-    const sshProfileId = 'late-sole-replacement@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {}, workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId, host: 'box.local', port: 22, username: 'late-sole-replacement',
-        auth: 'password', password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'late-sole-replacement-ssh', title: 'late sole replacement host', type: 'ssh', sshProfileId,
-          root: { type: 'leaf', terminalType: 'ssh', sshProfileId },
-        }],
-        activeTabId: 'late-sole-replacement-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-    await waitFor(() => {
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1);
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-    });
-    const restored = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { title: string }) => tab.title === 'late sole replacement host',
-    );
-    const retry = rendererMocks.sshRetryHandlers.get(restored.root.id)!;
-    let resolveReplacementShell!: (value: { connected: true }) => void;
-    (window.janet.sshCreateShell as any)
-      .mockRejectedValueOnce(new Error('stale shell'))
-      .mockImplementationOnce(() => new Promise((resolve) => {
-        resolveReplacementShell = resolve;
-      }));
-
-    let retryPromise!: Promise<void>;
-    await act(async () => {
-      retryPromise = Promise.resolve(retry(restored.root.id, { cols: 120, rows: 40 }));
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(3));
-
-    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal)/i }));
-    await confirmPendingAction(/^close tab$/i);
-    await waitFor(() => {
-      expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: restored.sshSessionId });
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-    });
-
-    await act(async () => {
-      resolveReplacementShell({ connected: true });
-      await retryPromise;
-    });
-    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-  });
-
-  it('preserves sibling SSH status when a direct retry finishes after its shared pane closes', async () => {
-    const sshProfileId = 'late@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {}, workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId, host: 'box.local', port: 22, username: 'late',
-        auth: 'password', password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'late-ssh', title: 'late host', type: 'ssh', sshProfileId,
-          root: {
-            type: 'split', direction: 'vertical', sizes: [1, 1],
-            children: [{ type: 'leaf' }, { type: 'leaf' }],
-          },
-        }],
-        activeTabId: 'late-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-    await waitFor(() => {
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-    });
-    const restored = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { title: string }) => tab.title === 'late host',
-    );
-    const retainedLeaf = restored.root.children[0];
-    const retriedLeaf = restored.root.children[1];
-    const retry = rendererMocks.sshRetryHandlers.get(retriedLeaf.id)!;
-    let resolveRetryShell!: (value: { connected: true }) => void;
-    (window.janet.sshCreateShell as any).mockImplementationOnce(() => new Promise((resolve) => {
-      resolveRetryShell = resolve;
-    }));
-
-    let retryPromise!: Promise<void>;
-    await act(async () => {
-      retryPromise = Promise.resolve(retry(retriedLeaf.id, { cols: 120, rows: 40 }));
-      await Promise.resolve();
-    });
-    expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(3);
-    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-    expect(screen.getByTestId(`terminal-${retainedLeaf.id}`))
-      .toHaveAttribute('data-ssh-connection-lost', 'false');
-
-    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal)/i })[1]);
-    await confirmPendingAction(/^close pane$/i);
-    await waitFor(() => {
-      expect(window.janet.sshDestroyShell).toHaveBeenCalledWith({
-        sessionId: restored.sshSessionId,
-        termId: retriedLeaf.id,
-      });
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-      expect(screen.getByTestId(`terminal-${retainedLeaf.id}`))
-        .toHaveAttribute('data-ssh-connection-lost', 'false');
-    });
-    expect(window.janet.sshDestroyShell).toHaveBeenCalledTimes(1);
-    expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
-
-    await act(async () => {
-      resolveRetryShell({ connected: true });
-      await retryPromise;
-    });
-    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-    expect(screen.getByTestId(`terminal-${retainedLeaf.id}`))
-      .toHaveAttribute('data-ssh-connection-lost', 'false');
-    expect(window.janet.sshDestroyShell).toHaveBeenCalledTimes(2);
-    expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
-  });
-
-  it('preserves sibling SSH status when a replacement shell finishes after its shared pane closes', async () => {
-    const sshProfileId = 'late-replacement@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {}, workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId, host: 'box.local', port: 22, username: 'late-replacement',
-        auth: 'password', password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'late-replacement-ssh', title: 'late replacement host', type: 'ssh', sshProfileId,
-          root: {
-            type: 'split', direction: 'vertical', sizes: [1, 1],
-            children: [{ type: 'leaf' }, { type: 'leaf' }],
-          },
-        }],
-        activeTabId: 'late-replacement-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-    await waitFor(() => {
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-    });
-    const restored = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { title: string }) => tab.title === 'late replacement host',
-    );
-    const retainedLeaf = restored.root.children[0];
-    const retriedLeaf = restored.root.children[1];
-    const retry = rendererMocks.sshRetryHandlers.get(retriedLeaf.id)!;
-    let resolveReplacementShell!: (value: { connected: true }) => void;
-    (window.janet.sshCreateShell as any)
-      .mockRejectedValueOnce(new Error('stale shell'))
-      .mockImplementationOnce(() => new Promise((resolve) => {
-        resolveReplacementShell = resolve;
-      }));
-
-    let retryPromise!: Promise<void>;
-    await act(async () => {
-      retryPromise = Promise.resolve(retry(retriedLeaf.id, { cols: 120, rows: 40 }));
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(4));
-    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-    expect(screen.getByTestId(`terminal-${retainedLeaf.id}`))
-      .toHaveAttribute('data-ssh-connection-lost', 'false');
-
-    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal)/i })[1]);
-    await confirmPendingAction(/^close pane$/i);
-    await waitFor(() => {
-      expect(window.janet.sshDestroyShell).toHaveBeenCalledWith({
-        sessionId: restored.sshSessionId,
-        termId: retriedLeaf.id,
-      });
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-      expect(screen.getByTestId(`terminal-${retainedLeaf.id}`))
-        .toHaveAttribute('data-ssh-connection-lost', 'false');
-    });
-    expect(window.janet.sshDestroyShell).toHaveBeenCalledTimes(1);
-    expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
-
-    await act(async () => {
-      resolveReplacementShell({ connected: true });
-      await retryPromise;
-    });
-    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-    expect(screen.getByTestId(`terminal-${retainedLeaf.id}`))
-      .toHaveAttribute('data-ssh-connection-lost', 'false');
-    expect(window.janet.sshDestroyShell).toHaveBeenCalledTimes(2);
-    expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
-  });
-
-  it('withdraws SSH status when the healthy sibling closes before the retried pane fails', async () => {
-    const sshProfileId = 'late-failure@box.local:22:password';
-    window.janet.sshCreateShell = vi.fn()
-      .mockResolvedValueOnce({ connected: true })
-      .mockRejectedValueOnce(new Error('initial shell unavailable'));
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {}, workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId, host: 'box.local', port: 22, username: 'late-failure',
-        auth: 'password', password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'late-failure-ssh', title: 'late failure host', type: 'ssh', sshProfileId,
-          root: {
-            type: 'split', direction: 'vertical', sizes: [1, 1],
-            children: [{ type: 'leaf' }, { type: 'leaf' }],
-          },
-        }],
-        activeTabId: 'late-failure-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-    await waitFor(() => {
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-    });
-    const restored = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { title: string }) => tab.title === 'late failure host',
-    );
-    const retainedLeaf = restored.root.children[0];
-    const retriedLeaf = restored.root.children[1];
-    const retry = rendererMocks.sshRetryHandlers.get(retriedLeaf.id)!;
-    let rejectRetryShell!: (error: Error) => void;
-    (window.janet.sshCreateShell as any)
-      .mockImplementationOnce(() => new Promise((_resolve, reject) => {
-        rejectRetryShell = reject;
-      }))
-      .mockRejectedValueOnce(new Error('replacement shell unavailable'));
-
-    let retryPromise!: Promise<void>;
-    await act(async () => {
-      retryPromise = Promise.resolve(retry(retriedLeaf.id, { cols: 120, rows: 40 }));
-      await Promise.resolve();
-    });
-    expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(3);
-
-    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal)/i })[0]);
-    await confirmPendingAction(/^close pane$/i);
-    await waitFor(() => expect(window.janet.sshDestroyShell).toHaveBeenCalledWith({
-      sessionId: restored.sshSessionId,
-      termId: retainedLeaf.id,
-    }));
-    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-
-    await act(async () => {
-      rejectRetryShell(new Error('stale shell'));
-      await expect(retryPromise).rejects.toThrow('replacement shell unavailable');
-    });
-    expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-    expect(screen.getByTestId(`terminal-${retriedLeaf.id}`))
-      .toHaveAttribute('data-ssh-connection-lost', 'true');
-    expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
-  });
-
-  it('preserves only a restored workspace SSH leaf whose profile is missing', async () => {
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {},
-      workspaceTabs: [],
-      sshProfiles: [],
-      session: {
-        tabs: [{
-          id: 'mixed-workspace',
-          title: 'mixed',
-          type: 'local',
-          root: {
-            type: 'split',
-            direction: 'vertical',
-            sizes: [1, 1],
-            children: [
-              { type: 'leaf', terminalType: 'local' },
-              { type: 'leaf', terminalType: 'ssh', sshProfileId: 'removed-profile' },
-            ],
-          },
-        }],
-        activeTabId: 'mixed-workspace',
-        sidebarOpen: true,
-        tabsOpen: true,
-        sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-
-    await waitFor(() => {
-      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2);
-      const restored = rendererMocks.verticalTabBarProps.tabs.find(
-        (tab: { title: string }) => tab.title === 'mixed',
-      );
-      const remote = restored.root.children.find(
-        (leaf: { terminalType?: string }) => leaf.terminalType === 'ssh',
-      );
-      expect(remote).toMatchObject({ terminalType: 'ssh', sshProfileId: 'removed-profile' });
-      expect(screen.getByTestId(`terminal-${remote.id}`))
-        .toHaveAttribute('data-ssh-connection-lost', 'true');
-    });
-    await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1));
-    expect(window.janet.sshConnect).not.toHaveBeenCalled();
-    expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
-    const restored = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { title: string }) => tab.title === 'mixed',
-    );
-    const remote = restored.root.children.find(
-      (leaf: { terminalType?: string }) => leaf.terminalType === 'ssh',
-    );
-    expect(rendererMocks.sshRetryHandlers.get(remote.id)).toBeTypeOf('function');
-  });
-
-  it('preserves a restored SSH tab when reconnecting its transport fails', async () => {
-    const sshProfileId = 'offline@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {}, workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId, host: 'box.local', port: 22, username: 'offline',
-        auth: 'password', password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'offline-ssh', title: 'offline host', type: 'ssh', sshProfileId,
-          root: {
-            type: 'leaf', terminalType: 'ssh', sshProfileId,
-            startupCommands: ['remote-only-command'], startupShellDialect: 'posix',
-          },
-        }],
-        activeTabId: 'offline-ssh', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
-      },
-    }));
-    (window.janet.sshConnect as any).mockRejectedValueOnce(new Error('host offline'));
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    try {
-      render(<App />);
-      await waitFor(() => {
-        const restored = rendererMocks.verticalTabBarProps.tabs.find(
-          (tab: { title: string }) => tab.title === 'offline host',
-        );
-        expect(restored).toMatchObject({ type: 'ssh', sshProfileId });
-        expect(restored.root).toMatchObject({
-          terminalType: 'ssh', sshProfileId,
-          startupCommands: ['remote-only-command'], startupShellDialect: 'posix',
-        });
-        expect(screen.getByTestId(`terminal-${restored.root.id}`))
-          .toHaveAttribute('data-ssh-connection-lost', 'true');
-      });
-      expect(window.janet.terminalCreate).not.toHaveBeenCalled();
-      expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
-
-      const restored = rendererMocks.verticalTabBarProps.tabs.find(
-        (tab: { title: string }) => tab.title === 'offline host',
-      );
-      (window.janet.sshCreateShell as any)
-        .mockRejectedValueOnce(new Error('session not found'))
-        .mockResolvedValueOnce({ connected: true });
-      await act(async () => {
-        await rendererMocks.sshRetryHandlers.get(restored.root.id)?.(
-          restored.root.id,
-          { cols: 120, rows: 40 },
-        );
-      });
-      await waitFor(() => {
-        expect(rendererMocks.verticalTabBarProps.tabs.find(
-          (tab: { title: string }) => tab.title === 'offline host',
-        )).toMatchObject({ sshShellReady: true });
-      });
-    } finally {
-      consoleError.mockRestore();
-    }
-  });
-
-  it('preserves a restored workspace SSH leaf when reconnecting its transport fails', async () => {
-    const sshProfileId = 'mixed-offline@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {}, workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId, host: 'box.local', port: 22, username: 'mixed-offline',
-        auth: 'password', password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'mixed-offline', title: 'mixed offline', type: 'local',
-          root: {
-            type: 'split', direction: 'vertical', sizes: [1, 1],
-            children: [
-              { type: 'leaf', terminalType: 'local' },
-              {
-                type: 'leaf', terminalType: 'ssh', sshProfileId,
-                startupCommands: ['remote-only-command'], startupShellDialect: 'posix',
-              },
-            ],
-          },
-        }],
-        activeTabId: 'mixed-offline', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
-      },
-    }));
-    (window.janet.sshConnect as any).mockRejectedValueOnce(new Error('host offline'));
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    try {
-      render(<App />);
-      await waitFor(() => {
-        const restored = rendererMocks.verticalTabBarProps.tabs.find(
-          (tab: { title: string }) => tab.title === 'mixed offline',
-        );
-        const remote = restored.root.children.find(
-          (leaf: { terminalType?: string }) => leaf.terminalType === 'ssh',
-        );
-        expect(remote).toMatchObject({
-          terminalType: 'ssh', sshProfileId,
-          startupCommands: ['remote-only-command'], startupShellDialect: 'posix',
-        });
-        expect(screen.getByTestId(`terminal-${remote.id}`))
-          .toHaveAttribute('data-ssh-connection-lost', 'true');
-      });
-      await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1));
-      expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
-    } finally {
-      consoleError.mockRestore();
-    }
-  });
-
-  it('retries a mixed-workspace SSH leaf with measured dimensions and surfaces transport failure', async () => {
-    const sshProfileId = 'mixed@box.local:22:password';
-    const preset = {
-      id: 'mixed-workspace-retry',
-      name: 'mixed retry',
-      type: 'local' as const,
-      terminalCount: 2,
-      splitDirection: 'vertical' as const,
-      root: {
-        type: 'split' as const,
-        direction: 'vertical' as const,
-        sizes: [1, 1],
-        children: [
-          { type: 'leaf' as const, terminalType: 'local' as const },
-          {
-            type: 'leaf' as const,
-            terminalType: 'ssh' as const,
-            sshProfileId,
-            startupCommands: ['hermes doctor', 'hermes --tui'],
-            startupShellDialect: 'posix' as const,
-          },
-        ],
-      },
-    };
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {},
-      workspaceTabs: [preset],
-      sshProfiles: [{
-        id: sshProfileId,
-        host: 'box.local',
-        port: 22,
-        username: 'mixed',
-        auth: 'password',
-        password: 'secret',
-      }],
-    }));
-
-    render(<App />);
-
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onWorkspaceTabLaunch).toBeTypeOf('function'));
-    await act(async () => {
-      await rendererMocks.verticalTabBarProps.onWorkspaceTabLaunch(preset, { id: 'default', name: 'My workspaces' });
-    });
-
-    await waitFor(() => expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(1));
-    const initialShell = (window.janet.sshCreateShell as any).mock.calls[0][0];
-    const retry = rendererMocks.sshRetryHandlers.get(initialShell.termId);
-    expect(retry).toBeTruthy();
-
-    (window.janet.sshCreateShell as any).mockClear();
-    (window.janet.sshConnect as any).mockClear();
-    (window.janet.sshCreateShell as any)
-      .mockRejectedValueOnce(new Error('stale shell'))
-      .mockResolvedValueOnce({ connected: true });
-
-    await act(async () => {
-      await retry!(initialShell.termId, { cols: 132, rows: 48 });
-    });
-
-    expect(window.janet.sshConnect).toHaveBeenCalledWith(expect.objectContaining({
-      id: initialShell.id,
-      host: 'box.local',
-      username: 'mixed',
-    }));
-    expect(window.janet.sshCreateShell).toHaveBeenNthCalledWith(1, {
-      id: initialShell.id,
-      termId: initialShell.termId,
-      cols: 132,
-      rows: 48,
-      startupCommands: ['hermes doctor', 'hermes --tui'],
-      startupShellDialect: 'posix',
-    });
-    expect(window.janet.sshCreateShell).toHaveBeenNthCalledWith(2, {
-      id: initialShell.id,
-      termId: initialShell.termId,
-      cols: 132,
-      rows: 48,
-      startupCommands: ['hermes doctor', 'hermes --tui'],
-      startupShellDialect: 'posix',
-    });
-    const retriedTab = rendererMocks.verticalTabBarProps.tabs.find(
-      (tab: { title: string }) => tab.title === 'mixed retry',
-    );
-    expect(retriedTab.root.children.find(
-      (leaf: { id: string }) => leaf.id === initialShell.termId,
-    )).toMatchObject({ sshShellReady: true });
-    expect(retriedTab.root.children.find(
-      (leaf: { terminalType?: string }) => leaf.terminalType === 'local',
-    )).not.toHaveProperty('sshShellReady');
-
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      (window.janet.sshCreateShell as any).mockRejectedValueOnce(new Error('shell unavailable'));
-      (window.janet.sshConnect as any).mockRejectedValueOnce(new Error('transport unavailable'));
-      await expect(retry!(initialShell.termId, { cols: 132, rows: 48 }))
-        .rejects.toThrow('transport unavailable');
-    } finally {
-      consoleError.mockRestore();
-    }
-  });
-
-  it('releases an SSH connection that finishes after its owning tab closes', async () => {
-    const sshProfileId = 'pending@box.local:22:password';
-    let resolveConnect!: (value: unknown) => void;
-    window.janet.sshConnect = vi.fn().mockImplementation(() => new Promise((resolve) => {
-      resolveConnect = resolve;
-    }));
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {},
-      workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId,
-        host: 'box.local',
-        port: 22,
-        username: 'pending',
-        auth: 'password',
-        password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'pending-ssh',
-          title: 'pending box',
-          type: 'ssh',
-          sshProfileId,
-          root: { type: 'leaf' },
-        }],
-        activeTabId: 'pending-ssh',
-        sidebarOpen: true,
-        tabsOpen: true,
-        sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-    await waitFor(() => {
-      expect(window.janet.sshConnect).toHaveBeenCalledTimes(1);
-      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
-    });
-    const sessionId = (window.janet.sshConnect as any).mock.calls[0][0].id as string;
-
-    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal)/i }));
-    expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
-    await confirmPendingAction(/^close tab$/i);
-    await waitFor(() => {
-      expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: sessionId });
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-    });
-
-    await act(async () => {
-      resolveConnect({ connected: true });
-      await Promise.resolve();
-    });
-    await waitFor(() => {
-      expect(window.janet.sshDisconnect).toHaveBeenCalledTimes(2);
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-    });
-    expect(window.janet.sshCreateShell).not.toHaveBeenCalled();
-  });
-
-  it('destroys individual SSH shells, disconnects released sessions, and disposes cached terminals', async () => {
-    const sshProfileId = 'test@box.local:22:password';
-    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
-      keybindings: {},
-      workspaceTabs: [],
-      sshProfiles: [{
-        id: sshProfileId,
-        host: 'box.local',
-        port: 22,
-        username: 'test',
-        auth: 'password',
-        password: 'secret',
-      }],
-      session: {
-        tabs: [{
-          id: 'ssh-split',
-          title: 'box',
-          type: 'ssh',
-          sshProfileId,
-          root: {
-            type: 'split',
-            direction: 'vertical',
-            sizes: [1, 1],
-            children: [{ type: 'leaf' }, { type: 'leaf' }],
-          },
-        }],
-        activeTabId: 'ssh-split',
-        sidebarOpen: true,
-        tabsOpen: true,
-        sidebarSection: 'files',
-      },
-    }));
-
-    render(<App />);
-
-    await waitFor(() => {
-      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2);
-      expect(window.janet.sshCreateShell).toHaveBeenCalledTimes(2);
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '1');
-    });
-
-    const sessionId = (window.janet.sshConnect as any).mock.calls[0][0].id as string;
-    const secondId = screen.getAllByTestId(/terminal-/)[1].textContent!;
-    fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal)/i })[1]);
-    expect(window.janet.sshDestroyShell).not.toHaveBeenCalled();
-    await confirmPendingAction(/^close pane$/i);
-
-    await waitFor(() => {
-      expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1);
-      expect(window.janet.sshDestroyShell).toHaveBeenCalledWith({ sessionId, termId: secondId });
-      expect(rendererMocks.disposeCachedTerminal).toHaveBeenCalledWith(secondId);
-    });
-    expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
-
-    const remainingId = screen.getByTestId(/terminal-/).textContent!;
-    fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal)/i }));
-    expect(window.janet.sshDisconnect).not.toHaveBeenCalled();
-    await confirmPendingAction(/^close tab$/i);
-
-    await waitFor(() => {
-      expect(window.janet.sshDisconnect).toHaveBeenCalledWith({ id: sessionId });
-      expect(rendererMocks.disposeCachedTerminal).toHaveBeenCalledWith(remainingId);
-      expect(screen.getByTestId('statusbar')).toHaveAttribute('data-ssh-count', '0');
-    });
   });
 
   it('persists the open tabs to settings after a tab change', async () => {

@@ -255,7 +255,7 @@ export class TerminalManager {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       TERM: 'xterm-256color',
-      TERM_PROGRAM: 'JaneT',
+      TERM_PROGRAM: 'kitty',
       COLORTERM: 'truecolor',
       ...launch.env,
       // Ensure shells that key on these (some readline configs) stay
@@ -622,7 +622,6 @@ export class TerminalManager {
       terminal.startupTimer = undefined;
     }
   }
-
 
   private ensureShellInitFile(name: string, contents: string): string {
     const initDir = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-shell-init-'));

@@ -136,15 +136,17 @@ describe('automatic agent launch runtime', () => {
     try {
       const helper = path.join(directory, 'helper.cjs');
       buildSync({ entryPoints: ['src/main/agent-cli.ts'], bundle: true, platform: 'node', outfile: helper });
-      fs.writeFileSync(path.join(directory, 'codex.ps1'), '[Console]::WriteLine(($args | ConvertTo-Json -Compress)); [Console]::WriteLine("TERM=$env:TERM"); $global:LASTEXITCODE = 37');
+      fs.writeFileSync(path.join(directory, 'codex.ps1'), '[Console]::WriteLine(($args | ConvertTo-Json -Compress)); [Console]::WriteLine("TERM=$env:TERM"); [Console]::WriteLine("TERM_PROGRAM=$env:TERM_PROGRAM"); $global:LASTEXITCODE = 37');
       const script = path.join(directory, 'test.ps1');
-      fs.writeFileSync(script, `${buildShellInit('powershell.exe', helper)}\ncodex 'a b' 'quote"value' --resume\n[Console]::WriteLine("EXIT=$LASTEXITCODE")\n[Console]::WriteLine("TERM_AFTER=$env:TERM")\n`);
-      const env = { ...process.env, ...await bridge.environment('ps'), TERM: 'xterm-256color', TERM_PROGRAM: 'JaneT', CODEX_HOME: path.join(directory, 'codex-home'), PATH: directory + path.delimiter + process.env.PATH };
+      fs.writeFileSync(script, `${buildShellInit('powershell.exe', helper)}\ncodex 'a b' 'quote"value' --resume\n[Console]::WriteLine("EXIT=$LASTEXITCODE")\n[Console]::WriteLine("TERM_AFTER=$env:TERM")\n[Console]::WriteLine("TERM_PROGRAM_AFTER=$env:TERM_PROGRAM")\n`);
+      const env = { ...process.env, ...await bridge.environment('ps'), TERM: 'xterm-256color', TERM_PROGRAM: 'kitty', CODEX_HOME: path.join(directory, 'codex-home'), PATH: directory + path.delimiter + process.env.PATH };
       const output = await run('powershell.exe', ['-NoProfile', '-File', script], env);
       expect(output).toContain('["a b","quote\\"value","--resume"]');
-      expect(output).toContain('TERM=xterm-kitty');
+      expect(output).toContain('TERM=xterm-256color');
+      expect(output).toContain('TERM_PROGRAM=kitty');
       expect(output).toContain('EXIT=37');
       expect(output).toContain('TERM_AFTER=xterm-256color');
+      expect(output).toContain('TERM_PROGRAM_AFTER=kitty');
       expect(fs.existsSync(path.join(env.CODEX_HOME, 'hooks.json'))).toBe(true);
       fs.writeFileSync(path.join(directory, 'codex.ps1'), '$input | ForEach-Object { [Console]::WriteLine("INPUT=$_") }');
       fs.writeFileSync(script, `${buildShellInit('powershell.exe', helper)}\n'prompt from pipe' | codex -\n`);

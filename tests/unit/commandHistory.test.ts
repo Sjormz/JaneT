@@ -27,7 +27,7 @@ describe('command history boundary', () => {
     const newest = entry('newest');
     const older = {
       ...entry('older'), startedAt: 5,
-      context: { kind: 'ssh' as const, label: 'prod' },
+      context: { kind: 'local' as const, cwd: '/other' },
     };
     const other = { ...entry('other'), command: 'pwd' };
 
@@ -78,10 +78,8 @@ describe('command history boundary', () => {
   it('rejects non-enumerable required and optional nested context fields', () => {
     const local = entry();
     Object.defineProperty(local.context, 'cwd', { value: '/repo', enumerable: false });
-    const ssh = { ...entry(), context: { kind: 'ssh' as const, label: 'host' } };
-    Object.defineProperty(ssh.context, 'label', { value: 'host', enumerable: false });
 
-    expect(normalizeCommandHistory([local, ssh])).toEqual([]);
+    expect(normalizeCommandHistory([local])).toEqual([]);
   });
 
   it('accepts and clones null-prototype entries and nested contexts with exact keys', () => {
@@ -107,7 +105,7 @@ describe('command history boundary', () => {
     const source = [entry()];
     const normalized = normalizeCommandHistory(source);
     const cloned = cloneCommandHistory(source);
-    source[0].context = { kind: 'ssh', label: 'changed' };
+    source[0].context = { kind: 'local', cwd: '/changed' };
     expect(normalized[0].context).toEqual({ kind: 'local', cwd: '/repo' });
     (cloned[0].context as { kind: 'local'; cwd: string }).cwd = '/mutated';
     expect(normalized[0].context).toEqual({ kind: 'local', cwd: '/repo' });

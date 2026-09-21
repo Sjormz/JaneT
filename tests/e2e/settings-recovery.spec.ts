@@ -23,6 +23,50 @@ async function launch(userData: string): Promise<ElectronApplication> {
   });
 }
 
+test('removes legacy remote panes while retaining local terminals and empty projects', async () => {
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-local-migration-e2e-'));
+  const settingsPath = path.join(userData, 'settings.json');
+  const remoteLeaf = { type: 'leaf', terminalType: 'ssh', sshProfileId: 'old', startupCommands: ['echo remote-only'] };
+  fs.writeFileSync(settingsPath, JSON.stringify({
+    mainDirectory: userData,
+    sshProfiles: [{ id: 'old', name: 'Old connection', host: 'unused.invalid', port: 22, auth: 'password' }],
+    session: {
+      tabs: [
+        { id: 'remote', title: 'Remote only', type: 'ssh', root: remoteLeaf },
+        { id: 'mixed', title: 'Mixed project', type: 'local', isProject: true, cwd: userData,
+          root: { type: 'split', direction: 'vertical', sizes: [1, 1], children: [
+            { type: 'leaf', terminalType: 'local', title: 'Local survivor', cwd: userData }, remoteLeaf,
+          ] }, selectedPanePath: [1] },
+        { id: 'empty', title: 'Retained project', type: 'local', isProject: true, cwd: userData, root: remoteLeaf },
+      ],
+      activeTabId: 'mixed', sidebarSection: 'ssh', sidebarOpen: true, tabsOpen: true,
+    },
+  }));
+  let app: ElectronApplication | undefined;
+  try {
+    app = await launch(userData);
+    const page = await app.firstWindow();
+    await expect(page.locator('.terminal-container')).toHaveCount(1);
+    await expect(page.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true');
+    await expect(page.getByText('Retained project', { exact: true })).toBeVisible();
+    await expect(page.getByText('Remote only', { exact: true })).toHaveCount(0);
+    const settings = await page.evaluate(async () => {
+      const current = await window.janet.getSettings();
+      await window.janet.setSettings({ fontSize: 15 });
+      return { current, remoteApi: Object.keys(window.janet).filter((key) => /ssh/i.test(key)) };
+    });
+    expect(settings.remoteApi).toEqual([]);
+    expect(settings.current).not.toHaveProperty('sshProfiles');
+    const saved = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    expect(saved).not.toHaveProperty('sshProfiles');
+    expect(saved.session.tabs).toHaveLength(2);
+    expect(JSON.stringify(saved)).not.toContain('remote-only');
+  } finally {
+    await forceClose(app);
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  }
+});
+
 test('restores a validated previous generation without overwriting corrupt settings on launch', async () => {
   const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-settings-recovery-e2e-'));
   const settingsPath = path.join(userData, 'settings.json');

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { createPortal, flushSync } from 'react-dom';
+import { createPortal } from 'react-dom';
+import MotionPresence from './MotionPresence';
 import {
   getAllLeafIds, PaneDropSide, PaneNode, SplitNode, TerminalLeaf,
 } from '../types';
@@ -10,7 +11,6 @@ import {
   RestoreIcon,
   XCloseIcon,
   TerminalTabIcon,
-  SSHIcon,
   BroadcastIcon,
 } from '../icons';
 import Tooltip from './Tooltip';
@@ -25,9 +25,8 @@ import type { SemanticCommandEvent, SemanticCommandStartedEvent } from '../seman
 interface SplitPaneProps {
   node: PaneNode;
   tabId: string;
-  tabType: 'local' | 'ssh';
+  tabType: 'local';
   activeTerminalId?: string | null;
-  sshSessionId?: string;
   onTerminalReady: (termId: string) => void;
   onTerminalRemoved: (termId: string) => void;
   onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
@@ -62,14 +61,6 @@ interface SplitPaneProps {
   initialCwd?: string;
   /** Returns true when the given leafId already has a live PTY/session. */
   hasSessionForLeaf?: (leafId: string) => boolean;
-  /** True once an SSH tab's transport exists and panes may open shells. */
-  sshShellReady?: boolean;
-  /** Reports whether a specific SSH transport closed unexpectedly. */
-  isSshSessionDisconnected?: (sessionId?: string) => boolean;
-  onSshShellReady?: (termId: string, sessionId: string) => void;
-  onSshShellFailed?: (termId: string, sessionId: string) => void;
-  /** User clicked "Reconnect" on the SSH notice for this term. */
-  onSshRetry?: (termId: string, dimensions: { cols: number; rows: number }) => void | Promise<void>;
   /** Total panes in the tab; propagated internally so leaf actions describe their real outcome. */
   totalPaneCount?: number;
 }
@@ -79,7 +70,6 @@ function TerminalPaneLeaf({
   leaf,
   tabId,
   tabType,
-  sshSessionId,
   onTerminalReady,
   onTerminalRemoved,
   onAgentEvent,
@@ -110,17 +100,11 @@ function TerminalPaneLeaf({
   onTerminalFocus,
   initialCwd,
   hasSessionForLeaf,
-  sshShellReady,
-  isSshSessionDisconnected,
-  onSshShellReady,
-  onSshShellFailed,
-  onSshRetry,
   totalPaneCount,
 }: {
   leaf: TerminalLeaf;
   tabId: string;
-  tabType: 'local' | 'ssh';
-  sshSessionId?: string;
+  tabType: 'local';
   onTerminalReady: (id: string) => void;
   onTerminalRemoved: (id: string) => void;
   onAgentEvent?: (termId: string, event: AgentLifecycleEvent) => void;
@@ -151,11 +135,6 @@ function TerminalPaneLeaf({
   onTerminalFocus?: (termId: string) => void;
   initialCwd?: string;
   hasSessionForLeaf?: (leafId: string) => boolean;
-  sshShellReady?: boolean;
-  isSshSessionDisconnected?: (sessionId?: string) => boolean;
-  onSshShellReady?: (termId: string, sessionId: string) => void;
-  onSshShellFailed?: (termId: string, sessionId: string) => void;
-  onSshRetry?: (termId: string, dimensions: { cols: number; rows: number }) => void | Promise<void>;
   totalPaneCount: number;
 }) {
   const leafType = leaf.terminalType ?? tabType;
@@ -182,14 +161,14 @@ function TerminalPaneLeaf({
       document.removeEventListener('contextmenu', closeOutside, true);
     };
   }, [menu]);
-  const PaneTypeIcon = leafType === 'ssh' ? SSHIcon : TerminalTabIcon;
-  const paneTypeLabel = leafType === 'ssh' ? 'SSH' : 'Local terminal';
+  const PaneTypeIcon = TerminalTabIcon;
+  const paneTypeLabel = 'Local terminal';
   const storedTitle = leaf.title?.trim();
-  const legacyTitle = leafType === 'ssh' ? 'ssh' : 'terminal';
+  const legacyTitle = 'terminal';
   const isLegacyUntypedSplitTitle = !leaf.terminalType && storedTitle?.toLowerCase() === 'terminal';
   const paneTitle = storedTitle && storedTitle.toLowerCase() !== legacyTitle && !isLegacyUntypedSplitTitle
     ? storedTitle
-    : leafType === 'ssh' ? 'SSH' : 'Terminal';
+    : 'Terminal';
   const paneLabel = paneTitle ? `${paneTitle} — ${paneTypeLabel} pane` : `${paneTypeLabel} pane`;
   const paneActionContext = paneTitle ? `${paneTitle} (${paneTypeLabel})` : paneTypeLabel;
   const hasMultiplePanes = totalPaneCount > 1;
@@ -197,7 +176,6 @@ function TerminalPaneLeaf({
   const closeLabel = hasMultiplePanes
     ? `Close pane — ${paneActionContext}`
     : `Close terminal — ${paneActionContext}`;
-  const effectiveSshSessionId = leaf.sshSessionId ?? sshSessionId;
   const dropSideAt = (event: React.DragEvent): PaneDropSide => {
     const bounds = event.currentTarget.getBoundingClientRect();
     const x = bounds.width ? (event.clientX - bounds.left) / bounds.width : 0;
@@ -206,17 +184,6 @@ function TerminalPaneLeaf({
       .reduce((nearest, candidate) => candidate[1] < nearest[1] ? candidate : nearest)[0];
   };
   const isDropTarget = dropTarget?.leafId === leaf.id;
-
-  function toggleMaximize() {
-    const startViewTransition = (document as Document & {
-      startViewTransition?: (update: () => void) => unknown;
-    }).startViewTransition;
-    if (startViewTransition && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-      startViewTransition.call(document, () => flushSync(onToggleMaximize));
-      return;
-    }
-    onToggleMaximize();
-  }
 
   return (
     <div
@@ -289,7 +256,7 @@ function TerminalPaneLeaf({
           </Tooltip>
           {hasMultiplePanes && (
             <Tooltip label={isMaximized ? 'Restore pane layout' : `Maximize pane — ${paneActionContext}`} placement="bottom">
-              <button className="leaf-btn" onClick={toggleMaximize} aria-label={isMaximized ? 'Restore pane layout' : `Maximize pane — ${paneActionContext}`}>
+              <button className="leaf-btn" onClick={onToggleMaximize} aria-label={isMaximized ? 'Restore pane layout' : `Maximize pane — ${paneActionContext}`}>
                 {isMaximized ? <RestoreIcon size="sm" /> : <MaximizeIcon size="sm" />}
               </button>
             </Tooltip>
@@ -302,7 +269,7 @@ function TerminalPaneLeaf({
           </Tooltip>
         </div>
       </div>
-      {menu && createPortal(
+      {createPortal(<MotionPresence>{menu &&
         <div ref={menuRef} className="vtab-context-menu" role="menu" aria-label={`Actions for ${paneTitle}`}
           style={{ left: menu.x, top: menu.y }}
           onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setMenu(null); }}
@@ -322,14 +289,13 @@ function TerminalPaneLeaf({
             setMenu(null);
             onRenamePane?.(leaf.id);
           }}>Rename</button>
-        </div>, document.body,
+        </div>}</MotionPresence>, document.body,
       )}
       <div className="terminal-leaf-body">
         <TerminalPane
           termId={leaf.id}
           tabType={leafType}
           inputLabel={paneLabel}
-          sshSessionId={effectiveSshSessionId}
           onReady={onTerminalReady}
           onRemoved={onTerminalRemoved}
           onAgentEvent={onAgentEvent}
@@ -346,11 +312,6 @@ function TerminalPaneLeaf({
           startupCommands={leaf.startupCommands}
           startupShellDialect={leaf.startupShellDialect}
           hasSession={hasSessionForLeaf?.(leaf.id)}
-          sshShellReady={leaf.sshShellReady ?? sshShellReady}
-          sshConnectionLost={leafType === 'ssh' && isSshSessionDisconnected?.(effectiveSshSessionId)}
-          onSshShellReady={onSshShellReady}
-          onSshShellFailed={onSshShellFailed}
-          onSshRetry={onSshRetry}
         />
       </div>
       {isDropTarget && <div className={`pane-drop-indicator pane-drop-${dropTarget.side}`} aria-hidden="true" />}
@@ -487,7 +448,6 @@ export default function SplitPane(props: SplitPaneProps) {
     tabId,
     tabType,
     activeTerminalId,
-    sshSessionId,
     onTerminalReady,
     onTerminalRemoved,
     onAgentEvent,
@@ -518,11 +478,6 @@ export default function SplitPane(props: SplitPaneProps) {
     onTerminalFocus,
     initialCwd,
     hasSessionForLeaf,
-    sshShellReady,
-    isSshSessionDisconnected,
-    onSshShellReady,
-    onSshShellFailed,
-    onSshRetry,
   } = props;
   const totalPaneCount = props.totalPaneCount ?? getAllLeafIds(node).length;
 
@@ -532,7 +487,6 @@ export default function SplitPane(props: SplitPaneProps) {
         leaf={node}
         tabId={tabId}
         tabType={tabType}
-        sshSessionId={sshSessionId}
         onTerminalReady={onTerminalReady}
         onTerminalRemoved={onTerminalRemoved}
         onAgentEvent={onAgentEvent}
@@ -563,11 +517,6 @@ export default function SplitPane(props: SplitPaneProps) {
         onTerminalFocus={onTerminalFocus}
         initialCwd={initialCwd}
         hasSessionForLeaf={hasSessionForLeaf}
-        sshShellReady={sshShellReady}
-        isSshSessionDisconnected={isSshSessionDisconnected}
-        onSshShellReady={onSshShellReady}
-        onSshShellFailed={onSshShellFailed}
-        onSshRetry={onSshRetry}
         totalPaneCount={totalPaneCount}
       />
     );
@@ -585,7 +534,6 @@ export default function SplitPane(props: SplitPaneProps) {
             tabId={tabId}
             tabType={tabType}
             activeTerminalId={activeTerminalId}
-            sshSessionId={sshSessionId}
             onTerminalReady={onTerminalReady}
             onTerminalRemoved={onTerminalRemoved}
             onAgentEvent={onAgentEvent}
@@ -616,11 +564,6 @@ export default function SplitPane(props: SplitPaneProps) {
             onTerminalFocus={onTerminalFocus}
             initialCwd={initialCwd}
             hasSessionForLeaf={hasSessionForLeaf}
-            sshShellReady={sshShellReady}
-            isSshSessionDisconnected={isSshSessionDisconnected}
-            onSshShellReady={onSshShellReady}
-            onSshShellFailed={onSshShellFailed}
-            onSshRetry={onSshRetry}
             totalPaneCount={totalPaneCount}
           />
         </div>
@@ -651,7 +594,6 @@ export default function SplitPane(props: SplitPaneProps) {
               tabId={tabId}
               tabType={tabType}
               activeTerminalId={activeTerminalId}
-              sshSessionId={sshSessionId}
               onTerminalReady={onTerminalReady}
               onTerminalRemoved={onTerminalRemoved}
               onAgentEvent={onAgentEvent}
@@ -682,11 +624,6 @@ export default function SplitPane(props: SplitPaneProps) {
               onTerminalFocus={onTerminalFocus}
               initialCwd={initialCwd}
               hasSessionForLeaf={hasSessionForLeaf}
-              sshShellReady={sshShellReady}
-              isSshSessionDisconnected={isSshSessionDisconnected}
-              onSshShellReady={onSshShellReady}
-              onSshShellFailed={onSshShellFailed}
-              onSshRetry={onSshRetry}
               totalPaneCount={totalPaneCount}
             />
           </div>

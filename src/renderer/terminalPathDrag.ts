@@ -1,8 +1,7 @@
 export const TERMINAL_PATH_MIME = 'application/x-janet-terminal-path';
 
 export type TerminalPathFilesystem =
-  | { kind: 'local' }
-  | { kind: 'ssh'; sessionId: string };
+  { kind: 'local' };
 
 export interface TerminalPathDragPayload {
   version: 1;
@@ -13,8 +12,7 @@ export interface TerminalPathDragPayload {
 }
 
 export type TerminalPathDropTarget =
-  | { kind: 'local' }
-  | { kind: 'ssh'; sessionId?: string };
+  { kind: 'local' };
 
 const MAX_TERMINAL_PATH_LENGTH = 32_768;
 const UNSAFE_TERMINAL_PATH = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
@@ -34,8 +32,7 @@ function isSafeTerminalPath(value: unknown): value is string {
 
 function isTerminalPathFilesystem(value: unknown): value is TerminalPathFilesystem {
   if (!isRecord(value)) return false;
-  if (value.kind === 'local') return true;
-  return value.kind === 'ssh' && isSafeTerminalPath(value.sessionId);
+  return value.kind === 'local';
 }
 
 function isTerminalPathDragPayload(value: unknown): value is TerminalPathDragPayload {
@@ -87,10 +84,7 @@ export function canDropTerminalPath(
   payload: TerminalPathDragPayload,
   target: TerminalPathDropTarget,
 ): boolean {
-  if (target.kind === 'local') return payload.filesystem.kind === 'local';
-  return payload.filesystem.kind === 'ssh'
-    && Boolean(target.sessionId)
-    && payload.filesystem.sessionId === target.sessionId;
+  return target.kind === 'local' && payload.filesystem.kind === 'local';
 }
 
 export function formatTerminalPathForPaste(

@@ -23,8 +23,6 @@ export interface SidebarProps {
   explorerSource: FileExplorerSource;
   /** True once we have a usable cwd to show. */
   cwdReady: boolean;
-  /** True if the active tab is an SSH tab. Source Control shows a notice. */
-  isRemote: boolean;
   gitRepository: GitRepositoryState;
   openLocalTerminals?: Array<{ terminalId: string; cwd: string; lastFocused: number }>;
   onOpenTerminal?: (terminalId: string) => void;
@@ -52,7 +50,6 @@ export default function Sidebar({
   onExpandedChange,
   explorerSource,
   cwdReady,
-  isRemote,
   gitRepository,
   openLocalTerminals,
   onOpenTerminal,
@@ -135,7 +132,6 @@ export default function Sidebar({
         ) : (
           <GitTree
             cwdReady={cwdReady}
-            isRemote={isRemote}
             repoPath={gitRepository.repoPath}
             status={gitRepository.status}
             searching={gitRepository.searching}

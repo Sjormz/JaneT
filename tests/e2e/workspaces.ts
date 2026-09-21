@@ -11,8 +11,16 @@ export function terminalSettings(directory: string) {
   } };
 }
 
+export async function ensureProjectTerminalsOpen(page: Page) {
+  const terminalCount = page.getByRole('spinbutton', { name: 'Initial terminals' });
+  if (await terminalCount.count() === 0) {
+    await page.getByRole('button', { name: /Add terminals/ }).click();
+  }
+  await expect(terminalCount).toBeVisible();
+}
+
 export async function createWorkspace(page: Page, name: string, terminals: Array<{
-  title?: string; cwd?: string; sshLabel?: string; commands?: string[];
+  title?: string; cwd?: string; commands?: string[];
 }>, newGroup?: string) {
   if (newGroup) {
     await page.getByRole('button', { name: 'New workspace', exact: true }).click();
@@ -25,26 +33,22 @@ export async function createWorkspace(page: Page, name: string, terminals: Array
     await page.getByRole('menuitem', { name: 'Add project', exact: true }).click();
   }
   await page.getByRole('textbox', { name: 'Project name' }).fill(name);
-  await page.getByRole('button', { name: /Add terminals/ }).click();
+  await ensureProjectTerminalsOpen(page);
   await page.getByRole('spinbutton', { name: 'Initial terminals' }).fill(String(terminals.length));
   await page.getByRole('radio', { name: 'Custom', exact: true }).check();
   await page.getByRole('textbox', { name: 'Custom command' }).fill('echo');
   await page.getByRole('button', { name: 'Create project', exact: true }).click();
 }
 
-// Legacy SSH, per-pane commands, and unavailable paths remain supported on restore.
-// Seed those fixtures directly now that the creation form only offers shared local setup.
+// Seed per-pane commands and unavailable paths directly; creation uses shared local setup.
 export async function restoreWorkspaceFixture(page: Page, name: string, terminals: Array<{
-  title?: string; cwd?: string; sshLabel?: string; commands?: string[];
+  title?: string; cwd?: string; commands?: string[];
 }>, groupName?: string) {
   const settings = await page.evaluate(() => window.janet.getSettings());
-  const profiles = settings.sshProfiles ?? [];
   const root = serializePaneTree(createWorkspaceRoot(terminals.map((terminal) => ({
-    type: terminal.sshLabel ? 'ssh' as const : 'local' as const,
+    type: 'local' as const,
     title: terminal.title,
     cwd: terminal.cwd,
-    sshProfileId: terminal.sshLabel ? profiles.find((profile: any) =>
-      (profile.username ? profile.username + '@' : '') + profile.host + ':' + profile.port === terminal.sshLabel)?.id : undefined,
     startupCommands: terminal.commands,
   }))), {}, { includeStartupCommands: true });
   const session = settings.session;

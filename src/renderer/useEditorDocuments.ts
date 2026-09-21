@@ -81,13 +81,7 @@ export function useEditorDocuments(): EditorDocumentsController {
     try {
       result = existing.resource.kind === 'local'
         ? await window.janet.fsReadTextFile({ filePath: existing.resource.path })
-        : existing.resource.kind === 'ssh'
-          ? await window.janet.sshReadTextFile({
-            sessionId: existing.resource.sessionId,
-            connectionId: existing.resource.connectionId,
-            remotePath: existing.resource.path,
-          })
-          : await window.janet.gitDiff({
+        : await window.janet.gitDiff({
             repoPath: existing.resource.repoPath,
             filePath: existing.resource.path,
             side: existing.resource.side,
@@ -237,18 +231,7 @@ export function useEditorDocuments(): EditorDocumentsController {
 
       let result;
       try {
-        result = document.resource.kind === 'local'
-          ? await window.janet.fsWriteTextFile({
-              requestedPath: document.requestedPath,
-              resolvedPath: document.resolvedPath,
-              expectedRevision: document.revision,
-              content: contentAtSave,
-              hasUtf8Bom: document.hasUtf8Bom,
-              ...(overwrite ? { overwrite: true } : {}),
-            })
-          : await window.janet.sshWriteTextFile({
-              sessionId: document.resource.sessionId,
-              connectionId: document.resource.connectionId,
+        result = await window.janet.fsWriteTextFile({
               requestedPath: document.requestedPath,
               resolvedPath: document.resolvedPath,
               expectedRevision: document.revision,

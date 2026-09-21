@@ -1,12 +1,9 @@
 import { forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { execFileSync } from 'child_process';
-import { createHash, generateKeyPairSync } from 'crypto';
 import * as fs from 'fs';
-import * as net from 'net';
 import * as path from 'path';
 import sharp from 'sharp';
-import { Server, utils } from 'ssh2';
 
 const root = path.resolve(__dirname, '../..');
 const screenshots = path.join(root, 'assets', 'screenshots');
@@ -14,9 +11,6 @@ const fixturePath = path.join(process.env.PUBLIC ?? 'C:\\Users\\Public', 'JaneT-
 const fixtureMarker = `${fixturePath}.janet-public-screenshot-fixture`;
 const fixtureOwnership = 'Owned by tests/e2e/public-screenshots.spec.ts\n';
 const shellCwd = path.parse(fixturePath).root;
-const sshPort = 52_222;
-const echoPort = 52_134;
-const forwardPort = 52_140;
 const screenshotNames = [
   'broadcast-input.png',
   'built-in-editor.png',
@@ -24,8 +18,6 @@ const screenshotNames = [
   'notification-settings.png',
   'semantic-commands.png',
   'source-control.png',
-  'ssh-jump-host.png',
-  'ssh-local-forward.png',
   'workspace-overview.png',
 ] as const;
 
@@ -70,9 +62,7 @@ function createProjectFixture(): void {
   fs.writeFileSync(path.join(fixturePath, 'src', 'app.ts'), [
     'export const workspace = {',
     '  localShells: true,',
-    '  ssh: true,',
     '  splitPanes: 2,',
-    "  presets: ['local', 'ssh', 'mixed'],",
     "  status: 'draft',",
     '};',
     '',
@@ -87,9 +77,7 @@ function createProjectFixture(): void {
   fs.writeFileSync(path.join(fixturePath, 'src', 'app.ts'), [
     'export const workspace = {',
     '  localShells: true,',
-    '  ssh: true,',
     '  splitPanes: 2,',
-    "  presets: ['local', 'ssh', 'mixed'],",
     "  status: 'ready',",
     '};',
     '',
@@ -97,110 +85,6 @@ function createProjectFixture(): void {
   fs.writeFileSync(path.join(fixturePath, 'docs', 'workspaces.md'), '# Saved workspaces\n', 'utf8');
   fs.writeFileSync(path.join(fixturePath, 'CHANGELOG.md'), '# Next\n\n- Refresh public screenshots.\n', 'utf8');
   runGit(['add', '--', 'docs/workspaces.md']);
-}
-
-interface SshFixture {
-  fingerprint: string;
-  close: () => Promise<void>;
-}
-
-function benignSocketError(error: unknown): void {
-  const code = error instanceof Error && (error as NodeJS.ErrnoException).code;
-  if (code === 'EPIPE' || code === 'ECONNABORTED' || code === 'ECONNRESET') return;
-  throw error;
-}
-
-async function startSshFixture(): Promise<SshFixture> {
-  const privateKey = generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
-    publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
-  }).privateKey;
-  const parsedHostKey = utils.parseKey(privateKey);
-  if (parsedHostKey instanceof Error) throw parsedHostKey;
-  const fingerprint = `SHA256:${createHash('sha256')
-    .update(parsedHostKey.getPublicSSH())
-    .digest('base64')
-    .replace(/=+$/, '')}`;
-  const clients = new Set<{ end: () => void }>();
-  const server = new Server({ hostKeys: [privateKey] }, (client) => {
-    clients.add(client);
-    client.on('close', () => clients.delete(client));
-    client.on('error', benignSocketError);
-    client.on('authentication', (context) => {
-      if (context.method === 'none' && context.username === 'demo') context.accept();
-      else context.reject();
-    });
-    client.on('ready', () => {
-      client.on('tcpip', (accept, reject, info) => {
-        if (info.destIP !== '127.0.0.1' || info.destPort !== echoPort) {
-          reject();
-          return;
-        }
-        const upstream = net.connect(echoPort, '127.0.0.1');
-        upstream.once('connect', () => {
-          const channel = accept();
-          channel.on('error', benignSocketError);
-          upstream.on('error', benignSocketError);
-          channel.pipe(upstream).pipe(channel);
-        });
-        upstream.once('error', () => reject());
-      });
-      client.on('session', (accept) => {
-        const session = accept();
-        session.on('error', benignSocketError);
-        session.on('pty', (acceptPty) => acceptPty?.());
-        session.on('shell', (acceptShell) => {
-          const stream = acceptShell();
-          stream.on('error', benignSocketError);
-          stream.write('Welcome to the JaneT loopback fixture\r\n$ ');
-          stream.on('data', (chunk: Buffer) => {
-            const command = chunk.toString('utf8').trim();
-            if (command === 'exit') {
-              stream.exit(0);
-              stream.end();
-            } else if (command) {
-              stream.write(`${command}\r\n$ `);
-            }
-          });
-        });
-      });
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(sshPort, '127.0.0.1', resolve);
-  });
-  return {
-    fingerprint,
-    close: async () => {
-      for (const client of clients) client.end();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    },
-  };
-}
-
-async function startEchoFixture(): Promise<net.Server> {
-  const server = net.createServer((socket) => socket.pipe(socket));
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(echoPort, '127.0.0.1', resolve);
-  });
-  return server;
-}
-
-function tcpRoundTrip(port: number, payload: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const socket = net.connect(port, '127.0.0.1');
-    const chunks: Buffer[] = [];
-    socket.once('error', reject);
-    socket.once('connect', () => socket.write(payload));
-    socket.on('data', (chunk) => {
-      chunks.push(Buffer.from(chunk));
-      if (Buffer.concat(chunks).length >= Buffer.byteLength(payload)) socket.end();
-    });
-    socket.once('close', () => resolve(Buffer.concat(chunks).toString('utf8')));
-  });
 }
 
 function tab(page: Page, title: string): Locator {
@@ -254,8 +138,7 @@ async function capture(name: typeof screenshotNames[number], target: Page | Loca
   expect(bytes.length).toBeGreaterThan(4_000);
 }
 
-function writeSettings(userData: string, fingerprint: string): void {
-  const localProfileId = `demo@127.0.0.1:${sshPort}:password`;
+function writeSettings(userData: string): void {
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
     fontSize: 14,
@@ -263,12 +146,6 @@ function writeSettings(userData: string, fingerprint: string): void {
     keybindings: {},
     notificationsEnabled: true,
     notificationThresholdSeconds: 15,
-    sshProfiles: [
-      { id: 'ops@bastion.example.com:22:password', host: 'bastion.example.com', port: 22, username: 'ops', auth: 'password' },
-      { id: 'demo@app.example.com:22:password', host: 'app.example.com', port: 22, username: 'demo', auth: 'password', jumpHostProfileId: 'ops@bastion.example.com:22:password' },
-      { id: localProfileId, host: '127.0.0.1', port: sshPort, username: 'demo', auth: 'password' },
-    ],
-    sshHostKeys: { [`127.0.0.1:${sshPort}`]: fingerprint },
     workspaceTabs: [
       {
         id: 'web-project', name: 'Web project', type: 'local', cwd: fixturePath,
@@ -278,17 +155,6 @@ function writeSettings(userData: string, fingerprint: string): void {
           children: [
             { type: 'leaf', title: 'App shell', terminalType: 'local', cwd: fixturePath },
             { type: 'leaf', title: 'Test runner', terminalType: 'local', cwd: fixturePath },
-          ],
-        },
-      },
-      {
-        id: 'local-ssh', name: 'Local + SSH', type: 'local', cwd: fixturePath,
-        terminalCount: 2, splitDirection: 'vertical',
-        root: {
-          type: 'split', direction: 'vertical', sizes: [1, 1],
-          children: [
-            { type: 'leaf', title: 'Local shell', terminalType: 'local', cwd: fixturePath },
-            { type: 'leaf', title: 'Remote shell', terminalType: 'ssh', sshProfileId: 'demo@app.example.com:22:password' },
           ],
         },
       },
@@ -310,10 +176,6 @@ function writeSettings(userData: string, fingerprint: string): void {
           id: 'command-demo', title: 'Command demo', type: 'local', cwd: shellCwd,
           root: { type: 'leaf', title: 'Commands', terminalType: 'local', cwd: shellCwd },
         },
-        {
-          id: 'loopback-ssh', title: 'Loopback SSH', type: 'ssh', sshProfileId: localProfileId,
-          root: { type: 'leaf', title: 'Loopback', terminalType: 'ssh', sshProfileId: localProfileId },
-        },
       ],
       activeTabId: 'demo-workspace',
       sidebarOpen: true,
@@ -326,17 +188,13 @@ function writeSettings(userData: string, fingerprint: string): void {
 test('recaptures the shipped public screenshot set from the real app', async () => {
   test.setTimeout(180_000);
   let userData: string | undefined;
-  let echo: net.Server | undefined;
-  let ssh: SshFixture | undefined;
   let app: ElectronApplication | undefined;
   const pageErrors: string[] = [];
 
   try {
     createProjectFixture();
     userData = fs.mkdtempSync(path.join(path.dirname(fixturePath), 'JaneT-Public-Screenshot-Profile-'));
-    echo = await startEchoFixture();
-    ssh = await startSshFixture();
-    writeSettings(userData, ssh.fingerprint);
+    writeSettings(userData);
     app = await electron.launch({
       args: ['.'],
       cwd: root,
@@ -468,34 +326,6 @@ test('recaptures the shipped public screenshot set from the real app', async () 
     await expect(sourceControl.getByText('CHANGELOG.md', { exact: true })).toBeVisible();
     await capture('source-control.png', page);
 
-    await page.getByRole('button', { name: 'SSH connections' }).click();
-    await page.getByRole('button', { name: 'Edit demo@app.example.com:22' }).click();
-    const sshEditor = page.getByRole('dialog', { name: 'Edit SSH connection' });
-    await expect(sshEditor.getByRole('textbox', { name: 'Host' })).toHaveValue('app.example.com');
-    await expect(sshEditor.getByRole('combobox', { name: 'Jump host' })).toHaveValue('ops@bastion.example.com:22:password');
-    await expect(sshEditor.getByRole('textbox', { name: 'Password' })).toHaveValue('');
-    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    await capture('ssh-jump-host.png', sshEditor);
-    await sshEditor.getByRole('button', { name: 'Cancel editing' }).click();
-
-    const hideTools = page.getByRole('button', { name: 'Collapse workspace tools' });
-    if (await hideTools.isVisible()) await hideTools.click();
-    const loopbackTab = tab(page, 'Loopback SSH');
-    await loopbackTab.click();
-    await expect(loopbackTab.locator('.vtab-sub')).not.toHaveText('Connecting…', { timeout: 20_000 });
-    await loopbackTab.click({ button: 'right' });
-    await expect(page.getByRole('menuitem', { name: 'Manage local forwards' })).toBeVisible({ timeout: 20_000 });
-    await page.getByRole('menuitem', { name: 'Manage local forwards' }).click();
-    const forwardDialog = page.getByRole('dialog', { name: 'SSH local forwards' });
-    await forwardDialog.getByRole('spinbutton', { name: 'Local port' }).fill(String(forwardPort));
-    await forwardDialog.getByRole('textbox', { name: 'Destination host' }).fill('127.0.0.1');
-    await forwardDialog.getByRole('spinbutton', { name: 'Destination port' }).fill(String(echoPort));
-    await forwardDialog.getByRole('button', { name: 'Create forward' }).click();
-    const stopForward = forwardDialog.getByRole('button', { name: `Stop forward 127.0.0.1:${forwardPort}` });
-    await expect(stopForward).toBeVisible({ timeout: 20_000 });
-    expect(await tcpRoundTrip(forwardPort, 'JaneT public screenshot')).toBe('JaneT public screenshot');
-    await capture('ssh-local-forward.png', forwardDialog);
-
     const bodyText = await page.locator('body').innerText();
     expect(bodyText).not.toMatch(/pckpr|JaneT-polish|projects\\JaneT/i);
     expect([...pageErrors, ...(await page.pageErrors({ filter: 'all' })).map((error) => error.message)]).toEqual([]);
@@ -506,8 +336,6 @@ test('recaptures the shipped public screenshot set from the real app', async () 
     }
   } finally {
     await forceClose(app);
-    await ssh?.close().catch(() => {});
-    if (echo) await new Promise<void>((resolve) => echo?.close(() => resolve()));
     if (userData && fs.existsSync(userData)) fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     removeOwnedFixture();
   }

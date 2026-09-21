@@ -5,20 +5,16 @@ export interface TerminalLeaf {
   id: string;
   type: 'leaf';
   title?: string;
-  terminalType?: 'local' | 'ssh';
+  terminalType?: 'local';
   cwd?: string;
-  sshProfileId?: string;
-  sshSessionId?: string;
-  sshShellReady?: boolean;
   startupCommands?: string[];
   startupShellDialect?: StartupShellDialect;
 }
 
 export interface WorkspaceTerminal {
-  type: 'local' | 'ssh';
+  type: 'local';
   title?: string;
   cwd?: string;
-  sshProfileId?: string;
   startupCommands?: string[];
   startupShellDialect?: StartupShellDialect;
 }
@@ -37,42 +33,19 @@ export interface TabInfo {
   isProject?: boolean;
   id: string;
   title: string;
-  type: 'local' | 'ssh';
+  type: 'local';
   workspaceId?: string;
   groupId?: string;
-  sshSessionId?: string;
-  sshProfileId?: string;
-  sshShellReady?: boolean;
   cwd?: string;
   root: PaneNode;
-}
-
-export interface SessionInfo {
-  id: string;
-  host: string;
-  port: number;
-  username?: string;
-  sshProfileId?: string;
-}
-
-export interface SavedSSHProfile {
-  id: string;
-  host: string;
-  port: number;
-  username?: string;
-  auth: 'password' | 'key';
-  password?: string;
-  privateKey?: string;
-  jumpHostProfileId?: string;
 }
 
 export interface WorkspaceTabPreset {
   createProject?: boolean;
   id: string;
   name: string;
-  type: 'local' | 'ssh';
+  type: 'local';
   cwd?: string;
-  sshProfileId?: string;
   /** Portable saved pane tree. Legacy presets omit this and use count/direction. */
   root?: import('./sessionRestore').SavedPaneNode;
   terminalCount: number;
@@ -84,8 +57,8 @@ export function genId(prefix = 'p'): string {
   return `${prefix}-${++_counter}-${Date.now().toString(36)}`;
 }
 
-export function createLeaf(type: 'local' | 'ssh' = 'local'): TerminalLeaf {
-  return { id: genId('term'), type: 'leaf', title: type === 'local' ? 'terminal' : 'ssh', terminalType: type };
+export function createLeaf(type: 'local' = 'local'): TerminalLeaf {
+  return { id: genId('term'), type: 'leaf', title: 'terminal', terminalType: type };
 }
 
 function workspaceLeaf(terminal: WorkspaceTerminal): TerminalLeaf {
@@ -93,12 +66,9 @@ function workspaceLeaf(terminal: WorkspaceTerminal): TerminalLeaf {
   const title = terminal.title?.trim();
   return {
     id: genId('term'), type: 'leaf', ...(title ? { title } : {}),
-    terminalType: terminal.type, cwd: terminal.type === 'local' ? terminal.cwd : undefined,
-    sshProfileId: terminal.type === 'ssh' ? terminal.sshProfileId : undefined,
+    terminalType: terminal.type, cwd: terminal.cwd,
     ...(startupCommands.length > 0 ? { startupCommands } : {}),
-    ...(terminal.type === 'ssh' && startupCommands.length > 0
-      ? { startupShellDialect: terminal.startupShellDialect ?? 'posix' }
-      : {}),
+    ...(terminal.startupShellDialect ? { startupShellDialect: terminal.startupShellDialect } : {}),
   };
 }
 
@@ -126,7 +96,7 @@ export function arrangePaneGrid(trees: PaneNode[]): PaneNode {
 }
 
 export function createPaneRoot(
-  type: 'local' | 'ssh' = 'local',
+  type: 'local' = 'local',
   terminalCount = 1,
   direction: 'horizontal' | 'vertical' = 'vertical',
 ): PaneNode {

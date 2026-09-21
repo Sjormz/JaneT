@@ -1,10 +1,10 @@
 import React, { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import { flushSync } from 'react-dom';
 import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, isWorkspaceProject, rebaseDirectory, type WorkspaceGroup } from '../shared/workspaceGroups';
 import EmptyWorkspace, { type WorkspaceEntryRequest } from './components/EmptyWorkspace';
 import Titlebar from './components/Titlebar';
 import VerticalTabBar from './components/VerticalTabBar';
 import SplitPane from './components/SplitPane';
-import SSHConnectionsDialog from './components/SSHConnectionsDialog';
 import AddTerminalsDialog from './components/AddTerminalsDialog';
 import { disposeCachedTerminal, updateTerminalStartingDirectory } from './components/TerminalPane';
 import Sidebar, { WorkspaceToolSection } from './components/Sidebar';
@@ -23,8 +23,7 @@ import RenameDialog from './components/RenameDialog';
 import WorkspaceContent, { surfaceTabFocusTarget } from './components/WorkspaceContent';
 import { ArrowRightIcon } from './icons';
 import {
-  TabInfo, SessionInfo,
-  SavedSSHProfile,
+  TabInfo,
   WorkspaceTabPreset,
   PaneNode, PaneDropSide, TerminalLeaf,
   createPaneRoot, arrangePaneGrid, splitPane, removePane, movePane, directionalPaneTarget, resizePane, getAllLeafIds, genId, mapLeaves, findLeaf, countLeaves,
@@ -61,7 +60,7 @@ import {
   type TerminalTransportStatus,
 } from './terminalAwareness';
 
-function createTabRoot(type: 'local' | 'ssh'): PaneNode {
+function createTabRoot(type: 'local'): PaneNode {
   return createPaneRoot(type, 1, 'vertical');
 }
 
@@ -80,8 +79,7 @@ function ensureSplitRoot(root: PaneNode): PaneNode {
 
 interface TerminalOwner {
   termId: string;
-  type: 'local' | 'ssh';
-  sshSessionId?: string;
+  type: 'local';
 }
 
 interface PendingDestructiveAction {
@@ -108,7 +106,6 @@ function collectTerminalOwners(tab: TabInfo): TerminalOwner[] {
       owners.push({
         termId: node.id,
         type,
-        sshSessionId: type === 'ssh' ? node.sshSessionId ?? tab.sshSessionId : undefined,
       });
       return;
     }
@@ -116,18 +113,6 @@ function collectTerminalOwners(tab: TabInfo): TerminalOwner[] {
   };
   collect(tab.root);
   return owners;
-}
-
-function ownsSshSession(tabs: TabInfo[], sessionId: string): boolean {
-  return tabs.some((tab) => collectTerminalOwners(tab).some(
-    (owner) => owner.type === 'ssh' && owner.sshSessionId === sessionId,
-  ));
-}
-
-function ownsSshTerminal(tabs: TabInfo[], termId: string, sessionId: string): boolean {
-  return tabs.some((tab) => collectTerminalOwners(tab).some(
-    (owner) => owner.termId === termId && owner.type === 'ssh' && owner.sshSessionId === sessionId,
-  ));
 }
 
 function preferredLeafId(tab: TabInfo, focusedTerminalId: string | null, maximizedLeafId?: string | null): string | null {
@@ -150,44 +135,12 @@ function terminalFocusTarget(termId: string | null): HTMLTextAreaElement | null 
   return container?.querySelector<HTMLTextAreaElement>('textarea') ?? null;
 }
 
-function displayPaneTitle(leaf: TerminalLeaf, tabType: 'local' | 'ssh'): string {
+function displayPaneTitle(leaf: TerminalLeaf): string {
   const stored = leaf.title?.trim();
-  const leafType = leaf.terminalType ?? tabType;
-  const legacyTitle = leafType === 'ssh' ? 'ssh' : 'terminal';
+  const legacyTitle = 'terminal';
   const isLegacyUntypedSplitTitle = !leaf.terminalType && stored?.toLowerCase() === 'terminal';
   if (stored && stored.toLowerCase() !== legacyTitle && !isLegacyUntypedSplitTitle) return stored;
-  return leafType === 'ssh' ? 'SSH' : 'Terminal';
-}
-
-function sshSessionInfo(sessionId: string, profile: SavedSSHProfile): SessionInfo {
-  return {
-    id: sessionId,
-    host: profile.host,
-    port: profile.port,
-    ...(profile.username ? { username: profile.username } : {}),
-    sshProfileId: profile.id,
-  };
-}
-
-function sshConnectProfile(profile: SavedSSHProfile, profiles: SavedSSHProfile[]) {
-  const jumpHost = profile.jumpHostProfileId
-    ? profiles.find((candidate) => candidate.id === profile.jumpHostProfileId)
-    : undefined;
-  if (profile.jumpHostProfileId && (!jumpHost || jumpHost.id === profile.id)) {
-    throw new Error('Saved jump host is missing or invalid');
-  }
-  return {
-    host: profile.host, port: profile.port,
-    ...(profile.username ? { username: profile.username } : {}), auth: profile.auth,
-    password: profile.auth === 'password' ? profile.password : undefined,
-    privateKey: profile.auth === 'key' ? profile.privateKey : undefined,
-    ...(jumpHost ? { jumpHost: {
-      host: jumpHost.host, port: jumpHost.port,
-      ...(jumpHost.username ? { username: jumpHost.username } : {}), auth: jumpHost.auth,
-      ...(jumpHost.auth === 'password' && jumpHost.password ? { password: jumpHost.password } : {}),
-      ...(jumpHost.auth === 'key' && jumpHost.privateKey ? { privateKey: jumpHost.privateKey } : {}),
-    } } : {}),
-  };
+  return 'Terminal';
 }
 
 interface InitialAppState {
@@ -200,8 +153,6 @@ interface InitialAppState {
   tabsOpen: boolean;
   sidebarSection: WorkspaceToolSection;
   settingsOpen: boolean;
-  sshConnectionsOpen: boolean;
-  sshProfiles: SavedSSHProfile[];
   currentTheme: ThemeName;
   fontSize: number;
   fontFamily: string;
@@ -223,13 +174,6 @@ function createInitialAppState(settings: any): InitialAppState {
   for (const saved of session.tabs) {
     let tree = restorePaneTree(saved.root);
     if (!tree) continue;
-    if (saved.type !== 'ssh') {
-      tree = mapLeaves(tree, (leaf) => leaf.terminalType === 'ssh' && leaf.sshProfileId ? {
-        ...leaf,
-        sshSessionId: `ssh-${Date.now()}-${leaf.id}`,
-        sshShellReady: false,
-      } : leaf);
-    }
     const tab: TabInfo = {
       id: genId('tab'),
       title: saved.title,
@@ -237,12 +181,6 @@ function createInitialAppState(settings: any): InitialAppState {
       groupId: groups.some((group) => group.id === saved.groupId) ? saved.groupId : groups[0].id,
       type: saved.type,
       cwd: saved.cwd,
-      sshProfileId: saved.sshProfileId,
-      // Allocate the runtime session id before any terminal component mounts.
-      sshSessionId: saved.type === 'ssh' && saved.sshProfileId
-        ? `ssh-${crypto.randomUUID()}`
-        : undefined,
-      sshShellReady: saved.type !== 'ssh',
       root: tree,
     };
     restored.push(tab);
@@ -261,8 +199,7 @@ function createInitialAppState(settings: any): InitialAppState {
   const tabs = restored;
   const theme = getTheme(s.theme || 'one-dark').name;
   const restoreLegacySettings = session.sidebarOpen && session.sidebarSection === 'settings';
-  const restoreLegacySsh = session.sidebarOpen && session.sidebarSection === 'ssh';
-  const restoreMovedLegacySurface = restoreLegacySettings || restoreLegacySsh;
+  const restoreMovedLegacySurface = restoreLegacySettings;
 
   return {
     tabs,
@@ -271,11 +208,9 @@ function createInitialAppState(settings: any): InitialAppState {
     focusedTerminalId: restoredFocusedTerminalId,
     maximizedLeafByTab: restoredMaximizedLeafByTab,
     sidebarOpen: restoreMovedLegacySurface ? false : session.sidebarOpen,
-    tabsOpen: restoreLegacySsh ? true : session.tabsOpen,
+    tabsOpen: session.tabsOpen,
     sidebarSection: session.sidebarSection === 'git' ? 'git' : 'files',
     settingsOpen: restoreLegacySettings,
-    sshConnectionsOpen: restoreLegacySsh,
-    sshProfiles: Array.isArray(s.sshProfiles) ? s.sshProfiles : [],
     currentTheme: theme,
     fontSize: typeof s.fontSize === 'number' ? s.fontSize : 14,
     fontFamily: normalizeTerminalFontFamily(s.fontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY),
@@ -309,15 +244,6 @@ function AppInner({ initialSettings, persistSettings }: {
   const [tabsOpen, setTabsOpen] = useState(initialState.tabsOpen);
   const responsiveTabsCollapsedRef = useRef(false);
   const [sidebarSection, setSidebarSection] = useState<WorkspaceToolSection>(initialState.sidebarSection);
-  const [sshSessions, setSshSessions] = useState<SessionInfo[]>([]);
-  const sshSessionsRef = useRef(sshSessions);
-  sshSessionsRef.current = sshSessions;
-  const [readySshSessionIds, setReadySshSessionIds] = useState<Set<string>>(new Set());
-  const [disconnectedSshSessionIds, setDisconnectedSshSessionIds] = useState<Set<string>>(new Set());
-  const [sshConnectionEpochById, setSshConnectionEpochById] = useState<Record<string, number>>({});
-  const [sshProfiles, setSshProfiles] = useState<SavedSSHProfile[]>(initialState.sshProfiles);
-  const sshProfilesRef = useRef(sshProfiles);
-  sshProfilesRef.current = sshProfiles;
   const [groups, setGroups] = useState<WorkspaceGroup[]>(initialState.groups);
   const [mainDirectory, setMainDirectory] = useState<string | null>(initialSettings.mainDirectory ?? null);
   const groupsRef = useRef(groups);
@@ -352,10 +278,6 @@ function AppInner({ initialSettings, persistSettings }: {
   const terminalLastFocusedRef = useRef<Record<string, number>>({});
   const terminalFocusSequenceRef = useRef(0);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
-  const connectingSshSessionIdsRef = useRef<Set<string>>(new Set());
-  const releasedSshSessionIdsRef = useRef<Set<string>>(new Set());
-  const invalidatedInitialSshShellsRef = useRef(new Map<string, string>());
-  const sshShellStateByTerminalRef = useRef(new Map<string, { sessionId: string; state: 'ready' | 'failed' }>());
   const terminalStatusAnnouncementEligibleIdsRef = useRef(new Set<string>());
 
   useLayoutEffect(() => {
@@ -387,121 +309,11 @@ function AppInner({ initialSettings, persistSettings }: {
     return () => narrowWindow.removeEventListener('change', syncResponsiveTabs);
   }, []);
 
-  const markSshSessionReady = useCallback((sessionId: string) => {
-    setReadySshSessionIds((current) => new Set(current).add(sessionId));
-    setDisconnectedSshSessionIds((current) => {
-      if (!current.has(sessionId)) return current;
-      const next = new Set(current);
-      next.delete(sessionId);
-      return next;
-    });
-  }, []);
-
-  const markSshSessionDisconnected = useCallback((sessionId: string) => {
-    for (const [termId, shell] of sshShellStateByTerminalRef.current) {
-      if (shell.sessionId === sessionId) sshShellStateByTerminalRef.current.delete(termId);
-    }
-    setSshSessions((current) => current.filter((session) => session.id !== sessionId));
-    setReadySshSessionIds((current) => {
-      if (!current.has(sessionId)) return current;
-      const next = new Set(current);
-      next.delete(sessionId);
-      return next;
-    });
-    setDisconnectedSshSessionIds((current) => new Set(current).add(sessionId));
-  }, []);
-
-  const markSshSessionUnavailable = useCallback((sessionId: string) => {
-    setReadySshSessionIds((current) => {
-      if (!current.has(sessionId)) return current;
-      const next = new Set(current);
-      next.delete(sessionId);
-      return next;
-    });
-    setDisconnectedSshSessionIds((current) => new Set(current).add(sessionId));
-  }, []);
-
-  const markSshTerminalReady = useCallback((termId: string, sessionId: string, explicitRetry = false) => {
-    if (!explicitRetry && invalidatedInitialSshShellsRef.current.get(termId) === sessionId) return;
-    if (releasedSshSessionIdsRef.current.has(sessionId)) return;
-    if (!ownsSshTerminal(tabsRef.current, termId, sessionId)) return;
-    if (explicitRetry) {
-      const next = tabsRef.current.map((tab) => {
-        const leaf = findLeaf(tab.root, termId);
-        if (!leaf) return tab;
-        if (tab.type === 'ssh') {
-          return tab.sshShellReady ? tab : { ...tab, sshShellReady: true };
-        }
-        return leaf.sshShellReady
-          ? tab
-          : {
-              ...tab,
-              root: mapLeaves(tab.root, (candidate) => (
-                candidate.id === termId ? { ...candidate, sshShellReady: true } : candidate
-              )),
-            };
-      });
-      tabsRef.current = next;
-      setTabs(next);
-    }
-    sshShellStateByTerminalRef.current.set(termId, { sessionId, state: 'ready' });
-    markSshSessionReady(sessionId);
-  }, [markSshSessionReady]);
-
-  const markSshTerminalFailed = useCallback((termId: string, sessionId: string, explicitRetry = false) => {
-    if (!explicitRetry && invalidatedInitialSshShellsRef.current.get(termId) === sessionId) return;
-    if (!ownsSshTerminal(tabsRef.current, termId, sessionId)) return;
-    if (explicitRetry) {
-      announcedTerminalStatusByIdRef.current.delete(termId);
-      terminalStatusAnnouncementEligibleIdsRef.current.add(termId);
-    }
-    sshShellStateByTerminalRef.current.set(termId, { sessionId, state: 'failed' });
-    const owners = tabsRef.current.flatMap(collectTerminalOwners).filter(
-      (owner) => owner.type === 'ssh' && owner.sshSessionId === sessionId,
-    );
-    if (owners.length > 0 && owners.every((owner) => (
-      sshShellStateByTerminalRef.current.get(owner.termId)?.state === 'failed'
-    ))) {
-      markSshSessionUnavailable(sessionId);
-    }
-  }, [markSshSessionUnavailable]);
-
-  const isSshSessionDisconnected = useCallback((sessionId?: string) => (
-    Boolean(sessionId && disconnectedSshSessionIds.has(sessionId))
-  ), [disconnectedSshSessionIds]);
-
-  useEffect(() => {
-    if (!window.janet.onSSHConnectionClosed) return undefined;
-    return window.janet.onSSHConnectionClosed(({ id }) => {
-      releasedSshSessionIdsRef.current.add(id);
-      const disconnectedTerminals = tabsRef.current.flatMap(collectTerminalOwners)
-        .filter((owner) => owner.sshSessionId === id);
-      disconnectedTerminals.forEach((owner) => {
-        terminalStatusAnnouncementEligibleIdsRef.current.add(owner.termId);
-      });
-      for (const owner of disconnectedTerminals) {
-        invalidatedInitialSshShellsRef.current.set(owner.termId, id);
-      }
-      clearPendingCommandHistoryRuns(new Set(disconnectedTerminals.map((owner) => owner.termId)));
-      const disconnectedRecipient = disconnectedTerminals
-        .some((owner) => broadcastRecipientIdsRef.current.has(owner.termId));
-      if (disconnectedRecipient) setBroadcastRecipientIds(new Set());
-      markSshSessionDisconnected(id);
-      setSshConnectionEpochById((current) => ({
-        ...current,
-        [id]: (current[id] ?? 0) + 1,
-      }));
-    });
-  }, [markSshSessionDisconnected]);
-
-  const restoredSshTabsStartedRef = useRef(false);
-  const restoredSshLeavesStartedRef = useRef(false);
   const [paletteVisible, setPaletteVisible] = useState(false);
   const [snippetsVisible, setSnippetsVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(initialState.settingsOpen);
   const [shortcutsVisible, setShortcutsVisible] = useState(false);
-  const [sshConnectionsOpen, setSshConnectionsOpen] = useState(initialState.sshConnectionsOpen);
   const [pendingDestructiveAction, setPendingDestructiveAction] = useState<PendingDestructiveAction | null>(null);
   const [pendingDestructiveBusy, setPendingDestructiveBusy] = useState(false);
   const pendingDestructiveBusyRef = useRef(false);
@@ -552,8 +364,7 @@ function AppInner({ initialSettings, persistSettings }: {
   const [localTransportByTerminal, setLocalTransportByTerminal] = useState<Record<string, TerminalTransportStatus>>({});
   const [terminalStatusAnnouncement, setTerminalStatusAnnouncement] = useState({ sequence: 0, text: '' });
   const announcedTerminalStatusByIdRef = useRef(new Map<string, string>());
-  // Cached home directory — used as the fallback cwd before any OSC 7
-  // has arrived or for SSH tabs.
+  // Cached home directory — used as the fallback cwd before any OSC 7 arrives.
   const [homeDir, setHomeDir] = useState<string>('');
   useEffect(() => {
     try { window.janet.fsGetHome().then(setHomeDir).catch(() => {}); } catch {}
@@ -592,117 +403,6 @@ function AppInner({ initialSettings, persistSettings }: {
 
   const { bindings, matches, on } = useKeybindings();
 
-  // Reconnect SSH tabs that were restored from the saved session.
-  // The tree is rebuilt with fresh leaf ids during restore, and the
-  // session id is pre-allocated so the TerminalPane mounts with a
-  // stable `sshSessionId` prop. The transport is still dead though
-  // (it's a fresh app start) — so this effect kicks off `ssh:connect`
-  // on the pre-allocated id, registers the session for the sidebar
-  // status, and surfaces any connect error to the user.
-  useEffect(() => {
-    if (restoredSshTabsStartedRef.current) return;
-    restoredSshTabsStartedRef.current = true;
-    if (tabsRef.current.length === 0) return;
-
-    const reconnectable = tabsRef.current.filter(
-      (tab) => tab.type === 'ssh' && tab.sshSessionId && tab.sshProfileId,
-    );
-    if (reconnectable.length === 0) return;
-
-    for (const tab of reconnectable) {
-      const profile = sshProfiles.find((candidate) => candidate.id === tab.sshProfileId);
-      if (!profile) {
-        markSshSessionDisconnected(tab.sshSessionId!);
-        continue;
-      }
-      const sessionId = tab.sshSessionId!;
-      if (connectingSshSessionIdsRef.current.has(sessionId)) {
-        continue;
-      }
-      connectingSshSessionIdsRef.current.add(sessionId);
-      window.janet.sshConnect({
-        id: sessionId,
-        ...sshConnectProfile(profile, sshProfiles),
-      }).then(() => {
-        if (
-          releasedSshSessionIdsRef.current.has(sessionId) ||
-          !ownsSshSession(tabsRef.current, sessionId)
-        ) {
-          window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
-          return;
-        }
-        const session: SessionInfo = {
-          id: sessionId,
-          host: profile.host,
-          port: profile.port,
-          ...(profile.username ? { username: profile.username } : {}),
-          sshProfileId: profile.id,
-        };
-        setSshSessions((prev) => prev.some((s) => s.id === sessionId) ? prev : [...prev, session]);
-        setTabs((prev) => prev.map((existing) => (
-          existing.id === tab.id ? { ...existing, sshShellReady: true } : existing
-        )));
-      }).catch((err) => {
-        console.error('Failed to reconnect saved SSH tab:', err);
-        markSshSessionDisconnected(sessionId);
-      }).finally(() => {
-        connectingSshSessionIdsRef.current.delete(sessionId);
-        releasedSshSessionIdsRef.current.delete(sessionId);
-      });
-    }
-  }, [markSshSessionDisconnected, sshProfiles]);
-
-  // Mixed workspace tabs carry their SSH connection settings on individual leaves.
-  useEffect(() => {
-    if (restoredSshLeavesStartedRef.current) return;
-    restoredSshLeavesStartedRef.current = true;
-    const leaves: Array<{ tabId: string; leafId: string; sshProfileId: string; sshSessionId: string }> = [];
-    const collect = (tab: TabInfo, node: PaneNode) => {
-      if (node.type === 'leaf') {
-        if (node.terminalType === 'ssh' && node.sshProfileId && node.sshSessionId) leaves.push({ tabId: tab.id, leafId: node.id, sshProfileId: node.sshProfileId, sshSessionId: node.sshSessionId });
-        return;
-      }
-      node.children.forEach((child) => collect(tab, child));
-    };
-    tabsRef.current.filter((tab) => tab.type !== 'ssh').forEach((tab) => collect(tab, tab.root));
-    for (const leaf of leaves) {
-      const profile = sshProfiles.find((candidate) => candidate.id === leaf.sshProfileId);
-      if (!profile) {
-        markSshSessionDisconnected(leaf.sshSessionId);
-        continue;
-      }
-      if (connectingSshSessionIdsRef.current.has(leaf.sshSessionId)) {
-        continue;
-      }
-      connectingSshSessionIdsRef.current.add(leaf.sshSessionId);
-      window.janet.sshConnect({
-        id: leaf.sshSessionId, ...sshConnectProfile(profile, sshProfiles),
-      }).then(() => {
-        if (
-          releasedSshSessionIdsRef.current.has(leaf.sshSessionId) ||
-          !ownsSshSession(tabsRef.current, leaf.sshSessionId)
-        ) {
-          window.janet.sshDisconnect({ id: leaf.sshSessionId }).catch(() => {});
-          return;
-        }
-        const session = sshSessionInfo(leaf.sshSessionId, profile);
-        setSshSessions((current) => current.some((candidate) => candidate.id === session.id)
-          ? current
-          : [...current, session]);
-        setTabs((current) => current.map((tab) => tab.id === leaf.tabId
-          ? { ...tab, root: mapLeaves(tab.root, (candidate) => candidate.id === leaf.leafId ? { ...candidate, sshShellReady: true } : candidate) }
-          : tab));
-      }).catch((error) => {
-        console.error('Failed to reconnect saved workspace SSH terminal:', error);
-        markSshSessionDisconnected(leaf.sshSessionId);
-      })
-        .finally(() => {
-          connectingSshSessionIdsRef.current.delete(leaf.sshSessionId);
-          releasedSshSessionIdsRef.current.delete(leaf.sshSessionId);
-        });
-    }
-  }, [markSshSessionDisconnected, sshProfiles]);
-
   const persistSession = useCallback(async (): Promise<boolean> => {
     if (directoryRenameBusy.current) return false;
     const currentActiveTabId = activeTabIdRef.current;
@@ -725,7 +425,6 @@ function AppInner({ initialSettings, persistSettings }: {
           groupId: tab.groupId ?? groupsRef.current[0]?.id,
           type: tab.type,
           cwd: tab.cwd,
-          sshProfileId: tab.sshProfileId,
           ...(selectedPanePath ? { selectedPanePath } : {}),
           ...(maximizedPanePath ? { maximizedPanePath } : {}),
           root: serializePaneTree(tab.root, cwdByTerminalRef.current, { includeStartupCommands: true }),
@@ -872,8 +571,8 @@ function AppInner({ initialSettings, persistSettings }: {
         void window.janet.notifyCommandCompleted({
           target: { tabId: owner.id, termId }, durationMs: Math.max(0, Math.round(performance.now() - run.started)),
           outcome: event.outcome === 'failed' ? 'failure' : event.outcome === 'succeeded' ? 'success' : 'unknown',
-          tabLabel: owner.title.slice(0, 256) || 'Project', paneLabel: `${event.provider} · ${displayPaneTitle(leaf, owner.type)}`.slice(0, 256),
-          context: (leaf.terminalType ?? owner.type) === 'ssh' ? { kind: 'ssh', hostLabel: 'SSH' } : { kind: 'local' },
+          tabLabel: owner.title.slice(0, 256) || 'Project', paneLabel: `${event.provider} · ${displayPaneTitle(leaf)}`.slice(0, 256),
+          context: { kind: 'local' },
         }).catch(() => {});
       }
       if (event.event === 'session.end' && run?.sessionId === event.sessionId) agentRunsRef.current.delete(termId);
@@ -913,17 +612,8 @@ function AppInner({ initialSettings, persistSettings }: {
     const owner = tabsRef.current.find((tab) => tab.id === tabId);
     const leaf = owner && findLeaf(owner.root, termId);
     if (!owner || !leaf) return null;
-    if ((leaf.terminalType ?? owner.type) === 'local') {
-      const cwd = cwdByTerminalRef.current[termId] || leaf.cwd || owner.cwd || homeDir;
-      return cwd ? { kind: 'local', cwd } : null;
-    }
-    const session = sshSessionsRef.current.find((candidate) => candidate.id === (leaf.sshSessionId ?? owner.sshSessionId));
-    const profile = sshProfilesRef.current.find((candidate) => candidate.id === (leaf.sshProfileId ?? owner.sshProfileId));
-    const host = session?.host ?? profile?.host;
-    if (!host) return null;
-    const username = session?.username ?? profile?.username;
-    const port = session?.port ?? profile?.port;
-    return { kind: 'ssh', label: `${username ? `${username}@` : ''}${host}${port ? `:${port}` : ''}` };
+    const cwd = cwdByTerminalRef.current[termId] || leaf.cwd || owner.cwd || homeDir;
+    return cwd ? { kind: 'local', cwd } : null;
   }, [homeDir]);
 
   const handleSemanticCommandStarted = useCallback((
@@ -984,17 +674,14 @@ function AppInner({ initialSettings, persistSettings }: {
     const owner = owners[0];
     const leaf = findLeaf(owner.root, termId);
     if (!leaf) return;
-    const leafType = leaf.terminalType ?? owner.type;
     handleAgentEvent(termId, { version: 1, provider: 'shell', event: 'turn.end', sessionId: termId, turnId: String(event.startedAt), outcome: event.exitCode === 0 ? 'succeeded' : event.exitCode === undefined ? 'interrupted' : 'failed' });
     const payload: CommandNotificationPayload = {
       target: { tabId, termId },
       durationMs: event.durationMs,
       outcome: event.exitCode === undefined ? 'unknown' : event.exitCode === 0 ? 'success' : 'failure',
       tabLabel: owner.title.trim().slice(0, 256) || 'Terminal',
-      paneLabel: displayPaneTitle(leaf, owner.type).slice(0, 256),
-      context: leafType === 'ssh'
-        ? { kind: 'ssh', hostLabel: (sshProfiles.find((profile) => profile.id === (leaf.sshProfileId ?? owner.sshProfileId))?.host ?? 'SSH').slice(0, 512) }
-        : { kind: 'local' },
+      paneLabel: displayPaneTitle(leaf).slice(0, 256),
+      context: { kind: 'local' },
     };
     if (!agentOwnedTerminalsRef.current.delete(termId)) window.janet.notifyCommandCompleted(payload).catch(() => {});
     agentRunsRef.current.delete(termId);
@@ -1059,7 +746,7 @@ function AppInner({ initialSettings, persistSettings }: {
         console.error('Failed to save command history:', error);
       }
     });
-  }, [resolveCommandHistoryContext, sshProfiles, handleAgentEvent]);
+  }, [resolveCommandHistoryContext, handleAgentEvent]);
 
   const removeCommandHistoryEntry = useCallback((entry: CommandHistoryEntry) => {
     historySaveQueueRef.current = historySaveQueueRef.current.then(async () => {
@@ -1084,16 +771,7 @@ function AppInner({ initialSettings, persistSettings }: {
     });
   }, []);
 
-  const transportByTerminal = useMemo(() => Object.fromEntries(
-    tabs.flatMap((tab) => collectTerminalOwners(tab).flatMap((owner) => {
-      const transport = owner.type === 'local'
-        ? localTransportByTerminal[owner.termId]
-        : owner.sshSessionId && disconnectedSshSessionIds.has(owner.sshSessionId)
-          ? 'disconnected' as const
-          : undefined;
-      return transport ? [[owner.termId, transport]] : [];
-    })),
-  ), [disconnectedSshSessionIds, localTransportByTerminal, tabs]);
+  const transportByTerminal = localTransportByTerminal;
 
   const awarenessByTab = useMemo(() => Object.fromEntries(
     tabs.flatMap((tab) => {
@@ -1117,8 +795,8 @@ function AppInner({ initialSettings, persistSettings }: {
       const paneLabels = owners.map((owner) => {
         const leaf = findLeaf(tab.root, owner.termId);
         if (!leaf) return '';
-        const paneTitle = displayPaneTitle(leaf, tab.type).slice(0, 256);
-        const paneType = (leaf.terminalType ?? tab.type) === 'ssh' ? 'SSH' : 'Local terminal';
+        const paneTitle = displayPaneTitle(leaf).slice(0, 256);
+        const paneType = 'Local terminal';
         return `${paneTitle} — ${paneType} pane`;
       });
       for (const [ownerIndex, owner] of owners.entries()) {
@@ -1197,7 +875,7 @@ function AppInner({ initialSettings, persistSettings }: {
     requestAnimationFrame(() => terminalFocusTarget(termId)?.focus());
   }), [selectTerminalTab]);
 
-  const teardownTerminalOwners = useCallback((owners: TerminalOwner[], remainingTabs: TabInfo[]) => {
+  const teardownTerminalOwners = useCallback((owners: TerminalOwner[]) => {
     if (owners.length === 0) return;
 
     const removedTerminals = new Set(owners.map((owner) => owner.termId));
@@ -1219,69 +897,12 @@ function AppInner({ initialSettings, persistSettings }: {
       return Object.keys(next).length === Object.keys(current).length ? current : next;
     });
 
-    const retainedSshSessions = new Set(
-      remainingTabs.flatMap(collectTerminalOwners)
-        .filter((owner) => owner.type === 'ssh' && owner.sshSessionId)
-        .map((owner) => owner.sshSessionId!),
-    );
-    const releasedSshSessions = new Set<string>();
-
     for (const owner of owners) {
-      invalidatedInitialSshShellsRef.current.delete(owner.termId);
-      sshShellStateByTerminalRef.current.delete(owner.termId);
       disposeCachedTerminal(owner.termId);
       liveTerminalIdsRef.current.delete(owner.termId);
-
-      if (owner.type === 'local') {
-        window.janet.terminalDestroy({ id: owner.termId }).catch(() => {});
-        continue;
-      }
-
-      if (!owner.sshSessionId) continue;
-      if (retainedSshSessions.has(owner.sshSessionId)) {
-        window.janet.sshDestroyShell({ sessionId: owner.sshSessionId, termId: owner.termId }).catch(() => {});
-      } else {
-        releasedSshSessions.add(owner.sshSessionId);
-      }
+      window.janet.terminalDestroy({ id: owner.termId }).catch(() => {});
     }
-
-    for (const sessionId of retainedSshSessions) {
-      if (!owners.some((owner) => owner.sshSessionId === sessionId)) continue;
-      const remainingOwners = remainingTabs.flatMap(collectTerminalOwners).filter(
-        (owner) => owner.type === 'ssh' && owner.sshSessionId === sessionId,
-      );
-      if (remainingOwners.length > 0 && remainingOwners.every((owner) => (
-        sshShellStateByTerminalRef.current.get(owner.termId)?.state === 'failed'
-      ))) {
-        markSshSessionUnavailable(sessionId);
-      }
-    }
-
-    for (const sessionId of releasedSshSessions) {
-      if (connectingSshSessionIdsRef.current.has(sessionId)) {
-        releasedSshSessionIdsRef.current.add(sessionId);
-      }
-      window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
-    }
-    if (releasedSshSessions.size > 0) {
-      setSshSessions((current) => current.filter((session) => !releasedSshSessions.has(session.id)));
-      setReadySshSessionIds((current) => {
-        const next = new Set(current);
-        for (const sessionId of releasedSshSessions) next.delete(sessionId);
-        return next;
-      });
-      setDisconnectedSshSessionIds((current) => {
-        const next = new Set(current);
-        for (const sessionId of releasedSshSessions) next.delete(sessionId);
-        return next;
-      });
-      setSshConnectionEpochById((current) => {
-        const next = { ...current };
-        for (const sessionId of releasedSshSessions) delete next[sessionId];
-        return next;
-      });
-    }
-  }, [clearPendingCommandHistoryRuns, markSshSessionUnavailable]);
+  }, [clearPendingCommandHistoryRuns]);
 
   // Called when a TerminalPane unmounts
   const handleTerminalRemoved = useCallback(
@@ -1317,10 +938,7 @@ function AppInner({ initialSettings, persistSettings }: {
 
   const addTab = useCallback(
     (
-      type: 'local' | 'ssh' = 'local',
-      sshSessionId?: string,
-      sshShellReady = type !== 'ssh',
-      sshProfileId?: string,
+      type: 'local' = 'local',
       cwd?: string,
       title?: string,
     ): boolean => {
@@ -1336,13 +954,10 @@ function AppInner({ initialSettings, persistSettings }: {
       }
       const tab: TabInfo = {
         id: genId('tab'),
-        title: title || (type === 'local' ? `Terminal ${tabs.length + 1}` : `SSH ${tabs.length + 1}`),
+        title: title || `Terminal ${tabs.length + 1}`,
         groupId: tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)?.groupId ?? groupsRef.current[0]?.id,
         type,
-        sshSessionId,
-        sshProfileId,
-        sshShellReady,
-        cwd: cwd ?? (type === 'local' ? tabsRef.current.find((item) => item.id === activeTabIdRef.current)?.cwd ?? mainDirectory ?? undefined : undefined),
+        cwd: cwd ?? tabsRef.current.find((item) => item.id === activeTabIdRef.current)?.cwd ?? mainDirectory ?? undefined,
         root: createTabRoot(type),
       };
       const next = [...tabsRef.current, tab];
@@ -1356,7 +971,7 @@ function AppInner({ initialSettings, persistSettings }: {
   );
 
   const openLocalTabAt = useCallback((cwd: string, title?: string) => {
-    addTab('local', undefined, true, undefined, cwd, title);
+    addTab('local', cwd, title);
   }, [addTab]);
 
   const selectAndOpenLocalDirectory = useCallback(() => {
@@ -1379,7 +994,7 @@ function AppInner({ initialSettings, persistSettings }: {
       }
 
       editorDocuments.closeDocumentsForTab(tabId);
-      teardownTerminalOwners(collectTerminalOwners(tab), next);
+      teardownTerminalOwners(collectTerminalOwners(tab));
       if (focusedTerminalId && getAllLeafIds(tab.root).includes(focusedTerminalId)) {
         setFocusedTerminalId(null);
       }
@@ -1528,8 +1143,7 @@ function AppInner({ initialSettings, persistSettings }: {
   const directoryRenameBusy = useRef(false);
   const renameDirectory = async (source: string, name: string) => {
     if (directoryRenameBusy.current) throw new Error('Another folder rename is still in progress.');
-    if (editorDocuments.documents.some((document) => document.resource.kind !== 'ssh'
-      && rebaseDirectory(document.resolvedPath, source, '__renamed__') !== document.resolvedPath)) {
+    if (editorDocuments.documents.some((document) => rebaseDirectory(document.resolvedPath, source, '__renamed__') !== document.resolvedPath)) {
       throw new Error('Close editor files in this folder before renaming it. Your changes have not been touched.');
     }
     directoryRenameBusy.current = true;
@@ -1539,8 +1153,7 @@ function AppInner({ initialSettings, persistSettings }: {
       groupsRef.current = groupsRef.current.map((group) => ({ ...group, directory: rebase(group.directory) }));
       setGroups(groupsRef.current);
       const localIds = new Set<string>();
-      tabsRef.current = tabsRef.current.map((tab) => ({ ...tab, cwd: tab.type === 'ssh' ? tab.cwd : rebase(tab.cwd), root: mapLeaves(tab.root, (leaf) => {
-        if ((leaf.terminalType ?? tab.type) === 'ssh') return leaf;
+      tabsRef.current = tabsRef.current.map((tab) => ({ ...tab, cwd: rebase(tab.cwd), root: mapLeaves(tab.root, (leaf) => {
         localIds.add(leaf.id);
         const cwd = rebase(leaf.cwd);
         updateTerminalStartingDirectory(leaf.id, cwd ?? rebase(tab.cwd));
@@ -1601,12 +1214,19 @@ function AppInner({ initialSettings, persistSettings }: {
   );
 
   const handleToggleMaximizePane = useCallback((tabId: string, leafId: string) => {
-    setBroadcastRecipientIds(new Set());
-    setFocusedTerminalId(leafId);
-    setMaximizedLeafByTab((prev) => ({
-      ...prev,
-      [tabId]: prev[tabId] === leafId ? null : leafId,
-    }));
+    const update = () => {
+      setBroadcastRecipientIds(new Set());
+      setFocusedTerminalId(leafId);
+      setMaximizedLeafByTab((prev) => ({
+        ...prev,
+        [tabId]: prev[tabId] === leafId ? null : leafId,
+      }));
+    };
+    if (document.startViewTransition && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      // Snapshots animate the geometry without resizing the live PTY every frame.
+      const transition = document.startViewTransition(() => flushSync(update));
+      void transition.ready.catch(() => {}); // Superseding transitions can skip the animation.
+    } else update();
   }, []);
 
   const handleBroadcastRecipientChange = useCallback((termId: string, selected: boolean) => {
@@ -1628,26 +1248,17 @@ function AppInner({ initialSettings, persistSettings }: {
     const selectedOwners = recipients.map((termId) => owners.find((owner) => owner.termId === termId));
     const allReady = selectedOwners.every((owner) => owner
       && liveTerminalIdsRef.current.has(owner.termId)
-      && localTransportByTerminal[owner.termId] !== 'exited'
-      && (owner.type === 'local' || (owner.sshSessionId
-        && !disconnectedSshSessionIds.has(owner.sshSessionId)
-        && readySshSessionIds.has(owner.sshSessionId))));
+      && localTransportByTerminal[owner.termId] !== 'exited');
     if (!allReady) {
       setBroadcastRecipientIds(new Set());
       return false;
     }
     for (const owner of selectedOwners as TerminalOwner[]) {
-      if (owner.type === 'local') {
-        if (binary) window.janet.terminalWriteBinary({ id: owner.termId, data, userInput: true });
-        else window.janet.terminalWrite({ id: owner.termId, data, userInput: true });
-      } else if (binary) {
-        window.janet.sshWriteShellBinary({ sessionId: owner.sshSessionId, termId: owner.termId, data, userInput: true });
-      } else {
-        window.janet.sshWriteShell({ sessionId: owner.sshSessionId, termId: owner.termId, data, userInput: true });
-      }
+      if (binary) window.janet.terminalWriteBinary({ id: owner.termId, data, userInput: true });
+      else window.janet.terminalWrite({ id: owner.termId, data, userInput: true });
     }
     return true;
-  }, [broadcastArmed, broadcastRecipientIds, disconnectedSshSessionIds, localTransportByTerminal, readySshSessionIds]);
+  }, [broadcastArmed, broadcastRecipientIds, localTransportByTerminal]);
 
   useEffect(() => {
     if (broadcastRecipientIds.size >= 2) return;
@@ -1685,7 +1296,7 @@ function AppInner({ initialSettings, persistSettings }: {
       }
       const nextRoot = newRoot ? ensureSplitRoot(newRoot) : { id: genId('split'), type: 'split' as const, direction: 'vertical' as const, children: [], sizes: [] };
       const next = current.map((candidate) => candidate.id === tabId ? { ...candidate, root: nextRoot } : candidate);
-      teardownTerminalOwners(owners, next);
+      teardownTerminalOwners(owners);
       tabsRef.current = next;
       restoreTerminalFocusRef.current = true;
       setTabs(next);
@@ -1860,14 +1471,12 @@ function AppInner({ initialSettings, persistSettings }: {
     setTerminalFocusRequest((request) => request + 1);
   }, [editorDocuments.selectSurface, handleMovePane]);
 
-  // === SSH session management ===
-
   const addSessionTerminals = async (tabId: string, preset: WorkspaceTabPreset) => {
     if (directoryRenameBusy.current) throw new Error('Wait for the folder rename to finish.');
     const tab = tabsRef.current.find(item => item.id === tabId);
     if (!tab) throw new Error('This session was closed. Select it again.');
     const group = groupsRef.current.find(item => item.id === tab.groupId);
-    const cwd = await window.janet.workspaceDirectory({ parent: (tab.type === 'ssh' ? undefined : tab.cwd) || group?.directory || homeDir });
+    const cwd = await window.janet.workspaceDirectory({ parent: tab.cwd || group?.directory || homeDir });
     if (directoryRenameBusy.current) throw new Error('The folder is being renamed. Try again afterward.');
     const root = restorePaneTree(preset.root);
     if (!root || countLeaves(root) === 0) throw new Error('Invalid terminal configuration.');
@@ -1896,8 +1505,7 @@ function AppInner({ initialSettings, persistSettings }: {
     const destinationParent = action === 'keep' ? await window.janet.selectLocalDirectory() : undefined;
     if (action === 'keep' && !destinationParent) return;
     const source = project?.cwd ?? group.directory;
-    if (action !== 'unlink' && source && editorDocuments.documents.some((document) => document.resource.kind !== 'ssh'
-      && rebaseDirectory(document.resolvedPath, source, '__removed__') !== document.resolvedPath)) {
+    if (action !== 'unlink' && source && editorDocuments.documents.some((document) => rebaseDirectory(document.resolvedPath, source, '__removed__') !== document.resolvedPath)) {
       setDirectoryActionError('Close editor files in this directory before deleting or keeping it. Your files have not been touched.');
       return;
     }
@@ -1927,7 +1535,6 @@ function AppInner({ initialSettings, persistSettings }: {
           for (const tab of affected) {
             for (const owner of collectTerminalOwners(tab)) {
               if (owner.type === 'local') await window.janet.terminalDestroy({ id: owner.termId });
-              else if (owner.sshSessionId) await window.janet.sshDestroyShell({ sessionId: owner.sshSessionId, termId: owner.termId });
             }
           }
           const result = action === 'unlink' ? null : await window.janet.workspaceLifecycle({ action, groupId, projectId, destinationParent: destinationParent ?? undefined, expectedDirectory: source });
@@ -1956,174 +1563,12 @@ function AppInner({ initialSettings, persistSettings }: {
       },
     });
   };
-  const handleSSHConnected = useCallback(
-    (session: SessionInfo) => {
-      let opened = false;
-      try {
-        opened = addTab('ssh', session.id, true, session.sshProfileId);
-      } catch (error) { setDirectoryActionError(error instanceof Error ? error.message : String(error)); }
-      if (!opened) {
-        window.janet.sshDisconnect({ id: session.id }).catch(() => {});
-        return;
-      }
-      releasedSshSessionIdsRef.current.delete(session.id);
-      setSshSessions((prev) => (
-        prev.some((s) => s.id === session.id) ? prev : [...prev, session]
-      ));
-      setSshConnectionsOpen(false);
-    },
-    [addTab],
-  );
-
-  // Re-open the SSH shell for a single term. Triggered by the
-  // "Reconnect" button on the SSH notice. If the underlying SSH
-  // session is gone (server closed the connection), reconnect the
-  // session first using the tab's saved profile.
-  const handleSshRetry = useCallback(async (
-    termId: string,
-    dimensions: { cols: number; rows: number },
-  ) => {
-    const tab = tabsRef.current.find((candidate) => getAllLeafIds(candidate.root).includes(termId));
-    const leaf = tab ? findLeaf(tab.root, termId) : null;
-    const leafType = leaf?.terminalType ?? tab?.type;
-    const sessionId = leaf?.sshSessionId ?? tab?.sshSessionId;
-    const profileId = leaf?.sshProfileId ?? tab?.sshProfileId;
-    if (!tab || leafType !== 'ssh' || !sessionId) {
-      throw new Error('SSH session is no longer available');
-    }
-
-    const dims = {
-      cols: dimensions?.cols || 80,
-      rows: dimensions?.rows || 24,
-    };
-    const profile = profileId
-      ? sshProfiles.find((candidate) => candidate.id === profileId)
-      : undefined;
-    const existingSession = sshSessionsRef.current.find((candidate) => candidate.id === sessionId);
-
-    const hasSiblingOwner = () => tabsRef.current.flatMap(collectTerminalOwners).some(
-      (owner) => owner.type === 'ssh' && owner.sshSessionId === sessionId && owner.termId !== termId,
-    );
-    setAwarenessByTerminal((current) => {
-      const awareness = current[termId];
-      if (!awareness || awareness.phase === 'ready') return current;
-      return { ...current, [termId]: { ...awareness, phase: 'ready', phaseChangedAt: Date.now() } };
-    });
-    sshShellStateByTerminalRef.current.delete(termId);
-    if (!hasSiblingOwner()) markSshSessionDisconnected(sessionId);
-    try {
-      await window.janet.sshCreateShell({
-        id: sessionId,
-        termId,
-        ...dims,
-        ...(leaf?.startupCommands?.length ? { startupCommands: leaf.startupCommands } : {}),
-        ...(leaf?.startupShellDialect ? { startupShellDialect: leaf.startupShellDialect } : {}),
-      });
-      if (
-        releasedSshSessionIdsRef.current.has(sessionId) ||
-        !ownsSshTerminal(tabsRef.current, termId, sessionId)
-      ) {
-        if (ownsSshSession(tabsRef.current, sessionId)) {
-          window.janet.sshDestroyShell({ sessionId, termId }).catch(() => {});
-        } else {
-          window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
-        }
-        return;
-      }
-      const session = existingSession ?? (profile ? sshSessionInfo(sessionId, profile) : undefined);
-      if (session) {
-        setSshSessions((current) => current.some((candidate) => candidate.id === sessionId)
-          ? current
-          : [...current, session]);
-      }
-      markSshTerminalReady(termId, sessionId, true);
-    } catch (shellErr) {
-      if (!ownsSshTerminal(tabsRef.current, termId, sessionId)) {
-        if (!ownsSshSession(tabsRef.current, sessionId)) {
-          window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
-        }
-        return;
-      }
-      // Shell open failed — the session itself may be dead. Try
-      // re-establishing the SSH connection from the saved profile,
-      // then re-open the shell. If the profile is missing the user
-      // will see the original error and can dismiss the tab.
-      if (!profile) {
-        markSshTerminalFailed(termId, sessionId, true);
-        console.error('SSH retry failed and no saved profile to reconnect from:', shellErr);
-        throw shellErr;
-      }
-      releasedSshSessionIdsRef.current.delete(sessionId);
-      connectingSshSessionIdsRef.current.add(sessionId);
-      try {
-        await window.janet.sshConnect({
-          id: sessionId,
-          ...sshConnectProfile(profile, sshProfiles),
-        });
-        if (
-          releasedSshSessionIdsRef.current.has(sessionId) ||
-          !ownsSshTerminal(tabsRef.current, termId, sessionId)
-        ) {
-          if (!ownsSshSession(tabsRef.current, sessionId)) {
-            window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
-          }
-          return;
-        }
-        await window.janet.sshCreateShell({
-          id: sessionId,
-          termId,
-          ...dims,
-          ...(leaf?.startupCommands?.length ? { startupCommands: leaf.startupCommands } : {}),
-          ...(leaf?.startupShellDialect ? { startupShellDialect: leaf.startupShellDialect } : {}),
-        });
-        if (
-          releasedSshSessionIdsRef.current.has(sessionId) ||
-          !ownsSshTerminal(tabsRef.current, termId, sessionId)
-        ) {
-          if (ownsSshSession(tabsRef.current, sessionId)) {
-            window.janet.sshDestroyShell({ sessionId, termId }).catch(() => {});
-          } else {
-            window.janet.sshDisconnect({ id: sessionId }).catch(() => {});
-          }
-          return;
-        }
-        const session = sshSessionInfo(sessionId, profile);
-        setSshSessions((current) => current.some((candidate) => candidate.id === sessionId)
-          ? current
-          : [...current, session]);
-        markSshTerminalReady(termId, sessionId, true);
-      } catch (reconnectErr) {
-        markSshTerminalFailed(termId, sessionId, true);
-        console.error('SSH retry failed:', reconnectErr);
-        throw reconnectErr;
-      } finally {
-        connectingSshSessionIdsRef.current.delete(sessionId);
-        releasedSshSessionIdsRef.current.delete(sessionId);
-      }
-    }
-  }, [markSshSessionDisconnected, markSshTerminalFailed, markSshTerminalReady, sshProfiles]);
-
-  const handleSSHProfilesChange = useCallback((profiles: SavedSSHProfile[]) => {
-    setSshProfiles(profiles);
-    void persistSettings({ sshProfiles: profiles });
-  }, []);
-
   const openWorkspaceTab = useCallback(async (preset: WorkspaceTabPreset, group: WorkspaceGroup) => {
     const restoredRoot = restorePaneTree(preset.root);
     let root = restoredRoot ?? createPaneRoot(preset.type, preset.terminalCount, preset.splitDirection);
     if (!restoredRoot) {
-      // Legacy presets stored one terminal configuration at the top level.
-      // Carry it into each synthesized leaf before the preset becomes a mixed
-      // workspace tab, otherwise rootless SSH presets cannot connect.
-      root = mapLeaves(root, (leaf) => preset.type === 'ssh'
-        ? { ...leaf, terminalType: 'ssh', sshProfileId: preset.sshProfileId }
-        : { ...leaf, terminalType: 'local', cwd: preset.cwd });
+      root = mapLeaves(root, (leaf) => ({ ...leaf, terminalType: 'local', cwd: preset.cwd }));
     }
-    root = mapLeaves(root, (leaf) => leaf.terminalType !== 'ssh' ? leaf : {
-      ...leaf,
-      sshSessionId: `ssh-${Date.now()}-${leaf.id}`,
-      sshShellReady: false,
-    });
     if (tabsRef.current.length >= MAX_RESTORED_TABS
       || terminalCount() + countLeaves(root) > MAX_RESTORED_TERMINALS) {
       throw new Error('Close a workspace or terminal first. JaneT supports up to 64 workspaces and 64 terminals.');
@@ -2141,7 +1586,7 @@ function AppInner({ initialSettings, persistSettings }: {
       groupsRef.current = nextGroups;
       setGroups(nextGroups);
       directory = await window.janet.workspaceDirectory({ parent: group.directory!, ...(group.kind === 'folder' ? {} : { name: preset.name }) });
-      root = mapLeaves(root, (leaf) => leaf.terminalType === 'ssh' ? leaf : { ...leaf, cwd: leaf.cwd || directory });
+      root = mapLeaves(root, (leaf) => ({ ...leaf, cwd: leaf.cwd || directory }));
     }
     if (tabsRef.current.length >= MAX_RESTORED_TABS || terminalCount() + countLeaves(root) > MAX_RESTORED_TERMINALS) {
       throw new Error('Close a workspace or terminal first. JaneT supports up to 64 workspaces and 64 terminals.');
@@ -2158,50 +1603,7 @@ function AppInner({ initialSettings, persistSettings }: {
     setTabs(nextTabs);
     setActiveTabId(tab.id);
 
-    const sshLeaves: Array<{ id: string; sshProfileId?: string; sshSessionId: string }> = [];
-    const collect = (node: PaneNode) => {
-      if (node.type === 'leaf') {
-        if (node.terminalType === 'ssh' && node.sshSessionId) {
-          sshLeaves.push({ id: node.id, sshProfileId: node.sshProfileId, sshSessionId: node.sshSessionId });
-        }
-        return;
-      }
-      node.children.forEach(collect);
-    };
-    collect(root);
-    for (const leaf of sshLeaves) {
-      const profile = sshProfiles.find((candidate) => candidate.id === leaf.sshProfileId);
-      if (!profile) {
-        markSshSessionDisconnected(leaf.sshSessionId);
-        continue;
-      }
-      releasedSshSessionIdsRef.current.delete(leaf.sshSessionId);
-      connectingSshSessionIdsRef.current.add(leaf.sshSessionId);
-      try {
-        await window.janet.sshConnect({
-          id: leaf.sshSessionId, ...sshConnectProfile(profile, sshProfiles),
-        });
-        if (
-          releasedSshSessionIdsRef.current.has(leaf.sshSessionId) ||
-          !ownsSshSession(tabsRef.current, leaf.sshSessionId)
-        ) {
-          window.janet.sshDisconnect({ id: leaf.sshSessionId }).catch(() => {});
-          continue;
-        }
-        const session = sshSessionInfo(leaf.sshSessionId, profile);
-        setSshSessions((current) => current.some((candidate) => candidate.id === session.id)
-          ? current
-          : [...current, session]);
-        updateTab(tab.id, (current) => ({ ...current, root: mapLeaves(current.root, (candidate) => candidate.id === leaf.id ? { ...candidate, sshShellReady: true } : candidate) }));
-      } catch (error) {
-        console.error('Failed to open workspace SSH terminal:', error);
-        markSshSessionDisconnected(leaf.sshSessionId);
-      } finally {
-        connectingSshSessionIdsRef.current.delete(leaf.sshSessionId);
-        releasedSshSessionIdsRef.current.delete(leaf.sshSessionId);
-      }
-    }
-  }, [mainDirectory, markSshSessionDisconnected, sshProfiles, terminalCount, updateTab]);
+  }, [mainDirectory, terminalCount]);
 
   const activeTab = getTab(activeTabId);
 
@@ -2226,7 +1628,7 @@ function AppInner({ initialSettings, persistSettings }: {
       tabId: (activeTab?.id ?? ""),
       leafId,
       terminalId: leafId,
-      initialValue: displayPaneTitle(leaf, activeTab.type),
+      initialValue: displayPaneTitle(leaf),
     });
   }, [activeTab, sidebarTerminalId]);
 
@@ -2262,66 +1664,21 @@ function AppInner({ initialSettings, persistSettings }: {
     const copied = await window.janet.copyText(pasteToken);
     if (!copied) throw new Error('Path could not be copied');
   }, [sidebarLeaf?.startupShellDialect]);
-  const sidebarIsRemote = (sidebarLeaf?.terminalType ?? (activeTab?.type ?? "local")) === 'ssh';
-  const sidebarSshSessionId = sidebarLeaf?.sshSessionId ?? (
-    (activeTab?.type ?? "local") === 'ssh' ? activeTab?.sshSessionId : undefined
-  );
-  const sidebarSshProfileId = sidebarLeaf?.sshProfileId ?? (
-    (activeTab?.type ?? "local") === 'ssh' ? activeTab?.sshProfileId : undefined
-  );
-  const sidebarSshSession = sidebarIsRemote
-    ? sshSessions.find((session) => session.id === sidebarSshSessionId)
-    : undefined;
-  const sidebarSshProfile = sidebarIsRemote
-    ? sshProfiles.find((profile) => profile.id === sidebarSshProfileId)
-    : undefined;
-  const sidebarRemoteHost = sidebarIsRemote
-    ? sidebarSshSession?.host ?? sidebarSshProfile?.host
-    : undefined;
-  const sidebarRemotePort = sidebarSshSession?.port ?? sidebarSshProfile?.port;
-  const sidebarRemoteUsername = sidebarSshSession?.username ?? sidebarSshProfile?.username;
-  const sidebarRemoteLabel = sidebarRemoteHost
-    ? `${sidebarRemoteUsername ? `${sidebarRemoteUsername}@` : ''}${sidebarRemoteHost}${sidebarRemotePort ? `:${sidebarRemotePort}` : ''}`
-    : 'SSH session';
-
-  // The effective cwd remains a local-only input for Git and status surfaces.
-  // Remote Explorer navigation is derived separately from SFTP below.
   const effectiveCwd = useMemo(() => {
-    if (sidebarIsRemote) return homeDir;
     if (sidebarTerminalId && cwdByTerminal[sidebarTerminalId]) {
       return cwdByTerminal[sidebarTerminalId];
     }
     return sidebarLeaf?.cwd || activeTab?.cwd || mainDirectory || homeDir;
-  }, [activeTab?.cwd, mainDirectory, sidebarIsRemote, sidebarLeaf?.cwd, sidebarTerminalId, cwdByTerminal, homeDir]);
+  }, [activeTab?.cwd, mainDirectory, sidebarLeaf?.cwd, sidebarTerminalId, cwdByTerminal, homeDir]);
   const explorerSource = useMemo<FileExplorerSource>(() => {
-    if (sidebarIsRemote) {
-      const sessionId = sidebarSshSessionId ?? '';
-      const connectionState = disconnectedSshSessionIds.has(sessionId)
-        ? 'disconnected'
-        : sessionId && readySshSessionIds.has(sessionId)
-          ? 'ready'
-          : 'connecting';
-      return {
-        kind: 'ssh',
-        key: `ssh:${sidebarTerminalId ?? (activeTab?.id ?? "")}:${sessionId || 'pending'}:${sshConnectionEpochById[sessionId] ?? 0}`,
-        sessionId,
-        label: sidebarRemoteLabel,
-        connectionState,
-        ready: connectionState === 'ready',
-      };
-    }
     return {
       kind: 'local',
       key: `local:${sidebarTerminalId ?? (activeTab?.id ?? "")}`,
       cwd: effectiveCwd,
       ready: Boolean(effectiveCwd),
     };
-  }, [
-    (activeTab?.id ?? ""), disconnectedSshSessionIds, effectiveCwd, readySshSessionIds, sidebarIsRemote,
-    sidebarRemoteLabel, sidebarSshSessionId, sidebarTerminalId,
-    sshConnectionEpochById,
-  ]);
-  const gitRepository = useGitRepository(effectiveCwd, !sidebarIsRemote);
+  }, [activeTab?.id, effectiveCwd, sidebarTerminalId]);
+  const gitRepository = useGitRepository(effectiveCwd, true);
   const openLocalTerminals = useMemo(() => {
     const terminals: Array<{ terminalId: string; cwd: string; lastFocused: number }> = [];
     const collect = (tab: TabInfo, node: PaneNode) => {
@@ -2523,15 +1880,6 @@ function AppInner({ initialSettings, persistSettings }: {
         handler: () => { setWorkspaceToolsExpanded(true); setSidebarSection('files'); },
       },
       {
-        id: 'sidebar-ssh', label: 'Open SSH connections', category: 'View',
-        keywords: ['connect', 'remote'],
-        handler: () => {
-          responsiveTabsCollapsedRef.current = false;
-          setTabsOpen(true);
-          setSshConnectionsOpen(true);
-        },
-      },
-      {
         id: 'sidebar-git', label: 'Open Source Control', category: 'View',
         handler: () => { setWorkspaceToolsExpanded(true); setSidebarSection('git'); },
       },
@@ -2686,7 +2034,6 @@ function AppInner({ initialSettings, persistSettings }: {
       onExpandedChange={setWorkspaceToolsExpanded}
       explorerSource={explorerSource}
       cwdReady={Boolean(effectiveCwd)}
-      isRemote={sidebarIsRemote}
       gitRepository={gitRepository}
       openLocalTerminals={openLocalTerminals}
       onOpenTerminal={openTerminal}
@@ -2756,38 +2103,36 @@ function AppInner({ initialSettings, persistSettings }: {
           </div>
         )}
       />
-      {sshConnectionsOpen && <SSHConnectionsDialog sshProfiles={sshProfiles} canConnect={canAddTerminalTab} onConnected={handleSSHConnected} onProfilesChange={handleSSHProfilesChange} onClose={() => setSshConnectionsOpen(false)} />}
       <div className={`app-body app-layout sidebar-${sidebarSide}`}>
         {sidebarSide === 'left' && workspaceTools}
-        {tabsOpen ? (
-          <VerticalTabBar
-            key="terminal-tabs"
-            tabs={tabs}
-            activeTabId={activeTabId}
-            dirtyTabIds={editorDocuments.dirtyTabIds}
-            awarenessByTab={awarenessByTab}
-            sshProfiles={sshProfiles}
-            groups={groups}
-            mainDirectory={mainDirectory}
-            onMainDirectoryChange={async (directory) => { await window.janet.setSettings({ mainDirectory: directory }); setMainDirectory(directory); }}
-            onRenameGroup={renameGroup}
-            onWorkspaceAction={(action, groupId, projectId) => { void requestWorkspaceAction(action, groupId, projectId).catch((error) => setDirectoryActionError(String(error))); }}
-            onGroupsChange={setGroups}
-            creatorOpen={workspaceCreatorOpen}
-            entryRequest={workspaceEntryRequest}
-            onEntryRequestHandled={() => setWorkspaceEntryRequest(undefined)}
-            onCreatorOpenChange={setWorkspaceCreatorOpen}
-            onSelectTab={selectTerminalTab}
-            onCloseTab={requestCloseTab}
-            onWorkspaceTabLaunch={openWorkspaceTab}
-            onRenameTab={renameTab}
-            onCollapse={() => {
-              responsiveTabsCollapsedRef.current = false;
-              setTabsOpen(false);
-            }}
-          />
-        ) : (
-          <Tooltip key="terminal-tabs" label="Show terminal tabs" placement="right">
+        <VerticalTabBar
+          key="terminal-tabs"
+          visible={tabsOpen}
+          tabs={tabs}
+          activeTabId={activeTabId}
+          dirtyTabIds={editorDocuments.dirtyTabIds}
+          awarenessByTab={awarenessByTab}
+          groups={groups}
+          mainDirectory={mainDirectory}
+          onMainDirectoryChange={async (directory) => { await window.janet.setSettings({ mainDirectory: directory }); setMainDirectory(directory); }}
+          onRenameGroup={renameGroup}
+          onWorkspaceAction={(action, groupId, projectId) => { void requestWorkspaceAction(action, groupId, projectId).catch((error) => setDirectoryActionError(String(error))); }}
+          onGroupsChange={setGroups}
+          creatorOpen={workspaceCreatorOpen}
+          entryRequest={workspaceEntryRequest}
+          onEntryRequestHandled={() => setWorkspaceEntryRequest(undefined)}
+          onCreatorOpenChange={setWorkspaceCreatorOpen}
+          onSelectTab={selectTerminalTab}
+          onCloseTab={requestCloseTab}
+          onWorkspaceTabLaunch={openWorkspaceTab}
+          onRenameTab={renameTab}
+          onCollapse={() => {
+            responsiveTabsCollapsedRef.current = false;
+            setTabsOpen(false);
+          }}
+        />
+        {!tabsOpen && (
+          <Tooltip key="terminal-tabs-toggle" label="Show terminal tabs" placement="right">
             <button className="tabs-rail workspace-tabs-rail-toggle" onClick={() => {
               responsiveTabsCollapsedRef.current = false;
               setTabsOpen(true);
@@ -2849,8 +2194,6 @@ function AppInner({ initialSettings, persistSettings }: {
                 tabId={(activeTab?.id ?? "")}
                 tabType={(activeTab?.type ?? "local")}
                 activeTerminalId={sidebarTerminalId}
-                sshSessionId={activeTab?.sshSessionId}
-                sshShellReady={(activeTab?.type ?? "local") !== 'ssh' || activeTab?.sshShellReady === true}
                 onTerminalReady={handleTerminalReady}
                 onTerminalRemoved={handleTerminalRemoved}
                 onAgentEvent={handleAgentEvent}
@@ -2881,10 +2224,6 @@ function AppInner({ initialSettings, persistSettings }: {
                 onTerminalFocus={handleTerminalFocus}
                 initialCwd={activeTab?.cwd || homeDir || undefined}
                 hasSessionForLeaf={(leafId) => liveTerminalIdsRef.current.has(leafId)}
-                isSshSessionDisconnected={isSshSessionDisconnected}
-                onSshShellReady={markSshTerminalReady}
-                onSshShellFailed={markSshTerminalFailed}
-                onSshRetry={handleSshRetry}
               />
             )}
           />}
@@ -2892,11 +2231,8 @@ function AppInner({ initialSettings, persistSettings }: {
         {sidebarSide === 'right' && workspaceTools}
       </div>
       <StatusBar
-        sshSessions={sshSessions.filter((session) => readySshSessionIds.has(session.id))}
         cwd={effectiveCwd}
         gitStatus={gitStatus}
-        isRemote={sidebarIsRemote}
-        remoteHost={sidebarRemoteHost}
       />
       <CommandPalette
         visible={paletteVisible}
@@ -2944,11 +2280,11 @@ function AppInner({ initialSettings, persistSettings }: {
         onCancel={() => setRenameTarget(null)}
         onSave={saveRename}
       />
-      {addTerminalsTabId && <AddTerminalsDialog
+      <AddTerminalsDialog open={addTerminalsTabId !== null}
         group={groups.find(group => group.id === tabs.find(tab => tab.id === addTerminalsTabId)?.groupId) ?? DEFAULT_WORKSPACE_GROUP}
         onClose={() => setAddTerminalsTabId(null)}
-        onSubmit={preset => addSessionTerminals(addTerminalsTabId, preset)}
-      />}
+        onSubmit={preset => addTerminalsTabId ? addSessionTerminals(addTerminalsTabId, preset) : Promise.resolve()}
+      />
       <ConfirmationDialog
         open={broadcastConfirmationOpen}
         title="Start broadcast input?"

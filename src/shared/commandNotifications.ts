@@ -4,12 +4,11 @@ export interface CommandNotificationPayload {
   outcome: 'success' | 'failure' | 'unknown';
   tabLabel: string;
   paneLabel: string;
-  context: { kind: 'local' } | { kind: 'ssh'; hostLabel: string };
+  context: { kind: 'local' };
 }
 
 const PAYLOAD_KEYS = ['durationMs', 'outcome', 'tabLabel', 'paneLabel', 'context'] as const;
 const LOCAL_CONTEXT_KEYS = ['kind'] as const;
-const SSH_CONTEXT_KEYS = ['kind', 'hostLabel'] as const;
 
 function ownDataValues(value: unknown, keys: readonly string[]): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -37,14 +36,8 @@ export function parseCommandNotificationPayload(value: unknown): CommandNotifica
       || !boundedLabel(payload.tabLabel, 256) || !boundedLabel(payload.paneLabel, 256)) return null;
 
     const contextKeys = ownDataValues(payload.context, LOCAL_CONTEXT_KEYS);
-    let context: CommandNotificationPayload['context'];
-    if (contextKeys?.kind === 'local') {
-      context = { kind: 'local' };
-    } else {
-      const sshContext = ownDataValues(payload.context, SSH_CONTEXT_KEYS);
-      if (sshContext?.kind !== 'ssh' || !boundedLabel(sshContext.hostLabel, 512)) return null;
-      context = { kind: 'ssh', hostLabel: sshContext.hostLabel as string };
-    }
+    if (contextKeys?.kind !== 'local') return null;
+    const context: CommandNotificationPayload['context'] = { kind: 'local' };
 
     let target: CommandNotificationPayload['target'];
     if (payload.target !== undefined) {

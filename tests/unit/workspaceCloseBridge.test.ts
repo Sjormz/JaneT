@@ -187,10 +187,10 @@ describe('preload close-preparation bridge', () => {
       onPrepareForClose(callback: (request: WorkspacePrepareForCloseRequest) => void | Promise<void>): () => void;
       resolvePrepareForClose(resolution: WorkspacePrepareForCloseResolution): Promise<boolean>;
       terminalAcknowledgeOutput(event: {
-        source: 'local' | 'ssh'; id: string; generation: number; sequence: number;
+        source: 'local'; id: string; generation: number; sequence: number;
       }): void;
       onTerminalData(callback: (event: {
-        source: 'local' | 'ssh'; id: string; data: string; generation: number; sequence: number;
+        source: 'local'; id: string; data: string; generation: number; sequence: number;
       }) => void): () => void;
       onTerminalExit(callback: (event: { id: string; exitCode: number; signal: number }) => void): () => void;
     };

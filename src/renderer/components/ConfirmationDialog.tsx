@@ -1,6 +1,7 @@
 import React, { ReactNode, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalFocus } from '../useModalFocus';
+import MotionPresence from './MotionPresence';
 
 interface ConfirmationDialogProps {
   open: boolean;
@@ -54,9 +55,8 @@ export default function ConfirmationDialog({
     fallbackFocus,
   });
 
-  if (!open) return null;
-
   return createPortal(
+    <MotionPresence>{open &&
     <div
       className="confirmation-dialog-overlay"
       role="presentation"
@@ -105,7 +105,7 @@ export default function ConfirmationDialog({
           </button>
         </div>
       </div>
-    </div>,
+    </div>}</MotionPresence>,
     document.body,
   );
 }

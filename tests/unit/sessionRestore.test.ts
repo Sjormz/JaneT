@@ -7,6 +7,13 @@ import {
 } from '../../src/renderer/types';
 
 describe('serializePaneTree', () => {
+  it('never restores legacy remote panes or their startup commands as local terminals', () => {
+    const root = { type: 'leaf', terminalType: 'ssh', startupCommands: ['echo remote-only'] };
+    expect(restorePaneTree(root)).toBeNull();
+    expect(normalizeSession({ tabs: [{ id: 'old', title: 'Old', type: 'ssh', root }] }).tabs).toEqual([]);
+    expect(normalizeSession({ tabs: [{ id: 'mixed', title: 'Mixed', type: 'local', root }] }).tabs).toEqual([]);
+  });
+
   it('preserves a project with zero terminals across serialization and restoration', () => {
     const root: PaneNode = { id: 'empty', type: 'split', direction: 'vertical', children: [], sizes: [] };
     const saved = serializePaneTree(root);
@@ -49,18 +56,17 @@ describe('serializePaneTree', () => {
 
   it('includes startup automation only when explicitly requested', () => {
     const tree: PaneNode = {
-      id: 'ssh-1',
+      id: 'term-1',
       type: 'leaf',
-      terminalType: 'ssh',
-      sshProfileId: 'profile-1',
+      terminalType: 'local',
       startupCommands: [' hermes doctor ', 'hermes --tui'],
+      startupShellDialect: 'posix',
     };
 
     expect(serializePaneTree(tree)).not.toHaveProperty('startupCommands');
     expect(serializePaneTree(tree, {}, { includeStartupCommands: true })).toEqual({
       type: 'leaf',
-      terminalType: 'ssh',
-      sshProfileId: 'profile-1',
+      terminalType: 'local',
       startupCommands: ['hermes doctor', 'hermes --tui'],
       startupShellDialect: 'posix',
     });
@@ -102,27 +108,6 @@ describe('serializePaneTree', () => {
     });
   });
 
-  it('preserves terminal type and SSH profile per leaf', () => {
-    const saved = serializePaneTree({
-      id: 'split-1',
-      type: 'split',
-      direction: 'vertical',
-      sizes: [1, 1],
-      children: [
-        { id: 'local-1', type: 'leaf', terminalType: 'local', cwd: 'C:/repo' },
-        { id: 'ssh-1', type: 'leaf', terminalType: 'ssh', sshProfileId: 'profile-1' },
-      ],
-    });
-
-    expect(saved).toEqual({
-      type: 'split', direction: 'vertical', sizes: [0.5, 0.5],
-      children: [
-        { type: 'leaf', terminalType: 'local', cwd: 'C:/repo' },
-        { type: 'leaf', terminalType: 'ssh', sshProfileId: 'profile-1' },
-      ],
-    });
-  });
-
   it('strips nested split ids', () => {
     let tree: PaneNode = createLeaf();
     const firstId = tree.id;
@@ -141,38 +126,11 @@ describe('restorePaneTree', () => {
   it('fails malformed startup automation closed instead of skipping invalid rows', () => {
     const restored = restorePaneTree({
       type: 'leaf',
-      terminalType: 'ssh',
+      terminalType: 'local',
       startupCommands: [' git pull ', '', 'npm\ninstall', 42],
     });
 
-    expect(restored).toMatchObject({ type: 'leaf', terminalType: 'ssh' });
-    expect(restored).not.toHaveProperty('startupCommands');
-    expect(restored).not.toHaveProperty('startupShellDialect');
-  });
-
-  it('restores valid commands and defaults a missing SSH syntax to POSIX', () => {
-    const restored = restorePaneTree({
-      type: 'leaf',
-      terminalType: 'ssh',
-      startupCommands: [' git pull ', '', 'npm install'],
-    });
-
-    expect(restored).toMatchObject({
-      type: 'leaf',
-      terminalType: 'ssh',
-      startupCommands: ['git pull', 'npm install'],
-      startupShellDialect: 'posix',
-    });
-  });
-
-  it('refuses SSH automation with an explicitly unsupported shell dialect', () => {
-    const restored = restorePaneTree({
-      type: 'leaf',
-      terminalType: 'ssh',
-      startupCommands: ['dangerous remote command'],
-      startupShellDialect: 'cmd',
-    });
-
+    expect(restored).toMatchObject({ type: 'leaf', terminalType: 'local' });
     expect(restored).not.toHaveProperty('startupCommands');
     expect(restored).not.toHaveProperty('startupShellDialect');
   });

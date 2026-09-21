@@ -125,12 +125,6 @@ describe('terminal agent awareness', () => {
     expect(agentStatus(attention)).toMatchObject({ kind: 'needs-input', label: 'Hermes · Needs input' });
     expect(aggregateAgentStatus([failed, running, attention])).toMatchObject({ kind: 'needs-input', busyCount: 1, unseenCount: 1 });
     expect(terminalStatus(ready, 'exited')).toEqual({ kind: 'exited', label: 'Exited' });
-    expect(terminalStatus(running, 'disconnected')).toEqual({ kind: 'disconnected', label: 'SSH disconnected' });
     expect(terminalStatus(attention, 'exited')).toEqual({ kind: 'exited', label: 'Exited' });
-    expect(terminalStatus(failed, 'disconnected')).toEqual({ kind: 'disconnected', label: 'SSH disconnected' });
-    expect(aggregateAgentStatus(
-      [ready, undefined],
-      [undefined, 'disconnected'],
-    )).toMatchObject({ kind: 'disconnected', label: 'SSH disconnected' });
   });
 });

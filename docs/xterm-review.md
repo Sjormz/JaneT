@@ -1,9 +1,14 @@
 # xterm stability review — 2026-09-16
 
+Historical review: built-in SSH/SFTP support was removed on 2026-09-19; references below describe the earlier implementation.
+
 Scope: renderer, local PTY, SSH transport, selection/clipboard, inline graphics,
 resize, dependency patches and terminal configuration. Baseline: `e9abbc3`,
 JaneT 0.11.1. This is a local review and change set, not a release or a claim of
 complete terminal-protocol conformance.
+
+The terminal identity recommendation below was superseded on 2026-09-19:
+[startup Kitty compatibility](terminal-graphics.md) replaces per-Codex overrides.
 
 ## Findings and changes
 

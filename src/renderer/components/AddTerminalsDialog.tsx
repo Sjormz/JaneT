@@ -1,12 +1,14 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import WorkspaceForm from './WorkspaceForm';
 import { XCloseIcon } from '../icons';
 import { useModalFocus } from '../useModalFocus';
+import MotionPresence from './MotionPresence';
 import type { WorkspaceGroup } from '../../shared/workspaceGroups';
 import type { WorkspaceTabPreset } from '../types';
 
-export default function AddTerminalsDialog({ group, onSubmit, onClose, inline = false }: {
+export default function AddTerminalsDialog({ group, onSubmit, onClose, inline = false, open = true }: {
+  open?: boolean;
   inline?: boolean;
   group: WorkspaceGroup;
   onSubmit: (preset: WorkspaceTabPreset) => Promise<void>;
@@ -16,7 +18,8 @@ export default function AddTerminalsDialog({ group, onSubmit, onClose, inline = 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const close = () => { if (!busy) onClose(); };
-  useModalFocus({ open: !inline, containerRef: ref, onClose: close, initialFocusSelector: 'input[type="number"]' });
+  useEffect(() => { if (open) { setBusy(false); setError(''); } }, [open]);
+  useModalFocus({ open: open && !inline, containerRef: ref, onClose: close, initialFocusSelector: 'input[type="number"]' });
   const title = inline ? 'Start session' : 'Add terminals';
   const content = <div ref={ref} className={inline ? 'empty-project-terminals' : 'workspace-modal'} role={inline ? 'region' : 'dialog'} aria-modal={inline ? undefined : true} aria-label={title}>
       <div className="workspace-modal-header"><h2>{title}</h2>{!inline && <button aria-label="Close add terminals" disabled={busy} onClick={close}><XCloseIcon /></button>}</div>
@@ -27,5 +30,5 @@ export default function AddTerminalsDialog({ group, onSubmit, onClose, inline = 
         catch (err) { setError(err instanceof Error ? err.message : String(err)); setBusy(false); }
       }} />
     </div>;
-  return inline ? content : createPortal(<div className="workspace-modal-overlay" onPointerDown={event => { if (event.target === event.currentTarget) close(); }}>{content}</div>, document.body);
+  return inline ? content : createPortal(<MotionPresence>{open && <div className="workspace-modal-overlay" onPointerDown={event => { if (event.target === event.currentTarget) close(); }}>{content}</div>}</MotionPresence>, document.body);
 }

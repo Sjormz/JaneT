@@ -1,9 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   FileEntry,
-  SSHConnectionClosedEvent,
-  SSHDirectoryListing,
-  SSHListDirParams,
 } from '../shared/files';
 import type { StartupShellDialect } from '../shared/startupCommands';
 import {
@@ -14,15 +11,12 @@ import {
 } from './workspaceLifecycle';
 import type {
   ReadLocalTextFileRequest,
-  ReadSSHTextFileRequest,
   TextFileResult,
   TextFileSnapshot,
   TextFileWriteValue,
   WriteLocalTextFileRequest,
-  WriteSSHTextFileRequest,
 } from '../shared/textFiles';
 import type { GitDiffRequest, GitDiffResult } from '../shared/gitDiff';
-import type { SSHLocalForwardStatus } from './ssh';
 import type { CommandNotificationPayload } from '../shared/commandNotifications';
 
 export interface UpdateProgress {
@@ -43,7 +37,7 @@ type PrepareForCloseCallback = (
 ) => void | Promise<void>;
 
 export interface TerminalOutputEvent {
-  source: 'local' | 'ssh';
+  source: 'local';
   id: string;
   data: string;
   generation: number;
@@ -124,52 +118,6 @@ const api = {
   onTerminalExit: (callback: (params: { id: string; exitCode: number; signal: number }) => void) => {
     terminalExitCallbacks.add(callback);
     return () => { terminalExitCallbacks.delete(callback); };
-  },
-
-  // SSH
-  sshConnect: (params: { id: string; host: string; port: number; username?: string; auth: string; password?: string; privateKey?: string; jumpHost?: { host: string; port: number; username?: string; auth: string; password?: string; privateKey?: string } }) =>
-    ipcRenderer.invoke('ssh:connect', params),
-  sshCreateShell: (params: {
-    id: string;
-    termId: string;
-    cols: number;
-    rows: number;
-    startupCommands?: string[];
-    startupShellDialect?: StartupShellDialect;
-  }) =>
-    ipcRenderer.invoke('ssh:createShell', params),
-  sshWriteShell: (params: { sessionId?: string; termId: string; data: string; userInput?: boolean }) =>
-    ipcRenderer.invoke('ssh:writeShell', params),
-  sshWriteShellBinary: (params: { sessionId?: string; termId: string; data: string; userInput?: boolean }) =>
-    ipcRenderer.invoke('ssh:writeShellBinary', params),
-  sshDestroyShell: (params: { sessionId?: string; termId: string }) =>
-    ipcRenderer.invoke('ssh:destroyShell', params),
-  sshResizeShell: (params: { termId: string; cols: number; rows: number }) =>
-    ipcRenderer.invoke('ssh:resizeShell', params),
-  sshListDir: (params: SSHListDirParams): Promise<SSHDirectoryListing> =>
-    ipcRenderer.invoke('ssh:listDir', params),
-  sshReadTextFile: (params: ReadSSHTextFileRequest): Promise<TextFileResult<TextFileSnapshot>> =>
-    ipcRenderer.invoke('ssh:readTextFile', params),
-  sshWriteTextFile: (params: WriteSSHTextFileRequest): Promise<TextFileResult<TextFileWriteValue>> =>
-    ipcRenderer.invoke('ssh:writeTextFile', params),
-  sshDisconnect: (params: { id: string }) =>
-    ipcRenderer.invoke('ssh:disconnect', params),
-  sshListConnections: () =>
-    ipcRenderer.invoke('ssh:listConnections'),
-  sshStartLocalForward: (params: {
-    sessionId: string;
-    request: { id: string; localPort: number; destinationHost: string; destinationPort: number };
-  }): Promise<SSHLocalForwardStatus> => ipcRenderer.invoke('ssh:startLocalForward', params),
-  sshStopLocalForward: (params: { sessionId: string; id: string }): Promise<void> =>
-    ipcRenderer.invoke('ssh:stopLocalForward', params),
-  sshListLocalForwards: (params: { sessionId: string }): Promise<SSHLocalForwardStatus[]> =>
-    ipcRenderer.invoke('ssh:listLocalForwards', params),
-  onSSHConnectionClosed: (callback: (event: SSHConnectionClosedEvent) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: SSHConnectionClosedEvent) => callback(data);
-    ipcRenderer.on('ssh:onConnectionClosed', handler);
-    return () => {
-      ipcRenderer.removeListener('ssh:onConnectionClosed', handler);
-    };
   },
 
   // File System

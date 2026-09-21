@@ -31,10 +31,10 @@ describe('arrangePaneGrid', () => {
 describe('createLeaf', () => {
   it('creates distinct typed terminal leaves', () => {
     const a = createLeaf();
-    const b = createLeaf('ssh');
+    const b = createLeaf();
 
     expect(a).toMatchObject({ type: 'leaf', terminalType: 'local', title: 'terminal' });
-    expect(b).toMatchObject({ type: 'leaf', terminalType: 'ssh', title: 'ssh' });
+    expect(b).toMatchObject({ type: 'leaf', terminalType: 'local', title: 'terminal' });
     expect(a.id).toMatch(/^term-/);
     expect(a.id).not.toBe(b.id);
   });

@@ -1,7 +1,7 @@
 import type { Terminal } from '@xterm/xterm';
 import { ImageAddon } from '@xterm/addon-image';
 
-/** Shared by local and SSH panes; xterm owns direct Kitty image rendering. */
+/** Shared by terminal panes; xterm owns direct Kitty image rendering. */
 export function enableTerminalGraphics(term: Terminal): void {
   term.loadAddon(new ImageAddon({
     kittySupport: true,

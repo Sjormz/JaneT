@@ -121,7 +121,7 @@ async function measureVisualState(page: Page, name: string) {
     const keySelectors = [
       '.app', '.titlebar', '.app-body', '.workspace-tools', '.vtab-bar', '.terminal-area',
       '.status-bar', '.broadcast-input-banner', '.activity-count.running', '.activity-count.finished',
-      '.vtab-item:has(.activity-dot.exited) .vtab-name', '.vtab-item:has(.activity-dot.disconnected) .vtab-name', '.leaf-awareness.needs-input',
+      '.vtab-item:has(.activity-dot.exited) .vtab-name', '.leaf-awareness.needs-input',
       '.terminal-command-failed',
     ];
     const regions = keySelectors.map((selector) => {
@@ -175,7 +175,6 @@ async function measureVisualState(page: Page, name: string) {
         contrast('.activity-count.running'),
         contrast('.activity-count.finished'),
         contrast('.vtab-item:has(.activity-dot.exited) .vtab-name'),
-        contrast('.vtab-item:has(.activity-dot.disconnected) .vtab-name'),
         contrast('.leaf-awareness.needs-input'),
         contrast('.terminal-leaf.broadcast-selected .leaf-title'),
         contrast('.broadcast-input-banner strong'),
@@ -195,7 +194,6 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
     fontSize: 14,
     sidebarSide: 'left',
     keybindings: {},
-    sshProfiles: [],
     workspaceTabs: [],
     session: {
       tabs: [
@@ -228,10 +226,6 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
           id: 'visual-exited', title: 'Exited shell', type: 'local', cwd: neutralCwd,
           root: { type: 'leaf', title: 'Exited', terminalType: 'local', cwd: neutralCwd },
         },
-        {
-          id: 'visual-disconnected', title: 'Disconnected SSH', type: 'ssh', sshProfileId: 'missing-neutral-profile',
-          root: { type: 'leaf', title: 'Remote', terminalType: 'ssh', sshProfileId: 'missing-neutral-profile' },
-        },
       ],
       activeTabId: 'visual-active',
       sidebarOpen: true,
@@ -259,8 +253,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1280, 800));
     await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
       .toEqual({ width: 1280, height: 800 });
-    await expect(page.locator('.vtab-item')).toHaveCount(5);
-    await expect(tab(page, 'Disconnected SSH')).toHaveAttribute('aria-label', /SSH disconnected/);
+    await expect(page.locator('.vtab-item')).toHaveCount(4);
 
     const runningTerminal = await selectTab(page, 'Running agent');
     await typeCommand(page, runningTerminal, emitCommand({

@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { TrashIcon, XCloseIcon } from '../icons';
 import { useModalFocus } from '../useModalFocus';
-import { commandHistoryContextLabel, type CommandHistoryEntry } from '../../shared/commandHistory';
+import MotionPresence from './MotionPresence';
+import { type CommandHistoryEntry } from '../../shared/commandHistory';
 import Tooltip from './Tooltip';
 
 interface Props {
@@ -23,11 +24,10 @@ export default function CommandHistoryPicker({ visible, entries, runningIds, onC
   const [selected, setSelected] = useState(0);
   useModalFocus({ open: visible, containerRef: panelRef, initialFocusSelector: '[aria-label="Search command history"]', onClose });
   const filtered = useMemo(() => entries.filter((entry) => {
-    const text = `${entry.command} ${entry.context.kind === 'ssh' ? commandHistoryContextLabel(entry.context) : ''}`.toLocaleLowerCase();
+    const text = entry.command.toLocaleLowerCase();
     return text.includes(query.trim().toLocaleLowerCase());
   }), [entries, query]);
   useEffect(() => setSelected(0), [query, entries]);
-  if (!visible) return null;
   const choose = (entry: CommandHistoryEntry) => { onSelect(entry); onClose(); };
   const focusOption = (index: number) => {
     setSelected(index);
@@ -44,7 +44,7 @@ export default function CommandHistoryPicker({ visible, entries, runningIds, onC
     else if (event.key === 'End') { event.preventDefault(); focusOption(filtered.length - 1); }
     else if (event.key === 'Enter') { event.preventDefault(); choose(filtered[selected]); }
   };
-  return <div className="snippet-picker-overlay" role="presentation">
+  return <MotionPresence>{visible && <div className="snippet-picker-overlay" role="presentation">
     <div ref={panelRef} className="snippet-picker" role="dialog" aria-modal="true" aria-label="Command history">
       <div className="snippet-picker-heading">
         <h2>Command history</h2>
@@ -64,10 +64,7 @@ export default function CommandHistoryPicker({ visible, entries, runningIds, onC
         </div> : filtered.map((entry, index) => <div className="command-history-row" role="presentation" key={entry.id}>
           <button ref={(element) => { optionRefs.current[index] = element; }} className="command-history-item" id={`command-history-${entry.id}`} role="option" aria-selected={index === selected} tabIndex={index === selected ? 0 : -1} onFocus={() => setSelected(index)} onMouseEnter={() => setSelected(index)} onKeyDown={keyDown} onClick={() => choose(entry)}>
             <span>{entry.command}</span>
-            {(entry.context.kind === 'ssh' || runningIds?.has(entry.id)) && <small>{[
-              entry.context.kind === 'ssh' ? commandHistoryContextLabel(entry.context) : null,
-              runningIds?.has(entry.id) ? 'Running' : null,
-            ].filter(Boolean).join(' · ')}</small>}
+            {runningIds?.has(entry.id) && <small>Running</small>}
           </button>
           {onRemove && <Tooltip label={`Remove ${entry.command} from command history`} placement="left">
             <button ref={(element) => { removeRefs.current[index] = element; }} type="button" className="command-history-remove" tabIndex={-1} aria-label={`Remove ${entry.command} from command history`} onKeyDown={(event) => {
@@ -77,5 +74,5 @@ export default function CommandHistoryPicker({ visible, entries, runningIds, onC
         </div>)}
       </div>
     </div>
-  </div>;
+  </div>}</MotionPresence>;
 }
