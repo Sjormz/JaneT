@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createWorkspace, restoreWorkspaceFixture } from './workspaces';
+import { createWorkspace, ensureProjectTerminalsOpen, restoreWorkspaceFixture } from './workspaces';
 
 class FolderSessions {
   constructor(private page: Page, private app: ElectronApplication) {}
@@ -17,7 +17,7 @@ class FolderSessions {
     await this.page.getByRole('button', { exact: true, name: `${folder}` }).click({ button: 'right' });
     await this.page.getByRole('menuitem', { name: 'Add project', exact: true }).click();
     await this.page.getByRole('textbox', { name: 'Project name' }).fill(name);
-    await this.page.getByRole('button', { name: /Add terminals/ }).click();
+    await ensureProjectTerminalsOpen(this.page);
     await this.page.getByRole('spinbutton', { name: 'Initial terminals' }).fill(String(count));
     await this.page.getByRole('radio', { name: 'Custom', exact: true }).check();
     await this.page.getByRole('textbox', { name: 'Custom command' }).fill('echo');

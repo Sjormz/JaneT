@@ -11,6 +11,14 @@ export function terminalSettings(directory: string) {
   } };
 }
 
+export async function ensureProjectTerminalsOpen(page: Page) {
+  const terminalCount = page.getByRole('spinbutton', { name: 'Initial terminals' });
+  if (await terminalCount.count() === 0) {
+    await page.getByRole('button', { name: /Add terminals/ }).click();
+  }
+  await expect(terminalCount).toBeVisible();
+}
+
 export async function createWorkspace(page: Page, name: string, terminals: Array<{
   title?: string; cwd?: string; commands?: string[];
 }>, newGroup?: string) {
@@ -25,7 +33,7 @@ export async function createWorkspace(page: Page, name: string, terminals: Array
     await page.getByRole('menuitem', { name: 'Add project', exact: true }).click();
   }
   await page.getByRole('textbox', { name: 'Project name' }).fill(name);
-  await page.getByRole('button', { name: /Add terminals/ }).click();
+  await ensureProjectTerminalsOpen(page);
   await page.getByRole('spinbutton', { name: 'Initial terminals' }).fill(String(terminals.length));
   await page.getByRole('radio', { name: 'Custom', exact: true }).check();
   await page.getByRole('textbox', { name: 'Custom command' }).fill('echo');
