@@ -66,6 +66,11 @@ export function notificationActivationKey(argv: string[]): string | undefined {
 const e2eEventsPath = process.env.JANET_E2E_EVENTS_PATH;
 const e2eRemoteDebuggingPort = process.env.JANET_E2E_REMOTE_DEBUGGING_PORT;
 
+if (process.env.NODE_ENV === 'test' && process.env.JANET_E2E_USER_DATA_DIR) {
+  // E2E runners may not expose a usable GPU; keep Electron tests software-rendered.
+  electron.app.commandLine.appendSwitch('disable-gpu');
+}
+
 if (e2eRemoteDebuggingPort) {
   electron.app.commandLine.appendSwitch('remote-debugging-port', e2eRemoteDebuggingPort);
 }
