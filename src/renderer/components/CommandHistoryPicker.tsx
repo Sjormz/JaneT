@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { TrashIcon, XCloseIcon } from '../icons';
 import { useModalFocus } from '../useModalFocus';
+import MotionPresence from './MotionPresence';
 import { type CommandHistoryEntry } from '../../shared/commandHistory';
 import Tooltip from './Tooltip';
 
@@ -27,7 +28,6 @@ export default function CommandHistoryPicker({ visible, entries, runningIds, onC
     return text.includes(query.trim().toLocaleLowerCase());
   }), [entries, query]);
   useEffect(() => setSelected(0), [query, entries]);
-  if (!visible) return null;
   const choose = (entry: CommandHistoryEntry) => { onSelect(entry); onClose(); };
   const focusOption = (index: number) => {
     setSelected(index);
@@ -44,7 +44,7 @@ export default function CommandHistoryPicker({ visible, entries, runningIds, onC
     else if (event.key === 'End') { event.preventDefault(); focusOption(filtered.length - 1); }
     else if (event.key === 'Enter') { event.preventDefault(); choose(filtered[selected]); }
   };
-  return <div className="snippet-picker-overlay" role="presentation">
+  return <MotionPresence>{visible && <div className="snippet-picker-overlay" role="presentation">
     <div ref={panelRef} className="snippet-picker" role="dialog" aria-modal="true" aria-label="Command history">
       <div className="snippet-picker-heading">
         <h2>Command history</h2>
@@ -74,5 +74,5 @@ export default function CommandHistoryPicker({ visible, entries, runningIds, onC
         </div>)}
       </div>
     </div>
-  </div>;
+  </div>}</MotionPresence>;
 }

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useModalFocus } from '../useModalFocus';
+import MotionPresence from './MotionPresence';
 import { SearchIcon } from '../icons';
 
 export interface CommandAction {
@@ -107,8 +108,6 @@ export default function CommandPalette({ visible, onClose, actions }: CommandPal
     [filtered.length, executeSelected, onClose],
   );
 
-  if (!visible) return null;
-
   // Group filtered actions by category
   const grouped: Record<string, CommandAction[]> = {};
   for (const action of filtered) {
@@ -126,6 +125,7 @@ export default function CommandPalette({ visible, onClose, actions }: CommandPal
   }
 
   return (
+    <MotionPresence>{visible &&
     <div
       className="command-palette-overlay"
       data-testid="command-palette"
@@ -220,6 +220,6 @@ export default function CommandPalette({ visible, onClose, actions }: CommandPal
           })}
         </div>
       </div>
-    </div>
+    </div>}</MotionPresence>
   );
 }

@@ -118,7 +118,7 @@ export function KeybindingsProvider({
       // Modal surfaces own the keyboard while open. Suppressing application
       // shortcuts prevents a second action from mutating state behind a
       // confirmation or replacing the destructive target being reviewed.
-      if (document.querySelector('[aria-modal="true"], [data-keybindings-suspended]')) return;
+      if (document.querySelector('[aria-modal="true"]:not([inert] *), [data-keybindings-suspended]:not([inert] *)')) return;
 
       // Xterm owns copy when it has a selection and Ctrl+C when it does not.
       // A user-rebound application action must not preempt either behavior.

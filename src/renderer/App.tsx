@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import { flushSync } from 'react-dom';
 import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, isWorkspaceProject, rebaseDirectory, type WorkspaceGroup } from '../shared/workspaceGroups';
 import EmptyWorkspace, { type WorkspaceEntryRequest } from './components/EmptyWorkspace';
 import Titlebar from './components/Titlebar';
@@ -1213,12 +1214,19 @@ function AppInner({ initialSettings, persistSettings }: {
   );
 
   const handleToggleMaximizePane = useCallback((tabId: string, leafId: string) => {
-    setBroadcastRecipientIds(new Set());
-    setFocusedTerminalId(leafId);
-    setMaximizedLeafByTab((prev) => ({
-      ...prev,
-      [tabId]: prev[tabId] === leafId ? null : leafId,
-    }));
+    const update = () => {
+      setBroadcastRecipientIds(new Set());
+      setFocusedTerminalId(leafId);
+      setMaximizedLeafByTab((prev) => ({
+        ...prev,
+        [tabId]: prev[tabId] === leafId ? null : leafId,
+      }));
+    };
+    if (document.startViewTransition && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      // Snapshots animate the geometry without resizing the live PTY every frame.
+      const transition = document.startViewTransition(() => flushSync(update));
+      void transition.ready.catch(() => {}); // Superseding transitions can skip the animation.
+    } else update();
   }, []);
 
   const handleBroadcastRecipientChange = useCallback((termId: string, selected: boolean) => {
@@ -2097,34 +2105,34 @@ function AppInner({ initialSettings, persistSettings }: {
       />
       <div className={`app-body app-layout sidebar-${sidebarSide}`}>
         {sidebarSide === 'left' && workspaceTools}
-        {tabsOpen ? (
-          <VerticalTabBar
-            key="terminal-tabs"
-            tabs={tabs}
-            activeTabId={activeTabId}
-            dirtyTabIds={editorDocuments.dirtyTabIds}
-            awarenessByTab={awarenessByTab}
-            groups={groups}
-            mainDirectory={mainDirectory}
-            onMainDirectoryChange={async (directory) => { await window.janet.setSettings({ mainDirectory: directory }); setMainDirectory(directory); }}
-            onRenameGroup={renameGroup}
-            onWorkspaceAction={(action, groupId, projectId) => { void requestWorkspaceAction(action, groupId, projectId).catch((error) => setDirectoryActionError(String(error))); }}
-            onGroupsChange={setGroups}
-            creatorOpen={workspaceCreatorOpen}
-            entryRequest={workspaceEntryRequest}
-            onEntryRequestHandled={() => setWorkspaceEntryRequest(undefined)}
-            onCreatorOpenChange={setWorkspaceCreatorOpen}
-            onSelectTab={selectTerminalTab}
-            onCloseTab={requestCloseTab}
-            onWorkspaceTabLaunch={openWorkspaceTab}
-            onRenameTab={renameTab}
-            onCollapse={() => {
-              responsiveTabsCollapsedRef.current = false;
-              setTabsOpen(false);
-            }}
-          />
-        ) : (
-          <Tooltip key="terminal-tabs" label="Show terminal tabs" placement="right">
+        <VerticalTabBar
+          key="terminal-tabs"
+          visible={tabsOpen}
+          tabs={tabs}
+          activeTabId={activeTabId}
+          dirtyTabIds={editorDocuments.dirtyTabIds}
+          awarenessByTab={awarenessByTab}
+          groups={groups}
+          mainDirectory={mainDirectory}
+          onMainDirectoryChange={async (directory) => { await window.janet.setSettings({ mainDirectory: directory }); setMainDirectory(directory); }}
+          onRenameGroup={renameGroup}
+          onWorkspaceAction={(action, groupId, projectId) => { void requestWorkspaceAction(action, groupId, projectId).catch((error) => setDirectoryActionError(String(error))); }}
+          onGroupsChange={setGroups}
+          creatorOpen={workspaceCreatorOpen}
+          entryRequest={workspaceEntryRequest}
+          onEntryRequestHandled={() => setWorkspaceEntryRequest(undefined)}
+          onCreatorOpenChange={setWorkspaceCreatorOpen}
+          onSelectTab={selectTerminalTab}
+          onCloseTab={requestCloseTab}
+          onWorkspaceTabLaunch={openWorkspaceTab}
+          onRenameTab={renameTab}
+          onCollapse={() => {
+            responsiveTabsCollapsedRef.current = false;
+            setTabsOpen(false);
+          }}
+        />
+        {!tabsOpen && (
+          <Tooltip key="terminal-tabs-toggle" label="Show terminal tabs" placement="right">
             <button className="tabs-rail workspace-tabs-rail-toggle" onClick={() => {
               responsiveTabsCollapsedRef.current = false;
               setTabsOpen(true);
@@ -2272,11 +2280,11 @@ function AppInner({ initialSettings, persistSettings }: {
         onCancel={() => setRenameTarget(null)}
         onSave={saveRename}
       />
-      {addTerminalsTabId && <AddTerminalsDialog
+      <AddTerminalsDialog open={addTerminalsTabId !== null}
         group={groups.find(group => group.id === tabs.find(tab => tab.id === addTerminalsTabId)?.groupId) ?? DEFAULT_WORKSPACE_GROUP}
         onClose={() => setAddTerminalsTabId(null)}
-        onSubmit={preset => addSessionTerminals(addTerminalsTabId, preset)}
-      />}
+        onSubmit={preset => addTerminalsTabId ? addSessionTerminals(addTerminalsTabId, preset) : Promise.resolve()}
+      />
       <ConfirmationDialog
         open={broadcastConfirmationOpen}
         title="Start broadcast input?"

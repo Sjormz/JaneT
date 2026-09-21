@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { TerminalTabIcon } from '../icons';
 import type { WorkspaceGroup } from '../../shared/workspaceGroups';
 
 export type WorkspaceEntryRequest = { action: 'create' | 'link'; groupId?: string };
@@ -10,6 +11,7 @@ export default function EmptyWorkspace({ groups, mainDirectory, onRequest }: {
   const selected = groups.find(group => group.id === selectedId) ?? groups[0];
   const library = selected?.kind === 'folder';
   return <div className="empty-project-setup"><section className="fresh-profile-entry workspace-landing" aria-labelledby="fresh-profile-entry-title">
+    <div className="workspace-entry-mark" aria-hidden="true"><TerminalTabIcon size="xl" /></div>
     <h2 id="fresh-profile-entry-title">{selected ? 'What would you like to work on?' : mainDirectory ? 'Create your first workspace' : 'Choose where to work'}</h2>
     <p>{selected
       ? 'Choose a workspace or Library folder for your new project.'

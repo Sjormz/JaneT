@@ -5,6 +5,7 @@ import {
 } from '../icons';
 import BrandMark from './BrandMark';
 import Tooltip from './Tooltip';
+import MotionPresence from './MotionPresence';
 import { formatShortcutForDisplay } from '../keybindings';
 
 function initialPlatform() {
@@ -72,7 +73,7 @@ export default function Titlebar({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       // A modal launched from Settings owns Escape until it is dismissed.
-      if (document.querySelector('[aria-modal="true"]')) return;
+      if (document.querySelector('[aria-modal="true"]:not([inert] *)')) return;
       event.preventDefault();
       event.stopPropagation();
       onSettingsClose();
@@ -80,7 +81,7 @@ export default function Titlebar({
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
       // Portaled modal content may still belong to the Settings surface.
-      if (document.querySelector('[aria-modal="true"]')) return;
+      if (document.querySelector('[aria-modal="true"]:not([inert] *)')) return;
       if (
         settingsButtonRef.current?.contains(target)
         || settingsPopoverRef.current?.contains(target)
@@ -143,7 +144,7 @@ export default function Titlebar({
               <SettingsIconCmp size="md" />
             </button>
           </Tooltip>
-          {settingsOpen && (
+          <MotionPresence>{settingsOpen && (
             <div
               ref={settingsPopoverRef}
               id="titlebar-settings-popover"
@@ -154,7 +155,7 @@ export default function Titlebar({
             >
               {settingsContent}
             </div>
-          )}
+          )}</MotionPresence>
         </div>
 
         {platform !== 'darwin' && (

@@ -46,7 +46,8 @@ export function useModalFocus({
       : null;
 
     const isTopmostModal = () => {
-      const modals = Array.from(document.querySelectorAll<HTMLElement>('[aria-modal="true"]'));
+      const modals = Array.from(document.querySelectorAll<HTMLElement>('[aria-modal="true"]'))
+        .filter(modal => !modal.closest('[inert]'));
       return modals.length === 0 || modals[modals.length - 1] === container;
     };
 
@@ -101,6 +102,7 @@ export function useModalFocus({
         const focusIsUnclaimed = active === null ||
           active === document.body ||
           active === container ||
+          (container.closest('[inert]') !== null && container.contains(active)) ||
           (active instanceof HTMLElement && !active.isConnected);
         const restoreTarget = previousFocus?.isConnected
           ? previousFocus

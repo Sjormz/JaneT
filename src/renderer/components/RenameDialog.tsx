@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalFocus } from '../useModalFocus';
+import MotionPresence from './MotionPresence';
 
 interface RenameDialogProps {
   open: boolean;
@@ -49,9 +50,8 @@ export default function RenameDialog({
     return () => cancelAnimationFrame(frame);
   }, [initialValue, open]);
 
-  if (!open) return null;
-
   return createPortal(
+    <MotionPresence>{open &&
     <div className="confirmation-dialog-overlay" role="presentation">
       <div
         ref={dialogRef}
@@ -82,7 +82,7 @@ export default function RenameDialog({
           <button type="button" disabled={busy} className="confirmation-dialog-button confirm" onClick={() => void save(inputRef.current?.value ?? '')}>{busy ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
-    </div>,
+    </div>}</MotionPresence>,
     document.body,
   );
 }

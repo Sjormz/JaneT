@@ -242,7 +242,7 @@ describe('VerticalTabBar', () => {
 
     expect(screen.queryByRole('button', { name: /^rename project$/i })).not.toBeInTheDocument();
     fireEvent.contextMenu(opener);
-    expect(screen.getByRole('menu').parentElement).toBe(document.body);
+    expect(screen.getByRole('menu').closest('.motion-presence')?.parentElement).toBe(document.body);
     fireEvent.click(screen.getByRole('menuitem', { name: /rename session/i }));
     const nameInput = screen.getByRole('textbox', { name: /^tab name$/i });
     expect(nameInput).toHaveAttribute('maxlength', '256');

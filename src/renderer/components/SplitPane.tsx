@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { createPortal, flushSync } from 'react-dom';
+import { createPortal } from 'react-dom';
+import MotionPresence from './MotionPresence';
 import {
   getAllLeafIds, PaneDropSide, PaneNode, SplitNode, TerminalLeaf,
 } from '../types';
@@ -184,17 +185,6 @@ function TerminalPaneLeaf({
   };
   const isDropTarget = dropTarget?.leafId === leaf.id;
 
-  function toggleMaximize() {
-    const startViewTransition = (document as Document & {
-      startViewTransition?: (update: () => void) => unknown;
-    }).startViewTransition;
-    if (startViewTransition && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-      startViewTransition.call(document, () => flushSync(onToggleMaximize));
-      return;
-    }
-    onToggleMaximize();
-  }
-
   return (
     <div
       className={`terminal-leaf ${draggedLeafId === leaf.id ? 'pane-dragging' : ''}${broadcastSelected ? ' broadcast-selected' : ''}`}
@@ -266,7 +256,7 @@ function TerminalPaneLeaf({
           </Tooltip>
           {hasMultiplePanes && (
             <Tooltip label={isMaximized ? 'Restore pane layout' : `Maximize pane — ${paneActionContext}`} placement="bottom">
-              <button className="leaf-btn" onClick={toggleMaximize} aria-label={isMaximized ? 'Restore pane layout' : `Maximize pane — ${paneActionContext}`}>
+              <button className="leaf-btn" onClick={onToggleMaximize} aria-label={isMaximized ? 'Restore pane layout' : `Maximize pane — ${paneActionContext}`}>
                 {isMaximized ? <RestoreIcon size="sm" /> : <MaximizeIcon size="sm" />}
               </button>
             </Tooltip>
@@ -279,7 +269,7 @@ function TerminalPaneLeaf({
           </Tooltip>
         </div>
       </div>
-      {menu && createPortal(
+      {createPortal(<MotionPresence>{menu &&
         <div ref={menuRef} className="vtab-context-menu" role="menu" aria-label={`Actions for ${paneTitle}`}
           style={{ left: menu.x, top: menu.y }}
           onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setMenu(null); }}
@@ -299,7 +289,7 @@ function TerminalPaneLeaf({
             setMenu(null);
             onRenamePane?.(leaf.id);
           }}>Rename</button>
-        </div>, document.body,
+        </div>}</MotionPresence>, document.body,
       )}
       <div className="terminal-leaf-body">
         <TerminalPane

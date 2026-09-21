@@ -7,6 +7,7 @@ import {
 } from '../icons';
 import WorkspaceForm from './WorkspaceForm';
 import { useModalFocus } from '../useModalFocus';
+import MotionPresence from './MotionPresence';
 import Tooltip from './Tooltip';
 import MainDirectory from './MainDirectory';
 import RenameDialog from './RenameDialog';
@@ -15,6 +16,7 @@ import type { AgentStatus } from '../terminalAwareness';
 import type { GitWorktreeInfo } from '../../shared/gitWorktrees';
 
 interface VerticalTabBarProps {
+  visible?: boolean;
   tabs: TabInfo[];
   activeTabId: string;
   groups?: WorkspaceGroup[];
@@ -49,6 +51,7 @@ function workspaceLeaves(root: PaneNode): TerminalLeaf[] {
 }
 
 export default function VerticalTabBar({
+  visible = true,
   tabs,
   activeTabId,
   groups = [DEFAULT_WORKSPACE_GROUP],
@@ -248,7 +251,7 @@ export default function VerticalTabBar({
   });
 
   return (
-    <div className="vtab-bar workspace-tabs-rail" role="group" aria-label="Workspaces">
+    <div className="vtab-bar workspace-tabs-rail" role="group" aria-label="Workspaces" hidden={!visible} style={visible ? undefined : { display: 'none' }}>
 
       <div className="vtab-list workspace-group-list">
       <div className="vtab-header">
@@ -361,7 +364,7 @@ export default function VerticalTabBar({
         <ChevronsLeftIcon size="sm" /><span>Collapse sidebar</span>
       </button>
 
-      {tabMenu && createPortal(
+      {createPortal(<MotionPresence>{tabMenu &&
         <div
           ref={tabMenuRef}
           className="vtab-context-menu"
@@ -395,17 +398,17 @@ export default function VerticalTabBar({
           </>}
           <button role="menuitem" disabled={isWorkspaceProject(tabMenu.tab, groups) && countLeaves(tabMenu.tab.root) === 0} onClick={() => { const id = tabMenu.tab!.id; closeTabMenu(); onCloseTab(id); }}>{isWorkspaceProject(tabMenu.tab, groups) ? 'Close all terminals…' : 'Close session'}</button>
           </>}
-        </div>,
+        </div>}</MotionPresence>,
         document.body,
       )}
       <RenameDialog open={editingGroupId !== null} title="Rename workspace" inputLabel="Workspace name" initialValue={draftTitle}
         fallbackFocus={() => workspaceAddButtonRef.current} onCancel={() => setEditingGroupId(null)}
         onSave={async (name) => { if (editingGroupId) { if (onRenameGroup) await onRenameGroup(editingGroupId, name); else onGroupsChange(groups.map((item) => item.id === editingGroupId ? { ...item, name } : item)); } setEditingGroupId(null); }} />
-      {directoryOpen && createPortal(<div className="workspace-modal-overlay"><div ref={directoryDialogRef} className="workspace-modal" role="dialog" aria-modal="true" aria-label="Main directory settings">
+      {createPortal(<MotionPresence>{directoryOpen && <div className="workspace-modal-overlay"><div ref={directoryDialogRef} className="workspace-modal" role="dialog" aria-modal="true" aria-label="Main directory settings">
         <div className="workspace-modal-header"><h2>Workspace location</h2><button aria-label="Close main directory settings" onClick={() => setDirectoryOpen(false)}><XCloseIcon size="sm" /></button></div>
         <MainDirectory directory={mainDirectory ?? null} onChange={async (directory) => { await onMainDirectoryChange?.(directory); setDirectoryOpen(false); }} />
-      </div></div>, document.body)}
-      {workspaceModalOpen && createPortal(
+      </div></div>}</MotionPresence>, document.body)}
+      {createPortal(<MotionPresence>{workspaceModalOpen &&
         <div
           className={projectPage ? "empty-project-setup workspace-creation-page" : "workspace-modal-overlay"}
           role="presentation"
@@ -441,7 +444,7 @@ export default function VerticalTabBar({
               onSubmit={createWorkspace}
             />}
           </div>
-        </div>,
+        </div>}</MotionPresence>,
         projectPage && projectPageHost ? projectPageHost : document.body,
       )}
     </div>

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { FileTextIcon, PencilIcon, PlusIcon, SearchCloseIcon, SearchIcon, TrashIcon } from '../icons';
 import { useModalFocus } from '../useModalFocus';
+import MotionPresence from './MotionPresence';
 import { hasDuplicateSnippetName, type Snippet } from '../../shared/snippets';
 import ConfirmationDialog from './ConfirmationDialog';
 
@@ -49,8 +50,6 @@ export default function SnippetPicker({ visible, onClose, snippets, onSave, onPa
     onClose,
     initialFocusSelector: editing ? '[data-testid="snippet-name-input"]' : '[data-testid="snippet-search-input"]',
   });
-
-  if (!visible) return null;
 
   const noMatches = snippets.length > 0 && query.trim().length > 0;
 
@@ -102,6 +101,7 @@ export default function SnippetPicker({ visible, onClose, snippets, onSave, onPa
   };
 
   return (
+    <><MotionPresence>{visible &&
     <div
       className="snippet-picker-overlay"
       role="presentation"
@@ -230,8 +230,9 @@ export default function SnippetPicker({ visible, onClose, snippets, onSave, onPa
           </>
         )}
       </div>
+    </div>}</MotionPresence>
       <ConfirmationDialog
-        open={deleting !== null}
+        open={visible && deleting !== null}
         title={`Delete ${deleting?.name ?? 'snippet'}?`}
         description="This permanently removes the saved snippet."
         confirmLabel="Delete snippet"
@@ -241,6 +242,6 @@ export default function SnippetPicker({ visible, onClose, snippets, onSave, onPa
           setDeleting(null);
         }}
       />
-    </div>
+    </>
   );
 }

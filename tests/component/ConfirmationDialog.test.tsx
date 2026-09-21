@@ -42,7 +42,7 @@ describe('ConfirmationDialog', () => {
     fireEvent.click(opener);
 
     const dialog = screen.getByRole('alertdialog', { name: 'Remove saved item?' });
-    expect(dialog.parentElement?.parentElement).toBe(document.body);
+    expect(dialog.closest('.motion-presence')?.parentElement).toBe(document.body);
     expect(dialog).toHaveAccessibleDescription('This item cannot be restored automatically.');
     expect(onConfirm).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus());

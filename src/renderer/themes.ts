@@ -281,6 +281,7 @@ export function applyCssTheme(cssVars: CssThemeVars): void {
   root.style.setProperty('--glass-bg-strong', cssVars['glass-bg'] ?? cssVars['bg-secondary']);
   root.style.setProperty('--text-tertiary', cssVars['text-secondary']);
   root.style.setProperty('--text-disabled', cssVars['text-muted']);
+  root.style.setProperty('--on-accent', cssVars['bg-primary']);
 }
 
 export const themeNames = Object.keys(themes) as ThemeName[];

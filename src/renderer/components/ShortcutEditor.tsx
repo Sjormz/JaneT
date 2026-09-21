@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useKeybindings } from '../KeybindingsContext';
 import { useModalFocus } from '../useModalFocus';
+import MotionPresence from './MotionPresence';
 import {
   KeybindingAction,
   KEYBINDING_LABELS,
@@ -68,9 +69,8 @@ export default function ShortcutEditor({ open, onClose }: ShortcutEditorProps) {
   const keys = Object.keys(KEYBINDING_LABELS) as KeybindingAction[];
   const platform = navigator.platform.toLowerCase().includes('mac') ? 'darwin' : '';
 
-  if (!open) return null;
-
   return createPortal(
+    <><MotionPresence>{open &&
     <div
       className="workspace-modal-overlay"
       role="presentation"
@@ -131,8 +131,11 @@ export default function ShortcutEditor({ open, onClose }: ShortcutEditorProps) {
       <button className="shortcut-reset-btn" onClick={() => setConfirmingReset(true)}>
         Reset shortcuts to defaults
       </button>
+        </div>
+      </div>
+    </div>}</MotionPresence>
       <ConfirmationDialog
-        open={confirmingReset}
+        open={open && confirmingReset}
         title="Reset all keyboard shortcuts?"
         description="This replaces every custom keyboard shortcut with JaneT’s defaults."
         confirmLabel="Reset shortcuts"
@@ -142,9 +145,7 @@ export default function ShortcutEditor({ open, onClose }: ShortcutEditorProps) {
         }}
         onCancel={() => setConfirmingReset(false)}
       />
-        </div>
-      </div>
-    </div>,
+    </>,
     document.body,
   );
 }
