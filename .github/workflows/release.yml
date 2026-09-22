@@ -135,7 +135,7 @@ jobs:
             build-args: --linux
           - os: macos-latest
             platform: macos
-            build-args: --mac --arm64 -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false -c.npmRebuild=false
+            build-args: --mac --arm64 -c.npmRebuild=false
           - os: windows-latest
             platform: windows
             build-args: --win
@@ -156,10 +156,37 @@ jobs:
       - name: Build app
         run: npm run build
 
+      - name: Validate macOS signing secrets
+        if: matrix.platform == 'macos'
+        shell: bash
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          for name in MAC_CSC_LINK MAC_CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required macOS release secret: $name" >&2
+              exit 1
+            fi
+            if [[ "${!name}" == SET_ME_* ]]; then
+              echo "Replace the placeholder in required macOS release secret: $name" >&2
+              exit 1
+            fi
+          done
+
       - name: Package installer
         run: npx electron-builder ${{ matrix.build-args }} --publish never
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.platform == 'macos' && 'false' || 'true' }}
+          CSC_LINK: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'macos' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_TEAM_ID || '' }}
 
       - name: Verify packaged release and native terminal runtime
         run: node scripts/verify-release-artifacts.mjs ${{ matrix.platform }}

@@ -24,7 +24,7 @@ When a `v*` tag is pushed, `.github/workflows/release.yml`:
    verification and packaging to pass.
 5. Verifies the exact installer/update-metadata set and starts a real PTY with
    each runner's packaged Electron runtime.
-6. Verifies the Apple Silicon macOS build uses an ad-hoc code signature.
+6. Verifies the Apple Silicon macOS build uses a Developer ID signature and passes Gatekeeper/notarization checks.
 7. Serializes publication, refuses an already-public version or a version older
    than a published stable release, and rechecks the tag's source SHA.
 8. Uploads installers and update metadata. The release action stages a new
@@ -44,20 +44,21 @@ files. The release check executes the Apple Silicon runner's packaged macOS PTY.
 
 ### macOS release signing
 
-macOS release artifacts are deliberately ad-hoc signed and are not notarized.
-The release workflow passes `identity=-`, disables hardened runtime and
-notarization, disables automatic certificate discovery, and preserves
-node-pty's packaged Darwin prebuilds, including their existing signatures,
-instead of rebuilding or recursively re-signing those two native files. No
-Apple signing credentials are required for this release profile. `npm run
-dist:mac:test` uses the same settings for local smoke packages.
+macOS release artifacts are signed with a Developer ID Application certificate,
+use the hardened runtime, and are notarized by Apple before publication. The
+macOS release job requires these GitHub Actions secrets:
 
-An ad-hoc signature verifies code integrity, but it does not establish a
-trusted developer identity or satisfy Gatekeeper's normal trust checks.
-Downloaded builds can therefore show a security warning or require the user to
-open JaneT explicitly from Finder. This is an alpha-stage distribution policy;
-a future generally trusted macOS release must restore Developer ID signing and
-Apple notarization.
+- `MAC_CSC_LINK`: base64-encoded password-protected Developer ID `.p12`
+- `MAC_CSC_KEY_PASSWORD`: password for that `.p12`
+- `APPLE_ID`: Apple Account email used for notarization
+- `APPLE_APP_SPECIFIC_PASSWORD`: app-specific password for `notarytool`
+- `APPLE_TEAM_ID`: Apple Developer Team ID
+
+The workflow fails before packaging if any of these secrets are missing. The
+artifact verifier checks the Developer ID authority, team identifier, Gatekeeper
+assessment, and stapled notarization ticket. The `npm run dist:mac:test`
+command remains intentionally unsigned and not notarized for fast local smoke
+packages.
 
 ### Windows ConPTY packaging
 

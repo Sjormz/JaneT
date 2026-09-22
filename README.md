@@ -179,7 +179,7 @@ JaneT checks GitHub Releases for updates from inside the app. If an in-app updat
 ### First launch
 
 - **Windows:** Windows builds are unsigned, so Microsoft Defender SmartScreen may warn before launch. Confirm that the download came from the JaneT GitHub release, then use SmartScreen's **More info** → **Run anyway** path if you choose to continue.
-- **macOS:** Current builds are ad-hoc signed and not notarized. After attempting to open JaneT, go to **System Settings** → **Privacy & Security** and choose **Open Anyway** for JaneT. See the [release documentation](docs/release.md#macos-release-signing) for the signing policy.
+- **macOS:** Release builds are signed with Apple Developer ID and notarized. The local `dist:mac:test` command intentionally creates an unsigned test package. See the [release documentation](docs/release.md#macos-release-signing) for the signing policy.
 - **Linux AppImage:** Make the downloaded file executable, then run it:
 
   ```bash
