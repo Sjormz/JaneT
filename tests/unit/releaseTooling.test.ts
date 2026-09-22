@@ -667,7 +667,14 @@ module.exports = {
     const workflow = fs.readFileSync(path.join(projectRoot, '.github', 'workflows', 'release.yml'), 'utf8');
     expect(workflow).toContain('build-args: --mac --arm64 -c.npmRebuild=false');
     expect(workflow).toContain('Validate macOS signing secrets');
-    expect(workflow).toContain("CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.platform == 'macos' && 'false' || 'true' }}");
+    expect(workflow).toContain('Import macOS signing certificate');
+    expect(workflow).toContain('security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"');
+    expect(workflow).toContain('-P "$MAC_CSC_KEY_PASSWORD"');
+    expect(workflow).toContain('-k "$KEYCHAIN_PASSWORD"');
+    expect(workflow).toContain('echo "CSC_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"');
+    expect(workflow).toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'true'");
+    expect(workflow).not.toContain("CSC_LINK: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK || '' }}");
+    expect(workflow).not.toContain("CSC_KEY_PASSWORD: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || '' }}");
     for (const secretName of [
       'MAC_CSC_LINK',
       'MAC_CSC_KEY_PASSWORD',
