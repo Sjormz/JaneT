@@ -2383,6 +2383,13 @@ export default function App() {
     loadSettings();
   }, [loadSettings]);
 
+  // AppInner does not mount during first-launch setup.
+  useLayoutEffect(() => {
+    if (settings?.mainDirectory === null && !settings.mainDirectorySetupSkipped) {
+      applyCssTheme(getTheme(settings.theme || 'one-dark').css);
+    }
+  }, [settings]);
+
   // Persist keybindings to main process
   const handleSave = useCallback((b: Record<KeybindingAction, string>) => {
     void persistence.persist({ keybindings: b });
