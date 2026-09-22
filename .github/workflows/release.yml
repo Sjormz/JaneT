@@ -172,6 +172,10 @@ jobs:
               echo "Missing required macOS release secret: $name" >&2
               exit 1
             fi
+            if [[ "${!name}" == SET_ME_* ]]; then
+              echo "Replace the placeholder in required macOS release secret: $name" >&2
+              exit 1
+            fi
           done
 
       - name: Package installer
