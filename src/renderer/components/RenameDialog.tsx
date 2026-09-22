@@ -46,6 +46,7 @@ export default function RenameDialog({
 
   useEffect(() => {
     if (!open) return;
+    if (inputRef.current) inputRef.current.value = initialValue;
     const frame = requestAnimationFrame(() => inputRef.current?.select());
     return () => cancelAnimationFrame(frame);
   }, [initialValue, open]);
