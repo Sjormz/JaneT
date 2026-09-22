@@ -126,45 +126,45 @@ describe('development tooling', () => {
 
 describe('release tooling', () => {
   it('keeps documented shortcuts aligned with the platform defaults', async () => {
-    const readme = fs.readFileSync(path.join(projectRoot, 'README.md'), 'utf8');
+    const shortcuts = fs.readFileSync(path.join(projectRoot, 'docs', 'site', 'reference', 'shortcuts.md'), 'utf8');
     const { defaultKeybindingsForPlatform } = await import('../../src/renderer/keybindings');
     const windows = defaultKeybindingsForPlatform('win32');
     const macos = defaultKeybindingsForPlatform('darwin');
-    const display = (shortcut: string) => shortcut ? shortcut.replace(/^Meta/, 'Cmd') : 'Unbound';
+    const display = (shortcut: string) => shortcut ? `\`${shortcut.replace(/^Meta/, 'Cmd')}\`` : 'Unassigned';
     const rows = [
-      ['Command palette', 'palette-toggle'],
+      ['Open command palette', 'palette-toggle'],
       ['New terminal tab', 'new-terminal'],
       ['Search terminal output', 'search-toggle'],
-      ['Toggle workspace tools', 'toggle-sidebar'],
+      ['Show or hide workspace tools', 'toggle-sidebar'],
       ['Open snippets', 'snippets-toggle'],
       ['Split pane right', 'split-right'],
       ['Split pane below', 'split-down'],
     ] as const;
 
     for (const [label, action] of rows) {
-      expect(readme).toContain(
-        `| ${label} | \`${display(windows[action])}\` | \`${display(macos[action])}\` |`,
+      expect(shortcuts).toContain(
+        `| ${label} | ${display(windows[action])} | ${display(macos[action])} |`,
       );
     }
   });
 
   it('documents fresh-shell restart and unauthenticated agent status truthfully', () => {
-    const readme = fs.readFileSync(path.join(projectRoot, 'README.md'), 'utf8');
+    const workspaces = fs.readFileSync(path.join(projectRoot, 'docs', 'site', 'guide', 'workspaces.md'), 'utf8');
+    const activity = fs.readFileSync(path.join(projectRoot, 'docs', 'site', 'guide', 'agent-activity.md'), 'utf8');
 
-    expect(readme).not.toContain('Keep active terminal and SSH work running when the window closes');
-    expect(readme).toContain('Closing JaneT ends its managed local terminal sessions');
-    expect(readme).toContain('Restarting restores the saved workspace structure into fresh shells');
-    expect(readme).toContain('startup commands run again');
-    expect(readme).toContain('Agent lifecycle status is bounded metadata, not an authenticated security signal');
+    expect(workspaces).toContain('Closing JaneT ends its managed local terminal sessions');
+    expect(workspaces).toContain('Restarting restores the saved workspace structure into fresh shells');
+    expect(workspaces).toContain('startup commands run again');
+    expect(activity).toContain('Agent lifecycle status is bounded metadata, not an authenticated security signal');
   });
 
   it('documents launch recovery for every public package family', () => {
-    const readme = fs.readFileSync(path.join(projectRoot, 'README.md'), 'utf8');
+    const guide = fs.readFileSync(path.join(projectRoot, 'docs', 'site', 'getting-started.md'), 'utf8');
 
-    expect(readme).toContain('Windows builds are unsigned');
-    expect(readme).toContain('SmartScreen');
-    expect(readme).toContain('Release builds are signed with Apple Developer ID and notarized');
-    expect(readme).toContain('chmod +x JaneT-<version>-linux-x64.AppImage');
+    expect(guide).toContain('Windows builds are unsigned');
+    expect(guide).toContain('SmartScreen');
+    expect(guide).toContain('Release builds are signed with Apple Developer ID and notarized');
+    expect(guide).toContain('chmod +x JaneT-<version>-linux-x64.AppImage');
   });
 
   it('keeps the documented node-pty lock and Windows fixes aligned with release tooling', () => {
