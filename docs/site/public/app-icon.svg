@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">JaneT</title>
+  <desc id="desc">A terminal prompt chevron beside a hooked letter J.</desc>
+  <defs>
+    <linearGradient id="tile" x1="170" y1="126" x2="850" y2="906" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1b1f31" />
+      <stop offset="1" stop-color="#10121b" />
+    </linearGradient>
+    <radialGradient id="halo" cx="0" cy="0" r="1" gradientTransform="translate(510 486) rotate(90) scale(420)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7c8cff" stop-opacity=".16" />
+      <stop offset="1" stop-color="#7c8cff" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect x="48" y="48" width="928" height="928" rx="232" fill="url(#tile)" />
+  <rect x="52" y="52" width="920" height="920" rx="228" fill="none" stroke="#313753" stroke-width="8" />
+  <rect x="92" y="92" width="840" height="840" rx="196" fill="url(#halo)" />
+  <path d="M250 310 430 512 250 714" fill="none" stroke="#7c8cff" stroke-width="96" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M565 310h185v285c0 89-48 140-130 140-52 0-92-20-117-58" fill="none" stroke="#54e1c5" stroke-width="96" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

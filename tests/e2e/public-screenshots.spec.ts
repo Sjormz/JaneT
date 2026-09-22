@@ -7,21 +7,26 @@ import sharp from 'sharp';
 
 const root = path.resolve(__dirname, '../..');
 const screenshots = path.join(root, 'assets', 'screenshots');
+const docsScreenshots = path.join(root, 'docs', 'site', 'public', 'screenshots');
 const fixturePath = path.join(process.env.PUBLIC ?? 'C:\\Users\\Public', 'JaneT-Demo');
 const fixtureMarker = `${fixturePath}.janet-public-screenshot-fixture`;
 const fixtureOwnership = 'Owned by tests/e2e/public-screenshots.spec.ts\n';
-const shellCwd = path.parse(fixturePath).root;
 const screenshotNames = [
   'broadcast-input.png',
   'built-in-editor.png',
   'command-history.png',
+  'command-palette.png',
   'notification-settings.png',
+  'project-creation.png',
+  'settings-overview.png',
   'semantic-commands.png',
+  'snippets.png',
   'source-control.png',
+  'workspace-creation.png',
   'workspace-overview.png',
 ] as const;
 
-test.skip(process.platform !== 'win32', 'Public screenshots are the Windows README set.');
+test.skip(process.platform !== 'win32', 'Public screenshots are captured from the Windows desktop app.');
 test.skip(process.env.JANET_UPDATE_PUBLIC_SCREENSHOTS !== '1', 'Set JANET_UPDATE_PUBLIC_SCREENSHOTS=1 to replace the shipped PNGs.');
 
 function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
@@ -117,7 +122,6 @@ async function warmTerminal(page: Page, terminal: Locator): Promise<void> {
 }
 
 async function capture(name: typeof screenshotNames[number], target: Page | Locator): Promise<void> {
-  const output = path.join(screenshots, name);
   const options = {
     animations: 'disabled',
     caret: 'hide',
@@ -133,7 +137,10 @@ async function capture(name: typeof screenshotNames[number], target: Page | Loca
     previous = current;
   }
   if (!bytes) throw new Error(`${name} did not produce two consecutive byte-identical frames`);
-  fs.writeFileSync(output, bytes);
+  fs.mkdirSync(docsScreenshots, { recursive: true });
+  for (const directory of [screenshots, docsScreenshots]) {
+    fs.writeFileSync(path.join(directory, name), bytes);
+  }
   expect(bytes.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   expect(bytes.length).toBeGreaterThan(4_000);
 }
@@ -144,8 +151,9 @@ function writeSettings(userData: string): void {
     fontSize: 14,
     sidebarSide: 'right',
     keybindings: {},
+    snippets: [{ id: 'demo-checks', name: 'Check demo workspace', content: 'git status -sb' }],
     notificationsEnabled: true,
-    notificationThresholdSeconds: 15,
+    notificationThresholdSeconds: 10,
     workspaceTabs: [
       {
         id: 'web-project', name: 'Web project', type: 'local', cwd: fixturePath,
@@ -173,8 +181,8 @@ function writeSettings(userData: string): void {
           selectedPanePath: [0],
         },
         {
-          id: 'command-demo', title: 'Command demo', type: 'local', cwd: shellCwd,
-          root: { type: 'leaf', title: 'Commands', terminalType: 'local', cwd: shellCwd },
+          id: 'command-demo', title: 'Command demo', type: 'local', cwd: fixturePath,
+          root: { type: 'leaf', title: 'Commands', terminalType: 'local', cwd: fixturePath },
         },
       ],
       activeTabId: 'demo-workspace',
@@ -273,7 +281,7 @@ test('recaptures the shipped public screenshot set from the real app', async () 
     await tab(page, 'Demo workspace').click();
     await expect(terminals).toHaveCount(2);
     for (const terminal of await terminals.all()) {
-      await typeCommand(page, terminal, `Set-Location '${shellCwd}'`);
+      await typeCommand(page, terminal, `Set-Location '${fixturePath}'`);
       await terminal.locator('.xterm-helper-textarea').focus();
       await page.keyboard.press('Control+L');
     }
@@ -301,11 +309,41 @@ test('recaptures the shipped public screenshot set from the real app', async () 
     }
 
     await page.getByRole('button', { name: 'Open settings' }).click();
+    const settings = page.getByRole('dialog', { name: 'Settings' });
+    await expect(settings).toBeVisible();
+    await capture('settings-overview.png', settings);
     const notificationSettings = page.locator('.notification-settings');
     await expect(notificationSettings.getByRole('checkbox')).toBeChecked();
-    await expect(notificationSettings.getByRole('spinbutton')).toHaveValue('15');
+    await expect(notificationSettings).toContainText('For commands lasting 10 seconds or longer.');
     await capture('notification-settings.png', notificationSettings);
     await page.getByRole('button', { name: 'Hide settings' }).click();
+
+    await page.getByRole('button', { name: 'New workspace' }).click();
+    const workspaceCreation = page.getByRole('dialog', { name: 'Create workspace' });
+    await expect(workspaceCreation).toBeVisible();
+    await capture('workspace-creation.png', workspaceCreation);
+    await workspaceCreation.getByRole('button', { name: 'Close creation dialog' }).click();
+
+    await page.locator('.workspace-group-heading').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Add project' }).click();
+    const projectCreation = page.locator('.project-creation-content');
+    await expect(projectCreation).toBeVisible();
+    await expect(projectCreation.getByLabel('Project name')).toBeVisible();
+    await projectCreation.getByRole('button', { name: /Add terminals/ }).click();
+    await expect(projectCreation.getByRole('spinbutton', { name: 'Initial terminals' })).toHaveValue('1');
+    await expect(projectCreation.getByText('Start terminals with')).toBeVisible();
+    await capture('project-creation.png', projectCreation);
+    await page.getByRole('button', { name: 'Cancel' }).click();
+
+    await page.getByRole('button', { name: 'Open command palette (Ctrl+Shift+P)' }).click();
+    const commandPalette = page.getByRole('dialog', { name: 'Command palette' });
+    await expect(commandPalette).toBeVisible();
+    await capture('command-palette.png', commandPalette);
+    await commandPalette.getByRole('option', { name: /Open snippets/ }).click();
+    const snippets = page.getByRole('dialog', { name: 'Snippets' });
+    await expect(snippets.getByText('Check demo workspace', { exact: true })).toBeVisible();
+    await capture('snippets.png', snippets);
+    await page.keyboard.press('Escape');
 
     await page.getByRole('tab', { name: 'Explorer' }).click();
     await page.getByRole('button', { name: 'Open folder src' }).click();
@@ -324,13 +362,20 @@ test('recaptures the shipped public screenshot set from the real app', async () 
     await expect(sourceControl.getByText('workspaces.md', { exact: true })).toBeVisible();
     await expect(sourceControl.getByText('app.ts', { exact: true })).toBeVisible();
     await expect(sourceControl.getByText('CHANGELOG.md', { exact: true })).toBeVisible();
+    for (const terminal of await terminals.all()) {
+      await warmTerminal(page, terminal);
+      await expect.poll(async () => (await terminal.locator('.xterm-rows > div').allTextContents()).join(''))
+        .toContain(`PS ${fixturePath}>`);
+    }
     await capture('source-control.png', page);
 
     const bodyText = await page.locator('body').innerText();
     expect(bodyText).not.toMatch(/pckpr|JaneT-polish|projects\\JaneT/i);
+    expect(bodyText).not.toMatch(/\$Recycle\.Bin|System Volume Information|Windows\.old|Program Files/i);
     expect([...pageErrors, ...(await page.pageErrors({ filter: 'all' })).map((error) => error.message)]).toEqual([]);
     for (const name of screenshotNames) {
       const bytes = fs.readFileSync(path.join(screenshots, name));
+      expect(fs.readFileSync(path.join(docsScreenshots, name))).toEqual(bytes);
       expect(bytes.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
       expect(bytes.length).toBeGreaterThan(4_000);
     }
