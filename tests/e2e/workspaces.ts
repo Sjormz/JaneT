@@ -36,7 +36,7 @@ export async function createWorkspace(page: Page, name: string, terminals: Array
   await ensureProjectTerminalsOpen(page);
   await page.getByRole('spinbutton', { name: 'Initial terminals' }).fill(String(terminals.length));
   await page.getByRole('radio', { name: 'Custom', exact: true }).check();
-  await page.getByRole('textbox', { name: 'Custom command' }).fill('echo');
+  await page.getByRole('textbox', { name: 'Custom command' }).fill('echo JANET_STARTUP_READY');
   await page.getByRole('button', { name: 'Create project', exact: true }).click();
 }
 

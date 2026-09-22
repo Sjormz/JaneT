@@ -210,6 +210,11 @@ function TerminalPaneLeaf({
         tabIndex={onRenamePane ? 0 : undefined}
         aria-label={`${paneTitle} heading`}
         aria-haspopup={onRenamePane ? 'menu' : undefined}
+        onClick={(event) => {
+          if (!(event.target as HTMLElement).closest('.leaf-actions')) {
+            event.currentTarget.parentElement?.querySelector<HTMLTextAreaElement>('[data-terminal-focus-target] textarea')?.focus();
+          }
+        }}
         onContextMenu={(event) => {
           if (!onRenamePane) return;
           event.preventDefault();

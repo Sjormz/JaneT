@@ -20,7 +20,7 @@ class FolderSessions {
     await ensureProjectTerminalsOpen(this.page);
     await this.page.getByRole('spinbutton', { name: 'Initial terminals' }).fill(String(count));
     await this.page.getByRole('radio', { name: 'Custom', exact: true }).check();
-    await this.page.getByRole('textbox', { name: 'Custom command' }).fill('echo');
+    await this.page.getByRole('textbox', { name: 'Custom command' }).fill('echo JANET_STARTUP_READY');
     await this.page.getByRole('button', { name: 'Create project', exact: true }).click();
   }
   async closeProjectTerminals(name: string) {
@@ -74,9 +74,21 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await expect(page.locator('.terminal-container')).toHaveCount(0);
     expect(fs.readdirSync(main)).toEqual([]);
     await createWorkspace(page, 'Temporary', [{}], 'First group');
+    const firstTerminal = page.locator('.terminal-container').first();
+    await expect(firstTerminal.locator('.xterm-helper-textarea')).toBeFocused();
+    await page.keyboard.type('echo JANET_FOCUS_CREATED');
+    await page.keyboard.press('Enter');
+    await expect(firstTerminal.locator('.xterm-rows')).toContainText(/JANET_FOCUS_CREATED.*JANET_FOCUS_CREATED/s);
     await page.getByRole('button', { name: 'Add terminals', exact: true }).click();
     await page.getByRole('dialog', { name: 'Add terminals' }).getByRole('button', { name: 'Add terminals', exact: true }).click();
     await expect(page.locator('.terminal-container')).toHaveCount(2);
+    const addedTerminal = page.locator('.terminal-container').nth(1);
+    await expect(addedTerminal.locator('.xterm-helper-textarea')).toBeFocused();
+    await page.keyboard.type('echo JANET_FOCUS_ADDED');
+    await page.keyboard.press('Enter');
+    await expect(addedTerminal.locator('.xterm-rows')).toContainText(/JANET_FOCUS_ADDED.*JANET_FOCUS_ADDED/s);
+    await page.locator('.terminal-leaf-header').first().click({ position: { x: 20, y: 10 } });
+    await expect(firstTerminal.locator('.xterm-helper-textarea')).toBeFocused();
     fs.writeFileSync(path.join(main, 'First group', 'Temporary', 'keep.txt'), 'keep');
     await page.locator('[data-terminal-id]').evaluateAll(async (nodes) => {
       for (const node of nodes) await (window as any).janet.terminalDestroy({ id: node.getAttribute('data-terminal-id') });
