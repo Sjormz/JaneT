@@ -163,8 +163,7 @@ describe('release tooling', () => {
 
     expect(readme).toContain('Windows builds are unsigned');
     expect(readme).toContain('SmartScreen');
-    expect(readme).toContain('Privacy & Security');
-    expect(readme).toContain('Open Anyway');
+    expect(readme).toContain('Release builds are signed with Apple Developer ID and notarized');
     expect(readme).toContain('chmod +x JaneT-<version>-linux-x64.AppImage');
   });
 
@@ -579,27 +578,27 @@ describe('release tooling', () => {
     }
   });
 
-  it('requires valid ad-hoc macOS signatures without an authority or team identifier', async () => {
-    const { validateAdHocMacSignature } = await loadScript('verify-release-artifacts.mjs');
+  it('requires valid Developer ID macOS signatures with an authority and team identifier', async () => {
+    const { validateDeveloperIdMacSignature } = await loadScript('verify-release-artifacts.mjs');
     const validDetails = [
       'Executable=/release/JaneT.app/Contents/MacOS/JaneT',
-      'Signature=adhoc',
-      'TeamIdentifier=not set',
+      'Authority=Developer ID Application: Example (ABCDE12345)',
+      'TeamIdentifier=ABCDE12345',
     ].join('\n');
 
-    expect(() => validateAdHocMacSignature(validDetails, '/release/JaneT.app')).not.toThrow();
-    expect(() => validateAdHocMacSignature(
-      validDetails.replace('Signature=adhoc', 'Authority=Developer ID Application: Example\nSignature size=9000'),
+    expect(() => validateDeveloperIdMacSignature(validDetails, '/release/JaneT.app')).not.toThrow();
+    expect(() => validateDeveloperIdMacSignature(
+      validDetails.replace('Authority=Developer ID Application: Example (ABCDE12345)\n', ''),
       '/release/JaneT.app',
-    )).toThrow(/not ad-hoc signed/);
-    expect(() => validateAdHocMacSignature(
-      `${validDetails}\nAuthority=Developer ID Application: Example`,
-      '/release/JaneT.app',
-    )).toThrow(/certificate authority/);
-    expect(() => validateAdHocMacSignature(
-      validDetails.replace('TeamIdentifier=not set', 'TeamIdentifier=ABCDE12345'),
+    )).toThrow(/not Developer ID Application signed/);
+    expect(() => validateDeveloperIdMacSignature(
+      validDetails.replace('TeamIdentifier=ABCDE12345', 'TeamIdentifier=not set'),
       '/release/JaneT.app',
     )).toThrow(/team identifier/);
+    expect(() => validateDeveloperIdMacSignature(
+      validDetails.replace('Authority=Developer ID Application: Example (ABCDE12345)', 'Signature=adhoc'),
+      '/release/JaneT.app',
+    )).toThrow(/not Developer ID Application signed/);
   });
 
   it('tests a listener-safe PTY round trip and exits despite a lingering Windows worker', async () => {
@@ -664,11 +663,11 @@ module.exports = {
     }
   }, 15_000);
 
-  it('pins release CI to explicit ad-hoc macOS signing without Apple credentials', () => {
+  it('requires macOS signing and notarization secrets in release CI', () => {
     const workflow = fs.readFileSync(path.join(projectRoot, '.github', 'workflows', 'release.yml'), 'utf8');
-    expect(workflow).toContain('build-args: --mac --arm64 -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false -c.npmRebuild=false');
-    expect(workflow).toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'");
-    expect(workflow).not.toContain('Require macOS signing and notarization secrets');
+    expect(workflow).toContain('build-args: --mac --arm64 -c.npmRebuild=false');
+    expect(workflow).toContain('Validate macOS signing secrets');
+    expect(workflow).toContain("CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.platform == 'macos' && 'false' || 'true' }}");
     for (const secretName of [
       'MAC_CSC_LINK',
       'MAC_CSC_KEY_PASSWORD',
@@ -676,8 +675,11 @@ module.exports = {
       'APPLE_APP_SPECIFIC_PASSWORD',
       'APPLE_TEAM_ID',
     ]) {
-      expect(workflow).not.toContain(secretName);
+      expect(workflow).toContain(secretName);
     }
+    expect(workflow).not.toContain('-c.mac.identity=-');
+    expect(workflow).not.toContain('-c.mac.hardenedRuntime=false');
+    expect(workflow).not.toContain('-c.mac.notarize=false');
 
     const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
     expect(packageJson.scripts['dist:mac:test']).toContain('-c.npmRebuild=false');

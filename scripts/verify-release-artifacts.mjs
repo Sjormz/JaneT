@@ -257,19 +257,22 @@ export async function verifyMacApplications(releaseRoot) {
     if (!fs.existsSync(appPath)) throw new Error(`Missing packaged macOS application: ${appPath}`);
     await execFileAsync('codesign', ['--verify', '--deep', '--strict', appPath]);
     const { stdout, stderr } = await execFileAsync('codesign', ['-dvv', appPath]);
-    validateAdHocMacSignature(`${stdout}\n${stderr}`, appPath);
+    const details = `${stdout}\n${stderr}`;
+    validateDeveloperIdMacSignature(details, appPath);
+    await execFileAsync('spctl', ['--assess', '--type', 'execute', '--verbose=4', appPath]);
+    await execFileAsync('xcrun', ['stapler', 'validate', appPath]);
   }
 }
 
-export function validateAdHocMacSignature(details, appPath = 'macOS application') {
-  if (!/^Signature=adhoc$/m.test(details)) {
-    throw new Error(`macOS app is not ad-hoc signed: ${appPath}`);
+export function validateDeveloperIdMacSignature(details, appPath = 'macOS application') {
+  if (!/^Authority=Developer ID Application:/m.test(details)) {
+    throw new Error(`macOS app is not Developer ID Application signed: ${appPath}`);
   }
-  if (/^Authority=/m.test(details)) {
-    throw new Error(`Ad-hoc macOS app unexpectedly has a certificate authority: ${appPath}`);
+  if (!/^TeamIdentifier=[A-Z0-9]+$/m.test(details)) {
+    throw new Error(`macOS app is missing a Developer ID team identifier: ${appPath}`);
   }
-  if (!/^TeamIdentifier=not set$/m.test(details)) {
-    throw new Error(`Ad-hoc macOS app unexpectedly has a team identifier: ${appPath}`);
+  if (/^Signature=adhoc$/m.test(details)) {
+    throw new Error(`macOS app is ad-hoc signed instead of Developer ID signed: ${appPath}`);
   }
 }
 
