@@ -690,9 +690,7 @@ module.exports = {
 
     const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
     expect(packageJson.scripts['dist:mac:test']).toContain('-c.npmRebuild=false');
-    expect(packageJson.build.mac.signIgnore).toEqual([
-      'node_modules/node-pty/prebuilds/darwin-(?:x64|arm64)/(?:pty\\.node|spawn-helper)$',
-    ]);
+    expect(packageJson.build.mac.signIgnore).toBeUndefined();
   });
 
   it('keeps protected check names and builds a single verified release commit', () => {

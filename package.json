@@ -1,6 +1,6 @@
 {
   "name": "janet",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "description": "A focused cross-platform terminal workspace with file browsing and Git tools",
   "desktopName": "janet",
   "main": "dist/main/index.js",
@@ -102,10 +102,7 @@
       "category": "public.app-category.utilities",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
-      "notarize": true,
-      "signIgnore": [
-        "node_modules/node-pty/prebuilds/darwin-(?:x64|arm64)/(?:pty\\.node|spawn-helper)$"
-      ]
+      "notarize": true
     },
     "dmg": {
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
