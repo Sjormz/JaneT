@@ -858,8 +858,16 @@ function AppInner({ initialSettings, persistSettings }: {
         return changed ? next : current;
       });
     }
-    restoreTerminalFocusRef.current = true;
-    terminalFocusTargetIdRef.current = null;
+    const target = tab ? preferredLeafId(
+      tab,
+      getAllLeafIds(tab.root).reduce<string | null>((last, id) => (
+        !last || (terminalLastFocusedRef.current[id] ?? 0) > (terminalLastFocusedRef.current[last] ?? 0) ? id : last
+      ), null),
+      maximizedLeafByTabRef.current[tabId],
+    ) : null;
+    restoreTerminalFocusRef.current = target !== null;
+    terminalFocusTargetIdRef.current = target;
+    setFocusedTerminalId(target);
     setActiveTabId(tabId);
     editorDocuments.selectSurface(tabId, 'terminal');
     setTerminalFocusRequest((request) => request + 1);
@@ -1484,7 +1492,10 @@ function AppInner({ initialSettings, persistSettings }: {
     if (!tabsRef.current.some(item => item.id === tabId)) throw new Error('This session was closed. Select it again.');
     const addition = mapLeaves(root, leaf => ({ ...leaf, terminalType: 'local' as const, cwd }));
     const next = tabsRef.current.map(item => item.id !== tabId ? item : { ...item, root: arrangePaneGrid([item.root, addition]) });
-    tabsRef.current = next; setTabs(next); setActiveTabId(tabId); setFocusedTerminalId(getAllLeafIds(addition)[0]);
+    const newTerminalId = getAllLeafIds(addition)[0];
+    terminalFocusTargetIdRef.current = newTerminalId;
+    restoreTerminalFocusRef.current = true;
+    tabsRef.current = next; setTabs(next); setActiveTabId(tabId); setFocusedTerminalId(newTerminalId);
     setMaximizedLeafByTab(current => ({ ...current, [tabId]: null }));
     setGroups(current => current.map(item => item.id === tab.groupId ? { ...item, collapsed: false } : item));
   };
@@ -1600,6 +1611,9 @@ function AppInner({ initialSettings, persistSettings }: {
     };
     const nextTabs = [...tabsRef.current, tab];
     tabsRef.current = nextTabs;
+    const firstTerminalId = getAllLeafIds(root)[0] ?? null;
+    terminalFocusTargetIdRef.current = firstTerminalId;
+    restoreTerminalFocusRef.current = firstTerminalId !== null;
     setTabs(nextTabs);
     setActiveTabId(tab.id);
 
@@ -2172,7 +2186,10 @@ function AppInner({ initialSettings, persistSettings }: {
             themeName={currentTheme}
             fontSize={fontSize}
             fontFamily={fontFamily}
-            onSelectSurface={(surface) => editorDocuments.selectSurface((activeTab?.id ?? ""), surface)}
+            onSelectSurface={(surface, focusTerminal) => {
+              if (surface === 'terminal' && focusTerminal) selectTerminalTab(activeTab.id);
+              else editorDocuments.selectSurface(activeTab.id, surface);
+            }}
             onDocumentChange={editorDocuments.updateDocumentContent}
             onSaveDocument={(key) => { void saveEditorDocument(key); }}
             onRetryDocument={(key) => { void editorDocuments.retryDocument(key); }}
