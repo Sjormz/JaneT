@@ -35,6 +35,16 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Check handoff is installed in the trusted base
+        working-directory: trusted
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const { existsSync } = require('node:fs');
+          if (!existsSync('scripts/release-handoff.mjs')) {
+            throw new Error('Release handoff is not installed in this PR base. Bootstrap this first release using the documented manual tag flow after merge checks pass. Future release PRs must start from main containing the handoff helper. Re-running this event uses the same old base.');
+          }
+          NODE
+
       - name: Validate merged release and start workflow
         working-directory: trusted
         env:
