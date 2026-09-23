@@ -115,7 +115,7 @@ jobs:
         env:
           JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: release-electron-failure-linux

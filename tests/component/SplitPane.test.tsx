@@ -414,6 +414,7 @@ describe('split panes in the app', () => {
     fireEvent.click(within(dialog).getByRole('radio', { name: 'Codex' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add terminals' }));
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(4));
+    await waitFor(() => expect(within(screen.getAllByTestId(/terminal-/)[1]).getByRole('textbox')).toHaveFocus());
     await waitFor(() => {
       const creations = vi.mocked(window.janet.terminalCreate).mock.calls.map(([request]) => request);
       expect(creations.filter(request => request.startupCommands?.[0] === 'codex')).toHaveLength(3);
@@ -1301,6 +1302,21 @@ describe('split panes in the app', () => {
 
     expect(originalPane).toHaveAttribute('aria-current', 'true');
     expect(newPane).not.toHaveAttribute('aria-current');
+  });
+
+  it('focuses a pane after its heading is clicked without taking keyboard focus from the heading', async () => {
+    render(<App />);
+    await splitFromPalette();
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+
+    const pane = screen.getAllByTestId(/terminal-/)[1].closest('.terminal-leaf')!;
+    const heading = pane.querySelector<HTMLElement>('.terminal-leaf-header')!;
+    const input = within(pane as HTMLElement).getByRole('textbox');
+    act(() => heading.focus());
+    expect(heading).toHaveFocus();
+
+    fireEvent.click(heading);
+    expect(input).toHaveFocus();
   });
 
   it('surviving pane fills space when sibling is closed', async () => {
@@ -2292,6 +2308,12 @@ describe('split panes in the app', () => {
     });
 
     await waitFor(() => {
+      const terminals = screen.getAllByTestId(/terminal-/);
+      expect(terminals).toHaveLength(2);
+      expect(within(terminals[0]).getByRole('textbox')).toHaveFocus();
+    });
+
+    await waitFor(() => {
       expect(window.janet.terminalCreate).toHaveBeenCalledWith(expect.objectContaining({
         cwd: '/repo',
         startupCommands: ['npm install', 'npm run dev'],
@@ -2383,7 +2405,7 @@ describe('split panes in the app', () => {
     });
   });
 
-  it('focuses the first terminal after clicking a terminal tab', async () => {
+  it('focuses the last used pane after returning to a terminal tab', async () => {
     window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {},
       workspaceTabs: [],
@@ -2416,6 +2438,7 @@ describe('split panes in the app', () => {
 
     render(<App />);
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    act(() => within(screen.getAllByTestId(/terminal-/)[1]).getByRole('textbox').focus());
     await openSampleEditor();
 
     fireEvent.click(within(screen.getByTestId('vertical-tab-bar')).getByText('docs'));
@@ -2425,7 +2448,7 @@ describe('split panes in the app', () => {
     await waitFor(() => {
       const terminals = screen.getAllByTestId(/terminal-/);
       expect(terminals).toHaveLength(2);
-      expect(within(terminals[0]).getByRole('textbox')).toHaveFocus();
+      expect(within(terminals[1]).getByRole('textbox')).toHaveFocus();
     });
   });
 
