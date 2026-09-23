@@ -785,6 +785,10 @@ export default function TerminalPane({
       window.janet.terminalCreate(localSpawnRequest).then(() => {
         const currentCache = terminalPaneCache.get(termId);
         if (currentCache?.term !== term || currentCache.tabType !== 'local') return;
+        // A resize observed while terminal:create was pending had no PTY to
+        // reach. Send the current dimensions now, even if they look unchanged.
+        lastResizeRef.current = null;
+        syncTerminalSize(term, fitAddon);
         currentCache.localSpawnState = { kind: 'ready' };
         currentCache.localSpawnReadyListener?.(termId);
       }).catch((error: unknown) => {
@@ -914,6 +918,9 @@ export default function TerminalPane({
     window.janet.terminalCreate(localSpawnRequest).then(() => {
       const currentCache = terminalPaneCache.get(termId);
       if (currentCache?.term !== term || currentCache.tabType !== 'local') return;
+      lastResizeRef.current = null;
+      const fitAddon = fitAddonRef.current;
+      if (fitAddon) syncTerminalSize(term, fitAddon);
       publishLocalSpawnState({ kind: 'ready' });
       currentCache.localSpawnReadyListener?.(termId);
     }).catch((error: unknown) => {

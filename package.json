@@ -1,6 +1,6 @@
 {
   "name": "janet",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "description": "A focused cross-platform terminal workspace with file browsing and Git tools",
   "desktopName": "janet",
   "main": "dist/main/index.js",
@@ -10,6 +10,10 @@
   "scripts": {
     "postinstall": "node scripts/fix-node-pty-permissions.mjs && node scripts/patch-node-pty-windows-worker.mjs",
     "dev": "node scripts/dev.mjs",
+    "docs:dev": "vitepress dev docs/site --host 127.0.0.1",
+    "docs:build": "vitepress build docs/site",
+    "docs:preview": "vitepress preview docs/site --host 127.0.0.1",
+    "docs:check": "npm run docs:build",
     "build:main": "node scripts/build-electron.mjs --main",
     "build:preload": "node scripts/build-electron.mjs --preload",
     "build:renderer": "npx vite build --config vite.config.ts",
@@ -102,10 +106,7 @@
       "category": "public.app-category.utilities",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
-      "notarize": true,
-      "signIgnore": [
-        "node_modules/node-pty/prebuilds/darwin-(?:x64|arm64)/(?:pty\\.node|spawn-helper)$"
-      ]
+      "notarize": true
     },
     "dmg": {
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
@@ -182,6 +183,11 @@
     "smol-toml": "1.7.2",
     "yaml": "^2.9.0"
   },
+  "overrides": {
+    "vitepress": {
+      "vite": "6.4.3"
+    }
+  },
   "devDependencies": {
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
@@ -199,6 +205,7 @@
     "sharp": "^0.35.3",
     "typescript": "^7.0.2",
     "vite": "^8.2.0",
+    "vitepress": "1.6.4",
     "vitest": "^4.1.10"
   }
 }

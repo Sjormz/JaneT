@@ -2,6 +2,15 @@
 
 Read `CONTRIBUTING.md` and `.github/workflows/ci.yml` before changing or validating code. The workflow is the source of truth for the current runtime, platforms, and test selection.
 
+## Keep product documentation current
+
+- For every user-facing feature, workflow, setting, or supported-platform change, update the matching VitePress guide in `docs/` in the same change. Keep the README as a short project landing page that links to the published guide at https://sjormz.github.io/JaneT/.
+- Write for app users: use the current UI labels, explain prerequisites and steps, and state meaningful behavior limits. Update VitePress navigation when adding or moving pages.
+- Include a relevant screenshot for each documented screen or workflow. Capture synthetic, non-sensitive data; never publish real user files, terminal output, credentials, private URLs, or personal information. Give each image useful alt text and a caption, and refresh it when the UI changes.
+- On Windows, rebuild the app and run `$env:JANET_UPDATE_PUBLIC_SCREENSHOTS='1'; npx.cmd playwright test --config playwright.config.ts tests/e2e/public-screenshots.spec.ts` to refresh the public screenshot set in both `assets/screenshots/` and `docs/site/public/screenshots/`. Keep every screenshot in the app's One Dark theme and review every changed image before publishing it.
+- Run `npm run docs:check` after documentation changes and inspect the changed pages and screenshots. Keep this command aligned with the site's build and link checks. For visual or navigation changes, review the site locally at desktop and narrow widths.
+- If a change does not affect user documentation, record the reason in the PR or completion report. Documentation checks do not establish that the guide matches current product behavior; review affected workflows against the app.
+
 ## Shipping requests
 
 For "let's ship this", "get this out to prod", or a JaneT release request, read
