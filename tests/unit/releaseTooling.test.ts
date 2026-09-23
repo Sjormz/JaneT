@@ -781,6 +781,86 @@ module.exports = {
     expect(() => check([], 'verified-sha', true)).toThrow(/API unavailable/);
   });
 
+  it('explains the first-installation failure without executing newly merged code', () => {
+    const workflow = fs.readFileSync(path.join(projectRoot, '.github/workflows/release-handoff.yml'), 'utf8');
+    const guard = workflow.match(/node --input-type=commonjs <<'NODE'\r?\n([\s\S]*?)\r?\n\s+NODE/)?.[1];
+    expect(guard).toBeDefined();
+    expect(workflow.indexOf('Check handoff is installed')).toBeLessThan(workflow.indexOf('Validate merged release'));
+    const check = (installed: boolean) => runWorkflowGuard(guard!, `
+      if (id === 'node:fs') return { existsSync: (file) => {
+        if (file !== 'scripts/release-handoff.mjs') throw new Error('Unexpected helper path');
+        return ${installed};
+      } };
+      throw new Error('Unexpected dependency');
+    `, {});
+    expect(() => check(false)).toThrow(/Bootstrap this first release.*same old base/);
+    expect(() => check(true)).not.toThrow();
+  });
+
+  it.each(['ready', 'unlabeled', 'unchanged', 'failed-check', 'existing-tag'])(
+    'executes the handoff safely for a %s candidate', (scenario) => {
+      const scriptUrl = pathToFileURL(path.join(projectRoot, 'scripts/release-handoff.mjs')).href;
+      const result = spawnSync(process.execPath, ['--input-type=commonjs', '-e', `
+        const assert = require('node:assert/strict');
+        const commands = [];
+        const scenario = ${JSON.stringify(scenario)};
+        process.env.GITHUB_REPOSITORY = 'owner/repo';
+        process.env.MERGE_SHA = 'merged-sha';
+        process.env.LABELS_JSON = JSON.stringify(scenario === 'unlabeled' ? [] : [{ name: 'release' }]);
+        require('node:child_process').execFileSync = (command, args) => {
+          commands.push([command, ...args]);
+          if (command === 'git') {
+            if (args[0] === 'rev-parse') return 'base-sha';
+            if (args[0] === 'show') {
+              const version = args[1].startsWith('base-sha:') || scenario === 'unchanged' ? '1.2.3' : '1.2.4';
+              return JSON.stringify({ version, packages: { '': { version } } });
+            }
+            if (['fetch', 'merge-base', 'config', 'tag', 'push'].includes(args[0])) return '';
+          }
+          if (command === 'gh' && args[0] === 'workflow') return '';
+          if (command === 'gh' && args[0] === 'api') {
+            const endpoint = args.at(-1);
+            if (endpoint.includes('/releases?')) return '[[]]';
+            if (endpoint.includes('/git/matching-refs/')) return JSON.stringify(
+              scenario === 'existing-tag' ? [{ ref: 'refs/tags/v1.2.4' }] : []);
+            if (endpoint.includes('/check-runs?')) {
+              assert(endpoint.includes('/commits/merged-sha/'));
+              return JSON.stringify([{ check_runs: [
+                'Verify', 'Durable workspace (macos-latest)', 'Durable workspace (windows-latest)', 'Analyze JavaScript/TypeScript',
+              ].map((name, id) => ({ name, id, app: { id: 15368 }, status: 'completed',
+                conclusion: scenario === 'failed-check' ? 'failure' : 'success' })) }]);
+            }
+          }
+          throw new Error('Unexpected command: ' + JSON.stringify([command, ...args]));
+        };
+        require('node:module').syncBuiltinESMExports();
+        import(${JSON.stringify(scriptUrl)}).then(({ main }) => {
+          let error;
+          try { main(); } catch (failure) { error = failure.message; }
+          console.log(JSON.stringify({ commands, error }));
+        }).catch((error) => { console.error(error); process.exitCode = 1; });
+      `], { encoding: 'utf8', timeout: 5000 });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      const { commands, error } = JSON.parse(result.stdout);
+      const mutations = commands.filter(([command, action]: string[]) =>
+        (command === 'git' && ['tag', 'push'].includes(action)) || (command === 'gh' && action === 'workflow'));
+      if (scenario === 'ready') {
+        expect(error).toBeUndefined();
+        expect(mutations).toEqual([
+          ['git', 'tag', '-a', 'v1.2.4', 'merged-sha', '-m', 'Release v1.2.4'],
+          ['git', 'push', 'origin', 'refs/tags/v1.2.4'],
+          ['gh', 'workflow', 'run', 'release.yml', '--repo', 'owner/repo', '--ref', 'main', '-f', 'tag=v1.2.4'],
+        ]);
+      } else {
+        expect(mutations).toEqual([]);
+        if (scenario === 'failed-check') expect(error).toMatch(/Required check failed/);
+        else if (scenario === 'existing-tag') expect(error).toMatch(/Tag already exists/);
+        else expect(error).toBeUndefined();
+      }
+    },
+  );
+
   it('gates automatic releases on a merged release label and exact checks', async () => {
     const workflow = fs.readFileSync(path.join(projectRoot, '.github/workflows/release-handoff.yml'), 'utf8');
     expect(workflow).toContain('pull_request_target:');

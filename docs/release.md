@@ -126,6 +126,18 @@ also does nothing. Any invalid version, failed check, existing tag/release or
 API failure stops before publication. The manual process below remains the
 recovery path when the automatic handoff is unavailable.
 
+### First installation
+
+The privileged handoff runs its helper from the PR's **pre-merge base**, not
+from the newly merged code. The PR that first installs the helper cannot use
+it to release itself. Bootstrap that one release with the manual tag flow
+below, after the merge checks pass. Later release PRs should branch from main
+containing the helper and need only the version update, `release` label, and
+merge. Re-running the installation event does not change its old base SHA.
+
+PR #144 installed the helper; its v0.11.5 release used this one-time bootstrap.
+There is no additional release button or service to configure.
+
 ## Recommended PR-only release flow
 
 The repository skill at [`.agents/skills/ship-janet/SKILL.md`](../.agents/skills/ship-janet/SKILL.md)

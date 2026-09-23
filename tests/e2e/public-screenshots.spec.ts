@@ -17,6 +17,7 @@ const screenshotNames = [
   'command-history.png',
   'command-palette.png',
   'notification-settings.png',
+  'optional-workspace-setup.png',
   'project-creation.png',
   'settings-overview.png',
   'semantic-commands.png',
@@ -24,6 +25,7 @@ const screenshotNames = [
   'source-control.png',
   'workspace-creation.png',
   'workspace-overview.png',
+  'workspace-setup-sidebar.png',
 ] as const;
 
 test.skip(process.platform !== 'win32', 'Public screenshots are captured from the Windows desktop app.');
@@ -147,7 +149,7 @@ async function capture(name: typeof screenshotNames[number], target: Page | Loca
 
 function writeSettings(userData: string): void {
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
-    theme: 'tokyo-night',
+    theme: 'one-dark',
     fontSize: 14,
     sidebarSide: 'right',
     keybindings: {},
@@ -202,13 +204,32 @@ test('recaptures the shipped public screenshot set from the real app', async () 
   try {
     createProjectFixture();
     userData = fs.mkdtempSync(path.join(path.dirname(fixturePath), 'JaneT-Public-Screenshot-Profile-'));
+    app = await electron.launch({
+      args: ['.'],
+      cwd: root,
+      env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }),
+    });
+    let page = await app.firstWindow();
+    await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim()))
+      .toBe('#0b0b0c');
+    const onboarding = page.locator('.directory-onboarding');
+    await expect(onboarding).toBeVisible();
+    await capture('optional-workspace-setup.png', onboarding);
+    await page.getByRole('button', { name: 'Skip for now' }).click();
+    await expect(page.getByRole('region', { name: 'Choose where to work' })).toBeVisible();
+    await capture('workspace-setup-sidebar.png', page.locator('.workspace-tabs-rail'));
+    await forceClose(app);
+    app = undefined;
+
     writeSettings(userData);
     app = await electron.launch({
       args: ['.'],
       cwd: root,
       env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }),
     });
-    const page = await app.firstWindow();
+    page = await app.firstWindow();
+    await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim()))
+      .toBe('#0b0b0c');
     page.on('pageerror', (error) => pageErrors.push(error.message));
     await page.waitForLoadState('domcontentloaded');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1440, 800));
