@@ -2075,24 +2075,8 @@ function AppInner({ initialSettings, persistSettings }: {
     }
   };
 
-  const focusTerminalAfterShellClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (event.detail === 0 || !(event.target instanceof Element)) return;
-    const clicked = event.target;
-    if (
-      clicked.closest('input, textarea, select, [contenteditable="true"], .terminal-container, .workspace-content-surface, .document-tab.file, .document-save-button, .titlebar-settings-popover, .workspace-modal, .project-creation-content, [role="menu"]')
-      || (clicked.closest('.workspace-tools') && !clicked.closest('.project-tools-collapse'))
-    ) return;
-    requestAnimationFrame(() => {
-      if (document.querySelector('[role="dialog"]:not([inert] *), [role="alertdialog"]:not([inert] *), [role="menu"]:not([inert] *)')) return;
-      const tab = tabsRef.current.find((candidate) => candidate.id === activeTabIdRef.current);
-      if (!tab) return;
-      const id = preferredLeafId(tab, focusedTerminalIdRef.current, maximizedLeafByTabRef.current[tab.id]);
-      terminalFocusTarget(id)?.focus();
-    });
-  };
-
   return (
-    <div className="app" onClick={focusTerminalAfterShellClick}>
+    <div className="app">
       {sessionSaveFailed && <div className="settings-save-notice" role="alert">
         Workspace changes could not be saved. Keep JaneT open and retry before closing.
         <button type="button" onClick={() => void persistSession()}>Retry workspace save</button>
@@ -2202,7 +2186,10 @@ function AppInner({ initialSettings, persistSettings }: {
             themeName={currentTheme}
             fontSize={fontSize}
             fontFamily={fontFamily}
-            onSelectSurface={(surface) => editorDocuments.selectSurface((activeTab?.id ?? ""), surface)}
+            onSelectSurface={(surface, focusTerminal) => {
+              if (surface === 'terminal' && focusTerminal) selectTerminalTab(activeTab.id);
+              else editorDocuments.selectSurface(activeTab.id, surface);
+            }}
             onDocumentChange={editorDocuments.updateDocumentContent}
             onSaveDocument={(key) => { void saveEditorDocument(key); }}
             onRetryDocument={(key) => { void editorDocuments.retryDocument(key); }}

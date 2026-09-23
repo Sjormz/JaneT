@@ -22,7 +22,7 @@ interface WorkspaceContentProps {
   themeName: ThemeName;
   fontSize: number;
   fontFamily: string;
-  onSelectSurface: (surface: 'terminal' | string) => void;
+  onSelectSurface: (surface: 'terminal' | string, focusTerminal?: boolean) => void;
   onDocumentChange: (key: string, content: string) => void;
   onSaveDocument: (key: string) => void;
   onRetryDocument: (key: string) => void;
@@ -77,7 +77,7 @@ export default function WorkspaceContent({
             aria-selected={effectiveSurface === 'terminal'}
             aria-controls={`workspace-surface-${tabId}`}
             tabIndex={effectiveSurface === 'terminal' ? 0 : -1}
-            onClick={() => onSelectSurface('terminal')}
+            onClick={(event) => onSelectSurface('terminal', event.detail > 0)}
             onKeyDown={(event) => moveTabFocus(event, 0)}
           >
             <TerminalTabIcon size="sm" />

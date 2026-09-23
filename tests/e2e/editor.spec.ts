@@ -150,7 +150,12 @@ test('text-size slider resizes an open editor without reopening the file', async
     await slider.press('End');
     await expect(lines).toHaveCSS('font-size', '24px');
     await expect.poll(async () => JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')).fontSize).toBe(24);
-    await page.getByRole('tab', { name: 'Terminal', exact: true }).click();
+    const terminalTab = page.getByRole('tab', { name: 'Terminal', exact: true });
+    await terminalTab.focus();
+    await terminalTab.press('Enter');
+    await expect(terminalTab).toBeFocused();
+    await page.getByRole('tab', { name: fixture.fileName }).click();
+    await terminalTab.click();
     await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
   } finally {
     await forceClose(app);
