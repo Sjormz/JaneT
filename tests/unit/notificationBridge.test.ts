@@ -224,6 +224,18 @@ describe('main notification bridge', () => {
     await expect(bridge.invoke({ ...validPayload, durationMs: 9_999 })).resolves.toBe(false);
     await expect(bridge.invoke({ ...validPayload, durationMs: 10_000 })).resolves.toBe(true);
   });
+  it('alerts for short Codex turns and input requests through the existing switch', async () => {
+    const bridge = await loadMain();
+    await expect(bridge.invoke({ ...validPayload, codexEvent: 'needs-input', durationMs: 0, outcome: 'unknown' })).resolves.toBe(true);
+    await expect(bridge.invoke({ ...validPayload, codexEvent: 'turn-complete', durationMs: 1 })).resolves.toBe(true);
+    expect(bridge.Notification.mock.calls.map(([options]) => options.title)).toEqual(['Codex needs input', 'Codex turn finished']);
+    expect(bridge.Notification.mock.calls[0][0].body).not.toMatch(/secret|\(0s\)/);
+  });
+  it('honors the existing switch for Codex alerts', async () => {
+    const disabled = await loadMain({ enabled: false });
+    await expect(disabled.invoke({ ...validPayload, codexEvent: 'needs-input', durationMs: 0 })).resolves.toBe(false);
+    expect(disabled.Notification).not.toHaveBeenCalled();
+  });
   it('quietly handles display failure', async () => {
     const bridge = await loadMain();
     bridge.notificationShow.mockImplementationOnce(() => { throw new Error('display failed'); });
