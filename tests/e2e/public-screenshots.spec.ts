@@ -335,7 +335,7 @@ test('recaptures the shipped public screenshot set from the real app', async () 
     await capture('settings-overview.png', settings);
     const notificationSettings = page.locator('.notification-settings');
     await expect(notificationSettings.getByRole('checkbox')).toBeChecked();
-    await expect(notificationSettings).toContainText('For commands lasting 10 seconds or longer.');
+    await expect(notificationSettings).toContainText('Codex alerts are immediate; other commands must run at least 10 seconds.');
     await capture('notification-settings.png', notificationSettings);
     await page.getByRole('button', { name: 'Hide settings' }).click();
 

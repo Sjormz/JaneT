@@ -217,7 +217,7 @@ function showOrCreateWindow(): void {
 function notificationDecision(payload: CommandNotificationPayload): 'disabled' | 'below-threshold' | 'unsupported' | 'focused' | 'would-show' {
   const settings = settingsManager.get();
   if (!settings.notificationsEnabled) return 'disabled';
-  if (payload.durationMs < 10_000) return 'below-threshold';
+  if (!payload.codexEvent && payload.durationMs < 10_000) return 'below-threshold';
   if (!electron.Notification.isSupported()) return 'unsupported';
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) return 'focused';
   return 'would-show';
@@ -239,7 +239,8 @@ function deliverCommandNotification(value: unknown): boolean {
   if (!payload) throw new Error('Invalid notification payload');
   const decision = notificationDecision(payload);
   if (e2eEventsPath) {
-    recordE2eEvent({ type: 'notification:decision', decision, durationMs: payload.durationMs, outcome: payload.outcome, contextKind: payload.context.kind }, false);
+    recordE2eEvent({ type: 'notification:decision', decision, durationMs: payload.durationMs, outcome: payload.outcome, contextKind: payload.context.kind,
+      ...(payload.codexEvent ? { codexEvent: payload.codexEvent } : {}) }, false);
     return decision === 'would-show';
   }
   if (decision !== 'would-show') return false;
@@ -252,8 +253,10 @@ function deliverCommandNotification(value: unknown): boolean {
       if (!notificationProtocolRegistered) throw new Error('Could not register notification activation');
     }
     const seconds = Math.round(payload.durationMs / 1000);
-    const title = payload.outcome === 'failure' ? 'Command failed' : payload.outcome === 'success' ? 'Command finished' : 'Command completed';
-    const body = `${payload.tabLabel} · ${payload.paneLabel} (${seconds}s)`;
+    const title = payload.codexEvent === 'needs-input' ? 'Codex needs input'
+      : payload.codexEvent === 'turn-complete' ? 'Codex turn finished'
+        : payload.outcome === 'failure' ? 'Command failed' : payload.outcome === 'success' ? 'Command finished' : 'Command completed';
+    const body = `${payload.tabLabel} · ${payload.paneLabel}${payload.codexEvent ? '' : ` (${seconds}s)`}`;
     const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     if (payload.target) notificationTargets.set(key, payload.target);
     while (notificationTargets.size > 128) notificationTargets.delete(notificationTargets.keys().next().value!);

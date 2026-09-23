@@ -90,7 +90,7 @@ describe('ThemeSwitcher', () => {
     const onNotificationsEnabledChange = vi.fn();
 
     renderThemeSwitcher({ onNotificationsEnabledChange });
-    const enabled = screen.getByRole('checkbox', { name: 'Notify when long commands finish while JaneT is unfocused' });
+    const enabled = screen.getByRole('checkbox', { name: 'Notify when Codex needs input or finishes, or long commands finish' });
     expect(enabled).not.toBeChecked();
     fireEvent.click(enabled);
     expect(onNotificationsEnabledChange).toHaveBeenCalledWith(true);
@@ -99,7 +99,7 @@ describe('ThemeSwitcher', () => {
   it('shows the fixed notification threshold without an adjustment field', () => {
     renderThemeSwitcher({ notificationsEnabled: true });
     expect(screen.queryByRole('spinbutton')).toBeNull();
-    expect(screen.getByText('For commands lasting 10 seconds or longer.')).toBeInTheDocument();
+    expect(screen.getByText('JaneT must be unfocused. Codex alerts are immediate; other commands must run at least 10 seconds.')).toBeInTheDocument();
   });
 
   it('copies diagnostics without renderer data and politely confirms success', async () => {
