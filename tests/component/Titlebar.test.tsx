@@ -96,16 +96,18 @@ describe('Titlebar', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Open settings' })).toHaveFocus());
   });
 
-  it('closes Settings on an outside pointer press and restores trigger focus', async () => {
+  it('lets an outside pointer press keep focus on the clicked control', async () => {
     mockPlatform('win32');
     const { onSettingsClose } = await renderControlledTitlebar();
     fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Outside target' }));
+    const outside = screen.getByRole('button', { name: 'Outside target' });
+    fireEvent.pointerDown(outside);
+    act(() => outside.focus());
 
     expect(onSettingsClose).toHaveBeenCalledOnce();
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Open settings' })).toHaveFocus());
+    await waitFor(() => expect(outside).toHaveFocus());
   });
 
   it('uses native traffic lights on mac instead of drawing duplicate controls', async () => {

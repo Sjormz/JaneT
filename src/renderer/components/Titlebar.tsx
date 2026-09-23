@@ -43,6 +43,7 @@ export default function Titlebar({
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const settingsPopoverRef = useRef<HTMLDivElement>(null);
   const previouslyOpenRef = useRef(settingsOpen);
+  const restoreSettingsButtonRef = useRef(false);
   const displayedPaletteShortcut = formatShortcutForDisplay(paletteShortcut, platform);
 
   const refreshMaximized = useCallback(async () => {
@@ -76,6 +77,7 @@ export default function Titlebar({
       if (document.querySelector('[aria-modal="true"]:not([inert] *)')) return;
       event.preventDefault();
       event.stopPropagation();
+      restoreSettingsButtonRef.current = true;
       onSettingsClose();
     };
     const onPointerDown = (event: PointerEvent) => {
@@ -86,6 +88,7 @@ export default function Titlebar({
         settingsButtonRef.current?.contains(target)
         || settingsPopoverRef.current?.contains(target)
       ) return;
+      restoreSettingsButtonRef.current = false;
       onSettingsClose();
     };
 
@@ -98,9 +101,10 @@ export default function Titlebar({
   }, [onSettingsClose, settingsOpen]);
 
   useEffect(() => {
-    if (previouslyOpenRef.current && !settingsOpen) {
+    if (previouslyOpenRef.current && !settingsOpen && restoreSettingsButtonRef.current) {
       requestAnimationFrame(() => settingsButtonRef.current?.focus());
     }
+    if (!settingsOpen) restoreSettingsButtonRef.current = false;
     previouslyOpenRef.current = settingsOpen;
   }, [settingsOpen]);
 
@@ -135,7 +139,10 @@ export default function Titlebar({
             <button
               ref={settingsButtonRef}
               className={`titlebar-settings-btn ${settingsOpen ? 'active' : ''}`}
-              onClick={onSettingsToggle}
+              onClick={(event) => {
+                restoreSettingsButtonRef.current = settingsOpen && event.detail === 0;
+                onSettingsToggle();
+              }}
               aria-label={settingsOpen ? 'Hide settings' : 'Open settings'}
               aria-expanded={settingsOpen}
               aria-controls="titlebar-settings-popover"

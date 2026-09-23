@@ -18,6 +18,8 @@ JaneT opens local shell sessions in terminal tabs. Split a tab into panes to kee
 - Use the terminal tabs to switch between saved sessions. The **Terminal** surface tab returns from an open editor document to the terminal layout.
 - Press **Escape** or choose **Cancel broadcast input** in the banner to stop broadcast input.
 
+After creating a project with terminals, adding terminals, switching terminal tabs, or clicking **Terminal** above an open file, you can type in the new or last-used pane without clicking it first. Clicking a pane heading also returns typing focus to that pane. Files, Source Control, Settings, and editor controls keep focus while you use them. You can navigate tabs and controls with the keyboard without moving focus to the terminal.
+
 Initial project setup accepts 1–16 terminals. JaneT also enforces an application-wide restored terminal limit; if it is reached, close a terminal before adding another. Each local shell starts in its configured directory. Projects in a linked Library folder start in that shared folder.
 
 ## Search, copy, paste, and paths

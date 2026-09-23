@@ -1133,6 +1133,36 @@ describe('TerminalPane reinitialization', () => {
     }
   });
 
+  it('resends the measured size after a pending PTY creation completes', async () => {
+    vi.useFakeTimers();
+    let resolveCreate!: (value: { pid: number }) => void;
+    terminalCreate.mockImplementationOnce(() => new Promise(resolve => { resolveCreate = resolve; }));
+    try {
+      const { default: TerminalPane } = await loadTerminalPane();
+      render(
+        <KeybindingsProvider>
+          <TerminalPane termId="term-create-resize" tabType="local"
+            onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+        </KeybindingsProvider>,
+      );
+      const term = MockTerminal.instances[0];
+      const fit = MockAddonFit.instances[0];
+      fit.proposeDimensions.mockReturnValue({ cols: 104, rows: 29 });
+      fit.fit.mockImplementation(() => term.resize(104, 29));
+
+      MockResizeObserver.instances[0].trigger();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(terminalResize).toHaveBeenCalledTimes(1);
+      expect(terminalResize).toHaveBeenLastCalledWith({ id: 'term-create-resize', cols: 104, rows: 29 });
+
+      await act(async () => { resolveCreate({ pid: 123 }); });
+      expect(terminalResize).toHaveBeenCalledTimes(2);
+      expect(terminalResize).toHaveBeenLastCalledWith({ id: 'term-create-resize', cols: 104, rows: 29 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('retries dimensions after a closed resize IPC call', async () => {
     vi.useFakeTimers();
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
