@@ -211,8 +211,8 @@ export function validateMacPtyLayout(runtime) {
 export function validateWindowsPtyRuntime(runtime) {
   const packageJsonPath = path.join(runtime.nodePtyRoot, 'package.json');
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
-  if (packageJson.version !== '1.2.0-beta.14') {
-    throw new Error(`Packaged node-pty Windows runtime is missing upstream ConPTY fix #922: ${packageJsonPath}`);
+  if (packageJson.version !== '1.2.0-beta.15') {
+    throw new Error(`Packaged node-pty Windows runtime is missing upstream ConPTY fixes #922/#943: ${packageJsonPath}`);
   }
   requireNonEmptyFile(
     path.join(runtime.nodePtyRoot, 'prebuilds', 'win32-x64', 'conpty.node'),

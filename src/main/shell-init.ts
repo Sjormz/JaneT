@@ -103,10 +103,12 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
     const helper = agentHelper?.replace(/['\u2018\u2019]/g, quote => quote + quote);
     const agents = (agentHelper ? ['codex', 'hermes'] : []).map(agent => [
       `$__jt_cli = Get-Command ${agent} -ErrorAction SilentlyContinue`,
-      `if ($__jt_cli -and $__jt_cli.CommandType -in @('Application', 'ExternalScript') -and (Get-Command node -CommandType Application -ErrorAction SilentlyContinue)) {`,
+      `$__jt_node = @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue)[0]`,
+      `if ($__jt_cli -and $__jt_cli.CommandType -in @('Application', 'ExternalScript') -and $__jt_node) {`,
       `  $global:__jt_${agent}_path = $__jt_cli.Source`,
+      `  $global:__jt_${agent}_node = $__jt_node.Source`,
       `  function global:${agent} {`,
-      `    & node '${helper}' --setup-${agent} @args`,
+      `    & $global:__jt_${agent}_node '${helper}' --setup-${agent} @args`,
       `    $global:__jt_state.UseNativeExitCode = $true`,
       `    if ($MyInvocation.ExpectingInput) { $input | & $global:__jt_${agent}_path @args } else { & $global:__jt_${agent}_path @args }`,
       `  }`,

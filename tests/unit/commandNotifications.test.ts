@@ -10,6 +10,15 @@ const validPayload = () => ({
 });
 
 describe('command notification payload validation', () => {
+  it('accepts only bounded Codex notification kinds without transcript data', () => {
+    expect(parseCommandNotificationPayload({ ...validPayload(), codexEvent: 'needs-input', durationMs: 0 }))
+      .toMatchObject({ codexEvent: 'needs-input', durationMs: 0 });
+    expect(parseCommandNotificationPayload({ ...validPayload(), codexEvent: 'turn-complete' }))
+      .toMatchObject({ codexEvent: 'turn-complete' });
+    expect(parseCommandNotificationPayload({ ...validPayload(), codexEvent: 'permission-allowed' })).toBeNull();
+    expect(parseCommandNotificationPayload({ ...validPayload(), codexEvent: 'needs-input', prompt: 'private' })).toBeNull();
+  });
+
   it('rejects payload and nested accessors without invoking them', () => {
     const payloadGetter = vi.fn(() => 10_000);
     const contextGetter = vi.fn(() => 'local');

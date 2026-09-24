@@ -43,11 +43,11 @@ test('records focus decisions and project busy/unread activity without command o
       args: ['.'], cwd: root,
       env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData, JANET_E2E_EVENTS_PATH: eventsPath }),
     });
+    const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     await app.evaluate(({ Notification }) => {
       Object.defineProperty(Notification, 'isSupported', { value: () => true });
     });
-    const page = await app.firstWindow();
-    await page.waitForLoadState('domcontentloaded');
     const terminal = page.locator('[data-terminal-id]').first();
     await expect(terminal).toBeVisible();
     const termId = await terminal.getAttribute('data-terminal-id');
@@ -96,12 +96,19 @@ test('records focus decisions and project busy/unread activity without command o
     await page.locator('.vtab-item').filter({ hasText: 'Other' }).click();
     sendHook('UserPromptSubmit');
     await expect(work.locator('.activity-dot')).toHaveClass(/running/);
+    await app.evaluate(({ BrowserWindow }) => {
+      const main = BrowserWindow.getAllWindows().find(window => window.webContents.getURL() !== 'about:blank');
+      BrowserWindow.getAllWindows().find(window => window.webContents.getURL() === 'about:blank')?.focus();
+      main?.blur();
+    });
     sendHook('PermissionRequest');
     await expect(work.locator('.activity-dot')).toHaveClass(/needs-input/);
+    await expect.poll(() => readDecisions(eventsPath).some(event => event.codexEvent === 'needs-input' && event.decision === 'would-show')).toBe(true);
     sendHook('PostToolUse');
     await expect(work.locator('.activity-dot')).toHaveClass(/running/);
     sendHook('agent-turn-complete');
     await expect(work.locator('.activity-count.finished')).toContainText('1 new');
+    await expect.poll(() => readDecisions(eventsPath).some(event => event.codexEvent === 'turn-complete' && event.decision === 'would-show')).toBe(true);
     await expect.poll(() => fs.existsSync(forwarded) && JSON.parse(fs.readFileSync(forwarded, 'utf8')).type).toBe('agent-turn-complete');
     expect((await work.boundingBox())!.height).toBeLessThan(45);
     await page.screenshot({ path: testInfo.outputPath('codex-project-activity.png') });
@@ -117,7 +124,9 @@ test('records focus decisions and project busy/unread activity without command o
     await expect(work.locator('.activity-count.running')).toHaveCount(0);
 
     for (const decision of readDecisions(eventsPath)) {
-      expect(Object.keys(decision).sort()).toEqual(['contextKind', 'decision', 'durationMs', 'outcome', 'type']);
+      expect(Object.keys(decision).sort()).toEqual([
+        'contextKind', 'decision', 'durationMs', 'outcome', 'type', ...(decision.codexEvent ? ['codexEvent'] : []),
+      ].sort());
       expect(decision).not.toHaveProperty('command');
       expect(decision).not.toHaveProperty('output');
     }

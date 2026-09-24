@@ -25,14 +25,14 @@ function run(executable: string, args: string[], env: NodeJS.ProcessEnv, input =
 }
 
 describe('automatic agent launch runtime', () => {
-  it('trusts all 12 concurrently launched directories without losing config or duplicating hooks', async () => {
+  it('configures concurrent launches without trusting their projects or duplicating hooks', async () => {
     const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-codex-batch-'));
     const bridge = new AgentActivityBridge(() => {});
     try {
       const helper = path.join(directory, 'agent-cli.cjs');
       buildSync({ entryPoints: ['src/main/agent-cli.ts'], bundle: true, platform: 'node', outfile: helper });
       const codexHome = path.join(directory, 'home'); fs.mkdirSync(codexHome);
-      fs.writeFileSync(path.join(codexHome, 'config.toml'), '# existing settings\nmodel = "test-model"\n');
+      fs.writeFileSync(path.join(codexHome, 'config.toml'), '# existing settings\nmodel = "test-model"\n[projects."elsewhere"]\ntrust_level = "untrusted"\n');
       const diagnostics = path.join(directory, 'diagnostics.jsonl');
       const env = { ...process.env, ...await bridge.environment('batch'), CODEX_HOME: codexHome, JANET_ACTIVITY_DIAGNOSTICS: diagnostics };
       const projects = Array.from({ length: 12 }, (_, i) => path.join(directory, `project ${i}`));
@@ -43,7 +43,7 @@ describe('automatic agent launch runtime', () => {
       const config = fs.readFileSync(configPath, 'utf8');
       expect(config).toContain('# existing settings');
       expect(parse(config).model).toBe('test-model');
-      expect(parse(config).projects).toEqual(Object.fromEntries(projects.map(project => [project, { trust_level: 'trusted' }])));
+      expect(parse(config).projects).toEqual({ elsewhere: { trust_level: 'untrusted' } });
       const hooks = JSON.parse(fs.readFileSync(path.join(codexHome, 'hooks.json'), 'utf8')).hooks;
       expect(Object.values(hooks).every(groups => (groups as unknown[]).length === 1)).toBe(true);
       const repeatedOutputs = await Promise.all(projects.map(project => run(process.execPath, [helper, '--setup-codex'], env, '', true, project)));
@@ -137,6 +137,7 @@ describe('automatic agent launch runtime', () => {
       const helper = path.join(directory, 'helper.cjs');
       buildSync({ entryPoints: ['src/main/agent-cli.ts'], bundle: true, platform: 'node', outfile: helper });
       fs.writeFileSync(path.join(directory, 'codex.ps1'), '[Console]::WriteLine(($args | ConvertTo-Json -Compress)); [Console]::WriteLine("TERM=$env:TERM"); [Console]::WriteLine("TERM_PROGRAM=$env:TERM_PROGRAM"); $global:LASTEXITCODE = 37');
+      fs.writeFileSync(path.join(directory, 'node.ps1'), 'throw "The Node script shim must not run."');
       const script = path.join(directory, 'test.ps1');
       fs.writeFileSync(script, `${buildShellInit('powershell.exe', helper)}\ncodex 'a b' 'quote"value' --resume\n[Console]::WriteLine("EXIT=$LASTEXITCODE")\n[Console]::WriteLine("TERM_AFTER=$env:TERM")\n[Console]::WriteLine("TERM_PROGRAM_AFTER=$env:TERM_PROGRAM")\n`);
       const env = { ...process.env, ...await bridge.environment('ps'), TERM: 'xterm-256color', TERM_PROGRAM: 'kitty', CODEX_HOME: path.join(directory, 'codex-home'), PATH: directory + path.delimiter + process.env.PATH };
@@ -147,7 +148,7 @@ describe('automatic agent launch runtime', () => {
       expect(output).toContain('EXIT=37');
       expect(output).toContain('TERM_AFTER=xterm-256color');
       expect(output).toContain('TERM_PROGRAM_AFTER=kitty');
-      expect(fs.existsSync(path.join(env.CODEX_HOME, 'hooks.json'))).toBe(true);
+      expect(fs.existsSync(path.join(env.CODEX_HOME, 'hooks.json')), output).toBe(true);
       fs.writeFileSync(path.join(directory, 'codex.ps1'), '$input | ForEach-Object { [Console]::WriteLine("INPUT=$_") }');
       fs.writeFileSync(script, `${buildShellInit('powershell.exe', helper)}\n'prompt from pipe' | codex -\n`);
       expect(await run('powershell.exe', ['-NoProfile', '-File', script], env)).toContain('INPUT=prompt from pipe');

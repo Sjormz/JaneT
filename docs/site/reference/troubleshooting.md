@@ -9,9 +9,9 @@ description: Resolve common JaneT workspace, notification, settings, and update 
 
 JaneT does not create starter workspaces or projects automatically. To create temporary work, choose a main directory, select **New workspace**, then add a project. To use an existing folder, select **Add Library entry** beside Library. See [Getting started](/getting-started) and [Workspaces and Library](/guide/workspaces).
 
-## A long-command notification did not appear
+## A notification did not appear
 
-Open **Settings** and check **Notify when long commands finish while JaneT is unfocused**. Notifications are off by default; tracked commands must run at least 10 seconds, and JaneT must be unfocused when the command finishes. Select **Check notification delivery** in Settings. If notifications are supported, check your operating system's app notification permissions and Do Not Disturb settings. Commands in unsupported shells may not report reliable command completion; see [Terminals and panes](/guide/terminals#navigate-completed-commands).
+Open **Settings** and check **Notify when Codex needs input or finishes, or long commands finish**. Notifications are off by default, and JaneT must be unfocused. Codex alerts depend on its [activity integration](/guide/agent-activity); other tracked commands must run at least 10 seconds. Select **Check notification delivery** in Settings. If notifications are supported, check your operating system's app notification permissions and Do Not Disturb settings. Commands in unsupported shells may not report reliable command completion; see [Terminals and panes](/guide/terminals#navigate-completed-commands).
 
 ## JaneT says it could not load workspace settings
 
