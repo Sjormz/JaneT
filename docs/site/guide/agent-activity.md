@@ -27,9 +27,11 @@ Visiting a project acknowledges its unseen results. Activity is live session sta
 
 ## Codex CLI
 
-Start a **new local terminal** in JaneT and type `codex` normally. JaneT configures its activity observers on launch while preserving unrelated Codex settings and existing notification commands. Codex may ask you to review new hooks; use `/hooks` and accept only the hooks you trust. Administrator policy and disabled hooks still apply.
+Start a **new local terminal** in JaneT and type `codex` normally. JaneT configures its activity observers on launch while preserving unrelated Codex settings and existing notification commands. Codex may ask you to trust the folder and review new hooks. Use `/hooks` to review and trust JaneT's hooks yourself. Folder trust and hook trust are separate; administrator policy and disabled hooks still apply.
 
 Node.js must be available on `PATH`, and the installed Codex version must support the required hooks and notification callback. If setup is unavailable, Codex still launches, but JaneT may show **Activity tracking incomplete**.
+
+To receive a desktop alert when Codex requests permission or finishes a turn while JaneT is in the background, enable **Notify when Codex needs input or finishes, or long commands finish** in **Settings**. Alerts contain the project and pane names, not the prompt or response. A permission-request event can precede Codex's own prompt; open the terminal to see what Codex is asking. Selecting the alert brings JaneT to that terminal. Codex turn alerts have no minimum duration.
 
 ## Hermes CLI and TUI
 

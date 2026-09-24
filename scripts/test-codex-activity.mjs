@@ -1,4 +1,4 @@
-// Opt-in real CLI regression. Run only against the disposable, reviewed local-test profile.
+// Opt-in real CLI regression against a disposable local-test profile.
 // No real model, account configuration, credentials, or fabricated lifecycle callbacks.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,17 +12,14 @@ import { buildSync } from 'esbuild';
 import pty from 'node-pty';
 import { parse } from 'smol-toml';
 
-const root = path.resolve(process.argv[2] || '.');
-assert.equal(path.dirname(root).toLowerCase(), os.tmpdir().toLowerCase(), 'Provide an isolated janet-real-codex-* test directory');
-assert.ok(path.basename(root).startsWith('janet-real-codex-'));
+const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-real-codex-'));
 const home = path.join(root, 'home'), cwd = path.join(root, 'work');
+fs.mkdirSync(home); fs.mkdirSync(cwd);
 const configPath = path.join(home, 'config.toml');
-const configText = fs.readFileSync(configPath, 'utf8'), config = parse(configText);
-assert.equal(config.model_provider, 'local_test');
-assert.equal(config.model, 'test-model');
-assert.ok(!fs.existsSync(path.join(home, 'auth.json')), 'Test profiles must not contain credentials');
+fs.writeFileSync(configPath, 'model = "test-model"\nmodel_provider = "local_test"\n[features]\nhooks = true\n[model_providers.local_test]\nname = "Local test"\nbase_url = "http://127.0.0.1:1/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[projects.' + JSON.stringify(fs.realpathSync(cwd)) + ']\ntrust_level = "trusted"\n');
 const cliPath = process.env.JANET_CODEX_TEST_BINARY || path.join(process.env.LOCALAPPDATA, 'Programs/OpenAI/Codex/bin/codex.exe');
-const helper = path.resolve('dist/main/agent-cli.cjs');
+const helper = path.join(root, 'agent-cli.cjs');
+fs.copyFileSync(path.resolve('dist/main/agent-cli.cjs'), helper);
 const require = createRequire(import.meta.url);
 const runtime = path.join(root, 'runtime.cjs');
 buildSync({ stdin: { contents: "export {AgentActivityBridge} from './src/main/agentActivityBridge'; export {applyAgentEvent,agentStatus} from './src/renderer/terminalAwareness';", resolveDir: process.cwd() }, bundle: true, platform: 'node', outfile: runtime });
@@ -67,10 +64,11 @@ try {
   const env = { ...process.env, ...await bridge.environment('test'), CODEX_HOME: home, TERM: 'xterm-256color' };
   delete env.OPENAI_API_KEY; delete env.CODEX_API_KEY;
   await new Promise((resolve, reject) => {
-    const setup = spawn(process.execPath, [helper, '--setup-codex'], { env, windowsHide: true, stdio: 'ignore' });
+    const setup = spawn(process.execPath, [helper, '--setup-codex'], { cwd, env, windowsHide: true, stdio: 'ignore' });
     setup.on('error', reject); setup.on('exit', code => code === 0 ? resolve() : reject(Error(`Setup exited ${code}`)));
   });
-  const args = ['--no-alt-screen', '--sandbox', 'read-only', '-c', `model_providers.local_test.base_url="http://127.0.0.1:${server.address().port}/v1"`];
+  assert.deepEqual(parse(fs.readFileSync(configPath, 'utf8')).projects, { [fs.realpathSync(cwd)]: { trust_level: 'trusted' } });
+  const args = ['--no-alt-screen', '--sandbox', 'read-only', '--dangerously-bypass-hook-trust', '-c', `model_providers.local_test.base_url="http://127.0.0.1:${server.address().port}/v1"`];
   // Negative control: the same real CLI must fail when its completion callback is removed.
   if (process.env.JANET_CODEX_TEST_DISABLE_NOTIFY === '1') args.push('-c', 'notify=[]');
   cli = pty.spawn(cliPath, args, { cwd, env, cols: 120, rows: 40 });
@@ -78,7 +76,7 @@ try {
     screen = (screen + data).slice(-30000);
     if (data.includes('\x1b[6n')) cli.write('\x1b[1;1R');
   });
-  await until(() => screen.includes('Tip:'), 'CLI ready');
+  await until(() => screen.includes('Ask Codex to do anything'), 'CLI ready');
   for (let turn = 1; turn <= 2; turn++) {
     cli.write(`Say hello ${turn}`); await delay(200); cli.write('\r');
     await until(() => agentStatus(awareness).kind === 'running', `turn ${turn} busy`);

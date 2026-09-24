@@ -2438,7 +2438,9 @@ describe('split panes in the app', () => {
 
     render(<App />);
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
-    act(() => within(screen.getAllByTestId(/terminal-/)[1]).getByRole('textbox').focus());
+    const secondTerminal = screen.getAllByTestId(/terminal-/)[1];
+    const secondTerminalInput = await within(secondTerminal).findByRole('textbox');
+    act(() => secondTerminalInput.focus());
     await openSampleEditor();
 
     fireEvent.click(within(screen.getByTestId('vertical-tab-bar')).getByText('docs'));

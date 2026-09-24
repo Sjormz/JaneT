@@ -10,11 +10,11 @@ JaneT uses explicit shell/agent lifecycle events, never silence or screen scrapi
 
 ## Codex CLI
 
-Requires Node.js on PATH and a Codex release supporting the documented hooks and `notify` callback. Tested helper/schema against the current official documentation; installed CLI version is 0.153.4. No model-backed turn was run as part of verification.
+Requires Node.js on PATH and a Codex release supporting the documented hooks and `notify` callback. Tested against the official hook contract and the installed Codex CLI 0.156.1 with a disposable local Responses provider.
 
 1. Open a new JaneT local terminal and type `codex` normally. There is no separate Connect button.
-2. Before launch, JaneT appends its observers to `hooks.json` and connects `notify`, preserving existing root/profile notification commands through a forwarding callback. Unrelated configuration text stays intact, and changed existing files receive exclusive backups. Subsequent launches are idempotent.
-3. Review/trust the new hooks using Codex `/hooks`. Administrator policy or disabled hooks still takes precedence; JaneT does not bypass either.
+2. Before launch, JaneT appends its user-level observers to `hooks.json` and connects `notify`, preserving existing root/profile notification commands through a forwarding callback. Unrelated configuration text and existing project trust decisions stay intact, and changed existing files receive exclusive backups. Subsequent launches are idempotent. JaneT does not mark a project trusted just to observe agent activity.
+3. Review/trust the new hooks using Codex `/hooks`. Administrator policy or disabled hooks still takes precedence; JaneT does not bypass either. Codex may also ask separately whether to trust the project directory; make that choice in Codex.
 4. After an app update/restart, recreate old terminals to receive the launch integration. Resume/fork arguments, normal TTY interaction, piped PowerShell input and CLI exit status are retained. Help/version requests do not install anything.
 
 Mapping: SessionStart → ready; UserPromptSubmit → busy; PermissionRequest → attention; Pre/PostToolUse → running; Interrupt → interrupted; SessionEnd → session removed. The `notify` event `agent-turn-complete` supplies the finished signal. `Stop` is deliberately not used: another Stop hook can continue the turn. Subagent hooks are not installed. Duplicate terminal completion is suppressed when an agent integration already owns that command.
@@ -64,11 +64,11 @@ Clicking a current-session toast opens its project and terminal. Stale targets a
 
 ### Real Codex regression (opt-in)
 
-`node scripts/test-codex-activity.mjs <isolated-test-root>` runs the installed Codex TUI, not synthetic hook payloads. It serves deterministic Responses SSE on localhost, types two prompts, and asserts real callbacks drive JaneT's bridge and renderer reducer through Ready → Running → Ready twice. No OpenAI credentials or paid model requests are used. Set `JANET_CODEX_TEST_BINARY` to test another installed CLI binary.
+`node scripts/test-codex-activity.mjs` runs the installed Codex TUI, not synthetic hook payloads. It creates a disposable test profile, serves deterministic Responses SSE on localhost, types two prompts, and asserts real callbacks drive JaneT's bridge and renderer reducer through Ready → Running → Ready twice. No OpenAI credentials or paid model requests are used. Set `JANET_CODEX_TEST_BINARY` to test another installed CLI binary.
 
-The root must be a disposable `%TEMP%/janet-real-codex-*` directory with `home` (CODEX_HOME) and an empty `work` directory. Its config must use `model="test-model"`, `model_provider="local_test"`, enabled hooks, and a `model_providers.local_test` Responses provider with a localhost base URL. Build JaneT first and run its bundled helper with `--setup-codex` in that isolated CODEX_HOME. Complete normal Codex directory/hook/sandbox review in that profile once; the regression refuses review screens instead of automatically accepting permissions. Never point it at your real Codex home. The runner overrides only the local provider URL per invocation and uses read-only sandbox mode.
+Build JaneT first. The runner creates an empty work directory and `CODEX_HOME` under `%TEMP%/janet-real-codex-*`, configures a local test model, and explicitly trusts only its own disposable work directory. It uses Codex's `--dangerously-bypass-hook-trust` only for the hooks it just generated in this isolated profile; JaneT's normal launches do not pass that flag or trust project directories. The runner asserts that JaneT setup leaves its test trust entry untouched and uses read-only sandbox mode. Never point it at your real Codex home.
 
-Set `JANET_CODEX_TEST_DISABLE_NOTIFY=1` for the negative control: the test **must fail** waiting for completion while state remains Running. Clear that variable for normal runs. On Windows Codex 0.153.4, both the positive two-turn run and this expected-failure control were verified. This covers the real CLI, helper, transport and reducer; the separate Electron test covers rendering, and a user-run live session confirmed Ready after restart.
+Set `JANET_CODEX_TEST_DISABLE_NOTIFY=1` for the negative control: the test **must fail** waiting for completion while state remains Running. Clear that variable for normal runs. On Windows Codex 0.156.1, both the positive two-turn run and this expected-failure control were verified. This covers the real CLI, helper, transport and reducer; the separate Electron test covers rendering.
 
 For delivery diagnosis, start JaneT with `JANET_ACTIVITY_DIAGNOSTICS` pointing to a disposable log file. This is off by default. The helper and bridge record timestamps, stage, hashed IDs and HTTP status only; no payloads, prompts, responses, capability URLs or raw IDs. Logging stops at approximately 64 KiB and failures never block terminal operation. Unset the variable on a subsequent launch to disable it.
 

@@ -358,7 +358,8 @@ function AppInner({ initialSettings, persistSettings }: {
     setFocusedTerminalIdState(value);
   }, []);
   const [awarenessByTerminal, setAwarenessByTerminal] = useState<Record<string, AgentAwareness>>({});
-  const agentRunsRef = useRef(new Map<string, { sessionId: string; turnId: string; started: number }>());
+  const agentRunsRef = useRef(new Map<string, { sessionId: string; turnId: string; started: number; needsInput?: boolean }>());
+  const agentAttentionTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const agentOwnedTerminalsRef = useRef(new Set<string>());
   const nativeWindowFocusedRef = useRef(document.hasFocus());
   const [localTransportByTerminal, setLocalTransportByTerminal] = useState<Record<string, TerminalTransportStatus>>({});
@@ -562,8 +563,31 @@ function AppInner({ initialSettings, persistSettings }: {
     if (event.provider !== 'shell') {
       agentOwnedTerminalsRef.current.add(termId);
       const run = agentRunsRef.current.get(termId);
+      if (event.event !== 'attention.request') {
+        const timer = agentAttentionTimersRef.current.get(termId);
+        if (timer) clearTimeout(timer);
+        agentAttentionTimersRef.current.delete(termId);
+        if (event.event === 'attention.resolve' && run?.sessionId === event.sessionId && run.turnId === event.turnId) run.needsInput = false;
+      }
       if (event.event === 'turn.start' && event.turnId && (!run || run.turnId !== event.turnId || run.sessionId !== event.sessionId)) {
         agentRunsRef.current.set(termId, { sessionId: event.sessionId, turnId: event.turnId, started: performance.now() });
+      }
+      if (event.provider === 'codex' && event.event === 'attention.request' && run?.sessionId === event.sessionId
+        && run.turnId === event.turnId && !run.needsInput) {
+        run.needsInput = true;
+        const timer = setTimeout(() => {
+          agentAttentionTimersRef.current.delete(termId);
+          if (!run.needsInput || agentRunsRef.current.get(termId) !== run) return;
+          const currentOwner = tabsRef.current.find((tab) => getAllLeafIds(tab.root).includes(termId));
+          const leaf = currentOwner && findLeaf(currentOwner.root, termId);
+          if (!currentOwner || !leaf) return;
+          void window.janet.notifyCommandCompleted({
+            target: { tabId: currentOwner.id, termId }, codexEvent: 'needs-input', durationMs: 0, outcome: 'unknown',
+            tabLabel: currentOwner.title.slice(0, 256) || 'Project', paneLabel: `Codex · ${displayPaneTitle(leaf)}`.slice(0, 256),
+            context: { kind: 'local' },
+          }).catch(() => {});
+        }, 500);
+        agentAttentionTimersRef.current.set(termId, timer);
       }
       if (event.event === 'turn.end' && run?.sessionId === event.sessionId && run.turnId === event.turnId) {
         agentRunsRef.current.delete(termId);
@@ -571,6 +595,7 @@ function AppInner({ initialSettings, persistSettings }: {
         void window.janet.notifyCommandCompleted({
           target: { tabId: owner.id, termId }, durationMs: Math.max(0, Math.round(performance.now() - run.started)),
           outcome: event.outcome === 'failed' ? 'failure' : event.outcome === 'succeeded' ? 'success' : 'unknown',
+          ...(event.provider === 'codex' ? { codexEvent: 'turn-complete' as const } : {}),
           tabLabel: owner.title.slice(0, 256) || 'Project', paneLabel: `${event.provider} · ${displayPaneTitle(leaf)}`.slice(0, 256),
           context: { kind: 'local' },
         }).catch(() => {});
@@ -589,6 +614,11 @@ function AppInner({ initialSettings, persistSettings }: {
       const { [termId]: _removed, ...next } = current;
       return next;
     });
+  }, []);
+
+  useEffect(() => () => {
+    for (const timer of agentAttentionTimersRef.current.values()) clearTimeout(timer);
+    agentAttentionTimersRef.current.clear();
   }, []);
 
   useEffect(() => window.janet.onAgentActivity?.(({ id, event }) => handleAgentEvent(id, event)), [handleAgentEvent]);
@@ -887,7 +917,13 @@ function AppInner({ initialSettings, persistSettings }: {
     if (owners.length === 0) return;
 
     const removedTerminals = new Set(owners.map((owner) => owner.termId));
-    for (const id of removedTerminals) { agentRunsRef.current.delete(id); agentOwnedTerminalsRef.current.delete(id); }
+    for (const id of removedTerminals) {
+      agentRunsRef.current.delete(id);
+      agentOwnedTerminalsRef.current.delete(id);
+      const timer = agentAttentionTimersRef.current.get(id);
+      if (timer) clearTimeout(timer);
+      agentAttentionTimersRef.current.delete(id);
+    }
     clearPendingCommandHistoryRuns(removedTerminals);
     setBroadcastRecipientIds((current) => (
       [...current].some((termId) => removedTerminals.has(termId)) ? new Set() : current
