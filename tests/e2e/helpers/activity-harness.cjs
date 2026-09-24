@@ -3,7 +3,10 @@ const path = require('node:path');
 const cp = require('node:child_process');
 
 if (process.argv[2] === '--notify') {
-  fs.writeFileSync(process.argv[3], process.argv[4]);
+  const destination = process.argv[3];
+  const temporary = `${destination}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, process.argv[4], { flag: 'wx' });
+  fs.renameSync(temporary, destination);
 } else {
   const directory = process.argv[2];
   const { helper, notify, codexHome } = JSON.parse(fs.readFileSync(path.join(directory, 'harness.json'), 'utf8'));

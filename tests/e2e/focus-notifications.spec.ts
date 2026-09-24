@@ -43,11 +43,11 @@ test('records focus decisions and project busy/unread activity without command o
       args: ['.'], cwd: root,
       env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData, JANET_E2E_EVENTS_PATH: eventsPath }),
     });
+    const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     await app.evaluate(({ Notification }) => {
       Object.defineProperty(Notification, 'isSupported', { value: () => true });
     });
-    const page = await app.firstWindow();
-    await page.waitForLoadState('domcontentloaded');
     const terminal = page.locator('[data-terminal-id]').first();
     await expect(terminal).toBeVisible();
     const termId = await terminal.getAttribute('data-terminal-id');
