@@ -75,7 +75,7 @@ test('chooses an existing workspace and restores only its immediate folders as p
     const saved = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     expect(saved.mainDirectory).toBeNull();
     expect(saved.session.tabs.map((tab: { cwd: string; isProject: boolean; root: { children: unknown[] } }) => [tab.cwd, tab.isProject, tab.root.children.length])).toEqual([
-      [path.join(workspace, 'Alpha'), true, 0], [path.join(workspace, 'Beta'), true, 0],
+      [fs.realpathSync(path.join(workspace, 'Alpha')), true, 0], [fs.realpathSync(path.join(workspace, 'Beta')), true, 0],
     ]);
     expect(fs.readFileSync(path.join(workspace, 'notes.txt'), 'utf8')).toBe('keep');
     expect(fs.statSync(path.join(workspace, 'Alpha', 'Nested')).isDirectory()).toBe(true);
