@@ -76,6 +76,7 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await createWorkspace(page, 'Temporary', [{}], 'First group');
     const firstTerminal = page.locator('.terminal-container').first();
     await expect(firstTerminal.locator('.xterm-helper-textarea')).toBeFocused();
+    await expect(firstTerminal.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true', { timeout: 15_000 });
     await page.keyboard.type('echo JANET_FOCUS_CREATED');
     await page.keyboard.press('Enter');
     await expect(firstTerminal.locator('.xterm-rows')).toContainText(/JANET_FOCUS_CREATED.*JANET_FOCUS_CREATED/s);
@@ -84,6 +85,7 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await expect(page.locator('.terminal-container')).toHaveCount(2);
     const addedTerminal = page.locator('.terminal-container').nth(1);
     await expect(addedTerminal.locator('.xterm-helper-textarea')).toBeFocused();
+    await expect(addedTerminal.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true', { timeout: 15_000 });
     await page.keyboard.type('echo JANET_FOCUS_ADDED');
     await page.keyboard.press('Enter');
     await expect(addedTerminal.locator('.xterm-rows')).toContainText(/JANET_FOCUS_ADDED.*JANET_FOCUS_ADDED/s);
