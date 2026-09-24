@@ -172,7 +172,8 @@ describe('release tooling', () => {
     const releaseGuide = fs.readFileSync(path.join(projectRoot, 'docs', 'release.md'), 'utf8');
 
     expect(releaseGuide).toContain(`locks \`node-pty\` ${packageJson.dependencies['node-pty']}`);
-    expect(releaseGuide).toContain('Windows handle fix from #922');
+    expect(releaseGuide).toContain('Windows handle fix #922');
+    expect(releaseGuide).toContain('worker deadlock fix #943');
     expect(releaseGuide).toContain('PR #885');
     expect(releaseGuide).not.toContain('locks `node-pty` 1.1.0');
   });
@@ -493,7 +494,7 @@ describe('release tooling', () => {
       path.join(installedNodePtyRoot, 'src', 'win', 'conpty.cc'),
       'utf8',
     );
-    expect(installedNodePtyPackage.version).toBe('1.2.0-beta.14');
+    expect(installedNodePtyPackage.version).toBe('1.2.0-beta.15');
     expect(installedConptySource).toContain('static std::mutex g_ptyHandlesMutex;');
     expect(installedConptySource).toContain('std::atomic<int> ptyCounter{0};');
     expect(installedConptySource).not.toContain('assert(remove_pty_baton');
@@ -508,7 +509,7 @@ describe('release tooling', () => {
       fs.mkdirSync(libRoot, { recursive: true });
       const prebuildRoot = path.join(nodePtyRoot, 'prebuilds', 'win32-x64');
       fs.mkdirSync(prebuildRoot, { recursive: true });
-      fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: '1.2.0-beta.14' }));
+      fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: '1.2.0-beta.15' }));
       fs.writeFileSync(path.join(prebuildRoot, 'conpty.node'), 'native');
       fs.mkdirSync(path.join(prebuildRoot, 'conpty'));
       for (const file of ['conpty.dll', 'OpenConsole.exe']) fs.writeFileSync(path.join(prebuildRoot, 'conpty', file), file);
@@ -517,8 +518,8 @@ describe('release tooling', () => {
         .toThrow(/cannot resolve app\.asar\.unpacked/);
       fs.writeFileSync(path.join(libRoot, 'windowsConoutConnection.js'), installedWorker);
       fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: '1.1.0' }));
-      expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).toThrow(/ConPTY fix #922/);
-      fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: '1.2.0-beta.14' }));
+      expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).toThrow(/ConPTY fixes #922\/#943/);
+      fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: '1.2.0-beta.15' }));
 
       fs.rmSync(path.join(prebuildRoot, 'conpty.node'));
       expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).toThrow(/native module/);
