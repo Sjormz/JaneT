@@ -7,17 +7,64 @@ export function notifyCommand(value: unknown): string[] {
   return value;
 }
 
-export function forwardedNotify(value: unknown, helper?: string): string[] {
-  let command = notifyCommand(value);
-  // Unwrap only JaneT's known command shapes, including a previous installation path.
-  for (let depth = 0; depth < 8; depth++) {
-    if (!/^(?:.*[\\/])?node(?:\.exe)?$/i.test(command[0] ?? '') ||
-      (command[1]?.replace(/\\/g, '/') !== helper?.replace(/\\/g, '/') && !/[\\/]agent-cli\.cjs$/.test(command[1] ?? ''))) return command;
-    if (command.length === 3 && command[2] === '--codex-notify') return [];
-    if (command.length !== 4 || command[2] !== '--codex-notify-forward') return command;
-    command = notifyCommand(JSON.parse(command[3]));
+function setupNotifyCommand(value: unknown): string[] {
+  // Setup may need to repair a previously bloated config; runtime forwarding keeps
+  // the tighter notifyCommand limit when it eventually starts the saved handler.
+  if (!Array.isArray(value) || value.length > 128 || value.some(arg => typeof arg !== 'string' || arg.includes('\0')) ||
+    (value.length > 0 && !value[0]) || JSON.stringify(value).length > 1024 * 1024) throw new Error('Invalid Codex notification command.');
+  return value;
+}
+
+function janetWrapper(command: string[], helper?: string): boolean {
+  return /^(?:.*[\\/])?node(?:\.exe)?$/i.test(command[0] ?? '') &&
+    (command[1]?.replace(/\\/g, '/') === helper?.replace(/\\/g, '/') || /[\\/]agent-cli\.cjs$/i.test(command[1] ?? '')) &&
+    command.length === 4 && command[2] === '--codex-notify-forward';
+}
+
+function computerUseWrapper(command: string[]): boolean {
+  return /(?:^|[\\/])codex-computer-use\.exe$/i.test(command[0] ?? '') && command.length === 4 &&
+    command[1] === 'turn-ended' && command[2] === '--previous-notify';
+}
+
+function computerUseBase(command: string[]): boolean {
+  return /(?:^|[\\/])codex-computer-use\.exe$/i.test(command[0] ?? '') && command.length === 2 && command[1] === 'turn-ended';
+}
+
+export function forwardedNotify(value: unknown, helper?: string, setup = false): string[] {
+  const read = setup ? setupNotifyCommand : notifyCommand;
+  let command = read(value);
+  let computer: string[] | undefined;
+  const seen = new Set<string>();
+  // Wrapper payloads are serialized argv arrays. Track them to reject malformed cycles.
+  for (;;) {
+    const key = JSON.stringify(command);
+    if (seen.has(key)) throw new Error('Recursive JaneT notification configuration.');
+    seen.add(key);
+    if (janetWrapper(command, helper)) {
+      command = read(JSON.parse(command[3]));
+      continue;
+    }
+    if (computerUseWrapper(command)) {
+      computer ??= command.slice(0, 3);
+      command = read(JSON.parse(command[3]));
+      continue;
+    }
+    if (computerUseBase(command)) {
+      computer ??= [...command, '--previous-notify'];
+      command = [];
+    }
+    if (/^(?:.*[\\/])?node(?:\.exe)?$/i.test(command[0] ?? '') &&
+      (command[1]?.replace(/\\/g, '/') === helper?.replace(/\\/g, '/') || /[\\/]agent-cli\.cjs$/i.test(command[1] ?? '')) &&
+      command.length === 3 && command[2] === '--codex-notify') command = [];
+    // Only the wrapper chain gets the larger setup limit; its saved leaf still
+    // has to satisfy the normal runtime forwarding limit.
+    notifyCommand(command);
+    if (!computer) return command;
+    if (!helper) return [...computer, JSON.stringify(command)];
+    // Keep the computer-use callback and make its previous callback one current JaneT forwarder.
+    const janet = ['node', helper.replace(/\\/g, '/'), '--codex-notify-forward', JSON.stringify(command)];
+    return [...computer, JSON.stringify(janet)];
   }
-  throw new Error('Recursive JaneT notification configuration.');
 }
 
 /** Find array spans without mistaking comments or quoted TOML text for configuration. */
@@ -52,7 +99,10 @@ export function connectCodexNotify(source: string, helper: string, addRoot: bool
       if (profile && typeof profile === 'object' && Object.hasOwn(profile, 'notify')) targets.push(['profiles', name, 'notify']);
     }
   }
-  const wrap = (previous: unknown) => ['node', helper.replace(/\\/g, '/'), '--codex-notify-forward', JSON.stringify(forwardedNotify(previous, helper))];
+  const wrap = (previous: unknown) => {
+    const normalized = forwardedNotify(previous, helper, true);
+    return computerUseWrapper(normalized) ? normalized : ['node', helper.replace(/\\/g, '/'), '--codex-notify-forward', JSON.stringify(normalized)];
+  };
   for (const keys of targets) {
     const expected = parse(source);
     let table = expected;

@@ -1,10 +1,25 @@
 import * as fs from 'node:fs';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { connectCodexNotify } from './codexNotify';
 
 const LIMIT = 1024 * 1024;
 const EVENTS = ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'Interrupt'];
+
+function isStaleJanetFirstInstallHook(hook: { command?: unknown; statusMessage?: unknown; timeout?: unknown }): boolean {
+  if (hook.statusMessage !== 'JaneT activity' || hook.timeout !== 2 || typeof hook.command !== 'string') return false;
+  const match = /^node '([^']+)' --codex-hook$/.exec(hook.command);
+  if (!match) return false;
+  const root = path.resolve(tmpdir());
+  const script = path.resolve(root, match[1]);
+  const relative = path.relative(root, script);
+  const parts = relative.split(path.sep);
+  if (path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`) ||
+    parts.length !== 3 || !/^janet-first-install-[0-9a-f]{32}$/i.test(parts[0]) ||
+    parts[1] !== 'agent-activity' || parts[2] !== 'agent-cli.cjs') return false;
+  return !fs.existsSync(script);
+}
 
 function rejectLinks(target: string): void {
   for (let current = target; ; current = path.dirname(current)) {
@@ -85,11 +100,22 @@ export function installCodexActivity(directory: string, helperPath: string): { m
         throw new Error('Invalid Codex hooks configuration.');
       }
     }
+    let changedHooks = false;
+    for (const [name, groups] of Object.entries(hooks) as [string, { hooks: { command?: unknown; statusMessage?: unknown; timeout?: unknown }[] }[]][]) {
+      hooks[name] = groups.filter(group => {
+        const retained = group.hooks.filter(hook => !isStaleJanetFirstInstallHook(hook));
+        if (retained.length !== group.hooks.length) {
+          group.hooks = retained;
+          changedHooks = true;
+          return retained.length > 0;
+        }
+        return true;
+      });
+    }
     const script = helperPath.replace(/\\/g, '/');
     const command = process.platform === 'win32'
       ? `node '${script.replace(/'/g, "''")}' --codex-hook`
       : `node '${script.replace(/'/g, "'\\''")}' --codex-hook`;
-    let changedHooks = false;
     for (const name of EVENTS) {
       if (hooks[name] !== undefined && !Array.isArray(hooks[name])) throw new Error(`Invalid ${name} hooks.`);
       const groups = hooks[name] ?? [];

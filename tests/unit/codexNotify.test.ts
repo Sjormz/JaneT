@@ -42,6 +42,38 @@ describe('Codex notification forwarding configuration', () => {
     expect(next).toEqual(['node', helper, '--codex-notify-forward', '["original","arg"]']);
   });
 
+  it('repairs a large alternating computer-use and JaneT wrapper chain once', () => {
+    const computer = 'C:/Users/test/.codex/plugins/computer-use/codex-computer-use.exe';
+    const leaf = ['C:/tools/user-notifier.exe', '--quiet', 'keep this'];
+    // Put the user's handler at the leaf of the computer-use chain.
+    let nested: string[] = [computer, 'turn-ended', '--previous-notify', JSON.stringify(leaf)];
+    let i = 0;
+    while (JSON.stringify(nested).length < 110000) {
+      nested = i % 2 === 0
+        ? ['node', 'C:/old/agent-cli.cjs', '--codex-notify-forward', JSON.stringify(nested)]
+        : [computer, 'turn-ended', '--previous-notify', JSON.stringify(nested)];
+      i++;
+    }
+    if (i % 2 === 1) nested = [computer, 'turn-ended', '--previous-notify', JSON.stringify(nested)];
+    expect(JSON.stringify(nested).length).toBeGreaterThan(65536);
+
+    const source = 'notify = ' + JSON.stringify(nested);
+    const repairedText = connectCodexNotify(source, helper, true);
+    const repaired = parse(repairedText).notify as string[];
+    expect(repaired.slice(0, 3)).toEqual([computer, 'turn-ended', '--previous-notify']);
+    const callback = JSON.parse(repaired[3]);
+    expect(callback).toEqual(['node', helper, '--codex-notify-forward', JSON.stringify(leaf)]);
+    expect(connectCodexNotify(repairedText, helper, true)).toBe(repairedText);
+    expect(forwardedNotify([computer, 'turn-ended'])).toEqual([computer, 'turn-ended', '--previous-notify', '[]']);
+
+    const duplicateBase = [computer, 'turn-ended', '--previous-notify', JSON.stringify([
+      'node', 'C:/old/agent-cli.cjs', '--codex-notify-forward', JSON.stringify([computer, 'turn-ended']),
+    ])];
+    const collapsed = parse(connectCodexNotify('notify = ' + JSON.stringify(duplicateBase), helper, true)).notify as string[];
+    expect(collapsed.slice(0, 3)).toEqual([computer, 'turn-ended', '--previous-notify']);
+    expect(JSON.parse(collapsed[3])).toEqual(['node', helper, '--codex-notify-forward', '[]']);
+  });
+
   it.each([`'''literal [ ] # "notify"'''`, `"""basic \\\" [ ] # text"""`, `'''four quotes''''`, `"""five quotes"""""`])('preserves multiline string boundaries: %s', literal => {
     const source = `notes = ${literal}\nnotify = ['original']\n`;
     const result = parse(connectCodexNotify(source, helper, true));
@@ -54,5 +86,6 @@ describe('Codex notification forwarding configuration', () => {
     expect(connectCodexNotify('# profile inherits root\nmodel="keep"', helper, false)).toBe('# profile inherits root\nmodel="keep"');
     expect(() => connectCodexNotify('notify="not an argv"', helper, true)).toThrow(/Invalid/);
     expect(() => connectCodexNotify('notify=[""]', helper, true)).toThrow(/Invalid/);
+    expect(() => connectCodexNotify('notify=' + JSON.stringify(['other', 'x'.repeat(65536)]), helper, true)).toThrow(/Invalid/);
   });
 });
