@@ -52,6 +52,8 @@ test('chooses an existing workspace and restores only its immediate folders as p
   fs.mkdirSync(userData);
   fs.mkdirSync(path.join(workspace, 'Alpha', 'Nested'), { recursive: true });
   fs.mkdirSync(path.join(workspace, 'Beta'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, 'Alpha', 'project-id.txt'), 'Alpha');
+  fs.writeFileSync(path.join(workspace, 'Beta', 'project-id.txt'), 'Beta');
   fs.writeFileSync(path.join(workspace, 'notes.txt'), 'keep');
   const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData };
   delete env.ELECTRON_RUN_AS_NODE; delete env.ELECTRON_NO_ATTACH_CONSOLE;
@@ -74,8 +76,13 @@ test('chooses an existing workspace and restores only its immediate folders as p
     await expect.poll(() => JSON.parse(fs.readFileSync(settingsPath, 'utf8')).session.tabs.length).toBe(2);
     const saved = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     expect(saved.mainDirectory).toBeNull();
-    expect(saved.session.tabs.map((tab: { cwd: string; isProject: boolean; root: { children: unknown[] } }) => [tab.cwd, tab.isProject, tab.root.children.length])).toEqual([
-      [fs.realpathSync(path.join(workspace, 'Alpha')), true, 0], [fs.realpathSync(path.join(workspace, 'Beta')), true, 0],
+    const savedGroup = saved.session.groups.find((group: { name: string }) => group.name === 'Existing workspace');
+    expect(fs.readFileSync(path.join(savedGroup.directory, 'notes.txt'), 'utf8')).toBe('keep');
+    expect(saved.session.tabs.map((tab: { cwd: string; isProject: boolean; root: { children: unknown[] } }) => [
+      path.basename(tab.cwd), tab.isProject, tab.root.children.length,
+      fs.readFileSync(path.join(tab.cwd, 'project-id.txt'), 'utf8'),
+    ])).toEqual([
+      ['Alpha', true, 0, 'Alpha'], ['Beta', true, 0, 'Beta'],
     ]);
     expect(fs.readFileSync(path.join(workspace, 'notes.txt'), 'utf8')).toBe('keep');
     expect(fs.statSync(path.join(workspace, 'Alpha', 'Nested')).isDirectory()).toBe(true);
