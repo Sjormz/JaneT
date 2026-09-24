@@ -62,11 +62,12 @@ packages.
 
 ### Windows ConPTY packaging
 
-JaneT currently locks `node-pty` 1.2.0-beta.14, which contains the upstream
-ConPTY fixes from [PR #885](https://github.com/microsoft/node-pty/pull/885) and
-the Windows handle fix from #922. The postinstall step keeps only JaneT's
-packaging-specific worker-path rewrite so a worker loaded from `app.asar` runs
-from `app.asar.unpacked`.
+JaneT currently locks `node-pty` 1.2.0-beta.15, which contains the upstream
+ConPTY fixes from [PR #885](https://github.com/microsoft/node-pty/pull/885),
+the [Windows handle fix #922](https://github.com/microsoft/node-pty/pull/922),
+and the [worker deadlock fix #943](https://github.com/microsoft/node-pty/pull/943).
+The postinstall step keeps only JaneT's packaging-specific worker-path rewrite so
+a worker loaded from `app.asar` runs from `app.asar.unpacked`.
 
 The `afterPack` hook copies the bundled `conpty.dll` and `OpenConsole.exe` beside
 any rebuilt `build/Release` or `build/Debug` native module before signing.
