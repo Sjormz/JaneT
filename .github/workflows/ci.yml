@@ -106,6 +106,14 @@ jobs:
           JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
         run: npx playwright test --config playwright.config.ts tests/e2e/dev-instance.spec.ts tests/e2e/close-shutdown.spec.ts tests/e2e/pane-maximize.spec.ts tests/e2e/terminal-copy.spec.ts tests/e2e/terminal-graphics.spec.ts tests/e2e/optional-workspace-setup.spec.ts tests/e2e/editor.spec.ts tests/e2e/settings-recovery.spec.ts tests/e2e/local-terminal-recovery.spec.ts
 
+      - name: Build and verify native Windows package
+        if: runner.os == 'Windows'
+        run: npm run dist:win -- --publish never
+
+      - name: Verify packaged Windows release and terminal runtime
+        if: runner.os == 'Windows'
+        run: node scripts/verify-release-artifacts.mjs windows release
+
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

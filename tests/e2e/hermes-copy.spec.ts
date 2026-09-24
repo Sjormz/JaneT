@@ -61,8 +61,8 @@ test('copies a modifier drag selection from the installed Hermes TUI', async ({}
     await page.screenshot({ path: screenshot });
     await testInfo.attach('hermes-copy', { path: screenshot, contentType: 'image/png' });
     const width = await page.locator('.xterm-screen').evaluate((screen) => screen.clientWidth);
-    await app.evaluate(({ BrowserWindow, clipboard }) => {
-      clipboard.writeText('UNCHANGED_AFTER_REDRAW');
+    await app.evaluate(async ({ BrowserWindow, clipboard }) => {
+      await clipboard.writeText('UNCHANGED_AFTER_REDRAW');
       BrowserWindow.getAllWindows()[0].setSize(1100, 780);
     });
     await expect.poll(() => page.locator('.xterm-screen').evaluate((screen) => screen.clientWidth)).not.toBe(width);

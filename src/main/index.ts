@@ -122,29 +122,27 @@ export function getApplicationVersion(): string {
 
 export function copyTextToClipboard(
   text: unknown,
-  writeText: (safeText: string) => void = (safeText) => electron.clipboard.writeText(safeText),
-): boolean {
+  writeText: (safeText: string) => Promise<void> = (safeText) => electron.clipboard.writeText(safeText),
+): Promise<boolean> {
   if (
     typeof text !== 'string'
     || text.length === 0
     || text.length > MAX_CLIPBOARD_TEXT_LENGTH
     || UNSAFE_CLIPBOARD_TEXT.test(text)
   ) {
-    return false;
+    return Promise.resolve(false);
   }
-  writeText(text);
-  return true;
+  return writeText(text).then(() => true, () => false);
 }
 
 export function copyTerminalTextToClipboard(
   text: unknown,
-  writeText: (selection: string) => void = (selection) => electron.clipboard.writeText(selection),
-): boolean {
+  writeText: (selection: string) => Promise<void> = (selection) => electron.clipboard.writeText(selection),
+): Promise<boolean> {
   if (typeof text !== 'string' || text.length === 0 || text.length > MAX_TERMINAL_CLIPBOARD_TEXT_LENGTH) {
-    return false;
+    return Promise.resolve(false);
   }
-  writeText(text);
-  return true;
+  return writeText(text).then(() => true, () => false);
 }
 
 async function stopWorkspaceResources(): Promise<void> {
@@ -508,10 +506,6 @@ function registerIpcHandlers() {
     });
   };
 
-  electron.ipcMain.on('app:copyTerminalText', (event, text: unknown) => {
-    event.returnValue = isTrustedSender(event) && copyTerminalTextToClipboard(text);
-  });
-
   electron.ipcMain.on('terminal:acknowledgeOutput', (event, acknowledgement: unknown) => {
     if (!isTrustedSender(event) || !acknowledgement || typeof acknowledgement !== 'object') return;
     const { source, id, generation, sequence } = acknowledgement as Record<string, unknown>;
@@ -735,9 +729,11 @@ function registerIpcHandlers() {
     return copyTextToClipboard(text);
   });
 
-  handle('app:copyDiagnostics', () => {
+  handle('app:copyTerminalText', (event, text: unknown) => copyTerminalTextToClipboard(text));
+
+  handle('app:copyDiagnostics', async () => {
     try {
-      electron.clipboard.writeText([
+      await electron.clipboard.writeText([
         `JaneT version: ${getApplicationVersion()}`,
         `OS: ${process.platform}`,
         `Architecture: ${process.arch}`,

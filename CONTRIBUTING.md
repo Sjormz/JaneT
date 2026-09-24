@@ -11,7 +11,7 @@ Thanks for helping improve JaneT.
 
 ## Local setup
 
-Use Node.js 22.12 or newer. This matches Electron 43 and the release/CI runtime.
+Use Node.js 22.22.2 or newer within a supported line: 22.22.2+, 24.15.0+, or 26+. The upgraded jsdom dependency sets these floors; CI selects the latest Node 22 release.
 
 ```bash
 npm install

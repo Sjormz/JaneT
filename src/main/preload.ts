@@ -213,7 +213,7 @@ const api = {
   openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
   copyText: (text: string): Promise<boolean> => ipcRenderer.invoke('app:copyText', text),
   copyDiagnostics: (): Promise<boolean> => ipcRenderer.invoke('app:copyDiagnostics'),
-  copyTerminalText: (text: string): boolean => ipcRenderer.sendSync('app:copyTerminalText', text) === true,
+  copyTerminalText: (text: string): Promise<boolean> => ipcRenderer.invoke('app:copyTerminalText', text),
   readTerminalClipboard: (): Promise<string | { imagePath: string }> => ipcRenderer.invoke('app:readTerminalClipboard'),
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   terminalDiagnosticsEnabled: process.env.JANET_TERMINAL_DIAGNOSTICS === '1',

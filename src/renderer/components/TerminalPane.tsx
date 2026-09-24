@@ -365,12 +365,12 @@ export default function TerminalPane({
     };
     container.addEventListener('mousedown', selectionMouseDownListener, true);
     mountCleanup.push(() => container.removeEventListener('mousedown', selectionMouseDownListener, true));
-    mountCleanup.push(term.parser.registerOscHandler(52, (data) => {
+    mountCleanup.push(term.parser.registerOscHandler(52, async (data) => {
       const text = decodeTerminalClipboard(data);
       if (!text) return true;
       if (container.contains(document.activeElement) && Date.now() - copyGestureAtRef.current < 1500) {
         copyGestureAtRef.current = 0;
-        if (!window.janet.copyTerminalText(text)) setClipboardError('Couldn’t copy terminal text.');
+        if (!await window.janet.copyTerminalText(text)) setClipboardError('Couldn’t copy terminal text.');
       } else setRequestedClipboard(text);
       return true;
     }));
@@ -450,8 +450,8 @@ export default function TerminalPane({
         setClipboardError('Couldn’t paste the clipboard. Try copying it again.');
       }
     };
-    const copySelection = (selection: string) => {
-      const copied = window.janet.copyTerminalText(selection);
+    const copySelection = async (selection: string): Promise<boolean> => {
+      const copied = await window.janet.copyTerminalText(selection);
       if (copied) {
         const wasForcedSelection = forcedSelectionRef.current;
         retainedSelectionRef.current = '';
@@ -470,7 +470,7 @@ export default function TerminalPane({
       }
       event.preventDefault();
       event.stopPropagation();
-      if (selection) copySelection(selection);
+      if (selection) void copySelection(selection);
       else void pasteClipboard();
     };
     container.addEventListener('contextmenu', contextMenuListener, true);
@@ -490,12 +490,13 @@ export default function TerminalPane({
         const selection = term.getSelection() || retainedSelectionRef.current;
         if (selection) {
           e.preventDefault();
-          const copied = copySelection(selection);
-          logTerminalDiagnostic(diagnosticsEnabled, termId, 'copy-attempt', {
-            copied,
-            selectionLength: selection.length,
-            retainedSelection: !term.hasSelection(),
-            selectionSnapshotActive: forcedSelectionRef.current,
+          void copySelection(selection).then((copied) => {
+            logTerminalDiagnostic(diagnosticsEnabled, termId, 'copy-attempt', {
+              copied,
+              selectionLength: selection.length,
+              retainedSelection: !term.hasSelection(),
+              selectionSnapshotActive: forcedSelectionRef.current,
+            });
           });
           return false;
         }
@@ -511,9 +512,19 @@ export default function TerminalPane({
           : matchesShortcut(e, currentBindings['next-command'])
             ? () => semanticCommands.next()
             : matchesShortcut(e, currentBindings['copy-command'])
-              ? () => Boolean(semanticCommands.current()?.command && window.janet.copyTerminalText(semanticCommands.current()!.command))
+              ? () => {
+                  const command = semanticCommands.current()?.command;
+                  if (!command) return false;
+                  void copySelection(command);
+                  return true;
+                }
               : matchesShortcut(e, currentBindings['copy-command-output'])
-                ? () => Boolean(semanticCommands.current()?.output && window.janet.copyTerminalText(semanticCommands.current()!.output))
+                ? () => {
+                    const output = semanticCommands.current()?.output;
+                    if (!output) return false;
+                    void copySelection(output);
+                    return true;
+                  }
                 : matchesShortcut(e, currentBindings['rerun-command'])
                   ? () => {
                       const command = semanticCommands.current()?.command;
@@ -1061,8 +1072,8 @@ export default function TerminalPane({
       </div>}
       {requestedClipboard !== null && <div className="terminal-notice" role="status">
         <span>This terminal wants to replace your clipboard ({requestedClipboard.length.toLocaleString()} characters).</span>
-        <button type="button" onClick={() => {
-          if (window.janet.copyTerminalText(requestedClipboard)) setRequestedClipboard(null);
+        <button type="button" onClick={async () => {
+          if (await window.janet.copyTerminalText(requestedClipboard)) setRequestedClipboard(null);
           else setClipboardError('Couldn’t copy terminal text.');
         }}>Allow copy</button>
         <button type="button" onClick={() => setRequestedClipboard(null)}>Dismiss</button>
