@@ -583,6 +583,9 @@ print("TUI_AWARENESS_OK")
     await page.getByRole('alertdialog').getByRole('button', { name: 'Close tab' }).click();
     await expect(page.locator('.vtab-item')).toHaveCount(1);
 
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
+    await expect.poll(() => page.evaluate(() => window.janet.isWindowFocused())).toBe(true);
+
     fs.writeFileSync(turnGatePath, '');
     await expect.poll(() => fs.existsSync(turnStartedPath)).toBe(true);
     await expect(firstTab).toHaveAttribute('aria-label', /Hermes · Running/);

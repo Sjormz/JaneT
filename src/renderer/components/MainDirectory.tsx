@@ -33,7 +33,7 @@ export default function MainDirectory({ directory, onboarding = false, onChange,
   const content = <>
     {onboarding && <div className="directory-onboarding-brand"><BrandMark size={40} /><span>Welcome to JaneT</span></div>}
     <Heading>{onboarding ? 'A home for your work' : 'Main directory'}</Heading>
-    <p>{onboarding ? 'Choose a home for temporary workspaces and projects, or skip this for now. You can set it later from Workspaces in the side panel. Creating workspaces requires a main directory; Library folders do not.' : 'New temporary workspaces are created here. Existing workspaces and Library locations stay where they are; no files are moved.'}</p>
+    <p>{onboarding ? 'Choose a home for new workspaces and projects, or skip this for now. You can set it later from Workspaces in the side panel. You can choose an existing workspace or link a Library folder without a main directory.' : 'New temporary workspaces are created here. Existing workspaces and Library locations stay where they are; no files are moved.'}</p>
     {directory && <p className="main-directory-path">{directory}</p>}
     {error && <p role="alert" className="form-error">{error}</p>}
     <button type="button" className="connect-btn" disabled={busy} onClick={() => void choose()}>{busy ? 'Setting up…' : directory ? 'Change main directory' : 'Choose main directory'}</button>

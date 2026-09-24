@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -42,6 +43,52 @@ describe('automatic Codex setup', () => {
     installCodexActivity(f.directory, f.helper);
     expect(fs.readdirSync(f.directory).map(name => [name, fs.statSync(join(f.directory, name)).mtimeMs])).toEqual(before);
     expect(before.filter(([name]) => String(name).includes('backup'))).toHaveLength(2);
+  });
+
+  it('removes only missing JaneT first-install temp hooks and preserves other hooks and trust', () => {
+    const f = fixture('# keep trust\n[projects."untrusted"]\ntrust_level = "untrusted"\n');
+    const installId = () => randomUUID().replace(/-/g, '');
+    const staleScript = join(tmpdir(), `janet-first-install-${installId()}`, 'agent-activity', 'agent-cli.cjs').replace(/\\/g, '/');
+    const existingRoot = join(tmpdir(), `janet-first-install-${installId()}`);
+    const existingScript = join(existingRoot, 'agent-activity', 'agent-cli.cjs');
+    fs.mkdirSync(join(existingRoot, 'agent-activity'), { recursive: true });
+    fs.writeFileSync(existingScript, '// still present');
+    directories.push(existingRoot);
+    const command = (script: string) => `node '${script}' --codex-hook`;
+    const events = ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'Interrupt'];
+    fs.writeFileSync(f.hooksPath, JSON.stringify({
+      description: 'keep',
+      hooks: Object.fromEntries(events.map(event => [event, [
+        {
+          matcher: 'keep matcher',
+          hooks: [
+            { type: 'command', command: 'unrelated missing command', timeout: 2, statusMessage: 'JaneT activity' },
+            { type: 'command', command: command(staleScript), timeout: 2, statusMessage: 'JaneT activity' },
+            { type: 'command', command: command(existingScript.replace(/\\/g, '/')), timeout: 2, statusMessage: 'JaneT activity' },
+          ],
+        },
+        { hooks: [{ type: 'command', command: command(staleScript), timeout: 2, statusMessage: 'JaneT activity' }] },
+      ]])),
+    }));
+
+    expect(installCodexActivity(f.directory, f.helper).message).toBeUndefined();
+    const hooks = JSON.parse(fs.readFileSync(f.hooksPath, 'utf8'));
+    expect(hooks.description).toBe('keep');
+    for (const event of events) {
+      expect(hooks.hooks[event][0]).toEqual({
+        matcher: 'keep matcher',
+        hooks: [
+          { type: 'command', command: 'unrelated missing command', timeout: 2, statusMessage: 'JaneT activity' },
+          { type: 'command', command: command(existingScript.replace(/\\/g, '/')), timeout: 2, statusMessage: 'JaneT activity' },
+        ],
+      });
+      expect(hooks.hooks[event]).toHaveLength(2);
+      expect(hooks.hooks[event][1].hooks[0].command).toBe(command(f.helper.replace(/\\/g, '/')));
+    }
+    expect(parse(fs.readFileSync(f.configPath, 'utf8')).projects).toEqual({ untrusted: { trust_level: 'untrusted' } });
+    const saved = fs.readFileSync(f.hooksPath, 'utf8');
+    installCodexActivity(f.directory, f.helper);
+    expect(fs.readFileSync(f.hooksPath, 'utf8')).toBe(saved);
   });
 
   it.each(['notify', '"notify"', "'notify'"])("forwards an existing %s handler and preserves unrelated text", key => {

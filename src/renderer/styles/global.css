@@ -945,7 +945,7 @@ html, body, #root {
 .activity-dot.running { background: var(--yellow); }
 .activity-dot.needs-input { background: var(--yellow); border-radius: 2px; transform: rotate(45deg); }
 .activity-dot.failed { background: var(--red); }
-.activity-count { font-size: 10px; white-space: nowrap; color: var(--text-secondary); }
+.activity-count { font-size: 10px; white-space: nowrap; color: var(--text-primary); }
 .activity-count.finished { border-bottom: 1px solid var(--green); }
 .vtab-sub.needs-input,
 .vtab-sub.interrupted,

@@ -16,6 +16,7 @@ const screenshotNames = [
   'built-in-editor.png',
   'command-history.png',
   'command-palette.png',
+  'existing-workspace-projects.png',
   'notification-settings.png',
   'optional-workspace-setup.png',
   'project-creation.png',
@@ -218,6 +219,16 @@ test('recaptures the shipped public screenshot set from the real app', async () 
     await page.getByRole('button', { name: 'Skip for now' }).click();
     await expect(page.getByRole('region', { name: 'Choose where to work' })).toBeVisible();
     await capture('workspace-setup-sidebar.png', page.locator('.workspace-tabs-rail'));
+    const existingWorkspace = path.join(userData, 'Existing workspace');
+    fs.mkdirSync(path.join(existingWorkspace, 'Alpha', 'Nested'), { recursive: true });
+    fs.mkdirSync(path.join(existingWorkspace, 'Beta'), { recursive: true });
+    fs.writeFileSync(path.join(existingWorkspace, 'notes.txt'), 'Synthetic example\n');
+    await app.evaluate(({ dialog }, selected) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] });
+    }, existingWorkspace);
+    await page.getByRole('button', { name: 'Choose existing workspace' }).last().click();
+    await expect(page.getByRole('region', { name: 'Existing workspace' }).locator('.project-entry')).toHaveCount(2);
+    await capture('existing-workspace-projects.png', page.locator('.workspace-tabs-rail'));
     await forceClose(app);
     app = undefined;
 
@@ -230,6 +241,8 @@ test('recaptures the shipped public screenshot set from the real app', async () 
     page = await app.firstWindow();
     await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim()))
       .toBe('#0b0b0c');
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
+    await expect.poll(() => page.evaluate(() => window.janet.isWindowFocused())).toBe(true);
     page.on('pageerror', (error) => pageErrors.push(error.message));
     await page.waitForLoadState('domcontentloaded');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1440, 800));

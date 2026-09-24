@@ -2,7 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createWorkspaceDirectory, requireDirectory, renameWorkspaceDirectory } from '../../src/main/workspaceDirectories';
+import { createWorkspaceDirectory, listWorkspaceProjects, requireDirectory, renameWorkspaceDirectory } from '../../src/main/workspaceDirectories';
 import { rebaseDirectory } from '../../src/shared/workspaceGroups';
 
 const roots: string[] = [];
@@ -28,6 +28,24 @@ it('renames real folders, keeps descendants, and rejects invalid names, collisio
   expect(rebaseDirectory('/work/old/file', '/work/old', '/work/new')).toBe('/work/new/file');
 });
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
+it('lists only immediate real child folders as workspace projects', async () => {
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'janet-import-')); roots.push(root);
+  const workspace = path.join(root, 'Existing');
+  await fs.mkdir(workspace);
+  await fs.mkdir(path.join(workspace, 'Alpha', 'Nested'), { recursive: true });
+  await fs.mkdir(path.join(workspace, 'Beta'));
+  await fs.writeFile(path.join(workspace, 'readme.txt'), 'keep');
+  await fs.symlink(path.join(workspace, 'Alpha'), path.join(workspace, 'Linked'), process.platform === 'win32' ? 'junction' : 'dir');
+  await fs.symlink(workspace, path.join(root, 'Linked workspace'), process.platform === 'win32' ? 'junction' : 'dir');
+  await expect(listWorkspaceProjects(path.join(root, 'Linked workspace'))).rejects.toThrow('linked directory');
+  expect(await listWorkspaceProjects(workspace)).toEqual({
+    directory: workspace, name: 'Existing', projects: [
+      { name: 'Alpha', directory: path.join(workspace, 'Alpha') },
+      { name: 'Beta', directory: path.join(workspace, 'Beta') },
+    ],
+  });
+  expect(await fs.readFile(path.join(workspace, 'readme.txt'), 'utf8')).toBe('keep');
+});
 it('creates managed folders without merging existing data or escaping the chosen parent', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'janet-directories-')); roots.push(root);
   const group = await createWorkspaceDirectory(root, 'Research');

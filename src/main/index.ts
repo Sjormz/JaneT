@@ -9,7 +9,7 @@ import { isAllowedExternalUrl } from './externalUrls';
 import { FileSystemManager } from './filesystem';
 import { GitManager } from './git';
 import { SettingsManager } from './settings';
-import { requireDirectory, createWorkspaceDirectory, renameWorkspaceDirectory } from './workspaceDirectories';
+import { requireDirectory, createWorkspaceDirectory, renameWorkspaceDirectory, listWorkspaceProjects } from './workspaceDirectories';
 import { WorkspaceFileOperations } from './workspaceFileOperations';
 import { sendRendererEvent } from './rendererEvents';
 import type {
@@ -710,6 +710,7 @@ function registerIpcHandlers() {
     const { parent, name } = request as { parent?: unknown; name?: unknown };
     return name === undefined ? requireDirectory(parent) : createWorkspaceDirectory(parent, name);
   });
+  handle('workspace:listProjects', (_event, directory: unknown) => listWorkspaceProjects(directory));
   handle('workspace:renameDirectory', async (_event, request: unknown) => {
     if (!request || typeof request !== 'object' || Array.isArray(request)) throw new Error('Invalid rename request');
     const { source, name } = request as { source?: unknown; name?: unknown };

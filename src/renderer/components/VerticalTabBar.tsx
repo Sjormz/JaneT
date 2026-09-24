@@ -2,7 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { TabInfo, WorkspaceTabPreset, countLeaves, genId, type PaneNode, type TerminalLeaf } from '../types';
 import {
-  XCloseIcon,
+  XCloseIcon, FolderOpenIcon,
   ChevronsLeftIcon, PlusIcon, ChevronRightIcon, ChevronDownIcon,
 } from '../icons';
 import WorkspaceForm from './WorkspaceForm';
@@ -32,6 +32,7 @@ interface VerticalTabBarProps {
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onWorkspaceTabLaunch: (workspace: WorkspaceTabPreset, group: WorkspaceGroup) => Promise<void>;
+  onImportWorkspace: (directory: string) => Promise<void>;
   onRenameTab: (id: string, title: string) => void | Promise<void>;
   onCollapse: () => void;
   dirtyTabIds?: ReadonlySet<string>;
@@ -67,6 +68,7 @@ export default function VerticalTabBar({
   onSelectTab,
   onCloseTab,
   onWorkspaceTabLaunch,
+  onImportWorkspace,
   onRenameTab,
   onCollapse,
   dirtyTabIds = new Set<string>(),
@@ -216,14 +218,23 @@ export default function VerticalTabBar({
     } catch (error) { setFolderError(error instanceof Error ? error.message : String(error)); }
     finally { setFolderBusy(false); }
   };
+  const importWorkspace = async () => {
+    setFolderBusy(true); setFolderError('');
+    try {
+      const selected = await window.janet.selectLocalDirectory();
+      if (selected) await onImportWorkspace(selected);
+    } catch (error) { setFolderError(error instanceof Error ? error.message : String(error)); }
+    finally { setFolderBusy(false); }
+  };
   const handledEntryRequest = useRef<typeof entryRequest>(undefined);
   useEffect(() => {
     if (!entryRequest || handledEntryRequest.current === entryRequest) return;
     handledEntryRequest.current = entryRequest;
     onEntryRequestHandled?.();
     if (entryRequest.action === 'link') { void linkFolder(); return; }
+    if (entryRequest.action === 'import') { void importWorkspace(); return; }
     const target = groups.find(group => group.id === entryRequest.groupId);
-    if (!mainDirectory && target?.kind !== 'folder') { setDirectoryOpen(true); return; }
+    if (!mainDirectory && !target?.directory) { setDirectoryOpen(true); return; }
     setProjectParentId(target?.id);
     setCreationKind(target ? 'workspace' : 'group');
     setCreationError('');
@@ -259,14 +270,15 @@ export default function VerticalTabBar({
           <button ref={directoryButtonRef} className="workspace-directory-heading" title={mainDirectory ?? 'Choose main directory'} aria-label="Main directory settings" onClick={() => setDirectoryOpen(true)}>Workspaces</button>
         </div>
         <div className="vtab-header-actions">
+          <Tooltip label="Choose existing workspace" placement="bottom"><button className="vtab-header-btn" aria-label="Choose existing workspace" disabled={folderBusy} onClick={() => void importWorkspace()}><FolderOpenIcon size="sm" /></button></Tooltip>
           <Tooltip label="New workspace" placement="bottom"><button ref={workspaceAddButtonRef} className="vtab-header-btn" aria-label="New workspace" onClick={openWorkspaceForm}><PlusIcon size="sm" /></button></Tooltip>
         </div>
       </div>
 
         {folderError && <p className="form-error" role="alert">{folderError}</p>}
         {!mainDirectory && <div className="workspace-group-empty">
-          <p>Choose a main directory to create workspaces.</p>
-          <button type="button" className="connect-btn" onClick={() => setDirectoryOpen(true)}>Set up workspaces</button>
+          <p>New workspaces need a main directory.</p>
+          <button type="button" className="connect-btn" onClick={() => setDirectoryOpen(true)}>Choose main directory</button>
         </div>}
         {(['workspaces', 'folders'] as const).map((section) => <React.Fragment key={section}>
         {section === 'folders' && <div className="folder-section-header"><h2>Library</h2><button className="vtab-header-btn" aria-label="Add Library entry" disabled={folderBusy} onClick={() => void linkFolder()}><PlusIcon size="sm" /></button></div>}
