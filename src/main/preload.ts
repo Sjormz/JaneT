@@ -208,6 +208,7 @@ const api = {
   getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
   selectLocalDirectory: (): Promise<string | null> => ipcRenderer.invoke('app:selectLocalDirectory'),
   workspaceDirectory: (request: { parent: string; name?: string }): Promise<string> => ipcRenderer.invoke('workspace:directory', request),
+  listWorkspaceProjects: (directory: string): Promise<{ directory: string; name: string; projects: { directory: string; name: string }[] }> => ipcRenderer.invoke('workspace:listProjects', directory),
   renameWorkspaceDirectory: (request: { source: string; name: string }): Promise<string> => ipcRenderer.invoke('workspace:renameDirectory', request),
   workspaceLifecycle: (request: import('./workspaceFileOperations').WorkspaceLifecycleRequest): Promise<{ session: import('./settings').SavedSession; warning?: string }> => ipcRenderer.invoke('workspace:lifecycle', request),
   openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),

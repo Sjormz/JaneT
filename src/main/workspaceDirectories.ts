@@ -14,6 +14,20 @@ export async function requireDirectory(value: unknown): Promise<string> {
   }
 }
 
+export async function listWorkspaceProjects(value: unknown): Promise<{ directory: string; name: string; projects: { directory: string; name: string }[] }> {
+  const directory = await requireDirectory(value);
+  if ((await fs.lstat(value as string)).isSymbolicLink()) throw new Error('Choose a workspace folder, not a linked directory.');
+  if (path.dirname(directory) === directory) throw new Error('Choose a workspace folder, not a drive root.');
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  return {
+    directory,
+    name: path.basename(directory),
+    projects: entries.filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+      .map((entry) => ({ name: entry.name, directory: path.join(directory, entry.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
 export function validateDirectoryName(name: unknown): asserts name is string {
   if (typeof name !== 'string' || !name.trim() || name.length > 128
     || /[<>:"/\\|?*\u0000-\u001f]/.test(name) || /[. ]$/.test(name)

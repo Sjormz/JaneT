@@ -28,6 +28,7 @@ function renderTabs(overrides?: Partial<React.ComponentProps<typeof VerticalTabB
       creatorOpen={creatorOpen} onCreatorOpenChange={onCreatorOpenChange}
       onSelectTab={vi.fn()} onCloseTab={vi.fn()}
       onWorkspaceTabLaunch={vi.fn().mockResolvedValue(undefined)}
+      onImportWorkspace={vi.fn().mockResolvedValue(undefined)}
       onRenameTab={vi.fn()} onCollapse={vi.fn()} {...overrides} />;
   }
   return render(<Harness />);

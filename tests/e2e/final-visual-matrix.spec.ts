@@ -323,6 +323,8 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
           await expect(showTabs).toBeVisible();
           await showTabs.click();
         }
+        await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
+        await expect.poll(() => page.evaluate(() => window.janet.isWindowFocused())).toBe(true);
         // Bash redraws its prompt on resize; repeated reflows can scroll the old
         // command marker out of view. Keep this visual fixture in the viewport.
         const markerSuffix = `${themes.indexOf(theme) * viewports.length + viewports.indexOf(viewport)}`;

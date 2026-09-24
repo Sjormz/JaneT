@@ -7,7 +7,7 @@ description: Create temporary projects or link existing folders in JaneT.
 
 JaneT groups temporary projects under **Workspaces** and lets you link existing folders in the persistent **Library**. Both can hold terminal sessions, but they manage files differently.
 
-![JaneT workspace sidebar with grouped workspaces and project sessions](/screenshots/workspace-overview.png)
+![JaneT Workspaces sidebar with the Choose existing workspace control, workspace groups, and projects](/screenshots/workspace-overview.png)
 
 *The sidebar keeps workspace groups, projects, and their sessions together.*
 
@@ -23,6 +23,20 @@ The main directory is only the default location for new temporary workspaces. Ch
 ![Create project dialog with a project name and initial terminal options](/screenshots/project-creation.png)
 
 *The project form lets you choose the initial terminal count and a shared launcher.*
+
+## Choose an existing workspace
+
+1. In the **Workspaces** sidebar, select **Choose existing workspace**. On first launch, select **Skip for now** if you do not want to set a main directory.
+2. Choose a folder to use as the workspace. JaneT adds each folder directly inside it as a project, even if that project has no terminals yet.
+3. Select a project and use **Add terminals** when you want a session in its folder. Folders deeper inside a project stay part of that project; they do not become separate projects. Files directly in the workspace folder stay there and do not appear as projects.
+
+![Workspaces sidebar showing two projects created from the selected folder's direct subfolders](/screenshots/existing-workspace-projects.png)
+
+*Choosing an existing workspace adds its direct subfolders as projects, ready for terminals.*
+
+Choosing a workspace does not move, copy, or change its files. The chosen folder and its projects become managed by Workspaces: **Rename** changes folder names on disk, and **Delete workspace…** or **Delete project…** sends those folders and their contents to the OS Recycle Bin/Trash after confirmation. Use **Library** if you want to link a folder without making it managed workspace storage. JaneT supports up to 64 saved projects and sessions, so a workspace with more folders than the available slots cannot be added.
+
+Choose a real folder; JaneT does not add linked workspace roots or linked child folders as projects.
 
 ## Start a project or session
 

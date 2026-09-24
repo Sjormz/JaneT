@@ -1655,6 +1655,24 @@ function AppInner({ initialSettings, persistSettings }: {
 
   }, [mainDirectory, terminalCount]);
 
+  const importWorkspace = useCallback(async (selected: string) => {
+    const { directory, name, projects } = await window.janet.listWorkspaceProjects(selected);
+    if (groupsRef.current.some((group) => group.directory === directory)) throw new Error('This folder is already in Workspaces or Library.');
+    if (groupsRef.current.length >= MAX_WORKSPACE_GROUPS) throw new Error('The 64-group limit has been reached.');
+    if (tabsRef.current.length + projects.length > MAX_RESTORED_TABS) throw new Error('Close a project first. JaneT supports up to 64 projects and sessions.');
+    const group: WorkspaceGroup = { id: genId('group'), name, directory };
+    const imported: TabInfo[] = projects.map((project) => ({
+      id: genId('tab'), title: project.name, type: 'local', groupId: group.id,
+      cwd: project.directory, isProject: true,
+      root: { id: genId('split'), type: 'split', direction: 'vertical', children: [], sizes: [] },
+    }));
+    groupsRef.current = [...groupsRef.current, group];
+    tabsRef.current = [...tabsRef.current, ...imported];
+    setGroups(groupsRef.current);
+    setTabs(tabsRef.current);
+    if (imported[0]) setActiveTabId(imported[0].id);
+  }, []);
+
   const activeTab = getTab(activeTabId);
 
   // The terminal pane whose cwd should drive the sidebar. If the user
@@ -2175,6 +2193,7 @@ function AppInner({ initialSettings, persistSettings }: {
           onSelectTab={selectTerminalTab}
           onCloseTab={requestCloseTab}
           onWorkspaceTabLaunch={openWorkspaceTab}
+          onImportWorkspace={importWorkspace}
           onRenameTab={renameTab}
           onCollapse={() => {
             responsiveTabsCollapsedRef.current = false;
