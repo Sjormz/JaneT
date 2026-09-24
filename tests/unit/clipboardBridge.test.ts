@@ -7,7 +7,7 @@ afterEach(() => {
 });
 
 async function importMainClipboardBridge() {
-  const writeText = vi.fn();
+  const writeText = vi.fn().mockResolvedValue(undefined);
   vi.doMock('electron', () => ({
     app: {
       commandLine: { appendSwitch: vi.fn() },
@@ -49,7 +49,7 @@ describe('main-process clipboard bridge', () => {
     const { copyTextToClipboard, writeText } = await importMainClipboardBridge();
     const token = "'/tmp/drag target' ";
 
-    expect(copyTextToClipboard(token)).toBe(true);
+    await expect(copyTextToClipboard(token)).resolves.toBe(true);
     expect(writeText).toHaveBeenCalledOnce();
     expect(writeText).toHaveBeenCalledWith(token);
   });
@@ -66,7 +66,7 @@ describe('main-process clipboard bridge', () => {
   ])('rejects %s without writing', async (_label, unsafeText) => {
     const { copyTextToClipboard, writeText } = await importMainClipboardBridge();
 
-    expect(copyTextToClipboard(unsafeText)).toBe(false);
+    await expect(copyTextToClipboard(unsafeText)).resolves.toBe(false);
     expect(writeText).not.toHaveBeenCalled();
   });
 
@@ -74,7 +74,7 @@ describe('main-process clipboard bridge', () => {
     const { copyTextToClipboard, writeText } = await importMainClipboardBridge();
     const token = 'a'.repeat(131_075);
 
-    expect(copyTextToClipboard(token)).toBe(true);
+    await expect(copyTextToClipboard(token)).resolves.toBe(true);
     expect(writeText).toHaveBeenCalledWith(token);
   });
 
@@ -82,9 +82,9 @@ describe('main-process clipboard bridge', () => {
     const { copyTerminalTextToClipboard, copyTextToClipboard, writeText } = await importMainClipboardBridge();
     const selection = 'first line\nsecond\tcolumn';
 
-    expect(copyTerminalTextToClipboard(selection)).toBe(true);
+    await expect(copyTerminalTextToClipboard(selection)).resolves.toBe(true);
     expect(writeText).toHaveBeenCalledWith(selection);
-    expect(copyTextToClipboard(selection)).toBe(false);
+    await expect(copyTextToClipboard(selection)).resolves.toBe(false);
   });
 
   it.each([
@@ -94,7 +94,7 @@ describe('main-process clipboard bridge', () => {
   ])('rejects %s as terminal selection text', async (_label, value) => {
     const { copyTerminalTextToClipboard, writeText } = await importMainClipboardBridge();
 
-    expect(copyTerminalTextToClipboard(value)).toBe(false);
+    await expect(copyTerminalTextToClipboard(value)).resolves.toBe(false);
     expect(writeText).not.toHaveBeenCalled();
   });
 
@@ -103,13 +103,11 @@ describe('main-process clipboard bridge', () => {
 describe('preload clipboard bridge', () => {
   it('exposes copyText through the guarded app IPC channel', async () => {
     const invoke = vi.fn().mockResolvedValue(true);
-    const sendSync = vi.fn(() => true);
     const exposeInMainWorld = vi.fn();
     vi.doMock('electron', () => ({
       contextBridge: { exposeInMainWorld },
       ipcRenderer: {
         invoke,
-        sendSync,
         on: vi.fn(),
         removeListener: vi.fn(),
       },
@@ -117,15 +115,14 @@ describe('preload clipboard bridge', () => {
 
     await import('../../src/main/preload');
     const api = exposeInMainWorld.mock.calls[0]?.[1] as {
-      copyTerminalText(text: string): boolean;
+      copyTerminalText(text: string): Promise<boolean>;
       copyText(text: string): Promise<boolean>;
     };
 
     await expect(api.copyText("'/tmp/drag target' ")).resolves.toBe(true);
-    expect(api.copyTerminalText('first line\nsecond line')).toBe(true);
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(invoke).toHaveBeenCalledWith('app:copyText', "'/tmp/drag target' ");
-    expect(sendSync).toHaveBeenCalledOnce();
-    expect(sendSync).toHaveBeenCalledWith('app:copyTerminalText', 'first line\nsecond line');
+    await expect(api.copyTerminalText('first line\nsecond line')).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke).toHaveBeenNthCalledWith(1, 'app:copyText', "'/tmp/drag target' ");
+    expect(invoke).toHaveBeenNthCalledWith(2, 'app:copyTerminalText', 'first line\nsecond line');
   });
 });

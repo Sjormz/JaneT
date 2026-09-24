@@ -308,9 +308,9 @@ test('copies TUI OSC 52 selections, rejects unsolicited writes, and pastes brack
     await expect(container.getByRole('button', { name: 'Allow copy' })).toHaveCount(0);
 
     // Clear the copy gesture before checking the exact paste bytes at the IPC boundary.
-    await app.evaluate(({ clipboard }) => {
+    await app.evaluate(async ({ clipboard }) => {
       (globalThis as any).__pastedTerminalData = [];
-      clipboard.writeText('first\nsecond');
+      await clipboard.writeText('first\nsecond');
     });
     await sendOutput('\x1b[?2004h\x1b[?1049h\x1b[?1003hBRACKETED_TEXT_READY');
     // IPC delivery precedes xterm parsing; wait for output after the mode sequence.
@@ -319,12 +319,14 @@ test('copies TUI OSC 52 selections, rejects unsolicited writes, and pastes brack
     await expect.poll(() => app!.evaluate(() => (globalThis as any).__pastedTerminalData)).toEqual([
       { id: termId, data: '\x1b[200~first\rsecond\x1b[201~', userInput: true },
     ]);
-    await app.evaluate(({ clipboard, nativeImage }) => {
+    await app.evaluate(({ clipboard, nativeImage, ClipboardItem }) => {
       (globalThis as any).__pastedTerminalData = [];
       clipboard.clear();
-      clipboard.writeImage(nativeImage.createFromBitmap(Buffer.from([255, 0, 0, 255]), { width: 1, height: 1 }));
+      const png = nativeImage.createFromBitmap(Buffer.from([255, 0, 0, 255]), { width: 1, height: 1 }).toPNG();
+      const pngData = new Uint8Array(png).buffer as ArrayBuffer;
+      return clipboard.write([new ClipboardItem({ 'image/png': new Blob([pngData], { type: 'image/png' }) })]);
     });
-    expect(await app.evaluate(({ clipboard }) => clipboard.readImage().isEmpty())).toBe(false);
+    expect(await app.evaluate(async ({ clipboard }) => (await clipboard.read()).some((item) => item.types.includes('image/png')))).toBe(true);
     await sendOutput('\x1b[?2004h\r\nBRACKETED_IMAGE_READY');
     await expect(container.locator('.xterm-rows')).toContainText('BRACKETED_IMAGE_READY');
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');

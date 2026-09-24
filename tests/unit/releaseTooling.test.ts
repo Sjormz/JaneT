@@ -935,6 +935,7 @@ module.exports = {
   it('packages macOS releases for Apple Silicon only without DMG blockmaps', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
 
+    expect(packageJson.build.mac.minimumSystemVersion).toBe('13.0.0');
     expect(packageJson.build.mac.target).toEqual([
       { target: 'dmg', arch: ['arm64'] },
       { target: 'zip', arch: ['arm64'] },
@@ -942,9 +943,9 @@ module.exports = {
     expect(packageJson.build.dmg.writeUpdateInfo).toBe(false);
   });
 
-  it('declares the Node version required by Electron 43', () => {
+  it('declares supported Node engines and the pinned development runtime', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
-    expect(packageJson.engines).toEqual({ node: '>=22.12.0' });
-    expect(fs.readFileSync(path.join(projectRoot, '.nvmrc'), 'utf8').trim()).toBe('22.12.0');
+    expect(packageJson.engines).toEqual({ node: '^22.22.2 || ^24.15.0 || >=26.0.0' });
+    expect(fs.readFileSync(path.join(projectRoot, '.nvmrc'), 'utf8').trim()).toBe('22.22.2');
   });
 });

@@ -12,7 +12,7 @@ JaneT brings local terminals, project files, and everyday Git tools into one des
 Download the package for your computer from [JaneT Releases](https://github.com/Sjormz/JaneT/releases/latest), then open JaneT.
 
 - **Windows x64:** Choose the installer or portable `.exe`. Windows builds are unsigned, so SmartScreen may ask you to confirm the download. Verify that it came from the JaneT release before proceeding.
-- **macOS Apple silicon:** Choose the `.dmg` or `.zip`. Release builds are signed with Apple Developer ID and notarized. Move JaneT to Applications from the DMG.
+- **macOS 13 Ventura or later, Apple silicon:** Choose the `.dmg` or `.zip`. Release builds are signed with Apple Developer ID and notarized. Move JaneT to Applications from the DMG.
 - **Linux x64:** Choose the AppImage or Debian package. Install the `.deb` with your package manager. For an AppImage, mark it executable before opening it.
 
 For an AppImage, run `chmod +x JaneT-<version>-linux-x64.AppImage` and then `./JaneT-<version>-linux-x64.AppImage` from the download directory.

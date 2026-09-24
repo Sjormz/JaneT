@@ -824,7 +824,7 @@ describe('TerminalPane reinitialization', () => {
     expect(handled).toBe(false);
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(copyTerminalText).toHaveBeenCalledWith('retained TUI text');
-    expect(term.clearSelection).toHaveBeenCalled();
+    await waitFor(() => expect(term.clearSelection).toHaveBeenCalled());
   });
 
   it('matches xterm native selection modifiers on macOS', async () => {
