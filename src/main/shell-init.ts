@@ -9,7 +9,7 @@ export const STARTUP_READY_MARKER = '\x1b]777;janet-ready\x1b\\';
  *
  * - emits an OSC 7 escape sequence (file://HOST/PATH) before every prompt,
  *   so JaneT can keep its cwd-aware UI in sync; and
- * - prepares agent activity hooks.
+ * - prepares Hermes activity hooks.
  *
  * The Hermes wrapper is installed only when `hermes` currently resolves to
  * an external command, so a user's alias or function is never replaced.
@@ -101,7 +101,7 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "}",
     ].join('\n');
     const helper = agentHelper?.replace(/['\u2018\u2019]/g, quote => quote + quote);
-    const agents = (agentHelper ? ['codex', 'hermes'] : []).map(agent => [
+    const agents = (agentHelper ? ['hermes'] : []).map(agent => [
       `$__jt_cli = Get-Command ${agent} -ErrorAction SilentlyContinue`,
       `$__jt_node = @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue)[0]`,
       `if ($__jt_cli -and $__jt_cli.CommandType -in @('Application', 'ExternalScript') -and $__jt_node) {`,
@@ -162,7 +162,6 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "    command hermes \"$@\"",
       "  }",
       "fi",
-      agentWrapper(agentHelper, 'bash'),
       "__jt_debug() {",
       "  local __jt_status=$?",
       "  (( __jt_debug_guard )) && return \"$__jt_status\"",
@@ -204,7 +203,7 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "  }",
       "fi",
       "fi",
-    ].join('\n') + agentWrapper(agentHelper, 'zsh');
+    ].join('\n');
   }
 
   // Fish. The fish-prompt event handler.
@@ -250,7 +249,7 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "  end",
       "end",
       "end",
-    ].join('\n') + agentWrapper(agentHelper, 'fish');
+    ].join('\n');
   }
 
   // cmd.exe has no scripting facility for per-prompt hooks. We could
@@ -259,21 +258,10 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
   // empty so cmd.exe gets no init.
   return '';
 }
-
 function setupAgent(helper: string | undefined, agent: string, shell: string): string {
   if (!helper) return '';
   const quoted = shell === 'fish' ? helper.replace(/\\/g, '\\\\').replace(/'/g, "\\'") : helper.replace(/'/g, "'\\''");
   return shell === 'fish'
     ? `if command -sq node; command node '${quoted}' --setup-${agent} $argv; end`
     : `if command -v node >/dev/null 2>&1; then command node '${quoted}' --setup-${agent} "$@"; fi`;
-}
-
-function agentWrapper(helper: string | undefined, shell: string): string {
-  if (!helper) return '';
-  const setup = setupAgent(helper, 'codex', shell);
-  if (shell === 'fish') return `\nif type -q codex; and test (type -t codex) = file\nfunction codex\n${setup}\ncommand codex $argv\nend\nend\n`;
-  const condition = shell === 'zsh'
-    ? '(( $+commands[codex] && ! $+aliases[codex] && ! $+galiases[codex] && ! $+functions[codex] ))'
-    : '[ "$(type -t codex 2>/dev/null)" = file ]';
-  return `\nif ${condition}; then\nfunction codex {\n${setup}\ncommand 'codex' "$@"\n}\nfi\n`;
 }

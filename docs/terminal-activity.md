@@ -8,7 +8,9 @@ JaneT uses explicit shell/agent lifecycle events, never silence or screen scrapi
 - Red: unseen failure. Muted: no integration, exited or disconnected. Hover/accessible labels explain each state.
 - Unseen results remain while other terminals run. Visiting a project acknowledges its results; returning focus acknowledges the currently visible project. Indicators are live session state, not persisted claims about restarted processes.
 
-## Codex CLI
+## Codex CLI (dormant integration)
+
+JaneT currently does not wrap `codex` or install its hooks and notification callback. The implementation below remains in the repository for controlled diagnostics; it does not run from current shell initialization. Older JaneT builds can still install it until updated and restarted.
 
 Requires Node.js on PATH and a Codex release supporting the documented hooks and `notify` callback. Tested against the official hook contract and the installed Codex CLI 0.156.1 with a disposable local Responses provider.
 
@@ -29,7 +31,7 @@ A user-supplied `-c notify=...` takes precedence; JaneT reports **Activity track
 
 ### Remove integration
 
-Remove the JaneT command entries from the agent's hooks configuration. For a forwarded `notify`, restore the original argv array encoded in its fourth element; if that array is empty, remove the JaneT notification setting. Preserve unrelated hooks. Backups are available as `*.janet-backup-*`; restoring an old backup wholesale also loses subsequent edits, so compare first. Normal launches inside JaneT will reconnect; use the executable's full path (or your own alias/function) to bypass the launch wrapper. Outside JaneT only the preserved notifier runs.
+Remove the JaneT command entries from the agent's hooks configuration. For a forwarded `notify`, restore the original argv array encoded in its fourth element; if that array is empty, remove the JaneT notification setting. Preserve unrelated hooks. Backups are available as `*.janet-backup-*`; restoring an old backup wholesale also loses subsequent edits, so compare first. Older JaneT builds can reconnect the integration; update and restart JaneT, then recreate its terminals. Outside JaneT only the preserved notifier runs.
 
 ## Hermes CLI and TUI
 

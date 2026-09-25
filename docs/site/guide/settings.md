@@ -19,11 +19,11 @@ Select the gear-shaped **Settings** button in the title bar to open appearance, 
 
 ## Get background notifications
 
-Notifications are off by default. Enable **Notify when Codex needs input or finishes, or long commands finish** to receive desktop alerts while JaneT is unfocused. A tracked Codex permission request or completed turn can alert immediately. Other tracked commands must run for at least 10 seconds. Select a notification to return to its terminal. JaneT's notification integration and your operating system's notification settings both affect delivery.
+Notifications are off by default. Enable **Notify when long commands finish** to receive desktop alerts while JaneT is unfocused. Tracked commands must run for at least 10 seconds. Select a notification to return to its terminal. JaneT's notification integration and your operating system's notification settings both affect delivery.
 
-![Settings notification switch for Codex activity and long commands, beside the delivery check](/screenshots/notification-settings.png)
+![Settings switch for long-command notifications beside the delivery check](/screenshots/notification-settings.png)
 
-*One switch controls Codex activity and long-command alerts.*
+*The switch enables alerts for long-running commands.*
 
 Select **Check notification delivery** to check whether desktop notifications are available and whether JaneT has observed a delivery failure. A supported result does not override operating-system notification permissions or Do Not Disturb settings.
 

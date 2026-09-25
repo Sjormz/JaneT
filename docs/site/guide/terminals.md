@@ -60,4 +60,4 @@ Selected panes stay highlighted while broadcasting. JaneT clears the set if a se
 
 For supported agent sessions, JaneT can show status such as **Running**, **Needs input**, **Ready**, or a completed result in the pane and workspace sidebar. Activity uses explicit lifecycle hooks and does not read the agent transcript. It is best-effort workspace information, not an authenticated signal about which process produced terminal output.
 
-See [Agent activity](/guide/agent-activity) for supported Codex and Hermes setup, shell coverage, and limitations. In particular, activity setup does not automatically bridge SSH, WSL, or container hosts; those sessions may still be used as ordinary terminal sessions.
+See [Agent activity](/guide/agent-activity) for Hermes setup, the current Codex limitation, shell coverage, and other limits. Activity setup does not automatically bridge SSH, WSL, or container hosts; those sessions may still be used as ordinary terminal sessions.
