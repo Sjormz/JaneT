@@ -798,7 +798,7 @@ module.exports = {
     expect(() => check(true)).not.toThrow();
   });
 
-  it.each(['ready', 'unlabeled', 'unchanged', 'failed-check', 'existing-tag'])(
+  it.each(['ready', 'large-releases', 'unlabeled', 'unchanged', 'failed-check', 'existing-tag'])(
     'executes the handoff safely for a %s candidate', (scenario) => {
       const scriptUrl = pathToFileURL(path.join(projectRoot, 'scripts/release-handoff.mjs')).href;
       const result = spawnSync(process.execPath, ['--input-type=commonjs', '-e', `
@@ -808,7 +808,7 @@ module.exports = {
         process.env.GITHUB_REPOSITORY = 'owner/repo';
         process.env.MERGE_SHA = 'merged-sha';
         process.env.LABELS_JSON = JSON.stringify(scenario === 'unlabeled' ? [] : [{ name: 'release' }]);
-        require('node:child_process').execFileSync = (command, args) => {
+        require('node:child_process').execFileSync = (command, args, options) => {
           commands.push([command, ...args]);
           if (command === 'git') {
             if (args[0] === 'rev-parse') return 'base-sha';
@@ -821,7 +821,15 @@ module.exports = {
           if (command === 'gh' && args[0] === 'workflow') return '';
           if (command === 'gh' && args[0] === 'api') {
             const endpoint = args.at(-1);
-            if (endpoint.includes('/releases?')) return '[[]]';
+            if (endpoint.includes('/releases?')) {
+              const response = scenario === 'large-releases'
+                ? JSON.stringify([[{ tag_name: 'v1.2.3', assets: [{ name: 'x'.repeat(1_100_000) }] }]])
+                : '[[]]';
+              if (Buffer.byteLength(response) > (options?.maxBuffer ?? 1024 * 1024)) {
+                throw new Error('spawnSync gh ENOBUFS');
+              }
+              return response;
+            }
             if (endpoint.includes('/git/matching-refs/')) return JSON.stringify(
               scenario === 'existing-tag' ? [{ ref: 'refs/tags/v1.2.4' }] : []);
             if (endpoint.includes('/check-runs?')) {
@@ -846,7 +854,7 @@ module.exports = {
       const { commands, error } = JSON.parse(result.stdout);
       const mutations = commands.filter(([command, action]: string[]) =>
         (command === 'git' && ['tag', 'push'].includes(action)) || (command === 'gh' && action === 'workflow'));
-      if (scenario === 'ready') {
+      if (scenario === 'ready' || scenario === 'large-releases') {
         expect(error).toBeUndefined();
         expect(mutations).toEqual([
           ['git', 'tag', '-a', 'v1.2.4', 'merged-sha', '-m', 'Release v1.2.4'],

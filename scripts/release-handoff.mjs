@@ -38,7 +38,8 @@ export function candidateTag(basePackage, packageJson, lockfile) {
 }
 
 function run(command, args) {
-  return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  // ponytail: cap CLI output at 16 MiB; narrow API responses if release history outgrows it.
+  return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024 }).trim();
 }
 
 function ghApi(endpoint, paginate = false) {
