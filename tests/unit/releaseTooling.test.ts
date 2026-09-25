@@ -761,10 +761,15 @@ module.exports = {
     const program = guard.run.match(/<<'NODE'\n([\s\S]*?)\nNODE/)[1];
     const check = (releases: object[], sha = 'verified-sha', failApi = false, tag = 'v1.2.3') => runWorkflowGuard(program, `
       if (id !== 'node:child_process') return nativeRequire(id);
-      return { execFileSync(command, args) {
+      return { execFileSync(command, args, options) {
         if (command !== 'gh') throw new Error('Expected GitHub CLI');
         if (${JSON.stringify(failApi)}) throw new Error('API unavailable');
-        return JSON.stringify(args.includes('--slurp') ? ${JSON.stringify([releases])} : ${JSON.stringify({ sha })});
+        // Exercise every publication safeguard with history above Node's default buffer limit.
+        const response = JSON.stringify(args.includes('--slurp')
+          ? ${JSON.stringify([releases])}.map(page => page.map(release => ({ ...release, body: 'x'.repeat(1_100_000) })))
+          : ${JSON.stringify({ sha })});
+        if (Buffer.byteLength(response) > (options?.maxBuffer ?? 1024 * 1024)) throw new Error('spawnSync gh ENOBUFS');
+        return response;
       } };
     `, { RELEASE_TAG: tag, GITHUB_REPOSITORY: 'owner/repo', SOURCE_SHA: 'verified-sha' },
     );

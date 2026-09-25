@@ -267,7 +267,8 @@ jobs:
           node --input-type=commonjs <<'NODE'
           const assert = require('node:assert/strict');
           const { execFileSync } = require('node:child_process');
-          const api = (...args) => JSON.parse(execFileSync('gh', ['api', ...args], { encoding: 'utf8' }));
+          // ponytail: cap CLI output at 16 MiB; narrow API responses if release history outgrows it.
+          const api = (...args) => JSON.parse(execFileSync('gh', ['api', ...args], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
           const repo = `repos/${process.env.GITHUB_REPOSITORY}`;
           const tag = process.env.RELEASE_TAG;
           const releases = api('--paginate', '--slurp', `${repo}/releases?per_page=100`).flat();
