@@ -114,9 +114,9 @@ export default function ThemeSwitcher({
         }}>Check notification delivery</button>
         <label className="notification-toggle">
           <input type="checkbox" checked={notificationsEnabled} onChange={(event) => onNotificationsEnabledChange(event.currentTarget.checked)} />
-          Notify when Codex needs input or finishes, or long commands finish
+          Notify when long commands finish
         </label>
-        <p className="workspace-form-help">JaneT must be unfocused. Codex alerts are immediate; other commands must run at least 10 seconds.</p>
+        <p className="workspace-form-help">JaneT must be unfocused. Commands must run at least 10 seconds.</p>
       </div>
       <div className="theme-section shortcut-settings-section">
         <button type="button" className="shortcut-settings-button" onClick={() => { void copyDiagnostics(); }} aria-label="Copy diagnostics">

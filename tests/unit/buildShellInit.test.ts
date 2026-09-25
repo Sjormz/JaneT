@@ -365,10 +365,12 @@ describe('buildShellInit', () => {
       expect(init).not.toContain('hermes() {');
     });
 
-    it.each(['bash', 'zsh', 'fish', 'powershell.exe'])('keeps %s activity wrappers independent of terminal identity', (shell) => {
+    it.each(['bash', 'zsh', 'fish', 'powershell.exe'])('leaves Codex unwrapped in %s', (shell) => {
       expect(buildShellInit(shell)).not.toContain('function codex');
       const init = buildShellInit(shell, '/tmp/agent-helper.cjs');
-      expect(init).toContain('--setup-codex');
+      expect(init).not.toContain('--setup-codex');
+      expect(init).not.toContain('function codex');
+      expect(init).toContain('--setup-hermes');
       expect(init).not.toContain('TERM');
     });
 

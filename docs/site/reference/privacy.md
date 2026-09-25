@@ -17,7 +17,7 @@ Editor documents are files on your disk. JaneT does not turn them into a separat
 
 JaneT checks GitHub Releases for updates. A Git fetch, pull, or push uses the remote configured for that repository. Commands and agent CLIs you run in a terminal have their own network and data behavior; consult their documentation before using them with sensitive material.
 
-Codex and Hermes activity integration passes bounded lifecycle information to JaneT. It does not send prompt text, tool input or output, transcript paths, or assistant messages into JaneT's activity bridge. Existing agent notification handlers remain under the agent's own configuration.
+Hermes activity integration passes bounded lifecycle information to JaneT. It does not send prompt text, tool input or output, transcript paths, or assistant messages into JaneT's activity bridge. JaneT currently does not install Codex activity hooks or change its notification command. Existing agent notification handlers remain under the agent's own configuration.
 
 ## Screenshots and support reports
 

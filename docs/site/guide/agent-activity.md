@@ -27,11 +27,9 @@ Visiting a project acknowledges its unseen results. Activity is live session sta
 
 ## Codex CLI
 
-Start a **new local terminal** in JaneT and type `codex` normally. JaneT configures its activity observers on launch while preserving unrelated Codex settings and existing notification commands. Codex may ask you to trust the folder and review new hooks. Use `/hooks` to review and trust JaneT's hooks yourself. Folder trust and hook trust are separate; administrator policy and disabled hooks still apply.
+Start a **new local terminal** in JaneT and type `codex` normally. JaneT currently leaves Codex's global hooks and notification command untouched. Codex works as a terminal program, but JaneT cannot reliably identify its turn completion or approval requests; the pane may show **Activity tracking incomplete**. JaneT still tracks the foreground shell command.
 
-Node.js must be available on `PATH`, and the installed Codex version must support the required hooks and notification callback. If setup is unavailable, Codex still launches, but JaneT may show **Activity tracking incomplete**.
-
-To receive a desktop alert when Codex requests permission or finishes a turn while JaneT is in the background, enable **Notify when Codex needs input or finishes, or long commands finish** in **Settings**. Alerts contain the project and pane names, not the prompt or response. A permission-request event can precede Codex's own prompt; open the terminal to see what Codex is asking. Selecting the alert brings JaneT to that terminal. Codex turn alerts have no minimum duration.
+The **Notify when long commands finish** setting covers tracked shell commands. Codex turn and approval alerts are unavailable while its activity hooks are disabled.
 
 ## Hermes CLI and TUI
 
@@ -39,6 +37,6 @@ Type `hermes` or `hermes --tui` in a new local terminal. JaneT adds activity obs
 
 ## When an indicator is incomplete
 
-Automatic launch setup covers PowerShell, Bash, Zsh, and Fish. It does not automatically follow an explicit binary path, nested shell, `cmd.exe`, SSH, WSL, or container host. Those sessions remain usable as ordinary terminals. An uninstrumented long-running TUI is a shell command; JaneT cannot infer the agent's turn completion from terminal silence.
+Hermes launch setup covers PowerShell, Bash, Zsh, and Fish. It does not automatically follow an explicit binary path, nested shell, `cmd.exe`, SSH, WSL, or container host. Those sessions remain usable as ordinary terminals. An uninstrumented long-running TUI is a shell command; JaneT cannot infer the agent's turn completion from terminal silence.
 
 Hook delivery can also be blocked or delayed by the agent's own policy or runtime. Treat the indicator as a cue to inspect the agent terminal, not as confirmation that a tool succeeded. For implementation details and diagnostics, see the [activity integration notes](https://github.com/Sjormz/JaneT/blob/main/docs/terminal-activity.md).

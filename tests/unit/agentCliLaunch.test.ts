@@ -130,7 +130,7 @@ describe('automatic agent launch runtime', () => {
     } finally { bridge.close(); fs.rmSync(directory, { recursive: true, force: true }); }
   }, 25000);
 
-  it.skipIf(process.platform !== 'win32')('ordinary PowerShell codex invocation installs before launch and preserves arguments and exit status', async () => {
+  it.skipIf(process.platform !== 'win32')('ordinary PowerShell codex invocation leaves global hooks untouched', async () => {
     const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "janet launch's "));
     const bridge = new AgentActivityBridge(() => {});
     try {
@@ -148,7 +148,7 @@ describe('automatic agent launch runtime', () => {
       expect(output).toContain('EXIT=37');
       expect(output).toContain('TERM_AFTER=xterm-256color');
       expect(output).toContain('TERM_PROGRAM_AFTER=kitty');
-      expect(fs.existsSync(path.join(env.CODEX_HOME, 'hooks.json')), output).toBe(true);
+      expect(fs.existsSync(path.join(env.CODEX_HOME, 'hooks.json')), output).toBe(false);
       fs.writeFileSync(path.join(directory, 'codex.ps1'), '$input | ForEach-Object { [Console]::WriteLine("INPUT=$_") }');
       fs.writeFileSync(script, `${buildShellInit('powershell.exe', helper)}\n'prompt from pipe' | codex -\n`);
       expect(await run('powershell.exe', ['-NoProfile', '-File', script], env)).toContain('INPUT=prompt from pipe');
