@@ -128,6 +128,12 @@
   .status-git-dirty .icon svg { fill: currentColor; }
   .status-git-ahead { color: var(--status-ok); }
   .status-git-behind { color: var(--status-warn); }
+  /* An older snapshot kept after Git failed: never styled like current state. */
+  .status-git.stale .status-git-branch,
+  .status-git.stale .status-git-dirty,
+  .status-git.stale .status-git-ahead,
+  .status-git.stale .status-git-behind { color: var(--text-tertiary); }
+  .status-git-stale { color: var(--status-warn); }
   .status-version {
     flex: none;
     height: 20px;

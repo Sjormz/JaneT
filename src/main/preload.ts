@@ -17,6 +17,8 @@ import type {
   WriteLocalTextFileRequest,
 } from '../shared/textFiles';
 import type { GitDiffRequest, GitDiffResult } from '../shared/gitDiff';
+import type { GitActionResult, GitResult } from '../shared/gitResults';
+import type { GitStatusResult } from './git';
 import type { CommandNotificationPayload } from '../shared/commandNotifications';
 
 export interface UpdateProgress {
@@ -144,7 +146,7 @@ const api = {
     ipcRenderer.invoke('fs:writeTextFile', params),
 
   // Git
-  gitStatus: (params: { repoPath: string }) =>
+  gitStatus: (params: { repoPath: string }): Promise<GitResult<GitStatusResult>> =>
     ipcRenderer.invoke('git:status', params),
   gitBranches: (params: { repoPath: string }) =>
     ipcRenderer.invoke('git:branches', params),
@@ -154,37 +156,37 @@ const api = {
     ipcRenderer.invoke('git:log', params),
   gitFindRepo: (params: { startPath: string }) =>
     ipcRenderer.invoke('git:findRepo', params),
-  gitCheckout: (params: { repoPath: string; branch: string }) =>
+  gitCheckout: (params: { repoPath: string; branch: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:checkout', params),
-  gitCreateBranch: (params: { repoPath: string; branch: string; startPoint?: string; checkout?: boolean }) =>
+  gitCreateBranch: (params: { repoPath: string; branch: string; startPoint?: string; checkout?: boolean }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:createBranch', params),
-  gitDeleteBranch: (params: { repoPath: string; branch: string; force?: boolean }) =>
+  gitDeleteBranch: (params: { repoPath: string; branch: string; force?: boolean }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:deleteBranch', params),
-  gitStage: (params: { repoPath: string; paths: string[] }) =>
+  gitStage: (params: { repoPath: string; paths: string[] }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:stage', params),
-  gitUnstage: (params: { repoPath: string; paths: string[] }) =>
+  gitUnstage: (params: { repoPath: string; paths: string[] }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:unstage', params),
-  gitDiscard: (params: { repoPath: string; paths: string[] }) =>
+  gitDiscard: (params: { repoPath: string; paths: string[] }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:discard', params),
-  gitDeleteUntracked: (params: { repoPath: string; path: string }) =>
+  gitDeleteUntracked: (params: { repoPath: string; path: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:deleteUntracked', params),
   gitDiff: (params: GitDiffRequest): Promise<GitDiffResult> =>
     ipcRenderer.invoke('git:diff', params),
-  gitCommit: (params: { repoPath: string; message: string }) =>
+  gitCommit: (params: { repoPath: string; message: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:commit', params),
-  gitFetch: (params: { repoPath: string }) =>
+  gitFetch: (params: { repoPath: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:fetch', params),
-  gitPull: (params: { repoPath: string }) =>
+  gitPull: (params: { repoPath: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:pull', params),
-  gitPush: (params: { repoPath: string }) =>
+  gitPush: (params: { repoPath: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:push', params),
   gitWorktrees: (params: { repoPath: string }) =>
     ipcRenderer.invoke('git:worktrees', params),
-  gitAddWorktree: (params: { repoPath: string; worktreePath: string; branch: string; createBranch?: boolean; startPoint?: string }) =>
+  gitAddWorktree: (params: { repoPath: string; worktreePath: string; branch: string; createBranch?: boolean; startPoint?: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:addWorktree', params),
-  gitRemoveWorktree: (params: { repoPath: string; worktreePath: string; force?: boolean }) =>
+  gitRemoveWorktree: (params: { repoPath: string; worktreePath: string; force?: boolean }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:removeWorktree', params),
-  gitPruneWorktrees: (params: { repoPath: string }) =>
+  gitPruneWorktrees: (params: { repoPath: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:pruneWorktrees', params),
 
   // Settings

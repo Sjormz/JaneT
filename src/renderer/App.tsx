@@ -1811,9 +1811,9 @@ function AppInner({ initialSettings, persistSettings }: {
   }, [editorDocuments.selectSurface]);
   const gitStatus: GitStatusSummary | null = useMemo(
     () => gitRepository.repoPath && gitRepository.status
-      ? summarizeGitStatus(gitRepository.repoPath, gitRepository.status)
+      ? summarizeGitStatus(gitRepository.repoPath, gitRepository.status, gitRepository.stale ? gitRepository.error : null)
       : null,
-    [gitRepository.repoPath, gitRepository.status],
+    [gitRepository.repoPath, gitRepository.status, gitRepository.stale, gitRepository.error],
   );
   const openEditorFile = useCallback((resource: EditorResource) => {
     if (!activeTab) return;

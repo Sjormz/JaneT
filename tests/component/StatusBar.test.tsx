@@ -39,6 +39,21 @@ describe('StatusBar', () => {
     expect(screen.queryByText(/MacIntel|Win32/i)).not.toBeInTheDocument();
   });
 
+  it('marks a Git summary kept after a failed refresh as out of date', () => {
+    const summary = {
+      repoPath: '/repo', branch: 'main', ahead: 1, behind: 0, changed: 2, staged: 0, conflicted: 0,
+    };
+    const { rerender } = render(<StatusBar {...defaultProps} gitStatus={summary} />);
+    const current = screen.getByLabelText(/^\/repo · main/);
+    expect(current).not.toHaveClass('stale');
+    expect(current.getAttribute('aria-label')).not.toMatch(/Out of date/);
+
+    rerender(<StatusBar {...defaultProps} gitStatus={{ ...summary, staleReason: 'Git is not installed or is not on PATH.' }} />);
+    const stale = screen.getByLabelText(/^\/repo · main/);
+    expect(stale).toHaveClass('stale');
+    expect(stale.getAttribute('aria-label')).toMatch(/Out of date: Git is not installed or is not on PATH\.$/);
+  });
+
   it('shows the current version and checks for updates when clicked', async () => {
     getVersion.mockResolvedValue('0.6.1');
     render(<StatusBar {...defaultProps} />);
