@@ -26,7 +26,12 @@ interface TerminalInstance {
   promptMarkerTail: string;
   startupExpression?: string;
   startupTimer?: ReturnType<typeof setTimeout>;
+  /** Retire this instance exactly as a native exit does (idempotent per PTY). */
+  retire: (event: { exitCode: number; signal: number }) => void;
 }
+
+/** Exit code reported when the PTY is known to be gone but its real status is unavailable. */
+export const UNKNOWN_TERMINAL_EXIT_CODE = -1;
 
 export interface TerminalManagerOptions {
   agentHelper?: string;
@@ -114,9 +119,105 @@ function validateTerminalData(data: unknown, encoding: BufferEncoding = 'utf8'):
   }
 }
 
+/** Writes one private init file and returns its path. */
 type ShellInitFile = (name: string, contents: string) => string;
+/** Writes several private init files into one fresh directory and returns that directory. */
+type ShellInitDirectory = (files: Record<string, string>) => string;
 
-function shellLaunch(shell: string, init: string, initFile: ShellInitFile): { args: string[]; env: NodeJS.ProcessEnv } {
+/** Environment variable carrying the user's inherited ZDOTDIR into JaneT's zsh shims. */
+export const ZSH_USER_ZDOTDIR_ENV = 'JANET_ZSH_USER_ZDOTDIR';
+
+const ZSH_STARTUP_FILES = ['.zshenv', '.zprofile', '.zshrc', '.zlogin'] as const;
+type ZshStartupFile = typeof ZSH_STARTUP_FILES[number];
+
+/**
+ * Build the zsh startup shims placed in JaneT's temporary ZDOTDIR.
+ *
+ * zsh reads `$ZDOTDIR/.zshenv`, `.zprofile` (login), `.zshrc` (interactive)
+ * and `.zlogin` (login), consulting ZDOTDIR afresh for each file. Each shim
+ * sources the user's real file from the user's ZDOTDIR (the inherited value,
+ * else `$HOME`, exactly as zsh would), with ZDOTDIR set to the user's value
+ * while it runs. A user file may itself change ZDOTDIR (commonly `~/.zshenv`
+ * exporting `ZDOTDIR=~/.config/zsh`); that becomes the directory for the
+ * later files. The `.zshrc` shim leaves ZDOTDIR at the user's value for the
+ * interactive session (so nested zsh processes and a login shell's `.zlogin`
+ * use the user's files) and then runs JaneT's init once. Everything is
+ * inlined at top level because sourcing from a function would make the
+ * user's `typeset` declarations local.
+ */
+export function buildZshStartupFiles(init: string): Record<ZshStartupFile, string> {
+  const restoreUserZdotdir = [
+    'if [[ "$__janet_user_zdotdir_set" == 1 ]]; then',
+    '  export ZDOTDIR="$__janet_user_zdotdir"',
+    'else',
+    '  unset ZDOTDIR',
+    'fi',
+  ];
+  const captureUserZdotdir = [
+    'if [[ -n "${ZDOTDIR-}" ]]; then',
+    '  __janet_user_zdotdir="$ZDOTDIR"',
+    '  __janet_user_zdotdir_set=1',
+    'else',
+    '  __janet_user_zdotdir="$HOME"',
+    '  __janet_user_zdotdir_set=0',
+    'fi',
+  ];
+  const sourceUserFile = (name: ZshStartupFile) => [
+    ...restoreUserZdotdir,
+    `[[ -f "$__janet_user_zdotdir/${name}" ]] && builtin source "$__janet_user_zdotdir/${name}"`,
+  ];
+  const resumeShimChain = [
+    ...captureUserZdotdir,
+    'export ZDOTDIR="$__janet_zdotdir"',
+  ];
+  const header = '# JaneT zsh startup shim. Loads your own startup file, then continues JaneT setup.';
+  // Only the first shim reads the launch environment; the value is not left
+  // exported so child processes see the user's ZDOTDIR alone.
+  const zshenv = [
+    header,
+    'typeset -g __janet_zdotdir="$ZDOTDIR"',
+    `if [[ -n "\${${ZSH_USER_ZDOTDIR_ENV}-}" ]]; then`,
+    `  typeset -g __janet_user_zdotdir="$${ZSH_USER_ZDOTDIR_ENV}"`,
+    '  typeset -g __janet_user_zdotdir_set=1',
+    'else',
+    '  typeset -g __janet_user_zdotdir="$HOME"',
+    '  typeset -g __janet_user_zdotdir_set=0',
+    'fi',
+    `unset ${ZSH_USER_ZDOTDIR_ENV}`,
+    ...sourceUserFile('.zshenv'),
+    ...resumeShimChain,
+    '',
+  ].join('\n');
+  const zprofile = [header, ...sourceUserFile('.zprofile'), ...resumeShimChain, ''].join('\n');
+  const zshrc = [
+    header,
+    ...sourceUserFile('.zshrc'),
+    // ZDOTDIR now holds the user's value for the rest of the session.
+    'unset __janet_zdotdir __janet_user_zdotdir __janet_user_zdotdir_set',
+    init,
+    '',
+  ].join('\n');
+  // zsh reads .zlogin after .zshrc, by which point ZDOTDIR points back at the
+  // user's directory. This shim only matters if a user file re-selected
+  // JaneT's directory; it never re-runs JaneT's init.
+  const zlogin = [
+    header,
+    'if [[ -n "${__janet_user_zdotdir-}" ]]; then',
+    ...sourceUserFile('.zlogin').map((line) => `  ${line}`),
+    '  unset __janet_zdotdir __janet_user_zdotdir __janet_user_zdotdir_set',
+    'fi',
+    '',
+  ].join('\n');
+  return { '.zshenv': zshenv, '.zprofile': zprofile, '.zshrc': zshrc, '.zlogin': zlogin };
+}
+
+export function shellLaunch(
+  shell: string,
+  init: string,
+  initFile: ShellInitFile,
+  initDirectory: ShellInitDirectory,
+  inheritedEnv: NodeJS.ProcessEnv = process.env,
+): { args: string[]; env: NodeJS.ProcessEnv } {
   if (!init) return { args: [], env: {} };
 
   const base = path.basename(shell).toLowerCase();
@@ -140,9 +241,15 @@ function shellLaunch(shell: string, init: string, initFile: ShellInitFile): { ar
   }
 
   if (base === 'zsh' || base === 'zsh.exe') {
-    const zshrc = initFile('.zshrc', `unset ZDOTDIR\n[ -f ~/.zshrc ] && . ~/.zshrc\n${init}\n`);
-    const zdotdir = path.dirname(zshrc);
-    return { args: ['-i'], env: { ZDOTDIR: zdotdir } };
+    const zdotdir = initDirectory(buildZshStartupFiles(init));
+    return {
+      args: ['-i'],
+      env: {
+        ZDOTDIR: zdotdir,
+        // Always set (possibly empty) so a stale inherited value cannot leak in.
+        [ZSH_USER_ZDOTDIR_ENV]: inheritedEnv.ZDOTDIR ?? '',
+      },
+    };
   }
 
   if (base === 'fish' || base === 'fish.exe') {
@@ -250,6 +357,7 @@ export class TerminalManager {
       defaultShell,
       launchInit,
       (name, contents) => this.ensureShellInitFile(name, contents),
+      (files) => this.ensureShellInitDirectory(files),
     );
 
     const env: NodeJS.ProcessEnv = {
@@ -309,16 +417,19 @@ export class TerminalManager {
       ...(!startupAtLaunch && startupExpression && !this.startupCommandLedger.has(id)
         ? { startupExpression }
         : {}),
+      retire: (event) => {
+        const current = this.terminals.get(id);
+        if (current?.pty !== pty) return;
+        if (current.startupTimer) clearTimeout(current.startupTimer);
+        current.startupTimer = undefined;
+        this.terminals.delete(id);
+        this.capacity.release(id);
+        onExit?.(event);
+      },
     };
     this.terminals.set(id, terminal);
     pty.onExit((event) => {
-      const current = this.terminals.get(id);
-      if (current?.pty === pty) {
-        if (current.startupTimer) clearTimeout(current.startupTimer);
-        this.terminals.delete(id);
-        this.capacity.release(id);
-        onExit?.({ exitCode: event.exitCode, signal: event.signal ?? 0 });
-      }
+      terminal.retire({ exitCode: event.exitCode, signal: event.signal ?? 0 });
     });
     pty.onData((data) => {
       const current = this.terminals.get(id);
@@ -393,8 +504,10 @@ export class TerminalManager {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/EBADF|already exited/i.test(message)) {
-        this.terminals.delete(id);
-        this.capacity.release(id);
+        // The PTY is gone but its exit event may never arrive. Retire it
+        // through the same path as a native exit so the startup timer is
+        // cleared and the renderer learns the terminal ended.
+        term.retire({ exitCode: UNKNOWN_TERMINAL_EXIT_CODE, signal: 0 });
         return;
       }
       throw error;
@@ -624,11 +737,16 @@ export class TerminalManager {
   }
 
   private ensureShellInitFile(name: string, contents: string): string {
+    return path.join(this.ensureShellInitDirectory({ [name]: contents }), name);
+  }
+
+  private ensureShellInitDirectory(files: Record<string, string>): string {
     const initDir = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-shell-init-'));
     if (process.platform !== 'win32') fs.chmodSync(initDir, 0o700);
     this.shellInitDirs.add(initDir);
-    const filePath = path.join(initDir, name);
-    fs.writeFileSync(filePath, contents, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    return filePath;
+    for (const [name, contents] of Object.entries(files)) {
+      fs.writeFileSync(path.join(initDir, name), contents, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    }
+    return initDir;
   }
 }

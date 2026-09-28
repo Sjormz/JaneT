@@ -407,7 +407,40 @@
     color: var(--text-tertiary);
     font-size: 11px;
     border-bottom: 1px solid var(--glass-border);
+    overflow-wrap: anywhere;
   }
+
+  .git-status-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 6px 14px;
+    color: var(--status-warn);
+    font-size: 11px;
+    line-height: 1.45;
+    border-bottom: 1px solid var(--glass-border);
+  }
+
+  .git-status-error-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+  }
+
+  .git-retry {
+    flex: none;
+    padding: 1px 8px;
+    border: 1px solid var(--glass-border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .git-retry:hover { background: var(--glass-border); }
 
   .git-file-item {
     display: flex;

@@ -141,6 +141,7 @@ export default function Sidebar({
             repoPath={gitRepository.repoPath}
             status={gitRepository.status}
             searching={gitRepository.searching}
+            statusError={gitRepository.error}
             openLocalTerminals={openLocalTerminals}
             onOpenTerminal={onOpenTerminal}
             onOpenLocalTabAt={onOpenLocalTabAt}

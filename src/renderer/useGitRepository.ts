@@ -14,8 +14,13 @@ export interface GitStatusResult {
 
 export interface GitRepositoryState {
   repoPath: string | null;
+  /** Last snapshot Git reported. Check `stale` before presenting it as current. */
   status: GitStatusResult | null;
   searching: boolean;
+  /** Why the latest status read failed, or null when it succeeded. */
+  error: string | null;
+  /** True when `status` is an older snapshot kept after a failed read. */
+  stale: boolean;
 }
 
 const REPO_DISCOVERY_INTERVAL_MS = 15_000;
@@ -30,6 +35,7 @@ export function useGitRepository(cwd: string, enabled: boolean): GitRepositorySt
   const active = enabled && Boolean(cwd);
   const [repoPath, setRepoPath] = useState<string | null>(null);
   const [status, setStatus] = useState<GitStatusResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [searching, setSearching] = useState(active);
   const resourceGeneration = useRef(0);
   const statusGeneration = useRef(0);
@@ -41,6 +47,7 @@ export function useGitRepository(cwd: string, enabled: boolean): GitRepositorySt
     repoPathRef.current = null;
     setRepoPath(null);
     setStatus(null);
+    setError(null);
     setSearching(active);
   }, [cwd, active]);
 
@@ -64,6 +71,7 @@ export function useGitRepository(cwd: string, enabled: boolean): GitRepositorySt
         statusGeneration.current += 1;
         setRepoPath(discovered);
         setStatus(null);
+        setError(null);
       }
       setSearching(false);
     },
@@ -77,23 +85,29 @@ export function useGitRepository(cwd: string, enabled: boolean): GitRepositorySt
       if (!repoPath) return;
       const generation = ++statusGeneration.current;
       const requestedRepo = repoPath;
+      const current = () => generation === statusGeneration.current && repoPathRef.current === requestedRepo;
+      let failure: string;
       try {
         const result = await window.janet.gitStatus({ repoPath: requestedRepo });
-        if (
-          generation === statusGeneration.current &&
-          repoPathRef.current === requestedRepo &&
-          result
-        ) {
-          setStatus((current) => gitStatusesEqual(current, result) ? current : result);
+        if (!current()) return;
+        if (result?.ok) {
+          const next = result.value;
+          setStatus((previous) => gitStatusesEqual(previous, next) ? previous : next);
+          setError(null);
+          return;
         }
-      } catch {
-        // Keep the last good snapshot. Repository discovery will clear it if
-        // the cwd stops belonging to a repository.
+        failure = result?.error || 'Git did not return a status.';
+      } catch (err) {
+        if (!current()) return;
+        failure = err instanceof Error && err.message ? err.message : 'Git status could not be read.';
       }
+      // Keep the last good snapshot only as visibly stale data. Repository
+      // discovery clears it if the cwd stops belonging to a repository.
+      setError((previous) => previous === failure ? previous : failure);
     },
   });
 
-  return { repoPath, status, searching };
+  return { repoPath, status, searching, error, stale: Boolean(error && status) };
 }
 
 function gitStatusesEqual(left: GitStatusResult | null, right: GitStatusResult): boolean {

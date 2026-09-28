@@ -23,6 +23,15 @@ describe('summarizeGitStatus', () => {
       staged: 1,
       conflicted: 1,
     });
+    expect(summary).not.toHaveProperty('staleReason');
     expect(formatGitStatusTitle(summary)).toBe('C:/repo · main · ahead 2 · behind 1 · 2 changed · 1 staged · 1 conflicted');
+  });
+
+  it('labels a kept snapshot as out of date with the reason', () => {
+    const summary = summarizeGitStatus('/repo', { current: 'main', ahead: 0, behind: 0, conflicted: [], files: [] }, 'fatal: not a git repository');
+    expect(summary.staleReason).toBe('fatal: not a git repository');
+    expect(formatGitStatusTitle(summary)).toMatch(/Out of date: fatal: not a git repository$/);
+    expect(summarizeGitStatus('/repo', { current: 'main', ahead: 0, behind: 0, conflicted: [], files: [] }, null))
+      .not.toHaveProperty('staleReason');
   });
 });
