@@ -154,13 +154,25 @@ describe('VerticalTabBar', () => {
   it('separates temporary delete/keep actions from non-destructive Library removal', () => {
     const action = vi.fn();
     const view = renderTabs({ groups: [{ id: 'default', name: 'Work', directory: 'C:/temp/Work' }],
-      tabs: [{ ...tabs[0], groupId: 'default', cwd: 'C:/temp/Work/App' }], onWorkspaceAction: action });
+      tabs: [
+        { ...tabs[0], groupId: 'default', cwd: 'C:/temp/Work/App', isProject: true },
+        // A new terminal or Git worktree opened from the project is only a session.
+        { ...tabs[1], groupId: 'default', cwd: 'C:/temp/Work/App' },
+        { ...tabs[1], id: 'worktree', title: 'App-feature', groupId: 'default', cwd: 'C:/temp/Work/App-feature' },
+      ], onWorkspaceAction: action });
     fireEvent.contextMenu(screen.getByRole('button', { name: /^Main app Local/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Keep in Library…' }));
     expect(action).toHaveBeenCalledWith('keep', 'default', 'tab-1');
     fireEvent.contextMenu(screen.getByRole('button', { name: /^Main app Local/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete project…' }));
     expect(action).toHaveBeenCalledWith('delete', 'default', 'tab-1');
+    for (const name of [/^Tools Local/, /^App-feature Local/]) {
+      fireEvent.contextMenu(screen.getByRole('button', { name }));
+      expect(screen.getByRole('menuitem', { name: 'Rename session' })).toBeInTheDocument();
+      expect(screen.queryByRole('menuitem', { name: 'Delete project…' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('menuitem', { name: 'Keep in Library…' })).not.toBeInTheDocument();
+      fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    }
     view.unmount();
     renderTabs({ groups: [{ id: 'linked', name: 'Repo', kind: 'folder', directory: 'C:/repo' }], tabs: [], onWorkspaceAction: action });
     expect(screen.getByRole('heading', { name: 'Library' })).toBeInTheDocument();

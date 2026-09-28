@@ -97,7 +97,7 @@ describe('SettingsManager', () => {
       session: {
         tabs: [
           { id: 'remote', title: 'Remote', type: 'ssh', root: remoteLeaf },
-          { id: 'mixed', title: 'Mixed', type: 'local', root: mixedRoot, selectedPanePath: [1], maximizedPanePath: [2] },
+          { id: 'mixed', title: 'Mixed', type: 'local', isProject: false, root: mixedRoot, selectedPanePath: [1], maximizedPanePath: [2] },
           { id: 'project', title: 'Project', type: 'local', isProject: true, root: { type: 'split', direction: 'vertical', children: [], sizes: [] } },
           { id: 'remote-project', title: 'Keep project', type: 'local', isProject: true, root: remoteLeaf },
         ],
@@ -114,6 +114,8 @@ describe('SettingsManager', () => {
     expect(settings.session.tabs.map((tab) => tab.id)).toEqual(['mixed', 'project', 'remote-project']);
     expect(settings.session.tabs[2].root).toEqual({ type: 'split', direction: 'vertical', children: [], sizes: [] });
     expect(settings.session.tabs[0].root).toEqual({ ...mixedRoot, children: [localLeaf, { ...localLeaf, title: 'Last' }], sizes: [2, 4] });
+    // Explicit session ownership survives, so restore never re-infers a project.
+    expect(settings.session.tabs.map((tab) => tab.isProject)).toEqual([false, true, true]);
     expect(settings.session.tabs[0]).not.toHaveProperty('selectedPanePath');
     expect(settings.session.tabs[0]).not.toHaveProperty('maximizedPanePath');
     expect(settings.session.sidebarSection).toBe('files');

@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import { flushSync } from 'react-dom';
-import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, isWorkspaceProject, rebaseDirectory, type WorkspaceGroup } from '../shared/workspaceGroups';
+import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, isWorkspaceProject, ownsWorkspaceProjectFolder, rebaseDirectory, type WorkspaceGroup } from '../shared/workspaceGroups';
 import EmptyWorkspace, { type WorkspaceEntryRequest } from './components/EmptyWorkspace';
 import Titlebar from './components/Titlebar';
 import VerticalTabBar from './components/VerticalTabBar';
@@ -52,7 +52,6 @@ import { useEditorDocuments } from './useEditorDocuments';
 import { emptyTabDocumentWorkspace, isEditorDocumentDirty, type EditorResource } from './editorDocuments';
 import { snippetTextForPaste, type Snippet } from '../shared/snippets';
 import { MAX_COMMAND_HISTORY_ENTRIES, type CommandHistoryEntry } from '../shared/commandHistory';
-import { basename } from '../shared/gitWorktrees';
 import {
   acknowledgeAgentAwareness,
   aggregateAgentStatus,
@@ -95,6 +94,11 @@ interface PendingDestructiveAction {
   onCancel?: () => void;
   destructive?: boolean;
   fallbackFocus?: () => HTMLElement | null;
+}
+
+interface ClosePrompt {
+  settled: boolean;
+  cancel: () => void;
 }
 
 type RenameTarget =
@@ -325,8 +329,16 @@ function AppInner({ initialSettings, persistSettings }: {
   const pendingDestructiveFocusRef = useRef<(() => HTMLElement | null) | undefined>(undefined);
   const editorDocuments = useEditorDocuments();
 
+  // A close prompt the main process is waiting on (it has no timeout once shown).
+  const activeClosePromptRef = useRef<ClosePrompt | null>(null);
+  const [closeRequestExpired, setCloseRequestExpired] = useState(false);
+
   useEffect(() => {
     if (pendingDestructiveAction !== null) return;
+    // If the close prompt left the screen without a decision (for example it was
+    // replaced by another confirmation), cancel so a later close is not blocked.
+    const closePrompt = activeClosePromptRef.current;
+    if (closePrompt && !closePrompt.settled) closePrompt.cancel();
     const fallbackFocus = pendingDestructiveFocusRef.current;
     pendingDestructiveFocusRef.current = undefined;
     fallbackFocus?.()?.focus();
@@ -430,7 +442,8 @@ function AppInner({ initialSettings, persistSettings }: {
         return {
           id: tab.id,
           title: tab.title,
-          ...(tab.isProject ? { isProject: true } : {}),
+          // Always explicit, so restore never has to infer ownership from the cwd.
+          isProject: tab.isProject === true,
           groupId: tab.groupId ?? groupsRef.current[0]?.id,
           type: tab.type,
           cwd: tab.cwd,
@@ -1043,28 +1056,24 @@ function AppInner({ initialSettings, persistSettings }: {
     addTab('local', cwd, title);
   }, [addTab]);
 
-  const selectAndOpenLocalDirectory = useCallback(() => {
-    void window.janet.selectLocalDirectory().then((cwd) => {
-      if (cwd) openLocalTabAt(cwd, basename(cwd));
-    }).catch(() => {});
-  }, [openLocalTabAt]);
-
   const closeTab = useCallback(
     (tabId: string) => {
       const current = tabsRef.current;
       const idx = current.findIndex((tab) => tab.id === tabId);
       if (idx < 0) return;
       const tab = current[idx];
-      const shouldRestoreTerminalFocus = activeTabId === tabId;
+      // Read refs, not render closures: callers close several tabs in one loop.
+      const shouldRestoreTerminalFocus = activeTabIdRef.current === tabId;
       let next = current.filter((candidate) => candidate.id !== tabId);
 
-      if (activeTabId === tabId) {
+      if (shouldRestoreTerminalFocus) {
         setActiveTabId(next[Math.min(idx, next.length - 1)]?.id ?? '');
       }
 
       editorDocuments.closeDocumentsForTab(tabId);
       teardownTerminalOwners(collectTerminalOwners(tab));
-      if (focusedTerminalId && getAllLeafIds(tab.root).includes(focusedTerminalId)) {
+      const focusedId = focusedTerminalIdRef.current;
+      if (focusedId && getAllLeafIds(tab.root).includes(focusedId)) {
         setFocusedTerminalId(null);
       }
       setMaximizedLeafByTab((currentMaximized) => {
@@ -1078,7 +1087,7 @@ function AppInner({ initialSettings, persistSettings }: {
       restoreTerminalFocusRef.current = shouldRestoreTerminalFocus;
       setTabs(next);
     },
-    [activeTabId, editorDocuments.closeDocumentsForTab, focusedTerminalId, teardownTerminalOwners],
+    [editorDocuments.closeDocumentsForTab, teardownTerminalOwners],
   );
 
   const saveEditorDocument = useCallback(async (
@@ -1245,12 +1254,10 @@ function AppInner({ initialSettings, persistSettings }: {
   const renameTab = async (tabId: string, title: string) => {
     const tab = tabsRef.current.find((item) => item.id === tabId);
     if (!tab) return;
-    if (!title.trim()) throw new Error('Enter a project name.');
-    const group = groupsRef.current.find((item) => item.id === tab.groupId);
-    if (group && !group.kind && tab.cwd && group.directory) {
-      const relative = rebaseDirectory(tab.cwd, group.directory, '__workspace__');
-      if (relative?.startsWith('__workspace__/') || relative?.startsWith('__workspace__\\')) await renameDirectory(tab.cwd, title);
-    }
+    if (!title.trim()) throw new Error(tab.isProject ? 'Enter a project name.' : 'Enter a session name.');
+    // Only the project that owns a temporary workspace folder renames it. New
+    // terminals, worktrees and folders opened from a project just change title.
+    if (ownsWorkspaceProjectFolder(tab, groupsRef.current)) await renameDirectory(tab.cwd!, title);
     updateTab(tabId, (item) => ({ ...item, title }));
     await persistSession();
   };
@@ -1370,15 +1377,15 @@ function AppInner({ initialSettings, persistSettings }: {
       restoreTerminalFocusRef.current = true;
       setTabs(next);
 
-      const wasMaximized = maximizedLeafByTab[tabId] === leafId;
-      if (wasMaximized) {
+      // Refs keep loops (close all terminals) consistent within one event.
+      if (maximizedLeafByTabRef.current[tabId] === leafId) {
         setMaximizedLeafByTab((prev) => ({ ...prev, [tabId]: null }));
       }
-      if (focusedTerminalId === leafId) {
+      if (focusedTerminalIdRef.current === leafId) {
         setFocusedTerminalId(getAllLeafIds(nextRoot)[0] ?? null);
       }
     },
-    [closeTab, focusedTerminalId, maximizedLeafByTab, teardownTerminalOwners],
+    [closeTab, teardownTerminalOwners],
   );
 
   const requestCloseTab = useCallback((tabId: string) => {
@@ -1440,30 +1447,46 @@ function AppInner({ initialSettings, persistSettings }: {
         return;
       }
 
+      // The main process stops its unresponsive-renderer timeout once the user is
+      // being asked. If the request already ended, showing a prompt would be stale.
+      const awaitingUser = window.janet.awaitUserForClose
+        ? await window.janet.awaitUserForClose({ requestId: request.requestId }).catch(() => false)
+        : true;
+      if (!awaitingUser) {
+        await window.janet.resolvePrepareForClose({ requestId: request.requestId, resolution: 'cancel' });
+        return;
+      }
+
       const reason = request.reason === 'update-install'
         ? 'installing the update'
         : 'closing JaneT';
-      const cancelClose = () => {
-        void window.janet.resolvePrepareForClose({
-          requestId: request.requestId,
-          resolution: 'cancel',
-        });
+      const prompt: ClosePrompt = { settled: false, cancel: () => {} };
+      // Every choice dismisses the prompt, even if the main process no longer
+      // accepts it, so a late decision can never leave the dialog stuck.
+      const settle = async (resolution: 'saved' | 'discarded' | 'cancel'): Promise<true> => {
+        if (prompt.settled) return true;
+        prompt.settled = true;
+        if (activeClosePromptRef.current === prompt) activeClosePromptRef.current = null;
+        const accepted = await window.janet.resolvePrepareForClose({ requestId: request.requestId, resolution })
+          .catch(() => false);
+        if (!accepted && resolution !== 'cancel') {
+          setCloseRequestExpired(true);
+        }
+        return true;
       };
+      const cancelClose = () => { void settle('cancel'); };
+      prompt.cancel = cancelClose;
+      activeClosePromptRef.current = prompt;
+      setCloseRequestExpired(false);
       setPendingDestructiveAction({
         title: `Save ${dirtyDocuments.length} changed ${dirtyDocuments.length === 1 ? 'file' : 'files'} before ${reason}?`,
         description: 'JaneT can save every changed file before continuing, or you can explicitly discard the editor changes. Cancel keeps the application, terminals, and files open.',
         confirmLabel: 'Discard changes and close',
-        run: async () => window.janet.resolvePrepareForClose({
-          requestId: request.requestId,
-          resolution: await persistSession() ? 'discarded' : 'cancel',
-        }),
+        run: async () => settle(await persistSession() ? 'discarded' : 'cancel'),
         secondaryLabel: 'Save all and close',
         runSecondary: () => saveEditorDocumentSequence(
           dirtyDocuments.map((document) => document.key),
-          async () => window.janet.resolvePrepareForClose({
-            requestId: request.requestId,
-            resolution: await persistSession() ? 'saved' : 'cancel',
-          }),
+          async () => settle(await persistSession() ? 'saved' : 'cancel'),
           cancelClose,
         ),
         onCancel: cancelClose,
@@ -1561,11 +1584,42 @@ function AppInner({ initialSettings, persistSettings }: {
     setGroups(current => current.map(item => item.id === tab.groupId ? { ...item, collapsed: false } : item));
   };
   const [directoryActionError, setDirectoryActionError] = useState('');
+  /** Replace stopped panes with fresh terminals at their last known directory. Returns the count. */
+  const restartStoppedTerminals = (tabIds: ReadonlySet<string>, stoppedIds: ReadonlySet<string>): number => {
+    const replacements = new Map<string, string>();
+    const next = tabsRef.current.map((tab) => {
+      if (!tabIds.has(tab.id)) return tab;
+      // A new leaf id remounts the pane, which starts a fresh PTY for it.
+      return { ...tab, root: mapLeaves(tab.root, (leaf) => {
+        if (!stoppedIds.has(leaf.id)) return leaf;
+        const id = genId('term');
+        replacements.set(leaf.id, id);
+        const cwd = cwdByTerminalRef.current[leaf.id] ?? leaf.cwd;
+        return { ...leaf, id, ...(cwd ? { cwd } : {}) };
+      }) };
+    });
+    if (replacements.size === 0) return 0;
+    teardownTerminalOwners([...replacements.keys()].map((termId) => ({ termId, type: 'local' as const })));
+    const focused = focusedTerminalIdRef.current;
+    if (focused && replacements.has(focused)) {
+      terminalFocusTargetIdRef.current = replacements.get(focused)!;
+      restoreTerminalFocusRef.current = true;
+      setFocusedTerminalId(replacements.get(focused)!);
+    }
+    setMaximizedLeafByTab((current) => Object.fromEntries(Object.entries(current).map(([tabId, leafId]) => (
+      [tabId, leafId && replacements.has(leafId) ? replacements.get(leafId)! : leafId]
+    ))));
+    tabsRef.current = next;
+    setTabs(next);
+    return replacements.size;
+  };
   const requestWorkspaceAction = async (action: 'delete' | 'keep' | 'unlink', groupId: string, projectId?: string) => {
     if (directoryRenameBusy.current || pendingDestructiveBusyRef.current) return;
     const group = groupsRef.current.find((entry) => entry.id === groupId);
     const project = projectId ? tabsRef.current.find((tab) => tab.id === projectId && tab.groupId === groupId) : undefined;
     if (!group || (projectId && !project)) return;
+    // Sessions opened inside a project never own its folder.
+    if (project && !isWorkspaceProject(project, groupsRef.current)) return;
     if (!project && !group.directory) action = 'unlink';
     if (project?.isProject && group.kind === 'folder') action = 'unlink';
     const affected = tabsRef.current.filter((tab) => project ? tab.id === project.id : tab.groupId === group.id);
@@ -1602,11 +1656,14 @@ function AppInner({ initialSettings, persistSettings }: {
         }
         if (!await persistSession()) return false;
         directoryRenameBusy.current = true;
+        const stopped = new Set<string>();
         try {
           // Confirmation explicitly authorizes stopping only these sessions. Await native teardown before filesystem work.
           for (const tab of affected) {
             for (const owner of collectTerminalOwners(tab)) {
-              if (owner.type === 'local') await window.janet.terminalDestroy({ id: owner.termId });
+              if (owner.type !== 'local') continue;
+              stopped.add(owner.termId);
+              await window.janet.terminalDestroy({ id: owner.termId });
             }
           }
           const result = action === 'unlink' ? null : await window.janet.workspaceLifecycle({ action, groupId, projectId, destinationParent: destinationParent ?? undefined, expectedDirectory: source });
@@ -1627,7 +1684,10 @@ function AppInner({ initialSettings, persistSettings }: {
           } else if (!project) groupsRef.current = groupsRef.current.filter((entry) => entry.id !== groupId);
           setGroups(groupsRef.current);
         } catch (error) {
-          setDirectoryActionError(`${error instanceof Error ? error.message : String(error)} Any terminals stopped for this operation can be reopened.`);
+          // Destroying a PTY emits no exit event, so the stopped panes would look alive
+          // but ignore input. The files were retained; start fresh terminals in place.
+          const restarted = restartStoppedTerminals(new Set(affected.map((tab) => tab.id)), stopped);
+          setDirectoryActionError(`${error instanceof Error ? error.message : String(error)}${restarted ? ` JaneT restarted the ${restarted} terminal${restarted === 1 ? '' : 's'} it stopped for this operation.` : ''}`);
           return true; // Close confirmation so the retained-file error is visible, not hidden behind the modal.
         } finally { directoryRenameBusy.current = false; }
         await persistSession();
@@ -2159,6 +2219,10 @@ function AppInner({ initialSettings, persistSettings }: {
       {sessionSaveFailed && <div className="settings-save-notice" role="alert">
         Workspace changes could not be saved. Keep JaneT open and retry before closing.
         <button type="button" onClick={() => void persistSession()}>Retry workspace save</button>
+      </div>}
+      {closeRequestExpired && <div className="settings-save-notice" role="alert">
+        JaneT stayed open because that close request had already ended. Any files you chose to save were saved. Close JaneT or install the update again to continue.
+        <button type="button" onClick={() => setCloseRequestExpired(false)}>Dismiss</button>
       </div>}
       <Titlebar
         onOpenPalette={() => {
