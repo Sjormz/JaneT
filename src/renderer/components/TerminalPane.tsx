@@ -837,8 +837,11 @@ export default function TerminalPane({
         if (cwdDebounce) clearTimeout(cwdDebounce);
         cwdDebounce = setTimeout(() => onCwdChange?.(termId, newCwd), 80);
       };
+      // Reports from another host (e.g. a nested SSH shell) or malformed
+      // reports return null and leave the last valid cwd unchanged.
+      const localHostname = window.janet?.localHostname ?? '';
       lifetimeCleanup.push(term.parser.registerOscHandler(7, (data) => {
-        const path = fileUrlToPath(data);
+        const path = fileUrlToPath(data, localHostname);
         if (path) {
           // OSC 7 is emitted before every local shell prompt. Even when the
           // cwd is unchanged, the command that just completed may have

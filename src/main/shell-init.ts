@@ -7,8 +7,10 @@ export const STARTUP_READY_MARKER = '\x1b]777;janet-ready\x1b\\';
  * Returns a small shell-init snippet that, when sourced/eval'd by the
  * shell at startup:
  *
- * - emits an OSC 7 escape sequence (file://HOST/PATH) before every prompt,
- *   so JaneT can keep its cwd-aware UI in sync; and
+ * - emits an OSC 7 escape sequence (file://HOST/PATH, with the UTF-8 path
+ *   percent-encoded and HOST set to this machine's hostname) before every
+ *   prompt, so JaneT can keep its cwd-aware UI in sync (see
+ *   src/renderer/osc7.ts for the decoder's validation rules); and
  * - prepares Hermes activity hooks.
  *
  * The Hermes wrapper is installed only when `hermes` currently resolves to
@@ -27,7 +29,7 @@ export const STARTUP_READY_MARKER = '\x1b]777;janet-ready\x1b\\';
 export function buildShellInit(shell: string, agentHelper?: string): string {
   const base = path.basename(shell).toLowerCase();
 
-  // PowerShell (any version — both 5.1 and 7+). The trick: capture the
+  // PowerShell (any version â€” both 5.1 and 7+). The trick: capture the
   // existing prompt function, then redefine it so it emits OSC 7 first
   // and then calls the original. This works regardless of whether the
   // user has a custom prompt or not.
@@ -76,8 +78,25 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "  $__jt_success = $?",
       "  $__jt_last_exit_code = $global:LASTEXITCODE",
       "  $e = [char]27",
-      "  $urlPath = ($PWD.ProviderPath -replace '\\\\','/')",
-      "  $osc = $e + ']7;file://' + $env:COMPUTERNAME + '/' + $urlPath + $e + [char]92",
+      // Report only FileSystem locations (not Registry:, Env:, ...). The
+      // UTF-8 path is percent-encoded per RFC 3986/8089, keeping only
+      // unreserved characters plus `/` and the drive colon, and the host is
+      // the same gethostname() value JaneT compares against.
+      "  $osc = ''",
+      "  try {",
+      "    $__jt_loc = $ExecutionContext.SessionState.Path.CurrentLocation",
+      "    if ($__jt_loc -and $__jt_loc.Provider.Name -eq 'FileSystem' -and $__jt_loc.ProviderPath) {",
+      "      $__jt_path = [string]$__jt_loc.ProviderPath -replace '\\\\','/'",
+      "      if (-not $__jt_path.StartsWith('/')) { $__jt_path = '/' + $__jt_path }",
+      "      $__jt_url = New-Object System.Text.StringBuilder",
+      "      foreach ($__jt_byte in [System.Text.Encoding]::UTF8.GetBytes($__jt_path)) {",
+      "        if (($__jt_byte -ge 48 -and $__jt_byte -le 58) -or ($__jt_byte -ge 65 -and $__jt_byte -le 90) -or ($__jt_byte -ge 97 -and $__jt_byte -le 122) -or $__jt_byte -eq 45 -or $__jt_byte -eq 46 -or $__jt_byte -eq 47 -or $__jt_byte -eq 95 -or $__jt_byte -eq 126) { [void]$__jt_url.Append([char]$__jt_byte) } else { [void]$__jt_url.Append('%' + $__jt_byte.ToString('X2')) }",
+      "      }",
+      "      $__jt_host = try { [System.Net.Dns]::GetHostName() } catch { '' }",
+      "      if ($__jt_host -notmatch '^[A-Za-z0-9._-]+$') { $__jt_host = 'localhost' }",
+      "      $osc = $e + ']7;file://' + $__jt_host + $__jt_url.ToString() + $e + [char]92",
+      "    }",
+      "  } catch { $osc = '' }",
       "  $ready = $e + ']777;janet-ready' + $e + [char]92",
       "  if ($global:__jt_state.InExecution) {",
       "    $commandStatus = if ($__jt_success) { 0 } elseif ($global:__jt_state.UseNativeExitCode -and $null -ne $__jt_last_exit_code -and $__jt_last_exit_code -ne 0) { $__jt_last_exit_code } else { 1 }",
@@ -86,7 +105,7 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "    $global:__jt_state.UseNativeExitCode = $false",
       "  }",
       "  Write-Host -NoNewline ($e + ']133;A' + $e + [char]92)",
-      "  Write-Host -NoNewline $osc",
+      "  if ($osc) { Write-Host -NoNewline $osc }",
       "  $global:LASTEXITCODE = $__jt_last_exit_code",
       "  if ($__jt_success) { $null = $true } else { Write-Error '__janet_status__' -ErrorAction Ignore }",
       "  try {",
@@ -117,14 +136,32 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
     return agents + '\n' + ps + '\n$null = $true';
   }
 
-  // Bash. The canonical PROMPT_COMMAND snippet — also used by VS Code.
+  // Bash. The canonical PROMPT_COMMAND snippet â€” also used by VS Code.
   if (base === 'bash' || base === 'bash.exe') {
     return [
       "__jt_already_installed() { [[ -n ${__jt_installed-} ]]; }",
       "if ! __jt_already_installed; then",
       "__jt_installed=1",
       // Use a namespaced function name so we don't clobber the user's.
-      "__jt_osc7() { printf '\\033]7;file://%s%s\\033\\\\' \"${HOSTNAME:-localhost}\" \"$PWD\"; }",
+      // Percent-encode $PWD byte by byte (C locale) so spaces, `%`, `#`,
+      // controls and UTF-8 round-trip through the file:// URL.
+      "__jt_urlencode_path() {",
+      "  local LC_ALL=C __jt_in=$1 __jt_out= __jt_ch __jt_code __jt_i",
+      "  for (( __jt_i = 0; __jt_i < ${#__jt_in}; __jt_i++ )); do",
+      "    __jt_ch=${__jt_in:__jt_i:1}",
+      "    case $__jt_ch in",
+      "      [A-Za-z0-9/._~:-]) __jt_out+=$__jt_ch ;;",
+      "      *) printf -v __jt_code '%d' \"'$__jt_ch\"; __jt_code=$(( (__jt_code + 256) % 256 )); printf -v __jt_ch '%%%02X' \"$__jt_code\"; __jt_out+=$__jt_ch ;;",
+      "    esac",
+      "  done",
+      "  __jt_encoded_path=$__jt_out",
+      "}",
+      "__jt_osc7() {",
+      "  local __jt_host=${HOSTNAME-} __jt_encoded_path",
+      "  case $__jt_host in ''|*[!A-Za-z0-9._-]*) __jt_host=localhost ;; esac",
+      "  __jt_urlencode_path \"$PWD\"",
+      "  printf '\\033]7;file://%s%s\\033\\\\' \"$__jt_host\" \"$__jt_encoded_path\"",
+      "}",
       "__jt_ready() { printf '\\033]777;janet-ready\\033\\\\'; }",
       "__jt_restore_status() { return \"$1\"; }",
       "__jt_in_command=0",
@@ -183,7 +220,18 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
     return [
       "if [[ -z ${__jt_installed-} ]]; then",
       "typeset -g __jt_installed=1",
-      "__jt_osc7() { print -Pn '\\e]7;file://%m%d\\a' }",
+      // Percent-encode $PWD byte by byte (C locale, no multibyte) and use
+      // the full gethostname() value, which JaneT compares against.
+      "__jt_osc7() {",
+      "  emulate -L zsh",
+      "  setopt extendedglob",
+      "  unsetopt multibyte",
+      "  local LC_ALL=C",
+      "  local __jt_host=$HOST",
+      "  [[ -n $__jt_host && $__jt_host != *[^A-Za-z0-9._-]* ]] || __jt_host=localhost",
+      "  local __jt_path=${PWD//(#m)[^A-Za-z0-9\\/._~:-]/%${(l:2::0:)$(( [##16] #MATCH ))}}",
+      "  print -rn -- $'\\e]7;file://'${__jt_host}${__jt_path}$'\\e\\\\'",
+      "}",
       "__jt_ready() { print -n $'\\e]777;janet-ready\\e\\\\' }",
       "autoload -Uz add-zsh-hook",
       "typeset -g __jt_in_command=0",
@@ -222,7 +270,11 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "  set -l __jt_status $status",
       "  if test \"$__jt_in_command\" = 1; printf '\\033]133;D;%s\\033\\\\' $__jt_last_status; set -g __jt_in_command 0; end",
       "  printf '\\033]133;A\\033\\\\'",
-      "  printf '\\033]7;file://%s%s\\033\\\\' (hostname) $PWD",
+      // `string escape --style=url` percent-encodes the UTF-8 path, keeping
+      // only alphanumerics and `/._~-`.
+      "  set -l __jt_host $hostname",
+      "  string match -qr '^[A-Za-z0-9._-]+$' -- \"$__jt_host\"; or set __jt_host localhost",
+      "  printf '\\033]7;file://%s%s\\033\\\\' $__jt_host (string escape --style=url -- $PWD)",
       "  if functions -q __jt_orig_fish_prompt; __jt_restore_status $__jt_status; __jt_orig_fish_prompt $argv; end",
       "  printf '\\033]133;B\\033\\\\'",
       "end",

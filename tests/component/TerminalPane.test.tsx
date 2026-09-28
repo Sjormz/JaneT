@@ -246,6 +246,7 @@ beforeEach(() => {
   Object.defineProperty(window, 'janet', {
     configurable: true,
     value: {
+      localHostname: 'janet-test-host',
       terminalCreate,
       terminalResize,
       terminalWrite,
@@ -1593,6 +1594,34 @@ describe('TerminalPane shell output', () => {
 
     expect(invalidate).toHaveBeenCalledTimes(2);
     expect(invalidate).toHaveBeenCalledWith('prompt');
+    expect(fileUrlToPath).toHaveBeenCalledWith('file://localhost/repo', 'janet-test-host');
+  });
+
+  it('keeps the last valid cwd when a report is rejected', async () => {
+    vi.useFakeTimers();
+    try {
+      const onCwdChange = vi.fn();
+      const { default: TerminalPane } = await loadTerminalPane();
+      render(
+        <KeybindingsProvider>
+          <TerminalPane termId="term-rejected" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} onCwdChange={onCwdChange} themeName="tokyo-night" />
+        </KeybindingsProvider>,
+      );
+      const handler = MockTerminal.instances.at(-1)?.oscHandlers.get(7)!;
+      const invalidate = vi.spyOn(refreshCoordinator, 'invalidate');
+
+      vi.mocked(fileUrlToPath).mockReturnValue('/repo');
+      await handler('file://localhost/repo');
+      vi.mocked(fileUrlToPath).mockReturnValue(null);
+      await handler('file://remote.example/home/alice');
+      act(() => { vi.advanceTimersByTime(100); });
+
+      expect(onCwdChange).toHaveBeenLastCalledWith('term-rejected', '/repo');
+      expect(onCwdChange).not.toHaveBeenCalledWith('term-rejected', '/home/alice');
+      expect(invalidate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('opens terminal links through the default-browser bridge instead of a renderer window', async () => {
