@@ -1,0 +1,392 @@
+@layer components {
+
+  .fresh-profile-entry-actions .empty-workspace-primary {
+    border-color: var(--text-accent);
+    background: var(--control-hover);
+  }
+
+  .empty-workspace-locations {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .terminal-container {
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    background: var(--bg-primary);
+    position: relative;
+  }
+
+  .terminal-notice {
+    position: absolute;
+    top: 8px;
+    left: 12px;
+    z-index: 50;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    max-width: min(420px, calc(100% - 24px));
+    padding: 10px 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-overlay);
+    box-shadow: 0 12px 32px color-mix(in srgb, #000 32%, transparent);
+    color: var(--text-primary);
+    pointer-events: auto;
+  }
+
+  .terminal-notice-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .terminal-notice-subtitle {
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--text-tertiary);
+  }
+
+  .terminal-notice-message {
+    margin-top: 4px;
+    color: var(--red);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    overflow-wrap: anywhere;
+  }
+
+  .terminal-notice-action.primary { border-color: var(--glass-border-active); color: var(--text-accent); }
+
+  .explorer-item-row:hover .terminal-path-copy-button,
+  .git-file-row:hover .terminal-path-copy-button,
+  .explorer-item-row:focus-within .terminal-path-copy-button,
+  .git-file-row:focus-within .terminal-path-copy-button,
+  .terminal-path-copy-button:focus-visible,
+  .terminal-path-copy-button[data-state="copied"],
+  .terminal-path-copy-button[data-state="error"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .terminal-path-copy-button:hover:not([aria-disabled="true"]) {
+    background: var(--control-hover);
+    color: var(--text-accent);
+  }
+
+  .terminal-path-copy-button[data-state="copied"] { color: var(--green); }
+
+  .terminal-path-copy-button[data-state="error"] { color: var(--red); }
+
+  .terminal-path-copy-button[aria-disabled="true"] { cursor: not-allowed; }
+
+  .terminal-container.is-path-drop-invalid .terminal-path-drop-indicator {
+    border-color: color-mix(in srgb, var(--red) 82%, transparent);
+    background: color-mix(in srgb, var(--red) 9%, var(--bg-primary));
+    color: var(--red);
+    box-shadow: inset 0 0 28px color-mix(in srgb, var(--red) 12%, transparent);
+  }
+
+  .split-child {
+    display: flex;
+    overflow: hidden;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .split-divider::before {
+    position: absolute;
+    content: '';
+    border-radius: 999px;
+    background: transparent;
+    transition: background var(--transition-fast), box-shadow var(--transition-fast);
+  }
+
+  .split-divider-vertical::before { inset: 14px 5px; }
+
+  .split-divider-horizontal::before { inset: 5px 14px; }
+
+  .split-divider:hover::before,
+  .split-divider:focus-visible::before {
+    background: var(--text-accent);
+    box-shadow: var(--glow-accent);
+  }
+
+  .pane-drop-left,
+  .pane-drop-right {
+    top: 0;
+    bottom: 0;
+    width: 3px;
+  }
+
+  .pane-drop-left { left: 0; }
+
+  .pane-drop-right { right: 0; }
+
+  .pane-drop-top,
+  .pane-drop-bottom {
+    left: 0;
+    right: 0;
+    height: 3px;
+  }
+
+  .pane-drop-top { top: 0; }
+
+  .pane-drop-bottom { bottom: 0; }
+
+  .broadcast-input-banner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 6px 12px;
+    color: #fff;
+    background: #71301d;
+    border-bottom: 2px solid #ffb86c;
+  }
+
+  .broadcast-input-banner button {
+    color: inherit;
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    padding: 2px 8px;
+    cursor: pointer;
+  }
+
+  .broadcast-toggle { position: relative; }
+
+  .broadcast-toggle .broadcast-recipient {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+  }
+
+  .broadcast-toggle:has(.broadcast-recipient:focus-visible) {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+  }
+
+  .workspace-main { background: var(--surface-canvas); }
+
+  .terminal-area,
+  .terminal-container,
+  .terminal-container .xterm,
+  .terminal-container .xterm-screen,
+  .terminal-container .xterm-viewport {
+    background: var(--surface-canvas) !important;
+  }
+
+  /* Focus: a 2px accent ring that follows the control's radius and gets room in scrollports. No positioning
+     change, so absolutely placed controls do not move when they receive focus. */
+  :where(button,a[href],input,select,textarea,[tabindex]):not(.xterm-helper-textarea):focus-visible {
+    z-index: 2;
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 2px;
+    scroll-margin: 8px;
+  }
+
+  .workspace-main {
+    min-width: 0;
+    overflow: hidden;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent !important;
+    box-shadow: none;
+  }
+
+  .workspace-main>.split-container { min-width: 0; min-height: 0; }
+
+  /* workspace-setup: kept after :where(button,a[href],input,select,textarea,[tabindex]):not(.xterm-helper-textarea):focus-visible (border) so the same declaration still wins. */
+  .directory-onboarding .connect-btn {
+    display: block;
+    margin-top: 28px;
+    width: 100%;
+    min-height: 46px;
+    padding: 12px 18px;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .empty-project-terminals {
+    width: min(640px, 100%);
+    margin: auto;
+    padding: clamp(20px, 3vw, 32px);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    background: radial-gradient(ellipse at top left, color-mix(in srgb, var(--text-accent) 6%, transparent), transparent 65%), var(--surface-panel);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 7%, transparent), 0 14px 36px #00000012;
+  }
+
+  .workspace-main:has(>.workspace-creation-page)>:not(.workspace-creation-page) { display: none; }
+
+  /* motion: kept after .explorer-item-row:hover .terminal-path-copy-button (pointer-events) so the same declaration still wins. */
+  .motion-presence[inert]>* { pointer-events: none; }
+
+  /* Panes: opaque content cards. The active pane gets an accent ring; inactive headers recede (never the terminal). */
+  .terminal-leaf {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--separator);
+    border-radius: var(--radius-pane);
+    background: var(--material-content);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
+  }
+  .terminal-leaf[aria-current="true"] { box-shadow: 0 0 0 1px var(--accent-ring), 0 6px 18px rgb(0 0 0 / 0.22); }
+  :root[data-scheme='light'] .terminal-leaf[aria-current="true"] { box-shadow: 0 0 0 1px var(--accent-ring), 0 6px 18px rgb(88 70 30 / 0.12); }
+  .terminal-leaf.pane-dragging { opacity: 0.45; }
+
+  .terminal-leaf-header {
+    position: relative;
+    z-index: 2;
+    height: 30px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0 var(--space-1) 0 var(--space-3);
+    border-bottom: 0.5px solid var(--separator);
+    --leaf-header-bg: color-mix(in srgb, var(--text-primary) 3%, var(--material-content));
+    background: var(--leaf-header-bg);
+    user-select: none;
+  }
+  .terminal-leaf-header[draggable="true"] { cursor: grab; }
+  .terminal-leaf-header[draggable="true"]:active { cursor: grabbing; }
+
+  .leaf-title {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-tertiary);
+    font: var(--weight-label) var(--text-sm)/1 var(--font-ui);
+  }
+  .leaf-title > .icon { color: var(--text-tertiary); }
+  .terminal-leaf[aria-current="true"] .leaf-title { color: var(--text-primary); }
+  .leaf-title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .leaf-awareness {
+    min-width: 0;
+    margin-left: auto;
+    padding-right: var(--space-2);
+    overflow: hidden;
+    color: var(--text-tertiary);
+    font: var(--weight-body) var(--text-xs)/1 var(--font-ui);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* States that need attention keep strong contrast; routine states stay quiet. */
+  .leaf-awareness.needs-input,
+  .leaf-awareness.interrupted { color: color-mix(in srgb, var(--text-primary) 45%, var(--yellow)); }
+  .leaf-awareness.failed,
+  .leaf-awareness.exited { color: color-mix(in srgb, var(--text-primary) 65%, var(--red)); }
+
+  /* Actions overlay the right end of the header, so the status text can sit flush right until they appear. */
+  .leaf-actions {
+    position: absolute;
+    top: 0;
+    right: var(--space-1);
+    bottom: 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding-left: var(--space-6);
+    background: linear-gradient(90deg, transparent, var(--leaf-header-bg) var(--space-5));
+    opacity: 0;
+    transition: opacity var(--dur-quick) var(--ease-out-expo);
+  }
+  .terminal-leaf:hover .leaf-actions,
+  .terminal-leaf:focus-within .leaf-actions,
+  .leaf-actions:has(.broadcast-toggle.is-selected) { opacity: 1; }
+  .leaf-btn {
+    position: relative;
+    z-index: 4;
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    display: inline-grid;
+    place-items: center;
+    border: 0;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+  }
+  .leaf-btn:hover { background: var(--fill-hover); color: var(--text-primary); }
+  .leaf-close:hover { background: color-mix(in srgb, var(--red) 18%, transparent); color: var(--red); }
+
+  /* Broadcast input is a safety signal: loud on purpose. */
+  .terminal-leaf.broadcast-selected { outline: 3px solid #ff8c42; outline-offset: -3px; }
+  .terminal-leaf.broadcast-selected .terminal-leaf-header { --leaf-header-bg: #71301d; background: var(--leaf-header-bg); color: #fff; }
+  .terminal-leaf.broadcast-selected .terminal-leaf-header :is(.leaf-title, .leaf-title > .icon, .leaf-awareness) { color: #fff; }
+
+  .terminal-leaf-body { flex: 1; display: flex; overflow: hidden; background: var(--material-content) !important; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .leaf-actions { transition: none; }
+  }
+
+  /* Terminal search: a glass capsule anchored to the pane's top-right corner. */
+  .search-overlay {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-3);
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px 3px 3px var(--space-3);
+    border-radius: var(--radius-row);
+    box-shadow: var(--shadow-floating);
+  }
+  .search-leading { flex: none; color: var(--text-tertiary); }
+  .search-input {
+    width: 200px;
+    height: 26px;
+    padding: 0 var(--space-2);
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+    caret-color: var(--accent-solid);
+    font: var(--weight-body) var(--text-base)/1 var(--font-ui);
+  }
+  .search-overlay .search-input:focus-visible { outline: none; }
+  .search-input::placeholder { color: var(--text-tertiary); }
+  .search-results {
+    min-width: 40px;
+    padding: 0 var(--space-1);
+    color: var(--text-tertiary);
+    font: var(--weight-body) var(--text-xs)/1 var(--font-ui);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+  .search-btn {
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    display: inline-grid;
+    place-items: center;
+    border: 0;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+  }
+  .search-btn:hover { background: var(--fill-hover); color: var(--text-primary); }
+
+}

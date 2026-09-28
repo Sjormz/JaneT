@@ -279,10 +279,23 @@ export default function TerminalPane({
       if (!usableDimensions(fitAddon.proposeDimensions())) return;
       fitAddon.fit();
       const dims = { cols: term.cols, rows: term.rows };
+      // Observable fit state: the container box this grid was fitted to, and the grid itself.
+      const fitted = containerRef.current;
+      if (fitted) {
+        const box = fitted.getBoundingClientRect();
+        fitted.dataset.fitBox = `${Math.round(box.width)}x${Math.round(box.height)}`;
+        fitted.dataset.termSize = `${dims.cols}x${dims.rows}`;
+      }
       const last = lastResizeRef.current;
       if (last?.cols === dims.cols && last?.rows === dims.rows) return;
       const resize = window.janet.terminalResize({ id: termId, cols: dims.cols, rows: dims.rows });
       lastResizeRef.current = dims;
+      // Observable PTY geometry: tests wait on it instead of timing, and can count resizes per layout change.
+      const container = containerRef.current;
+      if (container) container.dataset.ptyResizes = String(Number(container.dataset.ptyResizes ?? 0) + 1);
+      void resize.then(() => {
+        if (container && lastResizeRef.current === dims) container.dataset.ptySize = `${dims.cols}x${dims.rows}`;
+      }, () => {});
       void resize.catch((error: unknown) => {
         if (lastResizeRef.current === dims) {
           lastResizeRef.current = null;

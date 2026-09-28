@@ -1,0 +1,238 @@
+@layer components {
+
+  /* Palette and pickers: one floating-glass shell. Material (background, blur) comes from materials.css. */
+  .command-palette-overlay,
+  .snippet-picker-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: calc(var(--titlebar-height) + var(--space-2)) var(--space-4) var(--space-4);
+    background: var(--scrim);
+    backdrop-filter: blur(2px) saturate(115%);
+  }
+
+  .command-palette,
+  .snippet-picker {
+    position: relative;
+    width: min(640px, calc(100vw - 32px));
+    max-height: min(520px, calc(100vh - var(--titlebar-height) - 48px));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: var(--radius-floating);
+    box-shadow: var(--shadow-floating);
+    transform-origin: 50% -24px;
+  }
+  /* Pickers are compact companions to the palette. */
+  .snippet-picker { width: min(560px, calc(100vw - 32px)); }
+  /* Specular top edge: a 1px gradient ring, strongest at the top. */
+  .command-palette::before,
+  .snippet-picker::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    padding: 1px;
+    border-radius: inherit;
+    background: var(--specular);
+    pointer-events: none;
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+
+  /* Input row: no outline. The caret and the field are the focus signal. */
+  .command-palette-input-wrapper,
+  .snippet-search-shell {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: 52px;
+    padding: 0 var(--space-4);
+    box-shadow: inset 0 -0.5px 0 var(--separator);
+  }
+  .command-palette-icon { flex: none; color: var(--text-tertiary); }
+  .command-palette-input,
+  .snippet-search-input,
+  .command-history-search {
+    flex: 1;
+    min-width: 0;
+    height: 40px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+    caret-color: var(--accent-solid);
+    font: var(--weight-body) var(--text-md)/1 var(--font-ui);
+  }
+  /* Scoped above the global focus ring's specificity: in these single-field layers the caret is the signal. */
+  .command-palette .command-palette-input:focus-visible,
+  .snippet-picker .snippet-search-input:focus-visible,
+  .snippet-picker .command-history-search:focus-visible { outline: none; }
+  .command-palette-input::placeholder,
+  .snippet-search-input::placeholder,
+  .command-history-search::placeholder { color: var(--text-tertiary); }
+  .snippet-search-field { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-3); }
+
+  .command-palette-results,
+  .snippet-results,
+  .command-history-list {
+    flex: 1;
+    min-height: 0;
+    padding: var(--space-1) 6px 6px;
+    overflow-y: auto;
+  }
+  .command-category + .command-category { margin-top: var(--space-1); }
+  .command-category-label {
+    padding: var(--space-3) 10px var(--space-1);
+    color: var(--text-tertiary);
+    font: var(--weight-label) var(--text-xs)/1 var(--font-ui);
+  }
+  .command-palette-empty,
+  .snippet-empty {
+    padding: var(--space-6) var(--space-4);
+    color: var(--text-tertiary);
+    font-size: var(--text-base);
+    text-align: center;
+  }
+  .snippet-empty { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+  .snippet-empty strong { color: var(--text-secondary); font-weight: var(--weight-label); }
+  .snippet-empty-icon { color: var(--text-tertiary); }
+
+  /* Rows share one highlight: a soft accent pill. */
+  .command-item,
+  .snippet-item,
+  .command-history-item {
+    position: relative;
+    min-height: 34px;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 0 10px;
+    border-radius: var(--radius-row);
+    color: var(--text-secondary);
+    font: var(--weight-body) var(--text-base)/1.3 var(--font-ui);
+    cursor: pointer;
+  }
+  .command-item.selected,
+  .snippet-item.selected,
+  .command-history-item[aria-selected="true"] {
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 0.5px var(--accent-ring);
+    color: var(--text-primary);
+  }
+  .command-item:hover:not(.selected),
+  .snippet-item:hover:not(.selected),
+  .command-history-item:hover:not([aria-selected="true"]) { background: var(--fill-hover); color: var(--text-primary); }
+  .command-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .command-item-shortcut { margin-left: auto; }
+
+  .command-palette-footer {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    min-height: 34px;
+    padding: 0 var(--space-4);
+    box-shadow: inset 0 0.5px 0 var(--separator);
+    color: var(--text-tertiary);
+    font: var(--weight-body) var(--text-xs)/1 var(--font-ui);
+  }
+  .command-palette-footer span { display: inline-flex; align-items: center; gap: 4px; }
+  .command-palette-footer-end { margin-left: auto; }
+
+  /* Snippets and command history. */
+  .snippet-picker-heading,
+  .snippet-editor-heading {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-4) var(--space-2);
+  }
+  .snippet-picker-heading h2,
+  .snippet-editor-heading h2 {
+    margin: 0;
+    color: var(--text-primary);
+    font: var(--weight-title) var(--text-md)/1.2 var(--font-ui);
+    letter-spacing: -0.01em;
+  }
+  .snippet-picker-heading p { margin: 2px 0 0; color: var(--text-tertiary); font-size: var(--text-sm); }
+
+  .snippet-item { gap: var(--space-2); padding-right: 6px; }
+  .snippet-paste-button {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 6px 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .snippet-item-name { color: var(--text-primary); font-weight: var(--weight-label); }
+  .snippet-item-preview,
+  .command-history-item small {
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--text-tertiary);
+    font: var(--weight-body) var(--text-xs)/1.3 var(--font-mono);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .command-history-row { display: flex; align-items: center; gap: 2px; }
+  .command-history-item { flex: 1; min-width: 0; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; padding-block: 6px; border: 0; background: none; text-align: left; }
+  .command-history-item span { max-width: 100%; overflow: hidden; color: var(--text-primary); font: var(--weight-body) var(--text-base)/1.3 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+
+  .snippet-icon-button,
+  .command-history-remove,
+  .command-history-close {
+    width: 28px;
+    height: 28px;
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+  }
+  .snippet-icon-button:hover,
+  .command-history-remove:hover,
+  .command-history-close:hover { background: var(--fill-hover); color: var(--text-primary); }
+  .snippet-icon-button.danger:hover,
+  .command-history-remove:hover { color: var(--status-err); }
+
+  .snippet-primary-button,
+  .snippet-secondary-button {
+    height: 30px;
+    padding: 0 var(--space-3);
+    border: 0;
+    border-radius: var(--radius-row);
+    font: var(--weight-label) var(--text-sm)/1 var(--font-ui);
+    cursor: pointer;
+  }
+  .snippet-primary-button { background: var(--accent-solid); color: var(--on-accent); }
+  .snippet-primary-button:hover { background: color-mix(in srgb, var(--accent-solid) 88%, var(--text-primary)); }
+  .snippet-secondary-button { background: var(--fill-hover); color: var(--text-primary); }
+  .snippet-secondary-button:hover { background: var(--fill-selected); }
+
+  .snippet-editor { display: flex; flex-direction: column; gap: var(--space-3); padding: 0 var(--space-4) var(--space-4); overflow-y: auto; }
+  .snippet-editor-heading { padding-inline: 0; }
+  .snippet-content-input { min-height: 140px; font-family: var(--font-mono); font-size: var(--text-sm); resize: vertical; }
+  .snippet-error { color: var(--status-err); font-size: var(--text-sm); }
+  .snippet-editor-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
+
+}

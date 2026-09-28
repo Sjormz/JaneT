@@ -14,7 +14,7 @@ JaneT opens local shell sessions in terminal tabs. Split a tab into panes to kee
 ## Open and arrange terminals
 
 - Create a project with **Add terminals**, or use **Add terminals** on an existing pane to add terminals to that session.
-- Use the pane header controls to split, maximize, restore, rename, or close a pane. Drag a pane by its header to rearrange it; drag a divider to resize the layout.
+- Use the pane header controls to split, maximize, restore, rename, or close a pane. The controls appear when you point at a pane or move keyboard focus into it; the active pane has an accent outline. Drag a pane by its header to rearrange it; drag a divider to resize the layout.
 - Use the terminal tabs to switch between saved sessions. The **Terminal** surface tab returns from an open editor document to the terminal layout.
 - Press **Escape** or choose **Cancel broadcast input** in the banner to stop broadcast input.
 
@@ -49,7 +49,7 @@ Open **Settings**, then **Keyboard shortcuts**, to see or change the bindings. D
 Broadcast input sends what you type or paste to every pane you select. It is off until you explicitly select at least two panes and confirm the recipient set.
 
 1. Split the terminal tab so the intended recipients are visible.
-2. Select the broadcast checkbox in each pane header, including the pane where you plan to type.
+2. Point at each pane and select the broadcast checkbox in its header, including the pane where you plan to type. Selected checkboxes stay visible.
 3. Confirm the selection when JaneT asks.
 4. Type or paste in any selected pane. JaneT sends the input once to each selected terminal.
 5. Press **Escape** or select **Cancel broadcast input** to stop.

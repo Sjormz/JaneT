@@ -1,53 +1,136 @@
-/* Motion belongs to chrome and transient surfaces, never terminal output. */
-:root { --motion-enter: 220ms cubic-bezier(0.16, 1, 0.3, 1); view-transition-name: none; }
-.motion-presence { display: contents; }
-.motion-presence[inert] > * { pointer-events: none; }
-.motion-presence > *,
-.motion-presence [role="dialog"],
-.motion-presence [role="alertdialog"] { animation: none; }
-::view-transition { pointer-events: none; }
-::view-transition-group(*) { animation-duration: 240ms; animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1); }
-::view-transition-image-pair(*) { overflow: clip; border-radius: var(--radius-lg); }
+/* All motion lives here (docs/design/liquid-glass.md, Motion). Motion explains a change; it never touches terminal
+   text: panes may fade or translate by whole pixels, but xterm output is never scaled, blurred or animated.
+   Durations and easings are the --dur-* / --ease-* tokens; components/motion.ts mirrors them for WAAPI.
+   Everything below is instant under prefers-reduced-motion: reduce (see also base.css). */
+@layer motion {
 
-.workspace-main:has(> .motion-presence[data-motion-state="open"] > .workspace-creation-page) > :not(.motion-presence) { display: none; }
-.motion-presence[data-motion-state="closing"] > .workspace-creation-page { position: absolute; inset: 0; z-index: 1; }
+  :root { --motion-enter: var(--dur-base) var(--ease-out-expo); view-transition-name: none; }
 
-.workspace-landing,
-.project-creation-content,
-.empty-project-terminals {
-  padding: clamp(20px, 3vw, 32px);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-lg);
-  background: radial-gradient(ellipse at top left, color-mix(in srgb, var(--text-accent) 6%, transparent), transparent 65%), var(--surface-panel);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 7%, transparent), 0 14px 36px #00000012;
-}
-.workspace-entry-mark {
-  display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 20px;
-  color: var(--text-accent); background: var(--surface-canvas);
-  border: 1px solid var(--glass-border); border-radius: 13px;
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 10%, transparent);
-}
-.workspace-landing h2 { font-size: 22px; letter-spacing: -0.4px; text-wrap: balance; }
-.workspace-launcher-card { transition: background var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast); }
-.workspace-launcher-option:has(input:checked) .workspace-launcher-card { box-shadow: inset 0 0 0 1px var(--text-accent); }
-.workspace-launcher-options { grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); }
+  /* ---------- View transitions: pane maximize, collapse, theme ---------- */
+  ::view-transition { pointer-events: none; }
+  ::view-transition-group(*) { animation-duration: var(--dur-base); animation-timing-function: var(--ease-out-expo); }
+  ::view-transition-image-pair(*) { overflow: clip; border-radius: var(--radius-pane); }
+  .terminal-leaf { view-transition-class: terminal-pane; }
+  .sidebar { view-transition-name: workspace-tools; }
+  .vtab-bar { view-transition-name: workspace-rail; }
 
-@media (prefers-reduced-motion: no-preference) {
-  .workspace-landing, .empty-project-terminals, .directory-onboarding { animation: workspace-arrive var(--motion-enter) both; }
-  .workspace-count-row, .workspace-launcher-field { animation: workspace-arrive var(--motion-enter) both; }
-  :is(.connect-btn, .confirmation-dialog-button, .git-dialog-btn, .fresh-profile-entry-actions button,
-      .leaf-btn, .vtab-header-btn, .icon-btn, .titlebar-settings-btn, .workspace-count-picker button) {
-    transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast),
-      box-shadow var(--transition-fast), scale 100ms ease-out;
+  /* Collapsing a rail: the layout changes once, so terminals resize once. They jump to their final geometry
+     (no stretching snapshot) while the rail's snapshot clips and fades. */
+  html:is([data-layout-transition="tools"], [data-layout-transition="tabs"])::view-transition-group(*.terminal-pane) { animation: none; }
+  html:is([data-layout-transition="tools"], [data-layout-transition="tabs"])::view-transition-old(*.terminal-pane) { animation: none; opacity: 0; }
+  html:is([data-layout-transition="tools"], [data-layout-transition="tabs"])::view-transition-new(*.terminal-pane) { animation: none; }
+  ::view-transition-old(workspace-tools),
+  ::view-transition-new(workspace-tools),
+  ::view-transition-old(workspace-rail),
+  ::view-transition-new(workspace-rail) { height: 100%; object-fit: none; object-position: left top; }
+  ::view-transition-old(workspace-tools),
+  ::view-transition-old(workspace-rail) { animation: vt-fade-out var(--dur-quick) var(--ease-in) both; }
+  ::view-transition-new(workspace-tools),
+  ::view-transition-new(workspace-rail) { animation: vt-fade-in var(--dur-base) var(--ease-out-expo) both; }
+  /* A rail that appears or disappears slides from its own edge. */
+  ::view-transition-old(workspace-rail):only-child { animation: vt-slide-out var(--dur-quick) var(--ease-in) both; }
+  ::view-transition-new(workspace-rail):only-child { animation: vt-slide-in var(--dur-base) var(--ease-out-expo) both; }
+
+  /* Theme switch: a cross-fade of the whole window; nothing moves. */
+  html[data-layout-transition="theme"]::view-transition-group(*) { animation-duration: var(--dur-base); }
+
+  /* ---------- Selection that glides (components/motion.ts glideSelection) ---------- */
+  :is(.vtab-list, .workspace-tools-rail, .segmented, .command-palette-results) { position: relative; }
+  /* Only the options inside a gliding container: the project-tools collapse button shares
+     .workspace-tool-button but is positioned absolutely at the foot of the rail. */
+  :is(.vtab-list .vtab-item, .workspace-tools-rail .workspace-tool-button, .segmented .segmented-option,
+    .command-palette-results .command-item) { position: relative; z-index: 1; }
+  .selection-ghost { position: absolute; z-index: 0; pointer-events: none; transform-origin: 0 0; }
+  .selection-arriving { background: transparent !important; box-shadow: none !important; }
+
+  /* ---------- Transient layers ---------- */
+  .motion-presence[data-motion-state="closing"] > .workspace-creation-page { position: absolute; inset: 0; z-index: 1; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    /* Launch: the mark resolves, chrome arrives from its edges in a 40ms stagger, panes fade up. Under 600ms and
+       purely visual; input and terminal startup are never held back. html.is-launching is set for one pass. */
+    html.is-launching .titlebar-logo { animation: launch-mark var(--dur-slow) var(--ease-out-expo) both; }
+    html.is-launching .titlebar { animation: from-top var(--dur-base) var(--ease-out-expo) 40ms both; }
+    html.is-launching .app-body.sidebar-left .sidebar,
+    html.is-launching .app-body.sidebar-right .vtab-bar { animation: from-left var(--dur-base) var(--ease-out-expo) 80ms both; }
+    html.is-launching .app-body.sidebar-left .vtab-bar,
+    html.is-launching .app-body.sidebar-right .sidebar { animation: from-right var(--dur-base) var(--ease-out-expo) 120ms both; }
+    html.is-launching .status-bar { animation: from-bottom var(--dur-base) var(--ease-out-expo) 160ms both; }
+    html.is-launching .terminal-leaf { animation: fade-up var(--dur-base) var(--ease-out-expo) 200ms both; }
+
+    /* A pane that appears (split, new tab) fades in; terminal text is not scaled. */
+    .terminal-leaf { animation: fade-in var(--dur-quick) var(--ease-out-expo) both; }
+
+    /* Palette and picker rows arrive in a short stagger (index in --i, capped at 8 by the component). */
+    .command-palette-results .command-item,
+    .snippet-results .snippet-item,
+    .command-history-list .command-history-row {
+      animation: list-item-in var(--dur-quick) var(--ease-out-expo) both;
+      animation-delay: calc(var(--i, 0) * 14ms);
+    }
+
+    .tooltip-popover { animation: rise-in var(--dur-quick) var(--ease-out-expo) both; }
+    .search-overlay,
+    .terminal-notice { animation: rise-in var(--dur-quick) var(--ease-out-expo) both; }
+    .workspace-landing,
+    .project-creation-content,
+    .empty-project-terminals,
+    .workspace-count-row,
+    .workspace-launcher-field { animation: rise-in var(--dur-base) var(--ease-out-expo) both; }
+
+    /* Rows that move between Source Control sections slide in. */
+    .git-file-item { animation: slide-in var(--dur-quick) var(--ease-out-expo) both; }
+
+    /* Press feedback and hover lift. */
+    :is(button, [role="button"], .vtab-item):not(:disabled) { transition: background-color var(--dur-instant), color var(--dur-instant), box-shadow var(--dur-quick), scale var(--dur-instant) var(--ease-out-expo); }
+    :is(.connect-btn, .confirmation-dialog-button, .git-dialog-btn, .snippet-primary-button, .snippet-secondary-button,
+      .titlebar-icon-btn, .titlebar-palette-btn, .workspace-tool-button, .segmented-option, .leaf-btn, .vtab-header-btn,
+      .search-btn, .icon-btn):active:not(:disabled) { scale: 0.97; }
+    .theme-preview { transition: box-shadow var(--dur-quick), translate var(--dur-quick) var(--ease-out-expo); }
+    .theme-option:hover .theme-preview { translate: 0 -1px; }
+    .workspace-launcher-option:has(input:not(:disabled)):hover .workspace-launcher-card { translate: 0 -2px; }
+    .titlebar-settings-btn > .icon { transition: rotate var(--dur-base) var(--ease-spring); }
+    .titlebar-settings-btn.active > .icon { rotate: 45deg; }
+
+    /* Copy confirmation: the icon pops as it becomes a check. */
+    .terminal-path-copy-button[data-state="copied"] .icon { animation: pop-in var(--dur-base) var(--ease-spring) both; }
+
+    /* Status: a calm breathing dot for work in progress, short colour transitions for outcomes. */
+    .activity-dot.running,
+    .activity-count.running::before { animation: breathe 2.4s ease-in-out infinite; }
+    .activity-dot,
+    .leaf-awareness { transition: background-color var(--dur-base), color var(--dur-base); }
+
+    /* Update banner: a capsule that springs in from the top. */
+    .update-banner { animation: spring-down var(--dur-slow) var(--ease-spring) both; }
   }
-  :is(.connect-btn, .confirmation-dialog-button, .git-dialog-btn, .fresh-profile-entry-actions button,
-      .leaf-btn, .vtab-header-btn, .icon-btn, .titlebar-settings-btn, .workspace-count-picker button):active:not(:disabled) { scale: 0.97; }
-  .workspace-launcher-card { transition: background var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), translate var(--motion-enter); }
-  .workspace-launcher-option:has(input:not(:disabled)):hover .workspace-launcher-card { translate: 0 -2px; }
-  .titlebar-settings-btn > .icon { transition: rotate var(--motion-enter); }
-  .titlebar-settings-btn.active > .icon { rotate: 45deg; }
-}
-@keyframes workspace-arrive { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-@media (prefers-reduced-motion: reduce) {
-  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    ::view-transition-group(*),
+    ::view-transition-old(*),
+    ::view-transition-new(*) { animation: none; }
+  }
+
+  /* Functional, not decorative: the update spinner keeps turning under reduced motion. */
+  .update-banner-spin svg { animation: spin 900ms linear infinite; }
+
+  @keyframes launch-mark { from { opacity: 0; scale: 0.96; filter: blur(8px); } to { opacity: 1; scale: 1; filter: none; } }
+  @keyframes from-top { from { opacity: 0; translate: 0 -6px; } }
+  @keyframes from-bottom { from { opacity: 0; translate: 0 6px; } }
+  @keyframes from-left { from { opacity: 0; translate: -8px 0; } }
+  @keyframes from-right { from { opacity: 0; translate: 8px 0; } }
+  @keyframes fade-up { from { opacity: 0; translate: 0 4px; } }
+  @keyframes fade-in { from { opacity: 0; } }
+  @keyframes rise-in { from { opacity: 0; translate: 0 6px; } }
+  @keyframes slide-in { from { opacity: 0; translate: -6px 0; } }
+  @keyframes list-item-in { from { opacity: 0; translate: 0 4px; } }
+  @keyframes pop-in { from { scale: 0.6; opacity: 0.4; } }
+  @keyframes breathe { 50% { opacity: 0.55; } }
+  @keyframes spring-down { from { opacity: 0; translate: 0 -12px; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes vt-fade-out { to { opacity: 0; } }
+  @keyframes vt-fade-in { from { opacity: 0; } }
+  @keyframes vt-slide-out { to { opacity: 0; translate: -12px 0; } }
+  @keyframes vt-slide-in { from { opacity: 0; translate: -12px 0; } }
+
 }

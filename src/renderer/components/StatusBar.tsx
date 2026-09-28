@@ -7,11 +7,21 @@ interface StatusBarProps {
   /** The cwd of the focused terminal. */
   cwd: string;
   gitStatus?: GitStatusSummary | null;
+  /** Used to show the path as ~/… ; the full path stays in the tooltip and accessible name. */
+  homeDir?: string;
+}
+
+export function abbreviateHome(path: string, homeDir?: string): string {
+  if (!homeDir) return path;
+  const home = homeDir.replace(/[\\/]+$/, '');
+  if (path === home) return '~';
+  return path.startsWith(`${home}/`) || path.startsWith(`${home}\\`) ? `~${path.slice(home.length)}` : path;
 }
 
 export default function StatusBar({
   cwd,
   gitStatus,
+  homeDir,
 }: StatusBarProps) {
   const [version, setVersion] = useState('');
 
@@ -21,16 +31,12 @@ export default function StatusBar({
 
   return (
     <footer className="status-bar app-status" aria-label="Workspace status">
-      <span className="status-context">
-        <span className="status-context-mark" aria-hidden="true" />
-        LOCAL
-      </span>
       <div className="status-left">
         {cwd && (
           <Tooltip label={cwd} placement="top">
             <span className="status-item status-cwd" aria-label={`Working directory: ${cwd}`}>
               <FolderIcon size="xs" />
-              <span className="status-cwd-local">{cwd}</span>
+              <span className="status-cwd-local">{abbreviateHome(cwd, homeDir)}</span>
             </span>
           </Tooltip>
         )}
@@ -54,7 +60,6 @@ export default function StatusBar({
             aria-label={`JaneT version ${version}. Check for updates`}
             onClick={() => { window.janet.checkForUpdates().catch(() => {}); }}
           >
-            <span className="status-build-label" aria-hidden="true">BUILD</span>
             <span>v{version}</span>
           </button>
         </Tooltip>

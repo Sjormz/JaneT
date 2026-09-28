@@ -1,0 +1,277 @@
+@layer components {
+
+
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* The window material: the OS vibrancy/Mica tinted by the theme, or the solid theme canvas. */
+  html { background: var(--material-window); }
+
+  .icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    color: inherit;
+  }
+
+  .icon svg { display: block; }
+
+  #root { display: flex; flex-direction: column; }
+
+  .workspace-count-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+
+  .workspace-count-picker {
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    background: var(--control-bg);
+  }
+
+  .workspace-count-picker button:disabled { opacity: .4; cursor: default; }
+
+  .workspace-count-picker input {
+    width: 48px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font: 600 16px var(--font-mono);
+    text-align: center;
+    appearance: textfield;
+  }
+
+  .workspace-count-picker input::-webkit-inner-spin-button,
+  .workspace-count-picker input::-webkit-outer-spin-button {
+    appearance: none;
+    margin: 0;
+  }
+
+  /* workspace-setup: kept after .workspace-count-picker input (width) so the same declaration still wins. */
+  .workspace-launcher-option input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+  }
+
+  .editor-state.error .icon { color: var(--red); }
+
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: all var(--transition-fast);
+    padding: 0;
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+  }
+
+  .icon-btn:hover { color: var(--text-primary); background: var(--control-hover); }
+
+  .icon-btn:disabled { opacity: 0.3; cursor: default; }
+
+  .icon-btn:disabled:hover { background: transparent; color: var(--text-tertiary); }
+
+  .icon-btn.active {
+    background: color-mix(in srgb, var(--text-accent) 15%, transparent);
+    color: var(--text-accent);
+  }
+
+  /* explorer: kept after .editor-state.error .icon (color) so the same declaration still wins. */
+  .explorer-item:hover .item-icon { color: var(--text-accent); }
+
+  /* explorer: kept after .editor-state.error .icon (color) so the same declaration still wins. */
+  .explorer-item.dir .item-icon { color: var(--yellow); }
+
+  .item-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+
+  .badge {
+    background: var(--control-hover);
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    color: var(--text-tertiary);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  select:hover:not(:disabled) { border-color: var(--border-active); background-color: var(--control-hover); }
+
+  select:disabled {
+    color: var(--text-disabled);
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  input[type="checkbox"] {
+    accent-color: var(--text-accent);
+    cursor: pointer;
+    width: 15px;
+    height: 15px;
+  }
+
+  .workspace-optional-terminals {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    align-self: flex-start;
+    padding: 8px 12px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .workspace-optional-terminals:hover { background: var(--control-hover); color: var(--text-primary); }
+
+  /* workspace-setup: kept after .workspace-count-picker button:disabled (cursor) so the same declaration still wins. */
+  .directory-onboarding button:disabled { opacity: 0.55; cursor: wait; }
+
+  .motion-presence { display: contents; }
+
+  .workspace-main:has(>.motion-presence[data-motion-state="open"]>.workspace-creation-page)>:not(.motion-presence) {
+    display: none;
+  }
+
+  .workspace-entry-mark {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    margin-bottom: 20px;
+    color: var(--text-accent);
+    background: var(--surface-canvas);
+    border: 1px solid var(--glass-border);
+    border-radius: 13px;
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 10%, transparent);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .workspace-launcher-card {
+      transition: background var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), translate var(--motion-enter);
+    }
+  }
+
+  /* Shared scrollbars for panels, lists and floating layers. */
+
+  /* Quiet keycaps for shortcut hints (titlebar field, palette rows, tooltips). */
+  .keycaps { display: inline-flex; align-items: center; gap: 3px; flex: none; }
+  .keycap {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    display: inline-grid;
+    place-items: center;
+    border-radius: 5px;
+    background: var(--fill-hover);
+    box-shadow: inset 0 0 0 0.5px var(--separator-strong);
+    color: var(--text-tertiary);
+    font: var(--weight-label) var(--text-xs)/1 var(--font-ui);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Shared scrollbars for panels, lists and floating layers. */
+
+  /* Menus: small floating glass with 28px rows. Material comes from materials.css. */
+  .vtab-context-menu { position: fixed; z-index: 100; min-width: 180px; }
+  .git-kebab-menu { position: relative; }
+  .git-kebab-overlay { position: fixed; inset: 0; z-index: 99; }
+  .git-kebab-dropdown { position: absolute; top: 100%; right: 0; z-index: 100; min-width: 180px; margin-top: var(--space-1); }
+  .vtab-context-menu,
+  .git-file-context-menu,
+  .git-kebab-dropdown {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 5px;
+    border-radius: var(--radius-row);
+    box-shadow: var(--shadow-floating);
+  }
+  .vtab-context-menu button,
+  .git-file-context-menu button,
+  .git-kebab-item {
+    width: 100%;
+    min-height: 28px;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0 var(--space-2);
+    border: 0;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--text-primary);
+    font: var(--weight-body) var(--text-base)/1 var(--font-ui);
+    text-align: left;
+    cursor: pointer;
+  }
+  .vtab-context-menu button:hover,
+  .vtab-context-menu button:focus-visible,
+  .git-file-context-menu button:hover,
+  .git-file-context-menu button:focus-visible,
+  .git-kebab-item:hover:not(:disabled),
+  .git-kebab-item:focus-visible { background: var(--accent-soft); outline: none; }
+  .git-file-context-menu button.danger,
+  .git-kebab-item.danger { color: var(--status-err); }
+  .git-file-context-menu button.danger:hover,
+  .git-file-context-menu button.danger:focus-visible,
+  .git-kebab-item.danger:hover { background: color-mix(in srgb, var(--status-err) 14%, transparent); }
+  .git-kebab-item:disabled { opacity: 0.45; cursor: default; }
+
+  /* Panel titles (Explorer, Source Control). */
+  .section-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-primary);
+    font: var(--weight-title) var(--text-sm)/1 var(--font-ui);
+  }
+
+}

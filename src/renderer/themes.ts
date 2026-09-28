@@ -91,6 +91,8 @@ const themes: Record<ThemeName, ThemeDefinition> = {
       'glass-bg-light': 'rgba(40, 42, 54, 0.6)',
       'glass-border': 'rgba(255, 255, 255, 0.06)',
       'glass-border-active': 'rgba(189, 147, 249, 0.4)',
+      // Dracula purple is 4.3:1 on its raised fills; a lighter tint of it keeps accent text at 4.5:1.
+      'accent-text': '#caa9fa',
     },
     xterm: {
       background: '#1e1f29',
@@ -270,8 +272,25 @@ export function getTheme(name: ThemeName): ThemeDefinition {
   return themes[name] || themes['one-dark'];
 }
 
+/** Light or dark, from the theme's canvas colour; drives glass opacity floors and the native UI scheme. */
+export function themeScheme(cssVars: CssThemeVars): 'dark' | 'light' {
+  const hex = cssVars['bg-primary'] ?? '#000000';
+  const [red, green, blue] = [1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16) / 255);
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue > 0.5 ? 'light' : 'dark';
+}
+
+/** Properties the last applied theme set inline, so a theme that omits an optional key falls back to the default. */
+let appliedThemeKeys: string[] = [];
+
 export function applyCssTheme(cssVars: CssThemeVars): void {
   const root = document.documentElement;
+  const scheme = themeScheme(cssVars);
+  root.dataset.scheme = scheme;
+  root.style.colorScheme = scheme;
+  for (const key of appliedThemeKeys) {
+    if (!(key in cssVars)) root.style.removeProperty(`--${key}`);
+  }
+  appliedThemeKeys = Object.keys(cssVars);
   for (const [key, value] of Object.entries(cssVars)) {
     root.style.setProperty(`--${key}`, value);
   }

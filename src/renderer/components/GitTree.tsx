@@ -16,6 +16,7 @@ import { useModalFocus } from '../useModalFocus';
 import { beginTerminalPathDrag, endTerminalPathDrag, formatTerminalPathForPaste, resolveRepositoryPath } from '../terminalPathDrag';
 import Tooltip from './Tooltip';
 import type { EditorResource } from '../editorDocuments';
+import { rendererPlatform } from '../keybindings';
 
 interface GitBranchInfo {
   name: string;
@@ -524,11 +525,11 @@ export default function GitTree({
             <input
               className="git-commit-input"
               aria-label="Commit message"
-              placeholder="Message (Ctrl+Enter to commit)"
+              placeholder={rendererPlatform() === 'darwin' ? 'Message (⌘↩ to commit)' : 'Message (Ctrl+Enter to commit)'}
               value={commitMessage}
               onChange={(event) => setCommitMessage(event.target.value)}
               onKeyDown={(event) => {
-                if (event.ctrlKey && event.key === 'Enter') event.currentTarget.form?.requestSubmit();
+                if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') event.currentTarget.form?.requestSubmit();
               }}
               disabled={busy}
             />

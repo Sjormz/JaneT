@@ -7,8 +7,7 @@ import {
   KeybindingAction,
   KEYBINDING_LABELS,
   formatShortcut,
-  formatShortcutForDisplay,
-} from '../keybindings';
+  formatShortcutForDisplay, shortcutKeycaps } from '../keybindings';
 import { PencilIcon, XCloseIcon } from '../icons';
 import Tooltip from './Tooltip';
 import ConfirmationDialog from './ConfirmationDialog';
@@ -120,7 +119,11 @@ export default function ShortcutEditor({ open, onClose }: ShortcutEditorProps) {
                   onClick={() => handleStartCapture(action)}
                   aria-label={`${KEYBINDING_LABELS[action]} (currently ${displayedShortcut})`}
                 >
-                  <span className="shortcut-keys-text">{displayedShortcut}</span>
+                  <span className="shortcut-keys-text keycaps">
+                    {shortcut
+                      ? shortcutKeycaps(shortcut, platform).map((key, index) => <kbd key={`${key}-${index}`} className="keycap">{key}</kbd>)
+                      : 'unassigned'}
+                  </span>
                   <PencilIcon size="xs" className="shortcut-edit-icon" />
                 </button>
               </Tooltip>

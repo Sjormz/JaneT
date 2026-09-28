@@ -63,6 +63,12 @@ Use the context menu on a workspace or project in the sidebar. Renaming a manage
 
 If a linked folder is unavailable, select **Locate folder** beside it and choose its current location. This updates the link without moving its files.
 
+## Show or hide the workspace list
+
+Select **Collapse terminal tabs** (the sidebar button beside **New workspace**) to hide the workspace list and give your terminals more room. To bring it back, select **Show terminal tabs**, the sidebar button next to the JaneT name in the title bar. In narrow windows, JaneT hides the list automatically; the same title-bar button reopens it.
+
+The project tools (Explorer and Source Control) collapse to an icon strip with the button at the bottom of that strip.
+
 ## Restore your working layout
 
 JaneT saves workspace groups, projects, sessions, pane layouts, and terminal directories automatically. If the last session is closed, JaneT keeps the empty state after restart until you create or open work again.

@@ -22,11 +22,19 @@ beforeEach(() => {
 });
 
 describe('StatusBar', () => {
+  it('abbreviates the home directory but keeps the full path in the accessible name', () => {
+    render(<StatusBar {...defaultProps} cwd="/Users/demo/projects/app" homeDir="/Users/demo" />);
+    expect(screen.getByText('~/projects/app')).toBeInTheDocument();
+    expect(screen.getByLabelText('Working directory: /Users/demo/projects/app')).toBeInTheDocument();
+  });
+
   it('keeps the status bar focused on live working context', () => {
     render(<StatusBar {...defaultProps} cwd="C:/work/barrel-racer" />);
 
     expect(screen.getByText('C:/work/barrel-racer')).toBeInTheDocument();
-    expect(screen.getByText('LOCAL')).toBeInTheDocument();
+    // Only live context: no static LOCAL or BUILD labels.
+    expect(screen.queryByText('LOCAL')).not.toBeInTheDocument();
+    expect(screen.queryByText('BUILD')).not.toBeInTheDocument();
     expect(screen.queryByText(/terminal/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/MacIntel|Win32/i)).not.toBeInTheDocument();
   });

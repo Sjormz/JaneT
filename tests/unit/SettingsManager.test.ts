@@ -173,6 +173,7 @@ describe('SettingsManager', () => {
     expect(settings.fontSize).toBe(14);
     expect(settings.fontFamily).toContain('JetBrains Mono Variable');
     expect(settings.sidebarSide).toBe('right');
+    expect(settings.transparency).toBe('system');
     expect(settings.workspaceTabs).toEqual([]);
     expect(settings.notificationsEnabled).toBe(false);
     expect(settings.notificationThresholdSeconds).toBe(10);
@@ -223,6 +224,17 @@ describe('SettingsManager', () => {
     (fsMock.renameSync as any).mockImplementationOnce(() => { throw new Error('disk full'); });
     expect(() => manager.set({ commandHistory: [valid('kept')] })).toThrow('Could not persist settings');
     expect(manager.get().commandHistory).toEqual([]);
+  });
+
+  it.each(['system', 'reduced', 'off'] as const)('round-trips the %s transparency preference', async (transparency) => {
+    const { SettingsManager } = await import('../../src/main/settings');
+    expect(new SettingsManager().set({ transparency }).transparency).toBe(transparency);
+  });
+
+  it.each([null, 'glass', 1, true])('falls back to system transparency for a malformed stored value: %s', async (transparency) => {
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ transparency }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    expect(new SettingsManager().get().transparency).toBe('system');
   });
 
   it('round-trips valid notification settings', async () => {
@@ -510,6 +522,8 @@ describe('SettingsManager', () => {
     ['undefined theme', { theme: undefined }],
     ['undefined font size', { fontSize: undefined }],
     ['undefined sidebar side', { sidebarSide: undefined }],
+    ['unknown transparency', { transparency: 'glass' }],
+    ['undefined transparency', { transparency: undefined }],
     ['unknown field', { unexpected: true }],
   ])('rejects malformed runtime updates without mutating or writing: %s', async (_label, updates) => {
     const fsMock = await import('fs');

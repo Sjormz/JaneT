@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { TrashIcon, XCloseIcon } from '../icons';
+import { SearchIcon, TrashIcon, XCloseIcon } from '../icons';
 import { useModalFocus } from '../useModalFocus';
 import MotionPresence from './MotionPresence';
 import { type CommandHistoryEntry } from '../../shared/commandHistory';
@@ -53,7 +53,8 @@ export default function CommandHistoryPicker({ visible, entries, runningIds, onC
         </Tooltip>
       </div>
       <div className="snippet-search-shell">
-        <input className="command-history-search" ref={searchRef} role="combobox" aria-label="Search command history" aria-controls="command-history-list" aria-expanded="true" aria-activedescendant={filtered[selected] ? `command-history-${filtered[selected].id}` : undefined} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={keyDown} />
+        <SearchIcon size="md" className="command-palette-icon" />
+        <input className="command-history-search" ref={searchRef} placeholder="Search command history…" role="combobox" aria-label="Search command history" aria-controls="command-history-list" aria-expanded="true" aria-activedescendant={filtered[selected] ? `command-history-${filtered[selected].id}` : undefined} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={keyDown} />
       </div>
       <div id="command-history-list" className="command-history-list" role="listbox">
         {filtered.length === 0 ? <div className="snippet-empty" role="status">

@@ -1,0 +1,140 @@
+@layer components {
+
+  /* terminal: kept before .document-tab (border-left) so the same declaration still wins. */
+  .terminal-command-failed {
+    border-left: 2px solid var(--red);
+    transform: translateX(-6px);
+    pointer-events: none;
+  }
+
+  .document-tab-shell {
+    min-width: 0;
+    max-width: 220px;
+    display: flex;
+    align-items: stretch;
+    border-right: 1px solid var(--border-subtle);
+    background: var(--surface-panel);
+  }
+
+  .document-tab {
+    min-width: 0;
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 10px;
+    border: 0;
+    border-right: 1px solid var(--border-subtle);
+    background: var(--surface-panel);
+    color: var(--text-tertiary);
+    font: 500 11px/1 var(--font-ui);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .document-tab.file {
+    flex: 1;
+    border-right: 0;
+    padding-right: 4px;
+  }
+
+  .document-tab-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .document-dirty-marker {
+    color: var(--yellow);
+    font-size: 8px;
+    line-height: 1;
+  }
+
+  .document-tab-close:hover { color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
+
+  .document-save-button:hover:not(:disabled) { color: var(--text-accent); background: var(--control-hover); }
+
+  .document-save-button:disabled { opacity: 0.4; cursor: default; }
+
+  .editor-state.error strong { color: var(--text-primary); }
+
+  .editor-state button {
+    min-height: 32px;
+    padding: 0 14px;
+    border: 1px solid var(--border-active);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-accent);
+    cursor: pointer;
+    font: 600 12px/1 var(--font-ui);
+  }
+
+  /* explorer: kept after .document-tab (height) so the same declaration still wins. */
+  .file-explorer {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  /* explorer: kept after .document-tab (justify-content) so the same declaration still wins. */
+  .file-status-icon {
+    width: 16px;
+    display: inline-flex;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  /* explorer: kept after .document-tab (color) so the same declaration still wins. */
+  .file-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+  }
+
+  /* base: kept after .editor-state button (outline-offset) so the same declaration still wins. */
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid var(--text-accent);
+    outline-offset: 1px;
+  }
+
+  /* base: kept after .editor-state button (color) so the same declaration still wins. */
+  button:disabled,
+  .icon-btn:disabled {
+    color: var(--text-disabled);
+    cursor: not-allowed;
+  }
+
+  /* base: kept after button:focus-visible (border-color) so the same declaration still wins. */
+  select:focus-visible { border-color: var(--focus-ring); }
+
+  /* terminal: kept before .app-layout>.workspace-supporting-rail (outline-offset) so the same declaration still wins. */
+  .split-divider:focus-visible {
+    z-index: 3;
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -1px;
+  }
+
+  .workspace-feature-surface { background: var(--surface-canvas); border-radius: inherit; }
+
+  .workspace-content,
+  .workspace-content-surface {
+    background: var(--surface-canvas) !important;
+  }
+
+  .document-tab.active {
+    box-shadow: 0 0 0 1px var(--glass-border-active), 0 1px 0 color-mix(in srgb, var(--text-primary) 10%, transparent) inset;
+  }
+
+  /* workspace-setup: kept after .editor-state button (min-height) so the same declaration still wins. */
+  /* Keep target size generous in forms and transient UI without diluting dense terminal controls. */
+
+  .workspace-main>.workspace-content { min-width: 0; min-height: 0; }
+
+  /* layout: kept after .document-tab.file (padding) so the same declaration still wins. */
+  /* Edge-attached chrome surrounds an inset terminal canvas. */
+
+}

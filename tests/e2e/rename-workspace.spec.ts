@@ -113,7 +113,7 @@ test('renames the focused pane and active tab without interrupting xterm input',
     await expect.poll(async () => terminals.nth(1).locator('.xterm-rows').innerText(), { timeout: 15_000 })
       .toContain(PANE_MARKER);
 
-    await page.keyboard.press('Control+F2');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+F2' : 'Control+F2');
     const tabName = page.getByRole('dialog', { name: 'Rename tab' }).getByRole('textbox', { name: 'Tab name' });
     await expect(tabName).toHaveValue('Two panes');
     await expect(tabName).toBeFocused();

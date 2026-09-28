@@ -1,0 +1,57 @@
+@layer base {
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--control-hover);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover { background: var(--control-active); background-clip: padding-box; }
+
+  ::-webkit-scrollbar-corner { background: transparent; }
+
+  ::view-transition-group(*) {
+    animation-duration: 260ms;
+    animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+    }
+
+    ::view-transition-group(*) { animation: none; }
+  }
+
+  select {
+    appearance: none;
+    background: linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%) calc(100% - 14px) 50% / 5px 5px no-repeat,
+      linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%) calc(100% - 10px) 50% / 5px 5px no-repeat;
+    background-color: var(--control-bg);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding-right: 28px;
+    font-family: var(--font-ui);
+    cursor: pointer;
+  }
+
+  select option { background: var(--surface-overlay); color: var(--text-primary); }
+
+}

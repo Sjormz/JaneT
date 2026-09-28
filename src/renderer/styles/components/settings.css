@@ -1,0 +1,207 @@
+@layer components {
+
+  .settings-save-notice {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-shrink: 0;
+    padding: 10px 16px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--yellow);
+    font-size: 13px;
+  }
+
+  .settings-save-notice button { flex-shrink: 0; min-height: 32px; }
+
+  /* shared: kept before .notification-toggle input[type="checkbox"] (border-radius) so the same declaration still wins. */
+  .workspace-count-picker input:focus-visible {
+    border-radius: var(--radius-sm);
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -5px;
+    box-shadow: none;
+  }
+
+  /* base: kept before .notification-toggle input[type="checkbox"] (outline-color) so the same declaration still wins. */
+  input[type="checkbox"]:focus-visible { outline-color: var(--focus-ring); }
+
+  /* base: kept before .notification-toggle input[type="checkbox"] (cursor) so the same declaration still wins. */
+  input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.6; }
+
+  /* Settings: a floating popover of grouped inset lists (macOS System Settings rhythm). */
+  .titlebar-settings-popover {
+    position: absolute;
+    top: calc(100% + var(--space-2));
+    right: 0;
+    z-index: 200;
+    width: min(420px, calc(100vw - 24px));
+    max-height: calc(100vh - var(--titlebar-height) - var(--status-bar-height) - 24px);
+    overflow: auto;
+    border-radius: var(--radius-floating);
+    box-shadow: var(--shadow-floating);
+    color: var(--text-primary);
+    transform-origin: calc(100% - 14px) -12px;
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+  .theme-switcher { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-4) var(--space-3) var(--space-3); }
+  .settings-title { margin: 0 var(--space-1); font: var(--weight-title) var(--text-lg)/1.2 var(--font-ui); letter-spacing: -0.015em; }
+
+  .settings-group { display: flex; flex-direction: column; gap: 6px; }
+  .settings-group-title { margin: 0 var(--space-2); color: var(--text-tertiary); font: var(--weight-label) var(--text-xs)/1 var(--font-ui); }
+  .settings-inset {
+    display: flex;
+    flex-direction: column;
+    border-radius: 14px;
+    background: var(--fill-hover);
+    box-shadow: inset 0 0 0 0.5px var(--separator);
+  }
+  :root[data-scheme='light'] .settings-inset { background: color-mix(in srgb, #fff 55%, transparent); }
+  .settings-inset > * + * { box-shadow: 0 -0.5px 0 var(--separator); }
+
+  .settings-row {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    color: var(--text-primary);
+    font: var(--weight-body) var(--text-base)/1.3 var(--font-ui);
+  }
+  .settings-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .settings-row.stacked { flex-direction: column; align-items: stretch; gap: var(--space-2); }
+  .settings-row.stacked .segmented { align-self: flex-start; }
+  .settings-row-text small { color: var(--text-tertiary); font-size: var(--text-sm); line-height: 1.35; }
+  .settings-row-value { min-width: 36px; color: var(--text-tertiary); font-size: var(--text-sm); font-variant-numeric: tabular-nums; text-align: right; }
+  button.settings-row {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+  }
+  button.settings-row:hover { background: var(--fill-hover); }
+  .settings-inset > :first-child { border-top-left-radius: inherit; border-top-right-radius: inherit; }
+  .settings-inset > :last-child { border-bottom-left-radius: inherit; border-bottom-right-radius: inherit; }
+  .settings-link { color: var(--accent-text) !important; font-weight: var(--weight-label); }
+  .settings-nav > .icon { color: var(--text-tertiary); }
+
+  /* Theme previews: a miniature window per theme, with a ring for the selection. */
+  .theme-options { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-2); padding: var(--space-3); }
+  .theme-option {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-secondary);
+    font: var(--weight-label) var(--text-xs)/1.2 var(--font-ui);
+    text-align: center;
+    cursor: pointer;
+  }
+  .theme-option.active { color: var(--text-primary); }
+  .theme-preview {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+    border-radius: 8px;
+    background: var(--preview-canvas);
+    box-shadow: 0 0 0 0.5px var(--separator-strong);
+  }
+  .theme-preview::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 28%; background: var(--preview-chrome); }
+  .theme-preview i { position: absolute; left: 36%; height: 7%; border-radius: 2px; }
+  .theme-preview i:nth-child(1) { top: 18%; width: 44%; background: var(--preview-text); }
+  .theme-preview i:nth-child(2) { top: 34%; width: 30%; background: var(--preview-ok); }
+  .theme-preview i:nth-child(3) { top: 50%; width: 38%; background: var(--preview-accent); }
+  .theme-option:hover .theme-preview { box-shadow: 0 0 0 0.5px var(--separator-strong), 0 2px 8px rgb(0 0 0 / 0.2); }
+  .theme-option.active .theme-preview { box-shadow: 0 0 0 2px var(--material-content), 0 0 0 4px var(--accent-solid); }
+  .theme-option-label { max-width: 100%; min-height: 2.4em; overflow-wrap: anywhere; }
+
+  /* Segmented control. */
+  .segmented {
+    flex: none;
+    display: inline-grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    padding: 2px;
+    border-radius: 8px;
+    background: var(--fill-track);
+  }
+  .segmented-option {
+    min-width: 52px;
+    height: 26px;
+    padding: 0 var(--space-2);
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font: var(--weight-label) var(--text-sm)/1 var(--font-ui);
+    cursor: pointer;
+  }
+  .segmented-option:hover:not(.active) { color: var(--text-primary); }
+  .segmented-option.active {
+    background: var(--material-content);
+    box-shadow: 0 0 0 0.5px var(--separator-strong), 0 1px 3px rgb(0 0 0 / 0.2);
+    color: var(--text-primary);
+  }
+
+  /* Switch: the native checkbox, restyled; its role and keyboard behaviour are unchanged. */
+  .notification-toggle { cursor: pointer; }
+  input[type="checkbox"].switch {
+    position: relative;
+    flex: none;
+    width: 38px;
+    height: 22px;
+    margin: 0;
+    border-radius: 999px;
+    background: var(--fill-selected);
+    box-shadow: inset 0 0 0 0.5px var(--separator-strong);
+    appearance: none;
+    cursor: pointer;
+  }
+  input[type="checkbox"].switch::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+    transition: transform var(--dur-base) var(--ease-spring);
+  }
+  input[type="checkbox"].switch:checked { background: var(--accent-solid); box-shadow: none; }
+  /* The knob takes the on-accent colour so it stays visible on light accents (One Dark's is near white). */
+  input[type="checkbox"].switch:checked::after { transform: translateX(16px); background: var(--on-accent); }
+
+  /* Slider. */
+  .font-size-slider {
+    width: 132px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--fill-selected);
+    appearance: none;
+    -webkit-appearance: none;
+    outline-offset: 6px;
+  }
+  .font-size-slider::-webkit-slider-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.2), 0 1px 3px rgb(0 0 0 / 0.3);
+    -webkit-appearance: none;
+    cursor: pointer;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    input[type="checkbox"].switch::after { transition: none; }
+  }
+
+}

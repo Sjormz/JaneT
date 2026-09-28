@@ -1,0 +1,155 @@
+@layer components {
+
+  #root>.app {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+  }
+
+  .app {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    scrollbar-gutter: auto;
+  }
+
+  .app-startup {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 32px;
+    color: var(--text-secondary);
+    text-align: center;
+    background: var(--surface-canvas);
+  }
+
+  .app-startup-mark {
+    place-items: center;
+    color: var(--text-accent);
+    display: block;
+    width: 56px;
+    height: 56px;
+    border: 0;
+    border-radius: 14px;
+    background: none;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+    font: inherit;
+  }
+
+  .app-startup-name {
+    color: var(--text-primary);
+    font-size: 19px;
+    font-weight: 720;
+    letter-spacing: -0.02em;
+  }
+
+  .app-startup-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .app-startup-actions button {
+    min-height: 32px;
+    padding: 0 14px;
+    border: 1px solid var(--glass-border-active);
+    border-radius: var(--radius-sm);
+    background: var(--control-hover);
+    color: var(--text-primary);
+    cursor: pointer;
+    font: inherit;
+  }
+
+  /* shared: kept before .fresh-profile-entry-actions button (border) so the same declaration still wins. */
+  .workspace-count-picker button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  /* workspace-setup: kept after .app-startup-actions button (border) so the same declaration still wins. */
+  .fresh-profile-entry-actions button {
+    min-height: 30px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--control-bg);
+    color: var(--text-primary);
+    cursor: pointer;
+    font: 600 11px/1 var(--font-ui);
+    padding: 0 11px;
+  }
+
+  /* Navigation chrome: one restrained material, one inset highlight, no glow. */
+
+  @supports not (backdrop-filter: blur(1px)) {
+
+    /* status-bar: kept after .app-chrome (background) so the same declaration still wins. */
+    .update-banner {
+      background: var(--surface-panel);
+    }
+  }
+
+  @media (prefers-contrast: more) {
+
+    /* status-bar: kept after .app-chrome (box-shadow) so the same declaration still wins. */
+    .update-banner {
+      box-shadow: 0 0 0 1px var(--glass-border);
+    }
+  }
+
+  /* A bounded, static cool aura only has room to show through the chrome gutters. */
+
+  .main-directory-path {
+    overflow-wrap: anywhere;
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+
+  .main-directory-settings p {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+
+  /* workspace-setup: kept after .app-startup (background) so the same declaration still wins. */
+  .directory-setup {
+    overflow-y: auto;
+    padding: 24px;
+    background: var(--bg-primary);
+  }
+
+  /* workspace-setup: kept after .main-directory-settings p (font-size) so the same declaration still wins. */
+  .directory-onboarding p {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.65;
+    color: var(--text-secondary);
+  }
+
+  /* dialogs: kept after .workspace-modal>.main-directory-settings h2 (margin-top) so the same declaration still wins. */
+  .directory-onboarding p.form-error { margin-top: 16px; color: var(--red); }
+
+  /* The window frame: rails attach to the window edges on the chrome glass; panes float inside with one gutter. */
+  .app-body.app-layout { gap: 0; padding: 0; min-height: 0; }
+  .app-layout > .workspace-main { min-width: 0; overflow: hidden; padding: var(--space-gutter); }
+  .app-body.sidebar-left .terminal-area { order: 3; }
+  .app-body.sidebar-right .terminal-area { order: 2; }
+
+}

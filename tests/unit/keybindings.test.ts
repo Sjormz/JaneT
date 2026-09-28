@@ -44,3 +44,15 @@ describe('keyboard shortcut defaults', () => {
     });
   });
 });
+
+describe('shortcutKeycaps', () => {
+  it('uses modifier glyphs on macOS and names elsewhere', async () => {
+    const { shortcutKeycaps } = await import('../../src/renderer/keybindings');
+    expect(shortcutKeycaps('Meta+Shift+P', 'darwin')).toEqual(['⌘', '⇧', 'P']);
+    expect(shortcutKeycaps('Ctrl+Alt+C', 'darwin')).toEqual(['⌃', '⌥', 'C']);
+    expect(shortcutKeycaps('Ctrl+Shift+P', 'win32')).toEqual(['Ctrl', 'Shift', 'P']);
+    expect(shortcutKeycaps('Ctrl+Plus', 'linux')).toEqual(['Ctrl', '+']);
+    expect(shortcutKeycaps('Ctrl+Shift+ArrowUp', 'win32')).toEqual(['Ctrl', 'Shift', '↑']);
+    expect(shortcutKeycaps('', 'darwin')).toEqual([]);
+  });
+});

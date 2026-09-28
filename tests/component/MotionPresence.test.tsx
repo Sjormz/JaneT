@@ -1,6 +1,7 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import MotionPresence from '../../src/renderer/components/MotionPresence';
+import { DURATION, exitDuration } from '../../src/renderer/components/motion';
 
 function animationEnvironment(reduced = false) {
   const preference = { matches: reduced, addEventListener: vi.fn(), removeEventListener: vi.fn() };
@@ -37,11 +38,11 @@ describe('MotionPresence', () => {
     const environment = animationEnvironment();
     try {
       const { rerender, container } = render(<MotionPresence><div role="dialog">Original title</div></MotionPresence>);
-      expect(environment.animate).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ duration: 180 }));
+      expect(environment.animate).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ duration: DURATION.base }));
       rerender(<MotionPresence>{false}</MotionPresence>);
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
       expect(container.querySelector('[inert][aria-hidden="true"]')).toHaveTextContent('Original title');
-      expect(environment.animate).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ duration: 120 }));
+      expect(environment.animate).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ duration: exitDuration(DURATION.base) }));
       await act(async () => environment.animations.at(-1)!.finish());
       expect(container).toBeEmptyDOMElement();
     } finally { environment.restore(); }

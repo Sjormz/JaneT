@@ -62,7 +62,9 @@ describe('Titlebar', () => {
     expect(screen.queryByRole('button', { name: /source control/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /open command palette \(ctrl\+k\)/i })).toBeInTheDocument();
     expect(screen.getByText('Search commands')).toBeInTheDocument();
-    expect(screen.getByText('Ctrl+K')).toBeInTheDocument();
+    // The shortcut hint renders as one keycap per key.
+    const keycaps = Array.from(document.querySelectorAll('.titlebar-keys .keycap'), (key) => key.textContent);
+    expect(keycaps).toEqual(['Ctrl', 'K']);
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /minimize/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /maximize/i })).toBeInTheDocument();

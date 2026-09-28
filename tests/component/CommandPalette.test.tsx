@@ -53,9 +53,11 @@ describe('CommandPalette', () => {
   it('shows keyboard shortcuts', () => {
     render(<CommandPalette visible={true} onClose={vi.fn()} actions={sampleActions} />);
 
-    expect(screen.getByText('Ctrl+N')).toBeInTheDocument();
-    expect(screen.getByText('Ctrl+W')).toBeInTheDocument();
-    expect(screen.getByText('Ctrl+B')).toBeInTheDocument();
+    // Shown as keycaps; the full shortcut stays as the accessible label.
+    expect(screen.getByLabelText('Ctrl+N')).toBeInTheDocument();
+    expect(screen.getByLabelText('Ctrl+W')).toBeInTheDocument();
+    expect(screen.getByLabelText('Ctrl+B')).toBeInTheDocument();
+    expect(Array.from(screen.getByLabelText('Ctrl+N').querySelectorAll('.keycap'), (key) => key.textContent)).toEqual(['Ctrl', 'N']);
   });
 
   it('filters actions by query', () => {

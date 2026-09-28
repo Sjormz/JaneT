@@ -63,6 +63,9 @@ export interface SavedSession {
 }
 
 export type ThemeName = 'tokyo-night' | 'dracula' | 'one-dark' | 'solarized-light' | 'gruvbox';
+/** `system` follows the OS Reduce transparency setting; `reduced` keeps in-app glass on an opaque window; `off` is solid. */
+export type TransparencyPreference = 'system' | 'reduced' | 'off';
+const TRANSPARENCY_PREFERENCES: readonly TransparencyPreference[] = ['system', 'reduced', 'off'];
 
 export type KeybindingAction =
   | 'search-toggle'
@@ -192,6 +195,7 @@ export interface AppSettings {
   fontSize: number;
   fontFamily: string;
   sidebarSide: 'left' | 'right';
+  transparency: TransparencyPreference;
   notificationsEnabled: boolean;
   notificationThresholdSeconds: number;
   keybindings: Record<string, string>;
@@ -252,6 +256,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   fontSize: 14,
   fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
   sidebarSide: 'right',
+  transparency: 'system',
   notificationsEnabled: false,
   notificationThresholdSeconds: 10,
   keybindings: { ...PLATFORM_DEFAULT_KEYBINDINGS },
@@ -407,6 +412,9 @@ export class SettingsManager {
       keybindings: isBoundedStringRecord(mergedKeybindings, MAX_KEYBINDINGS, 256, 256)
         ? mergedKeybindings
         : { ...PLATFORM_DEFAULT_KEYBINDINGS },
+      transparency: TRANSPARENCY_PREFERENCES.includes(storedSettings.transparency as TransparencyPreference)
+        ? storedSettings.transparency
+        : 'system',
       notificationsEnabled: typeof storedSettings.notificationsEnabled === 'boolean' ? storedSettings.notificationsEnabled : false,
       notificationThresholdSeconds: isValidNotificationThreshold(storedSettings.notificationThresholdSeconds)
         ? storedSettings.notificationThresholdSeconds
@@ -816,7 +824,7 @@ function parseSettingsUpdate(value: unknown): Partial<AppSettings> | undefined {
     const prototype = Reflect.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) return undefined;
     const allowedKeys = new Set<keyof AppSettings>([
-      'mainDirectory', 'mainDirectorySetupSkipped', 'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'keybindings', 'snippets',
+      'mainDirectory', 'mainDirectorySetupSkipped', 'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'transparency', 'keybindings', 'snippets',
       'commandHistory', 'notificationsEnabled', 'notificationThresholdSeconds',
       'workspaceTabs', 'gitWorktreeBaseDir',
       'gitWorktreeNameTemplate', 'session',
@@ -844,6 +852,7 @@ function isValidSettingsUpdate(updates: Partial<AppSettings>): boolean {
     && (updates.fontFamily === undefined
       || (typeof updates.fontFamily === 'string' && updates.fontFamily.length <= MAX_WORKSPACE_STRING_LENGTH))
     && (updates.sidebarSide === undefined || updates.sidebarSide === 'left' || updates.sidebarSide === 'right')
+    && (updates.transparency === undefined || TRANSPARENCY_PREFERENCES.includes(updates.transparency))
     && (updates.notificationsEnabled === undefined || typeof updates.notificationsEnabled === 'boolean')
     && (updates.notificationThresholdSeconds === undefined || isValidNotificationThreshold(updates.notificationThresholdSeconds))
     && (updates.keybindings === undefined

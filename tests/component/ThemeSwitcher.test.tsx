@@ -18,6 +18,9 @@ function renderThemeSwitcher(overrides?: Partial<React.ComponentProps<typeof The
       onFontSizeChange={vi.fn()}
       sidebarSide="left"
       onSidebarSideChange={vi.fn()}
+      transparency="system"
+      systemReducesTransparency={false}
+      onTransparencyChange={vi.fn()}
       notificationsEnabled={false}
       onNotificationsEnabledChange={vi.fn()}
       {...overrides}
@@ -138,5 +141,20 @@ describe('ThemeSwitcher', () => {
 
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Could not copy diagnostics'));
     expect(document.body).not.toHaveTextContent('C:\\Users\\private\\settings.json');
+  });
+
+  it('offers System, Reduced and Off transparency and reports the choice', () => {
+    const onTransparencyChange = vi.fn();
+    renderThemeSwitcher({ transparency: 'system', onTransparencyChange });
+    const group = screen.getByRole('group', { name: 'Transparency' });
+    const options = ['System', 'Reduced', 'Off'].map((name) => screen.getByRole('button', { name, pressed: name === 'System' }));
+    expect(options.every((option) => group.contains(option))).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Reduced' }));
+    expect(onTransparencyChange).toHaveBeenCalledWith('reduced');
+  });
+
+  it('explains when the system is reducing transparency', () => {
+    renderThemeSwitcher({ transparency: 'system', systemReducesTransparency: true });
+    expect(screen.getByText(/system is set to reduce transparency/i)).toBeTruthy();
   });
 });
