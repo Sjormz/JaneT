@@ -329,7 +329,7 @@ test('copies TUI OSC 52 selections, rejects unsolicited writes, and pastes brack
     expect(await app.evaluate(async ({ clipboard }) => (await clipboard.read()).some((item) => item.types.includes('image/png')))).toBe(true);
     await sendOutput('\x1b[?2004h\r\nBRACKETED_IMAGE_READY');
     await expect(container.locator('.xterm-rows')).toContainText('BRACKETED_IMAGE_READY');
-    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : process.platform === 'linux' ? 'Control+Shift+V' : 'Control+V');
     await expect.poll(() => app!.evaluate(() => (globalThis as any).__pastedTerminalData.length)).toBe(1);
     const imagePaste = await app.evaluate(() => (globalThis as any).__pastedTerminalData[0]);
     expect(imagePaste.userInput).toBe(true);

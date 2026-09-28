@@ -168,18 +168,14 @@ describe('release tooling', () => {
     const { defaultKeybindingsForPlatform } = await import('../../src/renderer/keybindings');
     const windows = defaultKeybindingsForPlatform('win32');
     const macos = defaultKeybindingsForPlatform('darwin');
-    const display = (shortcut: string) => shortcut ? `\`${shortcut.replace(/^Meta/, 'Cmd')}\`` : 'Unassigned';
-    const rows = [
-      ['Open command palette', 'palette-toggle'],
-      ['New terminal tab', 'new-terminal'],
-      ['Search terminal output', 'search-toggle'],
-      ['Show or hide workspace tools', 'toggle-sidebar'],
-      ['Open snippets', 'snippets-toggle'],
-      ['Split pane right', 'split-right'],
-      ['Split pane below', 'split-down'],
-    ] as const;
+    const display = (shortcut: string) => shortcut
+      ? `\`${shortcut.replace(/^Meta/, 'Cmd').replace(/\+Alt\+/, '+Option+')}\``
+      : 'Unassigned';
+    const { KEYBINDING_LABELS } = await import('../../src/renderer/keybindings');
+    const rows = Object.entries(KEYBINDING_LABELS)
+      .filter(([action]) => !action.startsWith('move-pane-')) as Array<[keyof typeof windows, string]>;
 
-    for (const [label, action] of rows) {
+    for (const [action, label] of rows) {
       expect(shortcuts).toContain(
         `| ${label} | ${display(windows[action])} | ${display(macos[action])} |`,
       );

@@ -1347,7 +1347,7 @@ describe('split panes in the app', () => {
     expect(survivor!.style.flex).toBe('1 1 0%');
   });
 
-  it('applies the close-pane shortcut to the focused pane', async () => {
+  it('applies the close shortcut to the focused pane', async () => {
     render(<App />);
 
     await screen.findByRole('button', { name: 'Add terminals' });
@@ -1403,7 +1403,7 @@ describe('split panes in the app', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
-  it('renames the focused pane with F2 and returns focus to its terminal', async () => {
+  it('renames the focused pane with Ctrl+Shift+F2 and returns focus to its terminal', async () => {
     render(<App />);
 
     await splitFromPalette();
@@ -1414,7 +1414,7 @@ describe('split panes in the app', () => {
     vi.mocked(window.janet.terminalCreate).mockClear();
     vi.mocked(window.janet.terminalDestroy).mockClear();
 
-    fireEvent.keyDown(secondInput, { key: 'F2' });
+    fireEvent.keyDown(secondInput, { key: 'F2', code: 'F2', ctrlKey: true, shiftKey: true });
 
     const dialog = await screen.findByRole('dialog', { name: 'Rename terminal' });
     const nameInput = within(dialog).getByRole('textbox', { name: 'Terminal name' });
@@ -1442,7 +1442,7 @@ describe('split panes in the app', () => {
     expect(savedRoot.children[1]).toMatchObject({ title: 'Tests', terminalType: 'local' });
   });
 
-  it('renames the active tab with Ctrl+F2 while its rail is collapsed', async () => {
+  it('renames the active tab with Ctrl+Shift+I while its rail is collapsed', async () => {
     render(<App />);
 
     const terminal = await screen.findByTestId(/terminal-/);
@@ -1453,7 +1453,7 @@ describe('split panes in the app', () => {
     // The way back to a collapsed rail lives in the titlebar.
     await waitFor(() => expect(rendererMocks.titlebarProps.tabsHidden).toBe(true));
 
-    fireEvent.keyDown(terminalInput, { key: 'F2', ctrlKey: true });
+    fireEvent.keyDown(terminalInput, { key: 'I', code: 'KeyI', ctrlKey: true, shiftKey: true });
 
     const dialog = await screen.findByRole('dialog', { name: 'Rename tab' });
     const nameInput = within(dialog).getByRole('textbox', { name: 'Tab name' });
@@ -1700,14 +1700,17 @@ describe('split panes in the app', () => {
     const terminal = await screen.findByTestId(/terminal-/);
     const terminalId = terminal.textContent!;
     fireEvent.focus(terminal);
-    fireEvent.keyDown(document, { key: 'w', ctrlKey: true });
+    // Plain Ctrl+W stays with the shell (delete the previous word).
+    fireEvent.keyDown(document, { key: 'w', code: 'KeyW', ctrlKey: true });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'W', code: 'KeyW', ctrlKey: true, shiftKey: true });
 
     const dialog = await screen.findByRole('alertdialog');
     expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(screen.getByTestId(`terminal-${terminalId}`)).toBeInTheDocument();
 
-    fireEvent.keyDown(document, { key: 'w', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'W', code: 'KeyW', ctrlKey: true, shiftKey: true });
     await confirmPendingAction(/^close tab$/i);
     await waitFor(() => {
       expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
@@ -1760,8 +1763,8 @@ describe('split panes in the app', () => {
     await screen.findByTestId(/terminal-/);
     await waitFor(() => {
       expect(rendererMocks.paletteActions).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: 'rename-pane', shortcut: 'F2' }),
-        expect.objectContaining({ id: 'rename-tab', shortcut: 'Ctrl+F2' }),
+        expect.objectContaining({ id: 'rename-pane', shortcut: 'Ctrl+Shift+F2' }),
+        expect.objectContaining({ id: 'rename-tab', shortcut: 'Ctrl+Shift+I' }),
       ]));
     });
 
@@ -2912,7 +2915,7 @@ describe('unsaved editor shutdown handshake', () => {
     const terminal = await screen.findByTestId(/terminal-/);
     const terminalInput = await within(terminal).findByRole('textbox');
     act(() => terminalInput.focus());
-    fireEvent.keyDown(terminalInput, { key: 'F2', ctrlKey: true });
+    fireEvent.keyDown(terminalInput, { key: 'I', code: 'KeyI', ctrlKey: true, shiftKey: true });
     const dialog = await screen.findByRole('dialog', { name: 'Rename tab' });
     const nameInput = within(dialog).getByRole('textbox', { name: 'Tab name' });
     fireEvent.change(nameInput, { target: { value: 'Latest workspace' } });

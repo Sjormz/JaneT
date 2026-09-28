@@ -4,6 +4,8 @@ import {
   defaultKeybindingsForPlatform,
   matchesShortcut,
   formatShortcut,
+  rendererPlatform,
+  shortcutKeyFromEvent,
 } from './keybindings';
 
 interface KeybindingsContextValue {
@@ -40,9 +42,7 @@ export function KeybindingsProvider({
   initialBindings,
   onSave,
 }: KeybindingsProviderProps) {
-  const platformDefaults = useMemo(() => defaultKeybindingsForPlatform(
-    /Mac|iPhone|iPad/i.test(navigator.platform) ? 'darwin' : '',
-  ), []);
+  const platformDefaults = useMemo(() => defaultKeybindingsForPlatform(rendererPlatform()), []);
   const [bindings, setBindings] = useState<Record<KeybindingAction, string>>(() => ({
     ...platformDefaults,
     ...initialBindings,
@@ -120,10 +120,11 @@ export function KeybindingsProvider({
       // confirmation or replacing the destructive target being reviewed.
       if (document.querySelector('[aria-modal="true"]:not([inert] *), [data-keybindings-suspended]:not([inert] *)')) return;
 
-      // Xterm owns copy when it has a selection and Ctrl+C when it does not.
-      // A user-rebound application action must not preempt either behavior.
+      // The terminal owns its copy, paste, and interrupt chords (Ctrl+C,
+      // Ctrl+V, Ctrl+Shift+C/V, Cmd+C/V). A user-rebound application action
+      // must not preempt them inside a terminal.
       if (
-        ['c', 'v'].includes(e.key.toLowerCase())
+        ['c', 'v'].includes(shortcutKeyFromEvent(e).toLowerCase())
         && (e.ctrlKey || e.metaKey)
         && !e.altKey
         && e.target instanceof Element

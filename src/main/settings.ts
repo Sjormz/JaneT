@@ -18,6 +18,15 @@ import {
   normalizeCommandHistory,
   type CommandHistoryEntry,
 } from '../shared/commandHistory';
+import {
+  defaultKeybindingsForPlatform,
+  KEYBINDINGS_SCHEMA_KEY,
+  KEYBINDINGS_SCHEMA_VERSION,
+  migrateKeybindings,
+} from '../shared/keybindings';
+
+export type { KeybindingAction } from '../shared/keybindings';
+export { DEFAULT_KEYBINDINGS } from '../shared/keybindings';
 
 // Mirrors `SavedSession` in src/renderer/sessionRestore.ts. Duplicated as a
 // type-only contract because the main process cannot import the renderer
@@ -67,127 +76,18 @@ export type ThemeName = 'tokyo-night' | 'dracula' | 'one-dark' | 'solarized-ligh
 export type TransparencyPreference = 'system' | 'reduced' | 'off';
 const TRANSPARENCY_PREFERENCES: readonly TransparencyPreference[] = ['system', 'reduced', 'off'];
 
-export type KeybindingAction =
-  | 'search-toggle'
-  | 'palette-toggle'
-  | 'new-terminal'
-  | 'close-tab'
-  | 'settings-toggle'
-  | 'toggle-sidebar'
-  | 'font-increase'
-  | 'font-decrease'
-  | 'font-reset'
-  | 'previous-tab'
-  | 'next-tab'
-  | 'snippets-toggle'
-  | 'history-toggle'
-  | 'split-right'
-  | 'split-down'
-  | 'close-pane'
-  | 'maximize-pane'
-  | 'focus-next-pane'
-  | 'focus-previous-pane'
-  | 'move-pane-left'
-  | 'move-pane-right'
-  | 'move-pane-up'
-  | 'move-pane-down'
-  | 'rename-pane'
-  | 'rename-tab'
-  | 'save-document'
-  | 'close-document'
-  | 'previous-command'
-  | 'next-command'
-  | 'copy-command'
-  | 'copy-command-output'
-  | 'rerun-command';
-
-export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
-  'search-toggle': 'Ctrl+F',
-  'palette-toggle': 'Ctrl+Shift+P',
-  'new-terminal': 'Ctrl+Shift+T',
-  'close-tab': 'Ctrl+W',
-  'settings-toggle': 'Ctrl+,',
-  'toggle-sidebar': 'Ctrl+B',
-  'font-increase': 'Ctrl+Plus',
-  'font-decrease': 'Ctrl+-',
-  'font-reset': 'Ctrl+0',
-  'previous-tab': 'Ctrl+Shift+Tab',
-  'next-tab': 'Ctrl+Tab',
-  'snippets-toggle': '',
-  'history-toggle': '',
-  'split-right': 'Ctrl+\\',
-  'split-down': 'Ctrl+Shift+\\',
-  'close-pane': 'Ctrl+Shift+W',
-  'maximize-pane': '',
-  'focus-next-pane': '',
-  'focus-previous-pane': '',
-  'move-pane-left': '',
-  'move-pane-right': '',
-  'move-pane-up': '',
-  'move-pane-down': '',
-  'rename-pane': 'F2',
-  'rename-tab': 'Ctrl+F2',
-  'save-document': '',
-  'close-document': '',
-  'previous-command': 'Ctrl+Shift+ArrowUp',
-  'next-command': 'Ctrl+Shift+ArrowDown',
-  'copy-command': 'Ctrl+Alt+C',
-  'copy-command-output': 'Ctrl+Alt+O',
-  'rerun-command': 'Ctrl+Alt+R',
-};
-
-function defaultKeybindingsForPlatform(platform: string): Record<KeybindingAction, string> {
-  if (platform !== 'darwin') return { ...DEFAULT_KEYBINDINGS };
-  return {
-    ...DEFAULT_KEYBINDINGS,
-    'search-toggle': 'Meta+F',
-    'palette-toggle': 'Meta+Shift+P',
-    'new-terminal': 'Meta+T',
-    'close-tab': 'Meta+W',
-    'settings-toggle': 'Meta+,',
-    'toggle-sidebar': 'Meta+B',
-    'font-increase': 'Meta+Plus',
-    'font-decrease': 'Meta+-',
-    'font-reset': 'Meta+0',
-    'split-right': 'Meta+\\',
-    'split-down': 'Meta+Shift+\\',
-    'close-pane': 'Meta+Shift+W',
-    'rename-tab': 'Meta+F2',
-  };
-}
-
 const PLATFORM_DEFAULT_KEYBINDINGS = defaultKeybindingsForPlatform(process.platform);
-const PREVIOUS_PLATFORM_DEFAULT_KEYBINDINGS = Object.fromEntries(
-  Object.entries(PLATFORM_DEFAULT_KEYBINDINGS).filter(([action]) => !action.startsWith('move-pane-')),
-);
 
-const LEGACY_KEYBINDINGS: Record<string, string> = {
-  'search-toggle': 'Ctrl+F',
-  'palette-toggle': 'Ctrl+K',
-  'new-terminal': 'Ctrl+N',
-  'close-tab': 'Ctrl+W',
-  'toggle-sidebar': 'Ctrl+B',
-  'font-increase': 'Ctrl+Plus',
-  'font-decrease': 'Ctrl+-',
-  'snippets-toggle': 'Ctrl+Shift+P',
-  'split-right': 'Ctrl+\\',
-  'split-down': 'Ctrl+Shift+\\',
-  'close-pane': 'Ctrl+Shift+W',
-  'rename-pane': 'F2',
-  'rename-tab': 'Ctrl+F2',
-  'previous-command': 'Ctrl+Shift+ArrowUp',
-  'next-command': 'Ctrl+Shift+ArrowDown',
-  'copy-command': 'Ctrl+Alt+C',
-  'copy-command-output': 'Ctrl+Alt+O',
-  'rerun-command': 'Ctrl+Alt+R',
-};
-
-function exactlyMatches(record: Record<string, string>, expected: Record<string, string>): boolean {
-  const keys = Object.keys(record);
-  return keys.length === Object.keys(expected).length
-    && keys.every((key) => record[key] === expected[key]);
+/** A keybinding map as persisted: current bindings plus the default-generation marker. */
+function withKeybindingsSchema(keybindings: Record<string, string>): Record<string, string> {
+  const { [KEYBINDINGS_SCHEMA_KEY]: _schema, ...bindings } = keybindings;
+  return { ...bindings, [KEYBINDINGS_SCHEMA_KEY]: KEYBINDINGS_SCHEMA_VERSION };
 }
 
+function withoutKeybindingsSchema(keybindings: Record<string, string>): Record<string, string> {
+  const { [KEYBINDINGS_SCHEMA_KEY]: _schema, ...bindings } = keybindings;
+  return bindings;
+}
 export interface AppSettings {
   mainDirectory: string | null;
   mainDirectorySetupSkipped: boolean;
@@ -259,7 +159,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   transparency: 'system',
   notificationsEnabled: false,
   notificationThresholdSeconds: 10,
-  keybindings: { ...PLATFORM_DEFAULT_KEYBINDINGS },
+  keybindings: withKeybindingsSchema(PLATFORM_DEFAULT_KEYBINDINGS),
   snippets: [],
   commandHistory: [],
   workspaceTabs: [],
@@ -285,7 +185,7 @@ export class SettingsManager {
     if (this.recoveryRequired) throw new Error('Could not load settings');
     return {
       ...this.cache,
-      keybindings: { ...this.cache.keybindings },
+      keybindings: withoutKeybindingsSchema(this.cache.keybindings),
       snippets: this.cache.snippets.map((snippet) => ({ ...snippet })),
       commandHistory: cloneCommandHistory(this.cache.commandHistory),
       workspaceTabs: this.cache.workspaceTabs
@@ -353,7 +253,7 @@ export class SettingsManager {
       ...updates,
       keybindings: updates.keybindings === undefined
         ? this.cache.keybindings
-        : { ...PLATFORM_DEFAULT_KEYBINDINGS, ...updates.keybindings },
+        : withKeybindingsSchema({ ...PLATFORM_DEFAULT_KEYBINDINGS, ...updates.keybindings }),
       snippets: updates.snippets === undefined ? this.cache.snippets : normalizeSnippets(updates.snippets),
       commandHistory: updates.commandHistory === undefined
         ? this.cache.commandHistory
@@ -395,14 +295,10 @@ export class SettingsManager {
     const storedKeybindings = isBoundedStringRecord(storedSettings.keybindings, MAX_KEYBINDINGS, 256, 256)
       ? storedSettings.keybindings
       : {};
-    const mergedKeybindings = {
+    const mergedKeybindings = withKeybindingsSchema({
       ...PLATFORM_DEFAULT_KEYBINDINGS,
-      ...((exactlyMatches(storedKeybindings, LEGACY_KEYBINDINGS)
-        || exactlyMatches(storedKeybindings, { ...PLATFORM_DEFAULT_KEYBINDINGS, ...LEGACY_KEYBINDINGS })
-        || exactlyMatches(storedKeybindings, { ...PREVIOUS_PLATFORM_DEFAULT_KEYBINDINGS, ...LEGACY_KEYBINDINGS }))
-        ? {}
-        : storedKeybindings),
-    };
+      ...migrateKeybindings(storedKeybindings, process.platform),
+    });
     const stored = {
       ...DEFAULT_SETTINGS,
       ...storedSettings,
@@ -411,7 +307,7 @@ export class SettingsManager {
         && storedSettings.mainDirectory.length <= 8192 && !storedSettings.mainDirectory.includes('\0') ? storedSettings.mainDirectory : null,
       keybindings: isBoundedStringRecord(mergedKeybindings, MAX_KEYBINDINGS, 256, 256)
         ? mergedKeybindings
-        : { ...PLATFORM_DEFAULT_KEYBINDINGS },
+        : withKeybindingsSchema(PLATFORM_DEFAULT_KEYBINDINGS),
       transparency: TRANSPARENCY_PREFERENCES.includes(storedSettings.transparency as TransparencyPreference)
         ? storedSettings.transparency
         : 'system',
@@ -868,7 +764,7 @@ function isValidSettingsUpdate(updates: Partial<AppSettings>): boolean {
     && (updates.keybindings === undefined
       || (isBoundedStringRecord(updates.keybindings, MAX_KEYBINDINGS, 256, 256)
         && isBoundedStringRecord(
-          { ...PLATFORM_DEFAULT_KEYBINDINGS, ...updates.keybindings },
+          withKeybindingsSchema({ ...PLATFORM_DEFAULT_KEYBINDINGS, ...updates.keybindings }),
           MAX_KEYBINDINGS,
           256,
           256,
