@@ -473,7 +473,10 @@ export default function GitTree({
                 >
                   <FolderIcon size="xs" />
                   <span className="branch-name">{basename(tree.path)}</span>
-                  <span className="git-row-note">{current && status?.current ? status.current : tree.branch || 'detached'}{paneNote}</span>
+                  <span className="git-row-note git-worktree-note">
+                    <span className="git-worktree-branch">{current && status?.current ? status.current : tree.branch || 'detached'}</span>
+                    {paneNote && <span className="git-worktree-panes">{paneNote}</span>}
+                  </span>
                 </button>
               </Tooltip>
               {!current && (
@@ -488,7 +491,8 @@ export default function GitTree({
 
       <Tooltip label={repoPath} placement="right">
         <div className="git-repo-path" aria-label={`${status?.current || 'HEAD'} at ${repoPath}`}>
-          <GitBranchIcon size="xs" /> {status?.current || 'HEAD'}
+          <GitBranchIcon size="xs" />
+          <span className="git-repo-branch">{status?.current || 'HEAD'}</span>
           {status && status.files.length > 0 && <span className="git-pill dirty" aria-label={`${status.files.length} changed files`}><CircleIcon size="xs" /> {status.files.length}</span>}
           {status && status.ahead > 0 && <span className="git-pill ahead" aria-label={`${status.ahead} commits ahead`}><ArrowUpIcon size="xs" />{status.ahead}</span>}
           {status && status.behind > 0 && <span className="git-pill behind" aria-label={`${status.behind} commits behind`}><ArrowDownIcon size="xs" />{status.behind}</span>}
