@@ -6,6 +6,35 @@ import { forceClose } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 import { getTheme } from '../../src/renderer/themes';
 
+// MotionPresence timings: DURATION.base and exitDuration(DURATION.base) in src/renderer/components/motion.ts.
+const ENTER_MS = 240;
+const EXIT_MS = 156;
+
+type TerminalFit = { id: string | null; resizes: number; term?: string; settled: boolean };
+/** Each terminal's PTY resize count and whether its grid is fitted to its box and acknowledged by the PTY. */
+const terminalFits = (page: Page) => page.locator('.terminal-container').evaluateAll(elements => elements.map(el => {
+  const element = el as HTMLElement;
+  const box = element.getBoundingClientRect();
+  return { id: element.getAttribute('data-terminal-id'), resizes: Number(element.dataset.ptyResizes ?? 0),
+    term: element.dataset.termSize,
+    settled: element.dataset.fitBox === `${Math.round(box.width)}x${Math.round(box.height)}`
+      && !!element.dataset.termSize && element.dataset.termSize === element.dataset.ptySize };
+}));
+
+/** A rail collapse or expand changes the layout once, so every terminal re-fits and resizes its PTY exactly once. */
+async function expectOneResizePerTerminal(page: Page, change: () => Promise<void>) {
+  await expect.poll(async () => (await terminalFits(page)).every(fit => fit.settled)).toBe(true);
+  const before: TerminalFit[] = await terminalFits(page);
+  await change();
+  await expect.poll(async () => {
+    const after = await terminalFits(page);
+    return after.every((fit, index) => fit.settled && fit.term !== before[index].term);
+  }).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.documentElement.hasAttribute('data-layout-transition'))).toBe(false);
+  expect((await terminalFits(page)).map(({ id, resizes }) => ({ id, resizes })))
+    .toEqual(before.map(({ id, resizes }) => ({ id, resizes: resizes + 1 })));
+}
+
 class MotionWorkspace {
   constructor(private page: Page) {}
   async ready() {
@@ -75,11 +104,12 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
           return transition;
         }) as typeof document.startViewTransition;
         const animate = Element.prototype.animate;
+        const EXIT_MS = 156;
         Element.prototype.animate = function (frames, options) {
           const duration = typeof options === 'object' ? options?.duration : options;
           state.durations.push(duration);
           const animation = animate.call(this, frames, options);
-          if (duration === 120 && state.holdExits) animation.pause();
+          if (duration === EXIT_MS && state.holdExits) animation.pause();
           return animation;
         };
       });
@@ -94,6 +124,15 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       await expect.poll(() => page.evaluate(() => (window as any).__motion.finished)).toBe(reducedMotion === 'reduce' ? 0 : 2);
       expect(await page.evaluate(() => (window as any).__motion.ready)).toBe(reducedMotion === 'reduce' ? 0 : 2);
       expect(await page.evaluate(() => (window as any).__motion.transitions)).toBe(reducedMotion === 'reduce' ? 0 : 2);
+
+      // Collapsing and expanding each rail: one layout change, one PTY resize per terminal, terminals kept.
+      const tools = page.getByRole('button', { name: /^(Collapse|Expand) project tools$/ });
+      await expectOneResizePerTerminal(page, () => tools.click());
+      await expectOneResizePerTerminal(page, () => tools.click());
+      await expectOneResizePerTerminal(page, () => page.getByRole('button', { name: 'Collapse terminal tabs', exact: true }).click());
+      await expectOneResizePerTerminal(page, () => page.getByRole('button', { name: 'Show terminal tabs', exact: true }).click());
+      expect(await page.locator('.terminal-container').evaluateAll(elements => elements.map(el => el.getAttribute('data-terminal-id')))).toEqual(terminalIds);
+      await expect(page.locator('html')).not.toHaveAttribute('data-layout-transition');
 
       await workspace.rename();
       const rename = page.getByRole('dialog', { name: 'Rename terminal' });
@@ -138,7 +177,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       await expect(page.locator('.terminal-container')).toHaveCount(2);
       const durations = await page.evaluate(() => (window as any).__motion.durations as number[]);
       if (reducedMotion === 'reduce') expect(durations).toEqual([]);
-      else { expect(durations).toContain(180); expect(durations).toContain(120); }
+      else { expect(durations).toContain(ENTER_MS); expect(durations).toContain(EXIT_MS); }
       expect(errors).toEqual([]);
     } catch (error) {
       failure = error;

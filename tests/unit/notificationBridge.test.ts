@@ -26,12 +26,13 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
   const focus = vi.fn();
   const webContents = {
     mainFrame: {}, isDestroyed: vi.fn(() => false), isLoadingMainFrame: vi.fn(() => false),
-    setWindowOpenHandler: vi.fn(), on: vi.fn(), send: vi.fn(), loadURL: vi.fn(),
+    setWindowOpenHandler: vi.fn(), on: vi.fn(), once: vi.fn(), send: vi.fn(), loadURL: vi.fn(),
   };
   const window = {
     webContents, isDestroyed: vi.fn(() => false), isFocused: vi.fn(() => options.focused ?? false),
     isMinimized: vi.fn(() => options.minimized ?? false), restore, show, focus,
     on: vi.fn(), once: vi.fn(), loadURL: vi.fn(),
+    setVibrancy: vi.fn(), setBackgroundMaterial: vi.fn(), setBackgroundColor: vi.fn(),
   };
   const setAppUserModelId = vi.fn();
   const appOn = vi.fn();
@@ -67,6 +68,7 @@ async function loadMain(options: { enabled?: boolean; threshold?: number; suppor
     protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() }, net: { fetch: vi.fn() }, Menu: { setApplicationMenu: vi.fn() },
     BrowserWindow, Notification, clipboard: { writeText: clipboardWriteText }, dialog: { showMessageBox: vi.fn(), showOpenDialog, showErrorBox: vi.fn() }, shell: { openExternal: vi.fn() }, autoUpdater: { on: vi.fn() },
     ipcMain: { handle: vi.fn((channel: string, listener: Function) => handlers.set(channel, listener)), on: vi.fn() },
+    nativeTheme: { themeSource: 'system', prefersReducedTransparency: false, on: vi.fn() },
   }));
   const settings = await import('../../src/main/settings');
   const settingsGetSpy = vi.spyOn(settings.SettingsManager.prototype, 'get').mockReturnValue({ notificationsEnabled: options.enabled ?? true, notificationThresholdSeconds: options.threshold ?? 10 } as any);
@@ -276,10 +278,14 @@ describe('main notification bridge', () => {
 
     await expect(bridge.invokeChannel('settings:recovery-state', { ignored: true }))
       .resolves.toEqual({ previousAvailable: true });
+    const materialUpdates = () => bridge.webContents.send.mock.calls.filter(([channel]) => channel === 'app:windowMaterial').length;
     await expect(bridge.invokeChannel('settings:restore-previous', { ignored: true }))
       .resolves.toMatchObject({ theme: 'dracula' });
+    // Recovery changes the theme, so the window material is re-applied and the renderer told.
+    expect(materialUpdates()).toBe(1);
     await expect(bridge.invokeChannel('settings:reset', { ignored: true }))
       .resolves.toMatchObject({ theme: 'tokyo-night' });
+    expect(materialUpdates()).toBe(2);
     expect(bridge.settingsRecoveryStateSpy).toHaveBeenCalledWith();
     expect(bridge.restorePreviousSpy).toHaveBeenCalledWith();
     expect(bridge.resetSettingsSpy).toHaveBeenCalledWith();

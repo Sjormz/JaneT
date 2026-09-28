@@ -345,7 +345,16 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
     expect(settingsBounds).not.toBeNull();
     expect(settingsBounds!.x).toBeGreaterThan(viewport.width / 2);
-    expect(viewport.width - (settingsBounds!.x + settingsBounds!.width)).toBeGreaterThanOrEqual(10);
+    const settingsEdgeGap = viewport.width - (settingsBounds!.x + settingsBounds!.width);
+    if (process.platform === 'darwin') {
+      // macOS uses native traffic lights, so settings is the rightmost control and sits on the titlebar's edge gutter.
+      await expect(page.getByRole('button', { name: 'Close window' })).toHaveCount(0);
+      const titlebarGutter = await page.locator('.titlebar').evaluate((element) => parseFloat(getComputedStyle(element).paddingRight));
+      expect(titlebarGutter).toBeGreaterThanOrEqual(8);
+      expect(settingsEdgeGap).toBeCloseTo(titlebarGutter, 0);
+    } else {
+      expect(settingsEdgeGap).toBeGreaterThanOrEqual(10);
+    }
     await settingsButton.click();
     await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
     await page.getByRole('button', { name: 'Keyboard shortcuts' }).click();
@@ -361,8 +370,11 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     await shortcutsDialog.getByRole('textbox', {
       name: 'Press a shortcut for Open command history',
     }).press('Control+Shift+H');
+    // The shortcut editor shows modifier glyphs on macOS and named modifiers elsewhere.
+    const recordedShortcut = process.platform === 'darwin' ? '⌃⇧H' : 'Ctrl+Shift+H';
     await expect(shortcutsDialog.getByRole('button', {
-      name: /Open command history \(currently Ctrl\+Shift\+H\)/i,
+      name: `Open command history (currently ${recordedShortcut})`,
+      exact: true,
     })).toBeVisible();
     const shortcutsBounds = await shortcutsDialog.boundingBox();
     expect(shortcutsBounds).not.toBeNull();
@@ -408,14 +420,13 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
       await workspaceTools.evaluate((element) => element.getBoundingClientRect().width),
     )).toBe(250);
 
+    // With the rail collapsed, its way back lives in the titlebar and the tools sit directly against the terminal.
+    await expect(page.locator('.titlebar').getByRole('button', { name: 'Show terminal tabs' })).toBeVisible();
     const compactTools = await workspaceTools.boundingBox();
-    const compactTabsBox = await compactTabs.boundingBox();
     const compactTerminal = await page.locator('.terminal-area').boundingBox();
     expect(compactTools).not.toBeNull();
-    expect(compactTabsBox).not.toBeNull();
     expect(compactTerminal).not.toBeNull();
-    expect(compactTools!.x + compactTools!.width).toBeLessThanOrEqual(compactTabsBox!.x + 1);
-    expect(compactTabsBox!.x + compactTabsBox!.width).toBeLessThanOrEqual(compactTerminal!.x + 1);
+    expect(Math.abs(compactTools!.x + compactTools!.width - compactTerminal!.x)).toBeLessThanOrEqual(1);
     expect(compactTerminal!.x + compactTerminal!.width).toBeLessThanOrEqual(
       (await page.evaluate(() => innerWidth)) + 1,
     );

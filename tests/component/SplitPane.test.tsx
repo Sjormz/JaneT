@@ -1445,7 +1445,8 @@ describe('split panes in the app', () => {
     act(() => terminalInput.focus());
     await waitFor(() => expect(rendererMocks.verticalTabBarProps?.onCollapse).toBeTypeOf('function'));
     act(() => rendererMocks.verticalTabBarProps.onCollapse());
-    expect(await screen.findByRole('button', { name: 'Show terminal tabs' })).toBeInTheDocument();
+    // The way back to a collapsed rail lives in the titlebar.
+    await waitFor(() => expect(rendererMocks.titlebarProps.tabsHidden).toBe(true));
 
     fireEvent.keyDown(terminalInput, { key: 'F2', ctrlKey: true });
 
@@ -1463,7 +1464,8 @@ describe('split panes in the app', () => {
       expect(screen.queryByRole('dialog', { name: 'Rename tab' })).not.toBeInTheDocument();
       expect(terminalInput).toHaveFocus();
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Show terminal tabs' }));
+    act(() => rendererMocks.titlebarProps.onShowTabs());
+    await waitFor(() => expect(rendererMocks.titlebarProps.tabsHidden).toBe(false));
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs[0].title).toBe('JaneT - fixes'));
   });
 
@@ -2232,7 +2234,7 @@ describe('split panes in the app', () => {
     })) as any;
     try {
       render(<App />);
-      expect(await screen.findByRole('button', { name: 'Show terminal tabs' })).toBeInTheDocument();
+      await waitFor(() => expect(rendererMocks.titlebarProps?.tabsHidden).toBe(true));
 
       narrow = false;
       act(() => listener?.());

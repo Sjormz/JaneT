@@ -151,7 +151,8 @@ async function measureVisualState(page: Page, name: string) {
       },
       regions,
       distinctions: {
-        activePaneShadow: getComputedStyle(activeHeader).boxShadow,
+        // The active pane is marked by an accent ring on its frame.
+        activePaneShadow: getComputedStyle(activeHeader.closest('.terminal-leaf')!).boxShadow,
         broadcastOutlineStyle: getComputedStyle(broadcastLeaf).outlineStyle,
         broadcastOutlineWidth: getComputedStyle(broadcastLeaf).outlineWidth,
         activeTabOutlineStyle: getComputedStyle(activeTab).outlineStyle,
@@ -325,6 +326,13 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
         }
         await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
         await expect.poll(() => page.evaluate(() => window.janet.isWindowFocused())).toBe(true);
+        // Bash redraws its prompt when the PTY resizes. Type only once the terminal has fitted its final box and
+        // the PTY has acknowledged that grid, so the redraw cannot land on the marker command.
+        await expect.poll(() => activeTerminals.nth(1).evaluate((element: HTMLElement) => {
+          const box = element.getBoundingClientRect();
+          return element.dataset.fitBox === `${Math.round(box.width)}x${Math.round(box.height)}`
+            && !!element.dataset.termSize && element.dataset.termSize === element.dataset.ptySize;
+        }), { timeout: 10_000 }).toBe(true);
         // Bash redraws its prompt on resize; repeated reflows can scroll the old
         // command marker out of view. Keep this visual fixture in the viewport.
         const markerSuffix = `${themes.indexOf(theme) * viewports.length + viewports.indexOf(viewport)}`;
@@ -359,8 +367,8 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
           };
         });
         expect(chrome.separated).toBe(true);
-        expect(chrome.height).toBe(54);
-        expect(chrome.footerHeight).toBe(28);
+        expect(chrome.height).toBe(44);
+        expect(chrome.footerHeight).toBe(26);
         expect(chrome.commandDrag).toBe('no-drag');
         expect(report.document.bodyScrollWidth).toBeLessThanOrEqual(viewport.width);
         expect(report.document.rootScrollWidth).toBeLessThanOrEqual(viewport.width);
@@ -378,7 +386,8 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
         expect(report.distinctions.explorerOverflowY).toBe('auto');
         expect(parseFloat(report.distinctions.verticalDividerWidth)).toBeGreaterThanOrEqual(12);
         expect(parseFloat(report.distinctions.horizontalDividerHeight)).toBeGreaterThanOrEqual(12);
-        expect(report.distinctions.workspaceMainPadding).toBe('0px');
+        // One gutter between the chrome frame and the panes, from --space-gutter.
+        expect(report.distinctions.workspaceMainPadding).toBe('6px');
         expect(report.distinctions.terminalLeafBorderWidth).toBe('1px');
         for (const track of report.distinctions.terminalTracks) {
           expect(track.track).toBe(track.canvas);

@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { Worker } from 'node:worker_threads';
 import { describe, expect, it, vi } from 'vitest';
 
 const projectRoot = path.resolve(import.meta.dirname, '../..');
@@ -13,21 +14,58 @@ async function loadScript(name: string): Promise<any> {
   return import(pathToFileURL(path.join(projectRoot, 'scripts', name)).href);
 }
 
-function runWorkflowGuard(program: string, requireBody: string, env: Record<string, string>) {
-  // Actions runs these guards in plain Node, not Vitest's source-mapped realm.
-  const result = spawnSync(process.execPath, ['--input-type=commonjs', '-e', `
-    const nativeRequire = require;
-    const injectedRequire = (id) => { ${requireBody} };
+interface WorkflowGuardCase {
+  /** Body of `(id) => { ... }`; `nativeRequire` is Node's own require. */
+  requireBody: string;
+  env: Record<string, string>;
+}
+
+/**
+ * Runs each case through a workflow guard as Actions does: a CommonJS script given `require` and `process`, using
+ * Node's own built-in modules. It runs in this process because the guards only read their injected `require` and
+ * `process.env` and assert with explicit messages; a child Node process per case gave identical outcomes but its
+ * startup (seconds under full-suite load) made these tests time out intermittently.
+ * Returns null for a case that passed, or the failure message.
+ */
+function runWorkflowGuards(program: string, cases: WorkflowGuardCase[]): Array<string | null> {
+  const nativeRequire = createRequire(import.meta.url);
+  return cases.map(({ requireBody, env }) => {
+    const factory = new Function('nativeRequire', 'id', requireBody);
+    const injectedRequire = (id: string) => factory(nativeRequire, id);
     try {
-      new Function('require', 'process', ${JSON.stringify(program)})(injectedRequire, { env: ${JSON.stringify(env)} });
+      new Function('require', 'process', program)(injectedRequire, { env });
+      return null;
     } catch (error) {
-      console.error(error.message);
-      process.exitCode = 1;
+      return (error as Error).message;
     }
-  `], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(result.stderr || `Guard exited with status ${result.status}`);
-  return result.stdout;
+  });
+}
+
+/**
+ * Evaluates CommonJS `code` in a worker thread and resolves with the value it posts to `parentPort`. A worker has
+ * its own built-in modules and a copy of `process.env`, so code that patches `node:child_process` stays isolated,
+ * and it starts in milliseconds, unlike a child Node process whose startup reached seconds under full-suite load.
+ */
+async function runNodeWorker<T>(code: string): Promise<T> {
+  const worker = new Worker(code, { eval: true, execArgv: [] });
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      worker.once('message', resolve);
+      worker.once('error', reject);
+      worker.once('exit', (exitCode) => reject(new Error(`Worker exited with code ${exitCode} before reporting a result`)));
+    });
+  } finally {
+    await worker.terminate();
+  }
+}
+
+/** Asserts every labelled case passed (`null`) or failed with a message matching its pattern. */
+function expectGuardOutcomes(program: string, cases: Array<{ label: string; guard: WorkflowGuardCase; fails?: RegExp }>) {
+  const outcomes = runWorkflowGuards(program, cases.map(({ guard }) => guard));
+  cases.forEach(({ label, fails }, index) => {
+    if (fails) expect(outcomes[index], label).toMatch(fails);
+    else expect(outcomes[index], label).toBeNull();
+  });
 }
 
 function writeWindowsReleaseFixture(releaseRoot: string, version = '1.2.3') {
@@ -736,16 +774,17 @@ module.exports = {
     expect(steps.some((step: any) => step.run === 'npm ci')).toBe(false);
     expect(verifySteps.some((step: any) => step.run === 'npm ci')).toBe(true);
     const program = versions.run.match(/<<'NODE'\n([\s\S]*?)\nNODE/)[1];
-    const check = (tag: string, lockVersion = '1.2.3', rootVersion = lockVersion) => runWorkflowGuard(program, `
+    const versionCase = (tag: string, lockVersion = '1.2.3', rootVersion = lockVersion): WorkflowGuardCase => ({ requireBody: `
       if (id === './package.json') return { version: '1.2.3' };
       if (id === './package-lock.json') return ${JSON.stringify({ version: lockVersion, packages: { '': { version: rootVersion } } })};
       return nativeRequire(id);
-    `, { RELEASE_TAG: tag },
-    );
-    expect(() => check('v1.2.3')).not.toThrow();
-    expect(() => check('v1.2.4')).toThrow(/Tag\/package/);
-    expect(() => check('v1.2.3', '1.2.2')).toThrow(/Lockfile version/);
-    expect(() => check('v1.2.3', '1.2.3', '1.2.2')).toThrow(/Root lockfile/);
+    `, env: { RELEASE_TAG: tag } });
+    expectGuardOutcomes(program, [
+      { label: 'matching tag and lockfile', guard: versionCase('v1.2.3') },
+      { label: 'tag differs from package', guard: versionCase('v1.2.4'), fails: /Tag\/package/ },
+      { label: 'lockfile version differs', guard: versionCase('v1.2.3', '1.2.2'), fails: /Lockfile version/ },
+      { label: 'root lockfile entry differs', guard: versionCase('v1.2.3', '1.2.3', '1.2.2'), fails: /Root lockfile/ },
+    ]);
   });
 
   it('refuses public release rewrites, version downgrades and moved tags before uploading', () => {
@@ -759,7 +798,7 @@ module.exports = {
     expect(steps.indexOf(guard)).toBeLessThan(steps.findIndex((step: any) => step.uses?.startsWith('softprops/')));
     expect(guard.env.SOURCE_SHA).toBe('${{ needs.prepare.outputs.source-sha }}');
     const program = guard.run.match(/<<'NODE'\n([\s\S]*?)\nNODE/)[1];
-    const check = (releases: object[], sha = 'verified-sha', failApi = false, tag = 'v1.2.3') => runWorkflowGuard(program, `
+    const publication = (releases: object[], sha = 'verified-sha', failApi = false, tag = 'v1.2.3'): WorkflowGuardCase => ({ requireBody: `
       if (id !== 'node:child_process') return nativeRequire(id);
       return { execFileSync(command, args, options) {
         if (command !== 'gh') throw new Error('Expected GitHub CLI');
@@ -771,20 +810,21 @@ module.exports = {
         if (Buffer.byteLength(response) > (options?.maxBuffer ?? 1024 * 1024)) throw new Error('spawnSync gh ENOBUFS');
         return response;
       } };
-    `, { RELEASE_TAG: tag, GITHUB_REPOSITORY: 'owner/repo', SOURCE_SHA: 'verified-sha' },
-    );
-    expect(() => check([])).not.toThrow();
-    expect(() => check([{ tag_name: 'v1.2.3', draft: true }])).not.toThrow();
-    expect(() => check([{ tag_name: 'v1.2.2', draft: false }])).not.toThrow();
-    expect(() => check([{ tag_name: 'v1.9.9', draft: false }], 'verified-sha', false, 'v1.10.0')).not.toThrow();
-    expect(() => check([{ tag_name: 'v2.0.0-beta.1', draft: false, prerelease: true }])).not.toThrow();
-    expect(() => check([{ tag_name: 'v1.2.3', draft: false }])).toThrow(/Already published/);
-    expect(() => check([{ tag_name: 'v1.2.3', draft: false, prerelease: true }])).toThrow(/Already published/);
-    for (const tag of ['v1.2.4', 'v1.3.0', 'v2.0.0']) {
-      expect(() => check([{ tag_name: tag, draft: false }])).toThrow(/Refusing to publish/);
-    }
-    expect(() => check([], 'moved-sha')).toThrow(/tag moved/);
-    expect(() => check([], 'verified-sha', true)).toThrow(/API unavailable/);
+    `, env: { RELEASE_TAG: tag, GITHUB_REPOSITORY: 'owner/repo', SOURCE_SHA: 'verified-sha' } });
+    expectGuardOutcomes(program, [
+      { label: 'no releases', guard: publication([]) },
+      { label: 'same tag still a draft', guard: publication([{ tag_name: 'v1.2.3', draft: true }]) },
+      { label: 'older published release', guard: publication([{ tag_name: 'v1.2.2', draft: false }]) },
+      { label: 'numeric, not lexical, ordering', guard: publication([{ tag_name: 'v1.9.9', draft: false }], 'verified-sha', false, 'v1.10.0') },
+      { label: 'newer prerelease is ignored', guard: publication([{ tag_name: 'v2.0.0-beta.1', draft: false, prerelease: true }]) },
+      { label: 'same tag published', guard: publication([{ tag_name: 'v1.2.3', draft: false }]), fails: /Already published/ },
+      { label: 'same tag published as prerelease', guard: publication([{ tag_name: 'v1.2.3', draft: false, prerelease: true }]), fails: /Already published/ },
+      ...['v1.2.4', 'v1.3.0', 'v2.0.0'].map((tag) => ({
+        label: `downgrade below published ${tag}`, guard: publication([{ tag_name: tag, draft: false }]), fails: /Refusing to publish/,
+      })),
+      { label: 'tag moved after verification', guard: publication([], 'moved-sha'), fails: /tag moved/ },
+      { label: 'GitHub API unavailable', guard: publication([], 'verified-sha', true), fails: /API unavailable/ },
+    ]);
   });
 
   it('explains the first-installation failure without executing newly merged code', () => {
@@ -792,21 +832,23 @@ module.exports = {
     const guard = workflow.match(/node --input-type=commonjs <<'NODE'\r?\n([\s\S]*?)\r?\n\s+NODE/)?.[1];
     expect(guard).toBeDefined();
     expect(workflow.indexOf('Check handoff is installed')).toBeLessThan(workflow.indexOf('Validate merged release'));
-    const check = (installed: boolean) => runWorkflowGuard(guard!, `
+    const handoff = (installed: boolean): WorkflowGuardCase => ({ requireBody: `
       if (id === 'node:fs') return { existsSync: (file) => {
         if (file !== 'scripts/release-handoff.mjs') throw new Error('Unexpected helper path');
         return ${installed};
       } };
       throw new Error('Unexpected dependency');
-    `, {});
-    expect(() => check(false)).toThrow(/Bootstrap this first release.*same old base/);
-    expect(() => check(true)).not.toThrow();
+    `, env: {} });
+    expectGuardOutcomes(guard!, [
+      { label: 'handoff helper missing from the PR base', guard: handoff(false), fails: /Bootstrap this first release.*same old base/ },
+      { label: 'handoff helper installed', guard: handoff(true) },
+    ]);
   });
 
   it.each(['ready', 'large-releases', 'unlabeled', 'unchanged', 'failed-check', 'existing-tag'])(
-    'executes the handoff safely for a %s candidate', (scenario) => {
+    'executes the handoff safely for a %s candidate', async (scenario) => {
       const scriptUrl = pathToFileURL(path.join(projectRoot, 'scripts/release-handoff.mjs')).href;
-      const result = spawnSync(process.execPath, ['--input-type=commonjs', '-e', `
+      const { commands, error } = await runNodeWorker<{ commands: string[][]; error?: string }>(`
         const assert = require('node:assert/strict');
         const commands = [];
         const scenario = ${JSON.stringify(scenario)};
@@ -851,12 +893,9 @@ module.exports = {
         import(${JSON.stringify(scriptUrl)}).then(({ main }) => {
           let error;
           try { main(); } catch (failure) { error = failure.message; }
-          console.log(JSON.stringify({ commands, error }));
-        }).catch((error) => { console.error(error); process.exitCode = 1; });
-      `], { encoding: 'utf8', timeout: 5000 });
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-      const { commands, error } = JSON.parse(result.stdout);
+          require('node:worker_threads').parentPort.postMessage({ commands, error });
+        });
+      `);
       const mutations = commands.filter(([command, action]: string[]) =>
         (command === 'git' && ['tag', 'push'].includes(action)) || (command === 'gh' && action === 'workflow'));
       if (scenario === 'ready' || scenario === 'large-releases') {

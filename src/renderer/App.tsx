@@ -21,7 +21,6 @@ import Tooltip from './components/Tooltip';
 import ConfirmationDialog from './components/ConfirmationDialog';
 import RenameDialog from './components/RenameDialog';
 import WorkspaceContent, { surfaceTabFocusTarget } from './components/WorkspaceContent';
-import { ArrowRightIcon } from './icons';
 import {
   TabInfo,
   WorkspaceTabPreset,
@@ -29,6 +28,10 @@ import {
   createPaneRoot, arrangePaneGrid, splitPane, removePane, movePane, directionalPaneTarget, resizePane, getAllLeafIds, genId, mapLeaves, findLeaf, countLeaves,
 } from './types';
 import { ThemeName, applyCssTheme, getTheme } from './themes';
+import { applyWindowMaterialAttributes } from './windowMaterial';
+import { layoutTransition } from './components/motion';
+import type { TransparencyPreference } from '../main/settings';
+import type { WindowMaterialState } from '../main/windowMaterial';
 import { KeybindingsProvider, useKeybindings } from './KeybindingsContext';
 import { useSettingsPersistence } from './useSettingsPersistence';
 import { KeybindingAction } from './keybindings';
@@ -157,6 +160,7 @@ interface InitialAppState {
   fontSize: number;
   fontFamily: string;
   sidebarSide: 'left' | 'right';
+  transparency: TransparencyPreference;
   snippets: Snippet[];
   commandHistory: CommandHistoryEntry[];
   notificationsEnabled: boolean;
@@ -215,6 +219,7 @@ function createInitialAppState(settings: any): InitialAppState {
     fontSize: typeof s.fontSize === 'number' ? s.fontSize : 14,
     fontFamily: normalizeTerminalFontFamily(s.fontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY),
     sidebarSide: s.sidebarSide === 'left' ? 'left' : 'right',
+    transparency: s.transparency === 'reduced' || s.transparency === 'off' ? s.transparency : 'system',
     snippets: Array.isArray(s.snippets) ? s.snippets : [],
     commandHistory: Array.isArray(s.commandHistory) ? s.commandHistory : [],
     notificationsEnabled: s.notificationsEnabled === true,
@@ -332,7 +337,8 @@ function AppInner({ initialSettings, persistSettings }: {
       && document.activeElement.closest('.workspace-tools-panel')) {
       document.querySelector<HTMLElement>('.workspace-tool-button[aria-selected="true"]')?.focus();
     }
-    setSidebarOpen(expanded);
+    // One layout change (so one terminal resize); the panel's snapshot animates. See layoutTransition.
+    layoutTransition('tools', () => setSidebarOpen(expanded));
   }, []);
 
   const toggleWorkspaceTools = useCallback(() => {
@@ -376,6 +382,8 @@ function AppInner({ initialSettings, persistSettings }: {
   const [fontSize, setFontSize] = useState(initialState.fontSize);
   const [fontFamily] = useState(initialState.fontFamily);
   const [sidebarSide, setSidebarSide] = useState<'left' | 'right'>(initialState.sidebarSide);
+  const [transparency, setTransparency] = useState<TransparencyPreference>(initialState.transparency);
+  const [systemReducesTransparency, setSystemReducesTransparency] = useState(window.janet.initialWindowMaterial?.systemReducesTransparency ?? false);
   const [snippets, setSnippets] = useState<Snippet[]>(initialState.snippets);
   const [commandHistory, setCommandHistory] = useState<CommandHistoryEntry[]>(initialState.commandHistory);
   const commandHistoryRef = useRef(commandHistory);
@@ -461,7 +469,8 @@ function AppInner({ initialSettings, persistSettings }: {
 
   // Persist settings when changed
   const persistTheme = useCallback((theme: ThemeName) => {
-    setCurrentTheme(theme);
+    // Cross-fade between themes; geometry does not change, so terminals do not reflow.
+    layoutTransition('theme', () => setCurrentTheme(theme));
     void persistSettings({ theme });
   }, []);
 
@@ -473,6 +482,22 @@ function AppInner({ initialSettings, persistSettings }: {
   const persistSidebarSide = useCallback((side: 'left' | 'right') => {
     setSidebarSide(side);
     void persistSettings({ sidebarSide: side });
+  }, []);
+
+  const persistTransparency = useCallback((preference: TransparencyPreference) => {
+    setTransparency(preference);
+    void persistSettings({ transparency: preference });
+  }, []);
+
+  // The main process owns the window material; mirror each change (preference, theme, OS setting) onto <html>.
+  useEffect(() => {
+    const apply = (state: WindowMaterialState) => {
+      applyWindowMaterialAttributes(state);
+      setSystemReducesTransparency(state.systemReducesTransparency);
+    };
+    const unsubscribe = window.janet.onWindowMaterial?.(apply);
+    void window.janet.getWindowMaterial?.().then(apply).catch(() => {});
+    return () => unsubscribe?.();
   }, []);
 
   const persistSnippets = useCallback((next: Snippet[]) => {
@@ -2141,6 +2166,11 @@ function AppInner({ initialSettings, persistSettings }: {
           setPaletteVisible(true);
         }}
         paletteShortcut={bindings['palette-toggle']}
+        tabsHidden={!tabsOpen}
+        onShowTabs={() => {
+          responsiveTabsCollapsedRef.current = false;
+          layoutTransition('tabs', () => setTabsOpen(true));
+        }}
         settingsOpen={settingsOpen}
         onSettingsToggle={() => setSettingsOpen((open) => !open)}
         onSettingsClose={() => setSettingsOpen(false)}
@@ -2153,21 +2183,13 @@ function AppInner({ initialSettings, persistSettings }: {
               onFontSizeChange={persistFontSize}
               sidebarSide={sidebarSide}
               onSidebarSideChange={persistSidebarSide}
+              transparency={transparency}
+              systemReducesTransparency={systemReducesTransparency}
+              onTransparencyChange={persistTransparency}
               notificationsEnabled={notificationsEnabled}
               onNotificationsEnabledChange={persistNotificationsEnabled}
+              onOpenShortcuts={() => { setSettingsOpen(false); setShortcutsVisible(true); }}
             />
-            <div className="theme-section shortcut-settings-section">
-              <button
-                type="button"
-                className="shortcut-settings-button"
-                onClick={() => { setSettingsOpen(false); setShortcutsVisible(true); }}
-                aria-label="Keyboard shortcuts"
-                aria-haspopup="dialog"
-              >
-                <span><strong>Keyboard shortcuts</strong><small>Customize app commands and keys</small></span>
-                <ArrowRightIcon size="sm" />
-              </button>
-            </div>
           </div>
         )}
       />
@@ -2197,19 +2219,9 @@ function AppInner({ initialSettings, persistSettings }: {
           onRenameTab={renameTab}
           onCollapse={() => {
             responsiveTabsCollapsedRef.current = false;
-            setTabsOpen(false);
+            layoutTransition('tabs', () => setTabsOpen(false));
           }}
         />
-        {!tabsOpen && (
-          <Tooltip key="terminal-tabs-toggle" label="Show terminal tabs" placement="right">
-            <button className="tabs-rail workspace-tabs-rail-toggle" onClick={() => {
-              responsiveTabsCollapsedRef.current = false;
-              setTabsOpen(true);
-            }} aria-label="Show terminal tabs">
-              Tabs
-            </button>
-          </Tooltip>
-        )}
         <main id="workspace-main" key="terminal" className="terminal-area workspace-main" aria-label="Terminal workspace">
           {directoryActionError && <div role="alert" className="settings-save-notice">{directoryActionError}<button onClick={() => setDirectoryActionError('')}>Dismiss</button></div>}
           {!activeTab && <EmptyWorkspace groups={groups} mainDirectory={mainDirectory} onRequest={request => {
@@ -2305,6 +2317,7 @@ function AppInner({ initialSettings, persistSettings }: {
       <StatusBar
         cwd={effectiveCwd}
         gitStatus={gitStatus}
+        homeDir={homeDir}
       />
       <CommandPalette
         visible={paletteVisible}

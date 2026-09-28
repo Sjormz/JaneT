@@ -1,0 +1,146 @@
+@layer components {
+
+  /* Navigation chrome: one restrained material, one inset highlight, no glow. */
+
+  .update-banner {
+    position: fixed;
+    right: 12px;
+    bottom: calc(var(--status-bar-height, 28px) + 10px);
+    z-index: 10000;
+    display: flex;
+    max-width: min(560px, calc(100vw - 24px));
+    min-height: 44px;
+    padding: 8px 8px 8px 12px;
+    align-items: center;
+    gap: 10px;
+    border: 1px solid color-mix(in srgb, var(--text-accent) 24%, var(--border-subtle));
+    color: var(--text-primary);
+    font: 500 12px/1.4 var(--font-ui);
+    background: var(--surface-floating);
+    border-color: var(--glass-border);
+    box-shadow: var(--elevation-3);
+    border-radius: var(--radius-lg);
+  }
+
+  .update-banner.is-success .update-banner-icon { color: var(--green); }
+
+  .update-banner.is-error { border-color: color-mix(in srgb, var(--red) 42%, var(--border-subtle)); }
+
+  .update-banner.is-error .update-banner-icon { color: var(--red); }
+
+  .update-banner-action,
+  .update-banner-dismiss {
+    display: inline-flex;
+    min-height: 28px;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--control-bg);
+    color: var(--text-secondary);
+    font: 600 11px/1 var(--font-ui);
+    cursor: pointer;
+  }
+
+  .update-banner-action { padding: 0 10px; white-space: nowrap; }
+
+  .update-banner-action:hover,
+  .update-banner-dismiss:hover {
+    background: var(--control-hover);
+    color: var(--text-primary);
+  }
+
+  .update-banner-action.primary {
+    border-color: color-mix(in srgb, var(--text-accent) 58%, var(--border-subtle));
+    background: color-mix(in srgb, var(--text-accent) 20%, var(--control-bg));
+    color: var(--text-primary);
+  }
+
+  .update-banner-dismiss {
+    width: 28px;
+    min-width: 28px;
+    padding: 0;
+    border-color: transparent;
+    background: transparent;
+  }
+
+  .update-banner-progress {
+    width: 128px;
+    height: 5px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--control-bg);
+  }
+
+  .update-banner-progress>span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--text-accent);
+    transition: width 180ms ease-out;
+  }
+
+  .update-banner-percent {
+    width: 34px;
+    color: var(--text-tertiary);
+    font: 500 10px/1 var(--font-mono);
+    text-align: right;
+  }
+
+  @media (max-width: 620px) {
+    .update-banner-progress-state .update-banner-message { flex-basis: calc(100% - 28px); }
+  }
+
+  /* Status bar: a thin chrome strip of segments that carry real state only. */
+  .status-bar {
+    flex-shrink: 0;
+    height: var(--status-bar-height);
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 0 var(--space-2);
+    border-top: 0.5px solid var(--separator);
+    color: var(--text-tertiary);
+    font: var(--weight-body) var(--text-xs)/1 var(--font-ui);
+  }
+  .status-left { flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px; overflow: hidden; }
+  .status-item {
+    min-width: 0;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-control);
+    white-space: nowrap;
+  }
+  .status-item:hover { background: var(--fill-hover); color: var(--text-secondary); }
+  .status-item > .icon { flex: none; }
+  .status-cwd { max-width: min(48vw, 620px); }
+  .status-cwd-local,
+  .status-git-branch { overflow: hidden; text-overflow: ellipsis; }
+  .status-cwd-local { font-family: var(--font-mono); font-size: var(--text-xs); }
+  .status-git-dirty,
+  .status-git-ahead,
+  .status-git-behind { display: inline-flex; align-items: center; gap: 2px; font-variant-numeric: tabular-nums; }
+  .status-git-dirty { color: var(--status-warn); }
+  .status-git-dirty .icon svg { fill: currentColor; }
+  .status-git-ahead { color: var(--status-ok); }
+  .status-git-behind { color: var(--status-warn); }
+  .status-version {
+    flex: none;
+    height: 20px;
+    margin-left: auto;
+    padding: 0 var(--space-2);
+    border: 0;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--text-tertiary);
+    font: var(--weight-body) var(--text-xs)/1 var(--font-ui);
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+  }
+  .status-version:hover { background: var(--fill-hover); color: var(--text-primary); }
+
+}

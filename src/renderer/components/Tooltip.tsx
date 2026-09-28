@@ -174,7 +174,7 @@ export default function Tooltip({
           style={position ?? { top: 0, left: 0, visibility: 'hidden' }}
         >
           <span>{label}</span>
-          {shortcut && <kbd>{shortcut}</kbd>}
+          {shortcut && <kbd className="keycap">{shortcut}</kbd>}
         </span>,
         document.body,
       )}

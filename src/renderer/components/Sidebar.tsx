@@ -1,15 +1,17 @@
 import React from 'react';
 import FileExplorer from './FileExplorer';
 import GitTree from './GitTree';
+import Tooltip from './Tooltip';
 import {
-  ChevronsLeftIcon,
-  ChevronsRightIcon,
+  SidebarCollapseLeftIcon,
+  SidebarCollapseRightIcon,
   FilesIcon,
   SourceControlIcon,
 } from '../icons';
 import { GitRepositoryState } from '../useGitRepository';
 import type { FileExplorerSource } from '../fileExplorerSource';
 import type { EditorResource } from '../editorDocuments';
+import { useGlidingSelection } from './motion';
 
 export type WorkspaceToolSection = 'files' | 'git';
 
@@ -80,9 +82,13 @@ export default function Sidebar({
     document.getElementById(`workspace-tool-tab-${nextTool.id}`)?.focus();
   };
 
+  const toolRailRef = React.useRef<HTMLDivElement>(null);
+  useGlidingSelection(toolRailRef, '.workspace-tool-button.active', section);
+
   const toolRail = (
     <div
       key="workspace-tools-rail"
+      ref={toolRailRef}
       className="workspace-tools-rail"
       role="tablist"
       aria-label="Project tool views"
@@ -152,25 +158,25 @@ export default function Sidebar({
       className={`sidebar workspace-tools workspace-supporting-rail workspace-tools-side-${side} ${expanded ? 'is-expanded' : 'is-collapsed'}`}
       aria-label="Project tools"
     >
-      <div className="workspace-tools-header">
-        <h2 className="workspace-tools-title">Project tools</h2>
-
-      </div>
+      {/* Each tool panel carries its own title; this heading names the region for assistive technology. */}
+      <h2 className="workspace-tools-title sr-only">Project tools</h2>
 
       <div className="workspace-tools-body">
         {side === 'left' ? [toolRail, toolPanel] : [toolPanel, toolRail]}
       </div>
+      {/* Outside the tablist (only tabs belong there); styled to sit at the foot of the tool rail. */}
+      <Tooltip label={expanded ? 'Collapse project tools' : 'Expand project tools'} placement={side === 'left' ? 'right' : 'left'}>
         <button
           type="button"
-          className="workspace-rail-collapse project-tools-collapse"
+          className="workspace-tool-button project-tools-collapse"
           aria-controls={panelId}
           aria-expanded={expanded}
           aria-label={expanded ? 'Collapse project tools' : 'Expand project tools'}
           onClick={() => onExpandedChange(!expanded)}
         >
-          {(side === 'right') === expanded ? <ChevronsRightIcon size="sm" /> : <ChevronsLeftIcon size="sm" />}
-          {expanded && <span>Collapse sidebar</span>}
+          {(side === 'right') === expanded ? <SidebarCollapseRightIcon size="sm" /> : <SidebarCollapseLeftIcon size="sm" />}
         </button>
+      </Tooltip>
     </aside>
   );
 }

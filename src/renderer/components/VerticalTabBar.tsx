@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { TabInfo, WorkspaceTabPreset, countLeaves, genId, type PaneNode, type TerminalLeaf } from '../types';
 import {
   XCloseIcon, FolderOpenIcon,
-  ChevronsLeftIcon, PlusIcon, ChevronRightIcon, ChevronDownIcon,
+  SidebarCollapseLeftIcon, PlusIcon, ChevronRightIcon, ChevronDownIcon,
 } from '../icons';
 import WorkspaceForm from './WorkspaceForm';
 import { useModalFocus } from '../useModalFocus';
@@ -14,6 +14,7 @@ import RenameDialog from './RenameDialog';
 import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, isWorkspaceProject, rebaseDirectory, type WorkspaceGroup } from '../../shared/workspaceGroups';
 import type { AgentStatus } from '../terminalAwareness';
 import type { GitWorktreeInfo } from '../../shared/gitWorktrees';
+import { useGlidingSelection } from './motion';
 
 interface VerticalTabBarProps {
   visible?: boolean;
@@ -261,10 +262,13 @@ export default function VerticalTabBar({
     initialFocusSelector: 'input',
   });
 
+  const railListRef = useRef<HTMLDivElement>(null);
+  useGlidingSelection(railListRef, '.vtab-item.active', activeTabId);
+
   return (
     <div className="vtab-bar workspace-tabs-rail" role="group" aria-label="Workspaces" hidden={!visible} style={visible ? undefined : { display: 'none' }}>
 
-      <div className="vtab-list workspace-group-list">
+      <div className="vtab-list workspace-group-list" ref={railListRef}>
       <div className="vtab-header">
         <div className="vtab-heading">
           <button ref={directoryButtonRef} className="workspace-directory-heading" title={mainDirectory ?? 'Choose main directory'} aria-label="Main directory settings" onClick={() => setDirectoryOpen(true)}>Workspaces</button>
@@ -272,6 +276,7 @@ export default function VerticalTabBar({
         <div className="vtab-header-actions">
           <Tooltip label="Choose existing workspace" placement="bottom"><button className="vtab-header-btn" aria-label="Choose existing workspace" disabled={folderBusy} onClick={() => void importWorkspace()}><FolderOpenIcon size="sm" /></button></Tooltip>
           <Tooltip label="New workspace" placement="bottom"><button ref={workspaceAddButtonRef} className="vtab-header-btn" aria-label="New workspace" onClick={openWorkspaceForm}><PlusIcon size="sm" /></button></Tooltip>
+          <Tooltip label="Collapse terminal tabs" placement="bottom"><button className="vtab-header-btn" aria-label="Collapse terminal tabs" onClick={onCollapse}><SidebarCollapseLeftIcon size="sm" /></button></Tooltip>
         </div>
       </div>
 
@@ -372,9 +377,6 @@ export default function VerticalTabBar({
         })}</React.Fragment>)}
       </div>
 
-      <button className="workspace-rail-collapse" onClick={onCollapse} aria-label="Collapse terminal tabs">
-        <ChevronsLeftIcon size="sm" /><span>Collapse sidebar</span>
-      </button>
 
       {createPortal(<MotionPresence>{tabMenu &&
         <div

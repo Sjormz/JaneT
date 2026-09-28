@@ -2,6 +2,10 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useModalFocus } from '../useModalFocus';
 import MotionPresence from './MotionPresence';
 import { SearchIcon } from '../icons';
+import { formatShortcutForDisplay, rendererPlatform, shortcutKeycaps } from '../keybindings';
+import { useGlidingSelection } from './motion';
+
+const platform = rendererPlatform();
 
 export interface CommandAction {
   id: string;
@@ -119,6 +123,9 @@ export default function CommandPalette({ visible, onClose, actions }: CommandPal
   // Build a flat index-to-action mapping for keyboard selection
   let globalIdx = 0;
   const categoryStartIndices: Record<string, number> = {};
+  const resultsRef = useRef<HTMLDivElement>(null);
+  useGlidingSelection(resultsRef, '.command-item.selected', `${query}\u0000${selectedIndex}`);
+
   for (const cat of categories) {
     categoryStartIndices[cat] = globalIdx;
     globalIdx += grouped[cat].length;
@@ -170,6 +177,7 @@ export default function CommandPalette({ visible, onClose, actions }: CommandPal
 
         <div
           id="command-palette-results"
+          ref={resultsRef}
           className="command-palette-results"
           data-testid="command-palette-results"
           role="listbox"
@@ -200,6 +208,7 @@ export default function CommandPalette({ visible, onClose, actions }: CommandPal
                       id={optionId}
                       className={`command-item ${flatIdx === selectedIndex ? 'selected' : ''}`}
                       data-testid={`command-item-${action.id}`}
+                      style={{ '--i': Math.min(flatIdx, 8) } as React.CSSProperties}
                       role="option"
                       aria-selected={flatIdx === selectedIndex}
                       onClick={() => {
@@ -210,7 +219,9 @@ export default function CommandPalette({ visible, onClose, actions }: CommandPal
                     >
                       <span className="command-item-label">{action.label}</span>
                       {action.shortcut && (
-                        <span className="command-item-shortcut">{action.shortcut}</span>
+                        <span className="command-item-shortcut keycaps" aria-label={formatShortcutForDisplay(action.shortcut, platform)}>
+                          {shortcutKeycaps(action.shortcut, platform).map((key, index) => <kbd key={`${key}-${index}`} className="keycap">{key}</kbd>)}
+                        </span>
                       )}
                     </div>
                   );
@@ -218,6 +229,11 @@ export default function CommandPalette({ visible, onClose, actions }: CommandPal
               </div>
             );
           })}
+        </div>
+        <div className="command-palette-footer" aria-hidden="true">
+          <span><kbd className="keycap">↑</kbd><kbd className="keycap">↓</kbd> Navigate</span>
+          <span><kbd className="keycap">↩</kbd> Run</span>
+          <span className="command-palette-footer-end"><kbd className="keycap">esc</kbd> Close</span>
         </div>
       </div>
     </div>}</MotionPresence>

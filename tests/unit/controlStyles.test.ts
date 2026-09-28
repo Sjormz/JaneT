@@ -1,8 +1,7 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readRendererStylesheets } from './stylesheets';
 import { describe, expect, it } from 'vitest';
 
-const css = readFileSync(join(process.cwd(), 'src/renderer/styles/global.css'), 'utf8');
+const css = readRendererStylesheets();
 
 describe('native form control styles', () => {
   it('themes every native select and its interactive states', () => {

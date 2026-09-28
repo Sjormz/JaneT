@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   // Titlebar / window
-  Minus, Square, Copy, X,
+  Minus, Square, Copy, X, PanelLeft, PanelLeftClose, PanelRightClose,
   // Sidebar sections
   FolderTree, GitBranch, Settings as SettingsIcon,
   // Sidebar actions
@@ -53,7 +53,7 @@ interface IconProps {
 }
 
 function withDefaults(Comp: React.ComponentType<any>, props: IconProps) {
-  const { size = 'sm', strokeWidth = 1.75, className, style } = props;
+  const { size = 'sm', strokeWidth = 1.5, className, style } = props;
   const px = typeof size === 'number' ? size : SIZE_PX[size];
   return (
     <span
@@ -82,6 +82,9 @@ export const MinimizeIcon = make(Minus);
 export const MaximizeIcon = make(Square);
 export const RestoreIcon = make(Copy);
 export const CloseIcon = make(X);
+export const SidebarIcon = make(PanelLeft);
+export const SidebarCollapseLeftIcon = make(PanelLeftClose);
+export const SidebarCollapseRightIcon = make(PanelRightClose);
 
 // Sidebar / activity
 export const FilesIcon = make(FolderTree);

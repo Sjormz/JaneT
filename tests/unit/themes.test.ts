@@ -1,9 +1,8 @@
+import { readRendererStylesheets } from './stylesheets';
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { getTheme, themeNames, applyCssTheme } from '../../src/renderer/themes';
+import { getTheme, themeNames, applyCssTheme, themeScheme } from '../../src/renderer/themes';
 
-const globalCss = readFileSync(join(process.cwd(), 'src/renderer/styles/global.css'), 'utf8');
+const globalCss = readRendererStylesheets();
 
 function relativeLuminance(hex: string) {
   const channels = hex.slice(1).match(/.{2}/g)!.map((channel) => parseInt(channel, 16) / 255);
@@ -67,6 +66,17 @@ describe('themes', () => {
     root.style.cssText = originalStyle;
   });
 
+  it('applyCssTheme drops optional properties the next theme does not define', () => {
+    const root = document.documentElement;
+    const originalStyle = root.style.cssText;
+    applyCssTheme(getTheme('dracula').css);
+    expect(root.style.getPropertyValue('--accent-text')).toBe(getTheme('dracula').css['accent-text']);
+    applyCssTheme(getTheme('solarized-light').css);
+    expect(root.style.getPropertyValue('--accent-text')).toBe('');
+    expect(root.style.getPropertyValue('--bg-primary')).toBe(getTheme('solarized-light').css['bg-primary']);
+    root.style.cssText = originalStyle;
+  });
+
   it('keeps Solarized Light chrome, functional colors, and terminal text legible', () => {
     const theme = getTheme('solarized-light');
     expect(contrastRatio(theme.css['text-primary'], theme.css['bg-secondary'])).toBeGreaterThanOrEqual(4.5);
@@ -89,32 +99,33 @@ describe('themes', () => {
     } finally { root.style.cssText = originalStyle; }
   });
 
-  it('keeps secondary sidebar text legible in every theme', () => {
-    const textToken = 'text-secondary';
+  it('keeps secondary sidebar text legible on the chrome glass in every theme', () => {
     const sidebarSurfaceTokens = [...globalCss.matchAll(/([^{}]+)\{([^{}]*)\}/gs)]
       .filter(([, selectors]) => selectors.split(',').some((selector) => selector.trim() === '.sidebar'))
       .flatMap(([, , declarations]) => (
         [...declarations.matchAll(/background:\s*var\(--([\w-]+)\)/g)].map((match) => match[1])
       ));
-    const surfaceToken = sidebarSurfaceTokens.at(-1);
-    const themeSurfaceToken = globalCss.match(
-      new RegExp(`--${surfaceToken}:\\s*var\\(--([\\w-]+)\\)`),
-    )?.[1];
-    expect(textToken).toBe('text-secondary');
-    expect(surfaceToken).toBe('surface-panel');
-    expect(themeSurfaceToken).toBe('bg-secondary');
+    expect(sidebarSurfaceTokens.at(-1)).toBe('material-chrome');
+    expect(globalCss).toMatch(/--material-chrome:\s*color-mix\(in srgb, var\(--bg-secondary\) var\(--material-chrome-opacity\), transparent\)/);
+    expect(globalCss).toMatch(/--material-window:\s*color-mix\(in srgb, var\(--bg-primary\) var\(--material-window-opacity\), transparent\)/);
+    const percent = (pattern: RegExp) => Number(globalCss.match(pattern)![1]) / 100;
+    const chromeOpacity = {
+      dark: percent(/--material-chrome-opacity:\s*(\d+)%/),
+      light: percent(/:root\[data-scheme='light'\]\s*\{[^}]*--material-chrome-opacity:\s*(\d+)%/),
+    };
+    const windowTint = percent(/:root\[data-window-material='mica'\]\s*\{\s*--material-window-opacity:\s*(\d+)%/);
+    // Worst case under full glass: the theme-matched OS material behind the tinted window (liquid-glass.md, Contrast).
+    const osMaterial = { dark: '#2b2b2e', light: '#e6e1d4' };
+    const mix = (top: string, alpha: number, bottom: string) => '#' + [1, 3, 5].map((index) => Math.round(
+      parseInt(top.slice(index, index + 2), 16) * alpha + parseInt(bottom.slice(index, index + 2), 16) * (1 - alpha),
+    ).toString(16).padStart(2, '0')).join('');
 
-    const root = document.documentElement;
-    const originalStyle = root.style.cssText;
-    try {
-      for (const name of themeNames) {
-        applyCssTheme(getTheme(name).css);
-        const foreground = root.style.getPropertyValue(`--${textToken}`);
-        const background = root.style.getPropertyValue(`--${themeSurfaceToken}`);
-        expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5);
-      }
-    } finally {
-      root.style.cssText = originalStyle;
+    for (const name of themeNames) {
+      const { css } = getTheme(name);
+      const scheme = themeScheme(css);
+      const behindChrome = mix(css['bg-primary'], windowTint, osMaterial[scheme]);
+      const chrome = mix(css['bg-secondary'], chromeOpacity[scheme], behindChrome);
+      expect(contrastRatio(css['text-secondary'], chrome), `${name} text-secondary on chrome ${chrome}`).toBeGreaterThanOrEqual(4.5);
     }
   });
 });

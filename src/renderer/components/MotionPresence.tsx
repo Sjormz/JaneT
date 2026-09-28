@@ -1,4 +1,5 @@
 import React, { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { DURATION, EASING, exitDuration } from './motion';
 
 /** Keep only the exiting visual; the caller closes its focus/interaction state immediately. */
 export default function MotionPresence({ children }: { children: ReactNode }) {
@@ -18,12 +19,14 @@ export default function MotionPresence({ children }: { children: ReactNode }) {
     }
     if (open) setPresent(true);
     const surface = root.querySelector<HTMLElement>('[role="dialog"], [role="alertdialog"], [role="menu"], .project-creation-content') ?? root;
+    // Entrances use the base duration on the expo curve; exits are quicker and ease in (motion tokens).
     const timing = {
-      duration: open ? 180 : 120,
-      easing: open ? 'cubic-bezier(0.16, 1, 0.3, 1)' : 'cubic-bezier(0.4, 0, 1, 1)',
+      duration: open ? DURATION.base : exitDuration(DURATION.base),
+      easing: open ? EASING.outExpo : EASING.in,
       fill: 'both' as const,
     };
-    const offset = 'translateY(6px) scale(0.985)';
+    // Floating layers grow from their transform-origin (the palette from the titlebar field).
+    const offset = 'translateY(6px) scale(0.97)';
     // Menus measure their bounds while opening; keep their geometry stable.
     const frames = surface.matches('[role="menu"]') ? [{ opacity: 0 }, { opacity: 1 }]
       : [{ opacity: 0, transform: offset }, { opacity: 1, transform: 'none' }];

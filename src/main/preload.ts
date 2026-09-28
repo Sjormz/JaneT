@@ -91,7 +91,18 @@ ipcRenderer.on(WORKSPACE_PREPARE_FOR_CLOSE_CHANNEL, (
   }
 });
 
+const initialWindowMaterial = (() => {
+  const prefix = '--janet-window-material=';
+  const arg = process.argv.find((value) => value.startsWith(prefix));
+  try {
+    return arg ? JSON.parse(arg.slice(prefix.length)) as import('./windowMaterial').WindowMaterialState : null;
+  } catch {
+    return null;
+  }
+})();
+
 const api = {
+  initialWindowMaterial,
   // Terminal
   terminalCreate: (params: {
     id: string;
@@ -194,6 +205,12 @@ const api = {
 
   // App
   isWindowFocused: (): Promise<boolean> => ipcRenderer.invoke('app:isWindowFocused'),
+  getWindowMaterial: (): Promise<import('./windowMaterial').WindowMaterialState> => ipcRenderer.invoke('app:windowMaterial'),
+  onWindowMaterial: (callback: (state: import('./windowMaterial').WindowMaterialState) => void) => {
+    const listener = (_event: unknown, state: import('./windowMaterial').WindowMaterialState) => callback(state);
+    ipcRenderer.on('app:windowMaterial', listener);
+    return () => { ipcRenderer.removeListener('app:windowMaterial', listener); };
+  },
   onWindowFocus: (callback: (focused: boolean) => void) => {
     const listener = (_event: unknown, focused: boolean) => callback(focused);
     ipcRenderer.on('app:windowFocus', listener);

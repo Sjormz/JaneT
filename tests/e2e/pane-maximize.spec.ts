@@ -285,10 +285,9 @@ test('focuses and persistently marks a newly split maximized pane', async () => 
     await expect(newPane.locator('.xterm-helper-textarea')).toBeFocused();
     await expect(newPane).toHaveAttribute('aria-current', 'true');
     await expect(panes.nth(0)).not.toHaveAttribute('aria-current');
-    const activeHeader = newPane.locator('.terminal-leaf-header');
-    const inactiveHeader = panes.nth(0).locator('.terminal-leaf-header');
-    const activeShadow = await activeHeader.evaluate((element) => getComputedStyle(element).boxShadow);
-    const inactiveShadow = await inactiveHeader.evaluate((element) => getComputedStyle(element).boxShadow);
+    // The active pane is marked by an accent ring on its frame.
+    const activeShadow = await newPane.evaluate((element) => getComputedStyle(element).boxShadow);
+    const inactiveShadow = await panes.nth(0).evaluate((element) => getComputedStyle(element).boxShadow);
     expect(activeShadow).not.toBe('none');
     expect(activeShadow).not.toBe(inactiveShadow);
 
@@ -296,7 +295,7 @@ test('focuses and persistently marks a newly split maximized pane', async () => 
     await workspaceTool.focus();
     await expect(workspaceTool).toBeFocused();
     await expect(newPane).toHaveAttribute('aria-current', 'true');
-    expect(await activeHeader.evaluate((element) => getComputedStyle(element).boxShadow)).toBe(activeShadow);
+    expect(await newPane.evaluate((element) => getComputedStyle(element).boxShadow)).toBe(activeShadow);
   } finally {
     await closeApp(browser, electronProcess, userData);
   }

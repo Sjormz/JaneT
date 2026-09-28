@@ -1,12 +1,12 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   SettingsIconCmp, SearchIcon,
-  MinimizeIcon, MaximizeIcon, RestoreIcon, CloseIcon,
+  MinimizeIcon, MaximizeIcon, RestoreIcon, CloseIcon, SidebarIcon,
 } from '../icons';
 import BrandMark from './BrandMark';
 import Tooltip from './Tooltip';
 import MotionPresence from './MotionPresence';
-import { formatShortcutForDisplay } from '../keybindings';
+import { formatShortcutForDisplay, shortcutKeycaps } from '../keybindings';
 
 function initialPlatform() {
   if (/Mac|iPhone|iPad/i.test(navigator.platform)) return 'darwin';
@@ -23,6 +23,9 @@ interface TitlebarProps {
   // palette
   onOpenPalette: () => void;
   paletteShortcut: string;
+  /** Shown only while the workspaces rail is collapsed, as the way back to it. */
+  tabsHidden?: boolean;
+  onShowTabs?: () => void;
 }
 
 /**
@@ -37,6 +40,8 @@ export default function Titlebar({
   settingsContent,
   onOpenPalette,
   paletteShortcut,
+  tabsHidden = false,
+  onShowTabs,
 }: TitlebarProps) {
   const [maximized, setMaximized] = useState(false);
   const [platform, setPlatform] = useState(initialPlatform);
@@ -111,12 +116,18 @@ export default function Titlebar({
   return (
     <div className={`titlebar app-chrome ${platform === 'darwin' ? 'is-mac' : ''}`} role="banner">
       {/* Brand */}
-      <div className="titlebar-brand">
-        <div className="titlebar-brand-plate"><BrandMark size={28} className="titlebar-logo" /></div>
-        <div className="titlebar-brand-copy">
+      <div className="titlebar-leading">
+        <div className="titlebar-brand">
+          <BrandMark size={18} className="titlebar-logo" />
           <span className="titlebar-app-name">JaneT</span>
-          <span className="titlebar-edition">TERMINAL WORKSPACE</span>
         </div>
+        {tabsHidden && onShowTabs && (
+          <Tooltip label="Show terminal tabs" placement="bottom">
+            <button type="button" className="titlebar-icon-btn titlebar-rail-toggle" onClick={onShowTabs} aria-label="Show terminal tabs">
+              <SidebarIcon size="sm" />
+            </button>
+          </Tooltip>
+        )}
       </div>
 
       <div className="titlebar-command">
@@ -128,7 +139,9 @@ export default function Titlebar({
           >
             <SearchIcon size="sm" />
             <span className="titlebar-palette-label">Search commands</span>
-            <kbd className="titlebar-kbd" aria-hidden="true">{displayedPaletteShortcut}</kbd>
+            <span className="titlebar-keys keycaps" aria-hidden="true">
+              {shortcutKeycaps(paletteShortcut, platform).map((key, index) => <kbd key={`${key}-${index}`} className="keycap">{key}</kbd>)}
+            </span>
           </button>
         </Tooltip>
       </div>
@@ -138,7 +151,7 @@ export default function Titlebar({
           <Tooltip label={settingsOpen ? 'Hide settings' : 'Open settings'} placement="bottom">
             <button
               ref={settingsButtonRef}
-              className={`titlebar-settings-btn ${settingsOpen ? 'active' : ''}`}
+              className={`titlebar-icon-btn titlebar-settings-btn ${settingsOpen ? 'active' : ''}`}
               onClick={(event) => {
                 restoreSettingsButtonRef.current = settingsOpen && event.detail === 0;
                 onSettingsToggle();

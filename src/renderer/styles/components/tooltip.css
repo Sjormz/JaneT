@@ -1,0 +1,21 @@
+@layer components {
+
+  /* Tooltip: a small floating-glass label; the shortcut rides as a keycap. */
+  .tooltip-popover {
+    position: fixed;
+    z-index: 12000;
+    max-width: min(320px, calc(100vw - 16px));
+    min-height: 26px;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 4px var(--space-2);
+    border-radius: var(--radius-control);
+    box-shadow: var(--shadow-floating);
+    color: var(--text-primary);
+    font: var(--weight-label) var(--text-sm)/1.3 var(--font-ui);
+    pointer-events: none;
+  }
+  .tooltip-popover > span { min-width: 0; }
+
+}

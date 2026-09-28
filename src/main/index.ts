@@ -8,10 +8,12 @@ import * as fs from 'node:fs';
 import { isAllowedExternalUrl } from './externalUrls';
 import { FileSystemManager } from './filesystem';
 import { GitManager } from './git';
-import { SettingsManager } from './settings';
+import { SettingsManager, type ThemeName, type TransparencyPreference } from './settings';
 import { requireDirectory, createWorkspaceDirectory, renameWorkspaceDirectory, listWorkspaceProjects } from './workspaceDirectories';
 import { WorkspaceFileOperations } from './workspaceFileOperations';
 import { sendRendererEvent } from './rendererEvents';
+import * as os from 'node:os';
+import { applyWindowMaterial, recordInitialWindowMaterial, resolveWindowMaterial, THEME_WINDOW, WINDOW_MATERIAL_ARG, windowMaterialOptions, type WindowMaterialState } from './windowMaterial';
 import type {
   ReadLocalTextFileRequest,
   TextFileResult,
@@ -279,10 +281,49 @@ function deliverCommandNotification(value: unknown): boolean {
   }
 }
 
+/**
+ * Theme and transparency for the window. While corrupt settings await recovery, get() throws by design, and the
+ * window must still open to show the recovery prompt, so it uses the defaults until the user restores or resets.
+ */
+function windowAppearance(): { theme: ThemeName; transparency: TransparencyPreference } {
+  try {
+    const { theme, transparency } = settingsManager.get();
+    return { theme, transparency };
+  } catch {
+    return { theme: 'one-dark', transparency: 'system' };
+  }
+}
+
+function currentWindowMaterial(): WindowMaterialState {
+  return resolveWindowMaterial({
+    platform: process.platform,
+    osRelease: os.release(),
+    preference: windowAppearance().transparency,
+    systemReducesTransparency: electron.nativeTheme.prefersReducedTransparency,
+  });
+}
+
+/** Keeps the OS material and native UI in the theme's light/dark scheme, so vibrancy is never light behind a dark theme. */
+function syncNativeThemeSource(): void {
+  const scheme = (THEME_WINDOW[windowAppearance().theme] ?? THEME_WINDOW['one-dark']).scheme;
+  if (electron.nativeTheme.themeSource !== scheme) electron.nativeTheme.themeSource = scheme;
+}
+
+function refreshWindowMaterial(): void {
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) return;
+  syncNativeThemeSource();
+  const state = currentWindowMaterial();
+  applyWindowMaterial(window, state, windowAppearance().theme, process.platform);
+  sendRendererEvent(window, 'app:windowMaterial', state);
+}
+
 function createWindow() {
   // Remove the default application menu (File / Edit / View / Window).
   // JaneT uses a fully custom in-renderer titlebar.
   electron.Menu.setApplicationMenu(null);
+  syncNativeThemeSource();
+  const initialMaterial = currentWindowMaterial();
 
   mainWindow = new electron.BrowserWindow({
     width: 1400,
@@ -290,7 +331,9 @@ function createWindow() {
     minWidth: 800,
     minHeight: 600,
     title: 'JaneT',
-    backgroundColor: '#0f0f1a',
+    ...windowMaterialOptions(initialMaterial, windowAppearance().theme),
+    // Shown after first paint so a transparent or theme-coloured window never flashes empty.
+    show: false,
     ...(process.platform === 'darwin' ? {} : {
       icon: path.join(electron.app.getAppPath(), 'assets', 'runtime', 'app-icon-256.png'),
     }),
@@ -302,6 +345,8 @@ function createWindow() {
     trafficLightPosition: { x: 14, y: 14 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      // Read synchronously by the preload so the first frame already matches the window material.
+      additionalArguments: [`${WINDOW_MATERIAL_ARG}${JSON.stringify(initialMaterial)}`],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -309,6 +354,17 @@ function createWindow() {
   });
 
   const window = mainWindow;
+  recordInitialWindowMaterial(window, initialMaterial, windowAppearance().theme);
+  let shown = false;
+  const showOnce = () => {
+    if (shown || window.isDestroyed()) return;
+    shown = true;
+    window.show();
+  };
+  window.once('ready-to-show', showOnce);
+  // A failed or crashed first load must still surface the window and its error state.
+  window.webContents.once('did-fail-load', showOnce);
+  window.webContents.once('render-process-gone', showOnce);
   initializeUpdaterForWindow?.(window);
   window.on('focus', () => sendRendererEvent(window, 'app:windowFocus', true));
   window.on('blur', () => sendRendererEvent(window, 'app:windowFocus', false));
@@ -436,6 +492,14 @@ electron.app.whenReady().then(() => {
 
   registerIpcHandlers();
   createWindow();
+  // Fires for OS appearance changes, including Reduce transparency. syncNativeThemeSource only writes on change,
+  // so the update it may trigger re-resolves the same state instead of looping.
+  let refreshingMaterial = false;
+  electron.nativeTheme.on('updated', () => {
+    if (refreshingMaterial) return;
+    refreshingMaterial = true;
+    try { refreshWindowMaterial(); } finally { refreshingMaterial = false; }
+  });
   // On Windows, instance-level notification click listeners are not reliable
   // for notifications that outlive their JavaScript objects (or the process).
   // This API also receives a queued activation when JaneT was launched by a
@@ -677,12 +741,24 @@ function registerIpcHandlers() {
   });
 
   handle('settings:set', (event, updates) => {
-    return settingsManager.set(updates);
+    const settings = settingsManager.set(updates);
+    if (updates && typeof updates === 'object' && ('theme' in updates || 'transparency' in updates)) refreshWindowMaterial();
+    return settings;
   });
+  handle('app:windowMaterial', () => currentWindowMaterial());
 
   handle('settings:recovery-state', () => settingsManager.getRecoveryState());
-  handle('settings:restore-previous', () => settingsManager.restorePrevious());
-  handle('settings:reset', () => settingsManager.reset());
+  // Recovery brings back the real theme and transparency, so re-apply the window material to match.
+  handle('settings:restore-previous', () => {
+    const settings = settingsManager.restorePrevious();
+    refreshWindowMaterial();
+    return settings;
+  });
+  handle('settings:reset', () => {
+    const settings = settingsManager.reset();
+    refreshWindowMaterial();
+    return settings;
+  });
 
   handle('notifications:command-completed', (_event, payload: unknown) => deliverCommandNotification(payload));
   handle('notifications:status', () => notificationDeliveryError ?? (electron.Notification.isSupported() ? null : 'Desktop notifications are unavailable on this system.'));

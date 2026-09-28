@@ -1,11 +1,11 @@
 ---
 title: Settings
-description: Change JaneT's appearance, workspace tools position, notifications, and keyboard shortcuts.
+description: Change JaneT's appearance, transparency, workspace tools position, notifications, and keyboard shortcuts.
 ---
 
 # Settings
 
-Select the gear-shaped **Settings** button in the title bar to open appearance, notification, diagnostics, and shortcut controls. JaneT saves changes as you make them.
+Select the gear-shaped **Settings** button in the title bar. Settings is grouped into **Appearance**, **Layout**, **Notifications**, and **Advanced**. JaneT saves changes as you make them.
 
 ![JaneT Settings panel with theme, text size, position, notifications, diagnostics, and shortcuts](/screenshots/settings-overview.png)
 
@@ -15,7 +15,22 @@ Select the gear-shaped **Settings** button in the title bar to open appearance, 
 
 - **Theme**: choose Tokyo Night, Dracula, One Dark, Solarized Light, or Gruvbox (Dark).
 - **Terminal and editor text size**: drag the slider to choose a size from 10 to 24 pixels. The default is 14 pixels.
+- **Transparency**: choose how much the title bar, sidebars, status bar, and floating panels show through. See [Transparency](#transparency).
 - **Project tools position**: place the workspace and project tools on the left or right.
+
+## Transparency
+
+JaneT's title bar, sidebars, and status bar are translucent glass, and the command palette, menus, and dialogs blur what is behind them. Terminals and the editor are always solid, so their text is never see-through.
+
+- **System** (default): full glass. On macOS the desktop shows through the window frame, and on Windows 11 (version 22H2 or later) JaneT uses the Mica material. If your operating system is set to reduce transparency, JaneT uses **Reduced** instead, and Settings says so.
+- **Reduced**: thicker glass with a lighter blur, and a solid window, so the desktop no longer shows through.
+- **Off**: solid surfaces everywhere, with no blur.
+
+On Linux and earlier versions of Windows, the window itself stays solid, but panels and menus still use glass inside it. If your operating system's increased-contrast setting is on, JaneT always uses solid surfaces.
+
+## Motion
+
+Panels, menus, and selections animate briefly to show what changed. For example, collapsing a sidebar slides it away, and the highlighted tab glides to the new one. Terminal text never animates. To turn animation off, enable your operating system's reduce-motion setting: on macOS, **Reduce motion** in Accessibility > Display; on Windows, **Animation effects** in Accessibility > Visual effects. JaneT then changes views instantly.
 
 ## Get background notifications
 
@@ -29,7 +44,7 @@ Select **Check notification delivery** to check whether desktop notifications ar
 
 ## Change keyboard shortcuts
 
-Select **Keyboard shortcuts** at the bottom of Settings to open the shortcut list. See [Keyboard shortcuts](/reference/shortcuts) for the platform defaults and editing instructions.
+Select **Keyboard shortcuts** in the **Advanced** group of Settings to open the shortcut list. Shortcuts show as keys (on macOS, ⌘ ⌥ ⌃ ⇧); select one to record a new shortcut. See [Keyboard shortcuts](/reference/shortcuts) for the platform defaults and editing instructions.
 
 ## Copy diagnostics
 

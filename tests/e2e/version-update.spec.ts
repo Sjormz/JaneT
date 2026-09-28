@@ -47,7 +47,7 @@ test('shows the current JaneT version and checks for updates when clicked', asyn
     const version = page.getByRole('button', {
       name: `JaneT version ${packageMetadata.version}. Check for updates`,
     });
-    await expect(version).toHaveText(`BUILDv${packageMetadata.version}`);
+    await expect(version).toHaveText(`v${packageMetadata.version}`);
 
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(800, 600));
     await expect(version).toBeVisible();

@@ -1,0 +1,194 @@
+@layer components {
+
+  /* layout: kept before .fresh-profile-entry p (font-size) so the same declaration still wins. */
+  .app-startup p { font-size: 12px; }
+
+  /* layout: kept before .fresh-profile-entry-actions button:hover (background) so the same declaration still wins. */
+  .app-startup-actions button:hover { background: color-mix(in srgb, var(--text-accent) 14%, transparent); }
+
+  .workspace-creation-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .workspace-count-row .workspace-form-help { margin: 4px 0 0; }
+
+  /* shared: kept before .workspace-launcher-option input:checked+.workspace-launcher-card (background) so the same declaration still wins. */
+  .workspace-count-picker button:hover:not(:disabled) {
+    color: var(--text-primary);
+    background: var(--control-hover);
+  }
+
+  .workspace-launcher-field {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .workspace-launcher-field legend {
+    margin-bottom: 10px;
+    padding: 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+
+  .workspace-launcher-options {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .workspace-launcher-option { position: relative; cursor: pointer; }
+
+  .workspace-launcher-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 88px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    background: var(--control-bg);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    transition: background var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+  }
+
+  .workspace-launcher-option:hover .workspace-launcher-card { background: var(--control-hover); }
+
+  .workspace-launcher-option input:checked+.workspace-launcher-card {
+    border-color: var(--text-accent);
+    background: color-mix(in srgb, var(--text-accent) 14%, var(--control-bg));
+    color: var(--text-primary);
+    box-shadow: inset 0 0 0 1px var(--text-accent);
+  }
+
+  .workspace-launcher-option input:focus-visible+.workspace-launcher-card {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 3px;
+  }
+
+  .workspace-launcher-option input:disabled+.workspace-launcher-card { opacity: .5; cursor: default; }
+
+  .workspace-launcher-icon.is-codex { mask-image: url('../../assets/agents/openai.svg'); }
+
+  .workspace-launcher-icon.is-hermes { mask-image: url('../../assets/agents/hermes.svg'); }
+
+  .workspace-launcher-icon.is-claude { mask-image: url('../../assets/agents/claude.svg'); }
+
+  @media (max-width: 420px) {
+    .workspace-launcher-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+
+  .fresh-profile-entry {
+    width: min(640px, 100%);
+    margin: auto;
+    color: var(--text-secondary);
+  }
+
+  .fresh-profile-entry strong { color: var(--text-primary); font-size: 13px; }
+
+  .fresh-profile-entry h2 {
+    margin: 0 0 10px;
+    color: var(--text-primary);
+    font-size: 18px;
+    line-height: 1.3;
+  }
+
+  .fresh-profile-entry p {
+    margin: 8px 0 16px;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  .fresh-profile-entry-actions button:focus-visible {
+    outline: 2px solid var(--text-accent);
+    outline-offset: 3px;
+  }
+
+  .fresh-profile-entry-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  /* terminal: kept before .directory-onboarding p (margin) so the same declaration still wins. */
+  .empty-workspace-locations p { margin: 0 0 10px; font-size: 12px; }
+
+  .fresh-profile-entry-actions button:hover {
+    border-color: var(--text-accent);
+    background: var(--control-hover);
+  }
+
+  .workspace-form-help {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    line-height: 1.45;
+  }
+
+  .workspace-form-help.is-error { color: var(--red); }
+
+  .directory-onboarding-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .directory-onboarding h1 {
+    margin: 28px 0 12px;
+    color: var(--text-primary);
+    font-size: 28px;
+    line-height: 1.2;
+    letter-spacing: -0.7px;
+    font-weight: 600;
+    text-wrap: balance;
+  }
+
+  .directory-onboarding-quit {
+    display: block;
+    min-height: 40px;
+    margin: 12px auto 0;
+    padding: 8px 20px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .directory-onboarding-quit:hover:not(:disabled) {
+    background: var(--control-hover);
+    color: var(--text-primary);
+  }
+
+  .project-creation-content { width: min(640px, 100%); margin: auto; }
+
+  .workspace-landing,
+  .project-creation-content {
+    padding: clamp(20px, 3vw, 32px);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    background: radial-gradient(ellipse at top left, color-mix(in srgb, var(--text-accent) 6%, transparent), transparent 65%), var(--surface-panel);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 7%, transparent), 0 14px 36px #00000012;
+  }
+
+  .workspace-launcher-option:has(input:checked) .workspace-launcher-card {
+    box-shadow: inset 0 0 0 1px var(--text-accent);
+  }
+
+  .workspace-launcher-options { grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); }
+
+}

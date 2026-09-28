@@ -1,0 +1,283 @@
+/* Cascade-ordered rules that could not be moved into their component file without changing which
+   declaration wins. Each moves into its component as that surface is redesigned; do not add new rules here. */
+@layer components {
+
+  /* terminal: kept before .git-tree>* (flex) so the same declaration still wins. */
+  .terminal-notice-text {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  /* terminal: kept before .git-tree>* (flex-wrap) so the same declaration still wins. */
+  .terminal-notice-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 7px;
+  }
+
+  .terminal-notice-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    background: var(--control-bg);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-family: var(--font-ui);
+    padding: 4px 7px;
+    font-size: 10px;
+  }
+
+  .git-tree>* { flex-shrink: 0; }
+
+  .git-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 20px;
+  }
+
+  .git-section-toggle {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .git-commit-input {
+    min-width: 0;
+    flex: 1;
+    height: 28px;
+    padding: 0 9px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    outline: none;
+    background: var(--control-bg);
+    color: var(--text-primary);
+    font: 11px var(--font-ui);
+  }
+
+  .git-row-main {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .terminal-path-copy-button {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: var(--surface-overlay);
+    color: var(--text-tertiary);
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-50%);
+    transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+  }
+
+  /* workspace-setup: kept after .git-tree>* (flex-direction) so the same declaration still wins. */
+  .workspace-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .terminal-path-drop-indicator {
+    position: absolute;
+    inset: 10px;
+    z-index: 70;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+    border: 2px dashed color-mix(in srgb, var(--text-accent) 76%, transparent);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--text-accent) 9%, var(--bg-primary));
+    color: var(--text-accent);
+    box-shadow: inset 0 0 28px color-mix(in srgb, var(--text-accent) 12%, transparent), var(--glow-accent);
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: 0.2px;
+  }
+
+  /* terminal: kept before .split-divider (flex) so the same declaration still wins. */
+  .split-container {
+    display: flex;
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  /* terminal: kept after .split-container (flex-direction) so the same declaration still wins. */
+  .split-horizontal { flex-direction: column; }
+
+  /* terminal: kept after .split-container (flex-direction) so the same declaration still wins. */
+  .split-vertical { flex-direction: row; }
+
+  /* terminal: kept before .sidebar (background) so the same declaration still wins. */
+  .split-divider {
+    position: relative;
+    flex-shrink: 0;
+    z-index: 10;
+    background: transparent;
+  }
+
+  .split-divider-vertical { width: 12px; cursor: col-resize; }
+
+  .split-divider-horizontal { height: 12px; cursor: row-resize; }
+
+  .pane-drop-indicator {
+    position: absolute;
+    z-index: 5;
+    pointer-events: none;
+    background: var(--text-accent);
+    box-shadow: var(--glow-accent);
+  }
+
+  .split-maximized { width: 100%; height: 100%; }
+
+  .terminal-area {
+    background: var(--surface-canvas);
+  }
+
+  /* status-bar: kept after .git-tree>* (flex) so the same declaration still wins. */
+  .update-banner-icon { color: var(--text-accent); flex: 0 0 auto; }
+
+  /* status-bar: kept after .git-tree>* (flex) so the same declaration still wins. */
+  .update-banner-message {
+    min-width: 0;
+    flex: 1;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 620px) {
+    /* status-bar: kept after .git-tree>* (flex-wrap) so the same declaration still wins. */
+    .update-banner-progress-state { flex-wrap: wrap; }
+
+    /* status-bar: kept after .git-tree>* (flex) so the same declaration still wins. */
+    .update-banner-progress { flex: 1; margin-left: 26px; }
+  }
+
+  /* workspace-tools: kept after .pane-drop-indicator (background) so the same declaration still wins. */
+  /* Navigation chrome: one restrained material, one inset highlight, no glow. */
+
+  /* shared: kept after .pane-drop-indicator (background) so the same declaration still wins. */
+  /* Navigation chrome: one restrained material, one inset highlight, no glow. */
+
+  /* documents: kept after .terminal-notice (border-color) so the same declaration still wins. */
+  .document-tabbar,
+  .document-tab-shell,
+  .document-tab {
+    background: var(--surface-toolbar);
+    border-color: var(--glass-border);
+  }
+
+  .terminal-notice {
+    background: var(--surface-floating);
+    border-color: var(--glass-border);
+    box-shadow: var(--elevation-3);
+    border-radius: var(--radius-lg);
+  }
+
+  @supports not (backdrop-filter: blur(1px)) {
+
+    /* documents: kept after .terminal-container (background) so the same declaration still wins. */
+    .document-tabbar,
+    .document-tab-shell,
+    .document-tab {
+      background: var(--surface-panel);
+    }
+
+    .terminal-notice {
+      background: var(--surface-panel);
+    }
+  }
+
+  @media (prefers-contrast: more) {
+
+    /* documents: kept after .terminal-notice (box-shadow) so the same declaration still wins. */
+    .document-tabbar,
+    .document-tab-shell,
+    .document-tab {
+      box-shadow: 0 0 0 1px var(--glass-border);
+    }
+
+    .terminal-notice {
+      box-shadow: 0 0 0 1px var(--glass-border);
+    }
+  }
+
+  /* source-control: kept after .sidebar (border-radius) so the same declaration still wins. */
+  .git-file-item { min-height: 34px; border-radius: 8px; }
+
+  /* workspace-setup: kept after .git-tree>* (flex-direction) so the same declaration still wins. */
+  .workspace-creation-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    min-width: 0;
+  }
+
+  /* workspace-setup: kept after .git-tree>* (flex) so the same declaration still wins. */
+  .directory-onboarding {
+    flex: none;
+    width: min(480px, 100%);
+    margin: auto;
+    padding: clamp(24px, 5vw, 40px);
+    border: 1px solid var(--glass-border);
+    border-radius: 24px;
+    background: var(--surface-floating);
+    color: var(--text-primary);
+    text-align: left;
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 8%, transparent), 0 24px 64px #00000020;
+  }
+
+  .empty-project-setup {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 24px;
+  }
+
+  /* motion: kept after .terminal-notice (animation) so the same declaration still wins. */
+  .motion-presence>*,
+  .motion-presence [role="dialog"],
+  .motion-presence [role="alertdialog"] {
+    animation: none;
+  }
+
+}

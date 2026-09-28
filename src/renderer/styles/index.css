@@ -1,0 +1,22 @@
+/* Import order is cascade order. Layers are declared in tokens.css; vendor-overrides.css stays unlayered and last. */
+@import "./tokens.css";
+@import "./base.css";
+@import "./components/tooltip.css";
+@import "./components/dialogs.css";
+@import "./components/status-bar.css";
+@import "./components/titlebar.css";
+@import "./components/palette.css";
+@import "./components/settings.css";
+@import "./components/explorer.css";
+@import "./components/workspace-setup.css";
+@import "./components/workspace-tools.css";
+@import "./components/layout.css";
+@import "./components/shared.css";
+@import "./components/workspaces-rail.css";
+@import "./components/source-control.css";
+@import "./components/documents.css";
+@import "./components/terminal.css";
+@import "./components/legacy.css";
+@import "./materials.css";
+@import "./motion.css";
+@import "./vendor-overrides.css";

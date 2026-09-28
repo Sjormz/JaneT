@@ -1,0 +1,34 @@
+/* The material tiers, assigned in one place (docs/design/liquid-glass.md, Materials). The utilities layer outranks
+   component rules regardless of specificity, so a surface's tier is decided here; components keep shape, spacing
+   and borders. Tokens and their Transparency / scheme / high-contrast variants live in tokens.css. */
+@layer utilities {
+
+  /* Chrome: a translucent tint over the window material. The OS vibrancy or Mica does the blurring, nothing
+     scrolls underneath, and a backdrop-filter here would also stop floating layers inside it (the settings
+     popover) from blurring the workspace. */
+  .titlebar,
+  .sidebar,
+  .vtab-bar,
+  .tabs-rail,
+  .status-bar {
+    background: var(--material-chrome);
+    backdrop-filter: none;
+  }
+
+  /* Floating: thicker glass that blurs the workspace beneath it. */
+  .command-palette,
+  .snippet-picker,
+  .workspace-modal,
+  .confirmation-dialog,
+  .git-dialog,
+  .vtab-context-menu,
+  .git-file-context-menu,
+  .git-kebab-dropdown,
+  .titlebar-settings-popover,
+  .search-overlay,
+  .tooltip-popover {
+    background: var(--material-floating);
+    backdrop-filter: var(--material-floating-filter);
+  }
+
+}

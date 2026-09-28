@@ -194,6 +194,25 @@ export function formatShortcut(e: KeyboardEvent): string {
   return parts.join('+');
 }
 
+/** The platform this renderer runs on, for display conventions only (key handling uses the event itself). */
+export function rendererPlatform(): 'darwin' | 'win32' | 'linux' {
+  const value = typeof navigator === 'undefined' ? '' : navigator.platform;
+  if (/Mac|iPhone|iPad/i.test(value)) return 'darwin';
+  if (/Win/i.test(value)) return 'win32';
+  return 'linux';
+}
+
+/** A saved shortcut as one label per key, using the modifier glyphs on macOS. Empty for an unassigned shortcut. */
+export function shortcutKeycaps(shortcut: string, platform = ''): string[] {
+  if (!shortcut) return [];
+  const mac = platform === 'darwin';
+  const names: Record<string, string> = {
+    Plus: '+', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+    ...(mac ? { Meta: '⌘', Ctrl: '⌃', Alt: '⌥', Shift: '⇧', Enter: '↩', Backspace: '⌫', Escape: 'esc' } : {}),
+  };
+  return shortcut.split('+').map((part) => names[part] ?? part);
+}
+
 /** Render a saved shortcut using the conventions of the current platform. */
 export function formatShortcutForDisplay(shortcut: string, platform = ''): string {
   if (platform !== 'darwin') return shortcut.replace(/\bPlus\b/g, '+');

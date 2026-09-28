@@ -1,0 +1,87 @@
+@layer components {
+
+  /* layout: kept before .sidebar (background) so the same declaration still wins. */
+  .app-body {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  /* Workspace Tools is a persistent, extensible view rail. */
+
+  /* workspace-setup: kept after .sidebar (width) so the same declaration still wins. */
+  .workspace-launcher-icon {
+    display: block;
+    width: 24px;
+    height: 24px;
+    background: currentColor;
+    mask: center / contain no-repeat;
+  }
+
+  /* Project tools: an icon rail on the chrome glass beside an opaque content card for the file and git panels. */
+  .sidebar {
+    position: relative;
+    width: var(--sidebar-width);
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .workspace-tools.is-collapsed { width: 48px; }
+  .app-body.sidebar-left .sidebar { order: 1; box-shadow: inset -0.5px 0 0 var(--separator); }
+  .app-body.sidebar-right .sidebar { order: 3; box-shadow: inset 0.5px 0 0 var(--separator); }
+
+  .workspace-tools-body { flex: 1; min-height: 0; display: flex; flex-direction: row; }
+  .workspace-tools-rail {
+    flex: 0 0 48px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-2) 0 44px;
+    overflow-y: auto;
+  }
+  .workspace-tools.is-collapsed .workspace-tools-rail { flex-basis: auto; width: 100%; }
+
+  .workspace-tool-button {
+    position: relative;
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-row);
+    background: transparent;
+    color: var(--text-tertiary);
+    font: inherit;
+    cursor: pointer;
+  }
+  .workspace-tool-button:hover { background: var(--fill-hover); color: var(--text-primary); }
+  .workspace-tool-button.active { background: var(--fill-selected); color: var(--text-primary); }
+  .workspace-tool-label { display: none; }
+  /* The collapse toggle lives after the body in the DOM (outside the tablist) and sits at the foot of the rail. */
+  .project-tools-collapse { position: absolute; bottom: var(--space-2); }
+  .workspace-tools-side-left .project-tools-collapse { left: 8px; }
+  .workspace-tools-side-right .project-tools-collapse { right: 8px; }
+
+  .workspace-tools-panel {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    margin: 6px 0 6px 0;
+    border-radius: var(--radius-pane);
+    background: var(--material-content);
+    box-shadow: var(--shadow-pane);
+  }
+  .workspace-tools-side-left .workspace-tools-panel { margin-right: 6px; }
+  .workspace-tools-side-right .workspace-tools-panel { margin-left: 6px; }
+  .workspace-tools-panel[hidden] { display: none; }
+  .workspace-tools-panel > :is(.file-explorer, .git-tree) { flex: 1; min-height: 0; height: auto; }
+
+}

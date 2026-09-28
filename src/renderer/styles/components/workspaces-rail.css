@@ -1,0 +1,296 @@
+@layer components {
+
+  /* documents: kept before .workspace-group-heading.active (background) so the same declaration still wins. */
+  .document-tab-shell.active { background: var(--surface-canvas); }
+
+  /* documents: kept before .workspace-group-heading.active (background) so the same declaration still wins. */
+  .document-tab:hover,
+  .document-tab-shell:focus-within .document-tab {
+    color: var(--text-primary);
+    background: var(--control-hover);
+  }
+
+  /* documents: kept before .workspace-group-heading.active (background) so the same declaration still wins. */
+  .document-tab.active {
+    color: var(--text-primary);
+    background: var(--surface-canvas);
+    box-shadow: inset 0 2px 0 var(--text-accent);
+  }
+
+  /* terminal: kept before .terminal-path-copy-button:focus-visible (background) so the same declaration still wins. */
+  .terminal-notice-action:hover { background: var(--control-hover); }
+
+  /* source-control: kept before .git-worktree-item.current (background) so the same declaration still wins. */
+  .git-branch-item:hover,
+  .git-worktree-item:hover {
+    background: var(--control-hover);
+  }
+
+  /* source-control: kept before :where(button,[role="button"],.vtab-item,.document-tab,.explorer-item,.git-file-item):active:not(:disabled) (box-shadow) so the same declaration still wins. */
+  .git-worktree-item.current {
+    color: var(--text-accent);
+    font-weight: 500;
+    background: color-mix(in srgb, var(--text-accent) 10%, transparent);
+    box-shadow: inset 2px 0 0 var(--text-accent);
+  }
+
+  /* source-control: kept before .file-status-icon.staged (color) so the same declaration still wins. */
+  .git-pill.dirty,
+  .git-pill.behind {
+    color: var(--yellow);
+  }
+
+  /* source-control: kept before .file-status-icon.unstaged (color) so the same declaration still wins. */
+  .git-pill.ahead { color: var(--green); }
+
+  /* terminal: kept before :where(button,[role="button"],.vtab-item,.document-tab,.explorer-item,.git-file-item):active:not(:disabled) (box-shadow) so the same declaration still wins. */
+  .terminal-path-copy-button:focus-visible {
+    background: color-mix(in srgb, var(--text-accent) 14%, var(--surface-overlay));
+    color: var(--text-accent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-accent) 52%, transparent);
+  }
+
+  /* explorer: kept after .document-tab:hover (color) so the same declaration still wins. */
+  .file-status-icon.staged { color: var(--green); }
+
+  /* explorer: kept after .document-tab:hover (color) so the same declaration still wins. */
+  .file-status-icon.unstaged { color: var(--yellow); }
+
+  /* explorer: kept after .document-tab:hover (color) so the same declaration still wins. */
+  .file-status-icon.conflicted { color: var(--red); }
+
+  /* explorer: kept after .document-tab:hover (color) so the same declaration still wins. */
+  .git-file-item.staged .file-name { color: var(--green); }
+
+  /* explorer: kept after .document-tab:hover (color) so the same declaration still wins. */
+  .git-file-item.mixed .file-name { color: var(--yellow); }
+
+  /* explorer: kept after .document-tab:hover (color) so the same declaration still wins. */
+  .git-file-item.conflicted .file-name { color: var(--red); }
+
+  /* shared: kept after .document-tab:hover (color) so the same declaration still wins. */
+  .ahead.active { color: var(--green); }
+
+  /* shared: kept after .document-tab:hover (color) so the same declaration still wins. */
+  .behind.active { color: var(--yellow); }
+
+  /* terminal: kept before :where(button,[role="button"],.vtab-item,.document-tab,.explorer-item,.git-file-item):active:not(:disabled) (box-shadow) so the same declaration still wins. */
+  .broadcast-toggle.is-selected {
+    color: #fff;
+    background: color-mix(in srgb, #ff8c42 34%, transparent);
+    box-shadow: inset 0 0 0 1px #ffb86c;
+  }
+
+  /* Navigation chrome: one restrained material, one inset highlight, no glow. */
+
+  /* High-signal interaction states: elevation and shape accompany colour. */
+
+  /* Workspace hierarchy: one scrolling rail, quiet parent rows and inset children. */
+
+  /* layout: kept after .folder-section-header h2 (font-size) so the same declaration still wins. */
+  .main-directory-settings h2 { font-size: 13px; }
+
+  /* workspace-setup: kept after .folder-section-header h2 (font-size) so the same declaration still wins. */
+  .workspace-landing h2 {
+    font-size: 22px;
+    letter-spacing: -0.4px;
+    text-wrap: balance;
+  }
+
+  /* Workspaces rail: a source list on the chrome glass. Rows share one selection pill; counts are quiet text. */
+  .vtab-bar {
+    width: var(--vertical-tab-bar-width);
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .app-body.sidebar-right .vtab-bar { order: 1; box-shadow: inset -0.5px 0 0 var(--separator); }
+  .app-body.sidebar-left .vtab-bar { order: 2; box-shadow: inset -0.5px 0 0 var(--separator); }
+
+  .vtab-list {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: var(--space-1) var(--space-2) var(--space-3);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .vtab-header,
+  .folder-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 28px;
+    padding: var(--space-3) var(--space-2) var(--space-1);
+  }
+  .folder-section-header { margin-top: var(--space-2); }
+  .vtab-heading { display: flex; align-items: center; min-width: 0; }
+  .workspace-directory-heading,
+  .folder-section-header h2 {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-tertiary);
+    font: var(--weight-label) var(--text-xs)/1.2 var(--font-ui);
+    cursor: pointer;
+  }
+  .folder-section-header h2 { cursor: default; }
+  .workspace-directory-heading:hover { color: var(--text-secondary); }
+  .vtab-header-actions { display: flex; align-items: center; gap: 2px; }
+  .vtab-header-btn {
+    width: 24px;
+    height: 24px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+  }
+  .vtab-header-btn:hover:not(:disabled) { background: var(--fill-hover); color: var(--text-primary); }
+  .vtab-header-btn:disabled { opacity: 0.45; cursor: default; }
+
+  .workspace-group { min-width: 0; }
+  .workspace-group + .workspace-group { margin-top: 2px; }
+  .workspace-group-heading { display: flex; align-items: center; min-height: 28px; border-radius: var(--radius-row); }
+  .workspace-group-toggle {
+    flex: 1;
+    min-width: 0;
+    min-height: 28px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 var(--space-2) 0 6px;
+    border: 0;
+    border-radius: var(--radius-row);
+    background: transparent;
+    color: var(--text-primary);
+    font: var(--weight-label) var(--text-base)/1 var(--font-ui);
+    text-align: left;
+    cursor: pointer;
+  }
+  .workspace-group-toggle:hover { background: var(--fill-hover); }
+  .workspace-group-toggle > .icon { color: var(--text-tertiary); }
+  .workspace-group-toggle > .workspace-group-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .workspace-group-children { margin: 1px 0 0; padding: 0; }
+  .workspace-group-children[hidden] { display: none; }
+  .workspace-group-empty { margin: var(--space-1) var(--space-2) var(--space-2) 26px; color: var(--text-tertiary); font-size: var(--text-sm); line-height: 1.4; }
+  .folder-missing { display: flex; flex-direction: column; gap: 2px; margin: var(--space-1) 0 var(--space-1) 26px; color: var(--text-secondary); font-size: var(--text-sm); }
+  .folder-locate { padding: 0; border: 0; background: none; color: var(--accent-solid); font: inherit; text-align: left; cursor: pointer; }
+
+  .project-entry { position: relative; }
+  .vtab-item {
+    position: relative;
+    min-height: 28px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 3px var(--space-2) 3px 26px;
+    border-radius: var(--radius-row);
+    color: var(--text-secondary);
+    cursor: pointer;
+    outline-offset: -2px;
+  }
+  .vtab-item:hover { background: var(--fill-hover); color: var(--text-primary); }
+  /* The selection pill. */
+  .vtab-item.active {
+    background: var(--fill-selected);
+    box-shadow: inset 0 0.5px 0 color-mix(in srgb, var(--text-primary) 8%, transparent);
+    color: var(--text-primary);
+  }
+  /* Metadata on the pill takes the pill's text colour: the selection fill is too strong for tertiary text. */
+  .vtab-item.active .workspace-group-count { color: inherit; }
+  :root[data-scheme='light'] .vtab-item.active {
+    background: color-mix(in srgb, #fff 72%, transparent);
+    box-shadow: 0 0 0 0.5px var(--separator-strong), 0 1px 2px rgb(88 70 30 / 0.08);
+  }
+  .vtab-item:focus-visible { outline: 2px solid var(--accent-ring); }
+  /* A finished-with-error session must stay noticeable even when it is not selected. */
+  .vtab-item:has(.activity-dot.exited, .activity-dot.failed) { color: var(--text-primary); }
+
+  .vtab-text { min-width: 0; display: flex; align-items: center; gap: 6px; }
+  .vtab-name {
+    min-width: 0;
+    overflow: hidden;
+    color: inherit;
+    font: var(--weight-label) var(--text-base)/1.4 var(--font-ui);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .vtab-name-input {
+    width: 100%;
+    min-width: 0;
+    padding: 2px 6px;
+    border: 0;
+    border-radius: var(--radius-control);
+    background: var(--material-content);
+    box-shadow: 0 0 0 2px var(--accent-ring);
+    color: var(--text-primary);
+    font: inherit;
+    outline: none;
+  }
+  .vtab-worktree {
+    flex: none;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: var(--fill-hover);
+    color: var(--text-tertiary);
+    font: var(--weight-label) 10px/1.2 var(--font-mono);
+  }
+  .vtab-dirty-marker { margin-left: 4px; color: var(--yellow); font-size: 8px; vertical-align: middle; }
+
+  .vtab-meta { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .workspace-group-count {
+    color: var(--text-tertiary);
+    font: var(--weight-body) var(--text-sm)/1 var(--font-ui);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Activity: a calm dot for state, and short text badges that must stay high-contrast because they carry it. */
+  .activity-dot {
+    width: 6px;
+    height: 6px;
+    flex: 0 0 6px;
+    display: inline-block;
+    border-radius: 50%;
+    background: var(--text-disabled);
+  }
+  .vtab-name .activity-dot { margin-right: 7px; vertical-align: middle; }
+  .activity-dot.ready,
+  .activity-dot.finished { background: var(--status-ok); }
+  .activity-dot.running { background: var(--accent-solid); }
+  .activity-dot.needs-input { background: var(--status-warn); border-radius: 2px; transform: rotate(45deg); }
+  .activity-dot.failed,
+  .activity-dot.exited,
+  .activity-dot.interrupted { background: var(--status-err); }
+  .activity-count {
+    padding: 1px 6px;
+    border-radius: 999px;
+    font: var(--weight-label) var(--text-xs)/1.4 var(--font-ui);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  /* The colour rides on a small dot so the badge text keeps full contrast against the chrome. */
+  .activity-count.running,
+  .activity-count.finished {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding-inline: 0;
+    background: none;
+    color: var(--text-primary);
+  }
+  .activity-count.running::before,
+  .activity-count.finished::before { content: ''; width: 5px; height: 5px; border-radius: 50%; }
+  .activity-count.running::before { background: var(--accent-solid); }
+  .activity-count.finished::before { background: var(--status-ok); }
+
+}
