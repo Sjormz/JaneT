@@ -7,9 +7,9 @@ description: Change JaneT's appearance, transparency, workspace tools position, 
 
 Select the gear-shaped **Settings** button in the title bar. Settings is grouped into **Appearance**, **Layout**, **Notifications**, and **Advanced**. JaneT saves changes as you make them.
 
-![JaneT Settings panel with theme, text size, position, notifications, diagnostics, and shortcuts](/screenshots/settings-overview.png)
+![JaneT Settings panel with theme, transparency, text size, position, notifications, diagnostics, and shortcuts](/screenshots/settings-overview.png)
 
-*The Settings panel groups appearance and behavior controls.*
+*The Settings panel groups appearance and behavior controls. Shown with Transparency set to Reduced; the default is System.*
 
 ## Change appearance
 
