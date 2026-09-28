@@ -28,6 +28,9 @@ const screenshotNames = [
   'workspace-overview.png',
   'workspace-setup-sidebar.png',
 ] as const;
+// Page captures cannot see Mica or vibrancy, so full transparency would publish half-transparent PNGs.
+// Reduced keeps the in-app glass over an opaque window: the closest faithful picture (docs/design/liquid-glass.md).
+const screenshotTransparency = 'reduced';
 
 test.skip(process.platform !== 'win32', 'Public screenshots are captured from the Windows desktop app.');
 test.skip(process.env.JANET_UPDATE_PUBLIC_SCREENSHOTS !== '1', 'Set JANET_UPDATE_PUBLIC_SCREENSHOTS=1 to replace the shipped PNGs.');
@@ -124,22 +127,63 @@ async function warmTerminal(page: Page, terminal: Locator): Promise<void> {
   await page.keyboard.press('Control+L');
 }
 
-async function capture(name: typeof screenshotNames[number], target: Page | Locator): Promise<void> {
+/** Screenshot pixels covered by the target's rounded corners (0 for pages and square elements). */
+async function cornerRadius(target: Page | Locator): Promise<number> {
+  if (!('page' in target)) return 0;
+  return target.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const radii = [style.borderTopLeftRadius, style.borderTopRightRadius, style.borderBottomLeftRadius, style.borderBottomRightRadius];
+    return Math.ceil(Math.max(...radii.map((radius) => parseFloat(radius) || 0)) * devicePixelRatio);
+  });
+}
+
+/**
+ * Frames must match exactly, except that Chromium's backdrop-filter blur is not bit-stable where a glass
+ * surface's anti-aliased rounded corners meet the scrim: those pixels flicker by one or two levels between
+ * otherwise identical frames. Allow only that, and only inside the corner squares.
+ */
+async function framesMatch(previous: Buffer, current: Buffer, radius: number): Promise<boolean> {
+  if (previous.equals(current)) return true;
+  if (radius === 0) return false;
+  const [a, b] = await Promise.all([previous, current].map((frame) => sharp(frame).ensureAlpha().raw().toBuffer({ resolveWithObject: true })));
+  const { width, height } = a.info;
+  if (width !== b.info.width || height !== b.info.height) return false;
+  for (let offset = 0; offset < a.data.length; offset += 1) {
+    if (a.data[offset] === b.data[offset]) continue;
+    const pixel = Math.floor(offset / 4);
+    const x = pixel % width;
+    const y = Math.floor(pixel / width);
+    const inCorner = (x < radius || x >= width - radius) && (y < radius || y >= height - radius);
+    if (!inCorner || Math.abs(a.data[offset] - b.data[offset]) > 2) return false;
+  }
+  return true;
+}
+
+/** `padding` widens a locator capture for content that overflows its box, such as a line-height: 1 heading. */
+async function capture(name: typeof screenshotNames[number], target: Page | Locator, padding = 0): Promise<void> {
   const options = {
     animations: 'disabled',
     caret: 'hide',
   } as const;
+  const radius = padding ? 0 : await cornerRadius(target);
+  const box = padding && 'page' in target ? await target.boundingBox() : null;
+  if (padding && !box) throw new Error(`${name} needs a visible locator to pad`);
+  const shoot = () => box && 'page' in target
+    ? target.page().screenshot({ ...options, clip: { x: box.x - padding, y: box.y - padding, width: box.width + padding * 2, height: box.height + padding * 2 } })
+    : target.screenshot(options);
   let previous: Buffer | undefined;
   let bytes: Buffer | undefined;
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const current = await sharp(await target.screenshot(options)).png({ compressionLevel: 9, adaptiveFiltering: false }).toBuffer();
-    if (previous?.equals(current)) {
+    const current = await sharp(await shoot()).png({ compressionLevel: 9, adaptiveFiltering: false }).toBuffer();
+    if (previous && await framesMatch(previous, current, radius)) {
       bytes = current;
       break;
     }
     previous = current;
   }
-  if (!bytes) throw new Error(`${name} did not produce two consecutive byte-identical frames`);
+  if (!bytes) throw new Error(`${name} did not produce two consecutive matching frames`);
+  // Translucent pixels would show the docs page (white in the light theme) through the app chrome.
+  expect((await sharp(bytes).stats()).isOpaque, `${name} must be fully opaque`).toBe(true);
   fs.mkdirSync(docsScreenshots, { recursive: true });
   for (const directory of [screenshots, docsScreenshots]) {
     fs.writeFileSync(path.join(directory, name), bytes);
@@ -151,6 +195,7 @@ async function capture(name: typeof screenshotNames[number], target: Page | Loca
 function writeSettings(userData: string): void {
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'one-dark',
+    transparency: screenshotTransparency,
     fontSize: 14,
     sidebarSide: 'right',
     keybindings: {},
@@ -205,6 +250,7 @@ test('recaptures the shipped public screenshot set from the real app', async () 
   try {
     createProjectFixture();
     userData = fs.mkdtempSync(path.join(path.dirname(fixturePath), 'JaneT-Public-Screenshot-Profile-'));
+    fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ transparency: screenshotTransparency }), 'utf8');
     app = await electron.launch({
       args: ['.'],
       cwd: root,
@@ -349,7 +395,7 @@ test('recaptures the shipped public screenshot set from the real app', async () 
     const notificationSettings = page.locator('.notification-settings');
     await expect(notificationSettings.getByRole('checkbox')).toBeChecked();
     await expect(notificationSettings).toContainText('Commands must run at least 10 seconds.');
-    await capture('notification-settings.png', notificationSettings);
+    await capture('notification-settings.png', notificationSettings, 8);
     await page.getByRole('button', { name: 'Hide settings' }).click();
 
     await page.getByRole('button', { name: 'New workspace' }).click();
