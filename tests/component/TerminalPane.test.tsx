@@ -853,8 +853,14 @@ describe('TerminalPane reinitialization', () => {
       act(() => term.selectionChangeHandler?.());
       term.selection = '';
       act(() => term.selectionChangeHandler?.());
+      // Control+C always interrupts on macOS; Command+C copies the selection.
       expect(keyHandler({
-        type: 'keydown', key: 'c', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false,
+        type: 'keydown', key: 'c', code: 'KeyC', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false,
+        preventDefault: vi.fn(),
+      })).toBe(true);
+      expect(copyTerminalText).not.toHaveBeenCalled();
+      expect(keyHandler({
+        type: 'keydown', key: 'c', code: 'KeyC', ctrlKey: false, metaKey: true, shiftKey: false, altKey: false,
         preventDefault: vi.fn(),
       })).toBe(false);
       expect(copyTerminalText).toHaveBeenCalledWith('Option is native on macOS');
@@ -941,10 +947,11 @@ describe('TerminalPane reinitialization', () => {
     expect(keyHandler(event('ArrowUp'))).toBe(false);
     expect(term.scrollToLine).toHaveBeenLastCalledWith(1);
     const copyEvent = (key: string) => ({
-      type: 'keydown', key, ctrlKey: true, shiftKey: false, altKey: true, metaKey: false,
+      type: 'keydown', key: key.toUpperCase(), code: `Key${key.toUpperCase()}`,
+      ctrlKey: true, shiftKey: true, altKey: false, metaKey: false,
       preventDefault: vi.fn(),
     });
-    expect(keyHandler(copyEvent('c'))).toBe(false);
+    expect(keyHandler(copyEvent('k'))).toBe(false);
     expect(copyTerminalText).toHaveBeenLastCalledWith('two');
     expect(keyHandler(copyEvent('o'))).toBe(true);
     expect(terminalWrite).not.toHaveBeenCalled();
@@ -965,9 +972,63 @@ describe('TerminalPane reinitialization', () => {
     const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
     keyHandler({ type: 'keydown', key: 'ArrowUp', ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, preventDefault: vi.fn() });
 
-    expect(keyHandler({ type: 'keydown', key: 'r', ctrlKey: true, shiftKey: false, altKey: true, metaKey: false, preventDefault: vi.fn() })).toBe(false);
+    expect(keyHandler({ type: 'keydown', key: 'R', code: 'KeyR', ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, preventDefault: vi.fn() })).toBe(false);
     expect(term.paste).toHaveBeenCalledOnce();
     expect(term.paste).toHaveBeenCalledWith('one');
+  });
+
+  it('leaves semantic command keys to a full-screen program on the alternate screen', async () => {
+    const { default: TerminalPane } = await loadTerminalPane();
+    render(
+      <KeybindingsProvider>
+        <TerminalPane termId="term-semantic-alt" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" />
+      </KeybindingsProvider>,
+    );
+    const term = MockTerminal.instances.at(-1)!;
+    const osc = term.oscHandlers.get(133)!;
+    term.buffer.active.cursorX = 2; await osc('A'); await osc('B');
+    term.buffer.active.cursorX = 5; await osc('C'); await osc('D;0');
+    term.buffer.active.viewportY = 1;
+    const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
+    term.buffer.active.type = 'alternate';
+    try {
+      expect(keyHandler({
+        type: 'keydown', key: 'ArrowUp', code: 'ArrowUp', ctrlKey: true, shiftKey: true, altKey: false, metaKey: false,
+        preventDefault: vi.fn(),
+      })).toBe(true);
+      expect(term.scrollToLine).not.toHaveBeenCalled();
+    } finally {
+      term.buffer.active.type = 'normal';
+    }
+  });
+
+  it.each([
+    ['Win32', { ctrl: true, meta: false }],
+    ['Linux x86_64', { ctrl: false, meta: false }],
+    ['MacIntel', { ctrl: false, meta: true }],
+  ] as const)('follows the %s terminal paste convention', async (platform, pastes) => {
+    const originalPlatform = navigator.platform;
+    Object.defineProperty(navigator, 'platform', { configurable: true, value: platform });
+    try {
+      const { default: TerminalPane } = await loadTerminalPane();
+      render(<KeybindingsProvider><TerminalPane termId={`term-paste-${platform}`} tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" /></KeybindingsProvider>);
+      const term = MockTerminal.instances.at(-1)!;
+      const keyHandler = term.attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
+      const press = (modifiers: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }) => keyHandler({
+        type: 'keydown', key: modifiers.shiftKey ? 'V' : 'v', code: 'KeyV', altKey: false, ...modifiers,
+        preventDefault: vi.fn(),
+      });
+
+      // Plain Ctrl+V reaches vim block selection and shell quoted insert
+      // except on Windows, where terminals conventionally paste.
+      expect(press({ ctrlKey: true, shiftKey: false, metaKey: false })).toBe(!pastes.ctrl);
+      expect(press({ ctrlKey: true, shiftKey: true, metaKey: false })).toBe(false);
+      if (pastes.meta) expect(press({ ctrlKey: false, shiftKey: false, metaKey: true })).toBe(false);
+      await waitFor(() => expect(window.janet.readTerminalClipboard)
+        .toHaveBeenCalledTimes((pastes.ctrl ? 1 : 0) + 1 + (pastes.meta ? 1 : 0)));
+    } finally {
+      Object.defineProperty(navigator, 'platform', { configurable: true, value: originalPlatform });
+    }
   });
 
   it('delivers semantic completions only to the current cached-pane listener', async () => {
@@ -1357,11 +1418,12 @@ describe('TerminalPane reinitialization', () => {
     const activeKeyHandler = MockTerminal.instances[0].attachCustomKeyEventHandler.mock.calls.at(-1)?.[0];
     const preventDefault = vi.fn();
     act(() => activeKeyHandler({
-      key: 'f',
+      key: 'F',
+      code: 'KeyF',
       ctrlKey: true,
       metaKey: false,
       altKey: false,
-      shiftKey: false,
+      shiftKey: true,
       preventDefault,
     }));
     expect(preventDefault).toHaveBeenCalled();
@@ -1500,7 +1562,7 @@ describe('TerminalPane', () => {
     render(<KeybindingsProvider><TerminalPane termId="image" tabType="local" onReady={vi.fn()} onRemoved={vi.fn()} themeName="tokyo-night" /></KeybindingsProvider>);
     const terminal = MockTerminal.instances.at(-1)!;
     const handler = terminal.attachCustomKeyEventHandler.mock.calls.at(-1)![0];
-    act(() => { handler({ type: 'keydown', key: 'v', ctrlKey: true, preventDefault: vi.fn() }); });
+    act(() => { handler({ type: 'keydown', key: 'V', code: 'KeyV', ctrlKey: true, shiftKey: true, preventDefault: vi.fn() }); });
     await waitFor(() => expect(terminal.paste).toHaveBeenCalledWith("'C:/Temp/screen shot.png' "));
     const dataTransfer = { types: ['Files'], files: [new File(['image'], 'drop image.png')], dropEffect: 'none' };
     fireEvent.dragOver(document.querySelector('.terminal-container')!, { dataTransfer });

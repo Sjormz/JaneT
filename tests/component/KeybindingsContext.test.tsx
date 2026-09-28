@@ -29,6 +29,63 @@ describe('KeybindingsProvider terminal editing keys', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it('leaves terminal copy keys to xterm on a non-Latin layout too', () => {
+    const handler = vi.fn();
+    const view = render(
+      <KeybindingsProvider initialBindings={{ 'close-tab': 'Ctrl+Shift+C' }}>
+        <RegisteredShortcut handler={handler} />
+      </KeybindingsProvider>,
+    );
+
+    // Cyrillic layouts report С for the physical C key.
+    fireEvent.keyDown(view.getByLabelText('Terminal input'), { key: 'С', code: 'KeyC', ctrlKey: true, shiftKey: true });
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('fires a Ctrl+Shift+\\ shortcut from the event a keyboard really sends', () => {
+    const handler = vi.fn();
+    render(
+      <KeybindingsProvider initialBindings={{ 'close-pane': 'Ctrl+Shift+\\' }}>
+        <RegisteredShortcut action="close-pane" handler={handler} />
+      </KeybindingsProvider>,
+    );
+
+    // Shift turns \ into | on US-style layouts.
+    fireEvent.keyDown(document, { key: '|', code: 'Backslash', ctrlKey: true, shiftKey: true });
+
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('lets shell editing keys through to the terminal with the default shortcuts', () => {
+    const closeTab = vi.fn();
+    const closePane = vi.fn();
+    const view = render(
+      <KeybindingsProvider>
+        <RegisteredShortcut action="close-tab" handler={closeTab} />
+        <RegisteredShortcut action="close-pane" handler={closePane} />
+      </KeybindingsProvider>,
+    );
+    const [input] = view.getAllByLabelText('Terminal input');
+
+    for (const init of [
+      { key: 'w', code: 'KeyW', ctrlKey: true },
+      { key: 'b', code: 'KeyB', ctrlKey: true },
+      { key: 'f', code: 'KeyF', ctrlKey: true },
+      { key: '\\', code: 'Backslash', ctrlKey: true },
+      { key: 'F2', code: 'F2' },
+    ]) {
+      const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+      input.dispatchEvent(event);
+      expect([init.key, event.defaultPrevented]).toEqual([init.key, false]);
+    }
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(closePane).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: 'W', code: 'KeyW', ctrlKey: true, shiftKey: true });
+    expect(closeTab).toHaveBeenCalledOnce();
+  });
+
   it('runs only the first registered action when configured shortcuts collide', () => {
     const closeTab = vi.fn();
     const closePane = vi.fn();

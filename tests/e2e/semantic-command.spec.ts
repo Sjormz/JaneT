@@ -78,7 +78,7 @@ test('navigates, copies, and safely inserts a real semantic command', async () =
     await terminal.locator('.xterm-helper-textarea').focus();
 
     await app.evaluate(({ clipboard }) => clipboard.clear());
-    await page.keyboard.press('Control+Shift+ArrowUp');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Shift+ArrowUp');
     await expect(terminal.locator('.terminal-command-selected')).toBeVisible();
     await expect.poll(() => terminal.locator('.terminal-command-selected').evaluate((element) => {
       const selected = element.getBoundingClientRect();
@@ -98,14 +98,14 @@ test('navigates, copies, and safely inserts a real semantic command', async () =
     await expect.poll(() => terminal.locator('.terminal-command-selected').evaluate((element) => (
       element.getBoundingClientRect().width >= element.closest('.xterm')!.getBoundingClientRect().width * 0.9
     ))).toBe(true);
-    await page.keyboard.press('Control+Alt+C');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Alt+KeyC' : 'Control+Shift+KeyK');
     await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText()), { timeout: 10_000 }).toBe(command);
 
     await app.evaluate(({ clipboard }) => clipboard.clear());
-    await page.keyboard.press('Control+Alt+O');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Alt+KeyO' : 'Control+Shift+KeyO');
     await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toBe(OUTPUT);
 
-    await page.keyboard.press('Control+Alt+R');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Alt+KeyR' : 'Control+Shift+KeyR');
     await page.waitForTimeout(500);
     expect(fs.readFileSync(markerPath, 'utf-8')).toBe('X');
 

@@ -278,7 +278,7 @@ test('focuses and persistently marks a newly split maximized pane', async () => 
     await expect(panes).toHaveCount(2);
     await page.getByRole('button', { name: 'Maximize pane' }).nth(1).click();
     await expect(panes).toHaveCount(1);
-    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+\\' : 'Control+\\');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Backslash' : 'Control+Shift+Digit5');
     await expect(panes).toHaveCount(3);
 
     const newPane = panes.nth(2);

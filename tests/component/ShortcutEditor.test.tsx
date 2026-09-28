@@ -55,7 +55,7 @@ describe('ShortcutEditor', () => {
     renderEditor(onSave);
     await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
 
-    fireEvent.click(screen.getByRole('button', { name: /rename current terminal \(currently F2\)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /rename current terminal \(currently Ctrl\+Shift\+F2\)/i }));
     const capture = screen.getByRole('textbox', { name: /press a shortcut for rename current terminal/i });
     fireEvent.keyDown(capture, { key: 'q' });
     expect(capture).toBeInTheDocument();
@@ -83,6 +83,50 @@ describe('ShortcutEditor', () => {
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
     expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({ 'snippets-toggle': 'Ctrl+Shift+S' }));
+  });
+
+  it('records Shift+punctuation by the key pressed so the saved chord fires', async () => {
+    const onSave = vi.fn();
+    renderEditor(onSave);
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByRole('button', { name: /open snippets \(currently unassigned\)/i }));
+    const capture = screen.getByRole('textbox', { name: /press a shortcut for open snippets/i });
+    fireEvent.keyDown(capture, { key: '|', code: 'Backslash', ctrlKey: true, shiftKey: true });
+
+    await waitFor(() => expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({ 'snippets-toggle': 'Ctrl+Shift+\\' })));
+  });
+
+  it('shows no warnings for the default shortcuts', () => {
+    render(
+      <KeybindingsProvider>
+        <ShortcutEditor open onClose={() => {}} />
+      </KeybindingsProvider>,
+    );
+    expect(document.querySelector('.shortcut-warning')).toBeNull();
+  });
+
+  it('warns without refusing when a shortcut takes a terminal key or duplicates another action', async () => {
+    const onSave = vi.fn();
+    renderEditor(onSave);
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByRole('button', { name: /open snippets \(currently unassigned\)/i }));
+    fireEvent.keyDown(
+      screen.getByRole('textbox', { name: /press a shortcut for open snippets/i }),
+      { key: 'w', code: 'KeyW', ctrlKey: true },
+    );
+    await waitFor(() => expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({ 'snippets-toggle': 'Ctrl+W' })));
+    const snippets = screen.getByRole('button', { name: /open snippets \(currently Ctrl\+W\)/i });
+    expect(snippets).toHaveAccessibleDescription(/terminal key \(delete the previous word\)/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /open command history \(currently unassigned\)/i }));
+    fireEvent.keyDown(
+      screen.getByRole('textbox', { name: /press a shortcut for open command history/i }),
+      { key: 'T', code: 'KeyT', ctrlKey: true, shiftKey: true },
+    );
+    const history = await screen.findByRole('button', { name: /open command history \(currently Ctrl\+Shift\+T\)/i });
+    expect(history).toHaveAccessibleDescription(/also assigned to “new terminal tab”/i);
   });
 
   it('preserves custom shortcuts when reset confirmation is cancelled', async () => {
@@ -122,7 +166,7 @@ describe('ShortcutEditor', () => {
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
     expect(onSave).toHaveBeenLastCalledWith(DEFAULT_KEYBINDINGS);
-    expect(screen.getByRole('button', { name: /close current terminal \(currently Ctrl\+W\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /close current terminal \(currently Ctrl\+Shift\+W\)/i })).toBeInTheDocument();
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 });

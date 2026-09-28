@@ -113,9 +113,12 @@ test('renames the focused pane and active tab without interrupting xterm input',
     await expect.poll(async () => terminals.nth(1).locator('.xterm-rows').innerText(), { timeout: 15_000 })
       .toContain(PANE_MARKER);
 
-    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+F2' : 'Control+F2');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+F2' : 'Control+Shift+KeyI');
     const tabName = page.getByRole('dialog', { name: 'Rename tab' }).getByRole('textbox', { name: 'Tab name' });
     await expect(tabName).toHaveValue('Two panes');
+    // Ctrl+Shift+I is a Chromium DevTools chord; JaneT has no menu accelerator for it.
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+      .some((window) => window.webContents.isDevToolsOpened()))).toBe(false);
     await expect(tabName).toBeFocused();
     await expect.poll(() => tabName.evaluate((input: HTMLInputElement) => ({
       start: input.selectionStart,
@@ -129,7 +132,7 @@ test('renames the focused pane and active tab without interrupting xterm input',
     await expect.poll(async () => terminals.nth(1).locator('.xterm-rows').innerText(), { timeout: 15_000 })
       .toContain(TAB_MARKER);
 
-    await page.keyboard.press('F2');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+F2' : 'Control+Shift+F2');
     const cancelledName = page.getByRole('dialog', { name: 'Rename terminal' }).getByRole('textbox', { name: 'Terminal name' });
     await cancelledName.fill('Cancelled');
     await cancelledName.press('Escape');

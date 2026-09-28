@@ -24,7 +24,7 @@ Initial project setup accepts 1–16 terminals. JaneT also enforces an applicati
 
 ## Search, copy, paste, and paths
 
-Open **Search terminal output** to find text in the current terminal buffer. Standard terminal copy and paste use your platform's keyboard shortcuts. Dragging a file or folder from Explorer into a local terminal pastes its shell-escaped path; the path copy button beside an item does the same through the clipboard.
+Open **Search terminal output** (`Ctrl+Shift+F`, or `Cmd+F` on macOS) to find text in the current terminal buffer. Copy and paste follow each platform's terminal convention: `Ctrl+Shift+C` and `Ctrl+Shift+V` on Windows and Linux, `Cmd+C` and `Cmd+V` on macOS. On Windows and Linux, `Ctrl+C` also copies while text is selected, and on Windows `Ctrl+V` also pastes. See [Copy and paste in a terminal](/reference/shortcuts#copy-and-paste-in-a-terminal) for every key. Dragging a file or folder from Explorer into a local terminal pastes its shell-escaped path; the path copy button beside an item does the same through the clipboard.
 
 Terminal applications such as Vim, tmux, or agent TUIs may capture the mouse. To make a native text selection in that situation, hold **Shift** while dragging on Windows/Linux or **Option** while dragging on macOS, then use the platform copy shortcut. Some terminal applications also support OSC 52 clipboard copying; JaneT asks before accepting unsolicited clipboard changes.
 
@@ -42,7 +42,7 @@ Completed command history is local and bounded to the latest 256 entries. It sto
 
 Open **Search commands** in the title bar or press the command palette shortcut to find app actions. Open **Snippets** to save reusable text and paste a chosen snippet into the focused terminal. JaneT does not run snippets automatically.
 
-Open **Settings**, then **Keyboard shortcuts**, to see or change the bindings. Defaults vary by platform; some actions, including snippets and command history, may be unbound until you assign a shortcut. The command palette remains available for actions without shortcuts.
+Open **Settings**, then **Keyboard shortcuts**, to see or change the bindings. Defaults vary by platform; some actions, including snippets and command history, may be unbound until you assign a shortcut. The command palette remains available for actions without shortcuts. JaneT's default shortcuts leave shell and terminal-program keys such as `Ctrl+W`, `Ctrl+B`, `Ctrl+F`, and `F2` to the terminal, and the shortcut editor warns you if a shortcut you choose would take one of them.
 
 ## Send the same input to selected panes
 

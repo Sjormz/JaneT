@@ -23,7 +23,7 @@ const LEGACY_KEYBINDINGS = {
 };
 
 async function loadKeybindings(
-  platformName: 'win32' | 'darwin',
+  platformName: 'win32' | 'linux' | 'darwin',
   storedForDefaults: (defaults: Record<string, string>) => Record<string, string>,
 ): Promise<{ actual: Record<string, string>; defaults: Record<string, string> }> {
   const fsMock = await import('fs');
@@ -177,12 +177,13 @@ describe('SettingsManager', () => {
     expect(settings.workspaceTabs).toEqual([]);
     expect(settings.notificationsEnabled).toBe(false);
     expect(settings.notificationThresholdSeconds).toBe(10);
+    const mac = process.platform === 'darwin';
     expect(settings.keybindings).toMatchObject({
-      'previous-command': 'Ctrl+Shift+ArrowUp',
-      'next-command': 'Ctrl+Shift+ArrowDown',
-      'copy-command': 'Ctrl+Alt+C',
-      'copy-command-output': 'Ctrl+Alt+O',
-      'rerun-command': 'Ctrl+Alt+R',
+      'previous-command': mac ? 'Meta+ArrowUp' : 'Ctrl+Shift+ArrowUp',
+      'next-command': mac ? 'Meta+ArrowDown' : 'Ctrl+Shift+ArrowDown',
+      'copy-command': mac ? 'Meta+Alt+C' : 'Ctrl+Shift+K',
+      'copy-command-output': mac ? 'Meta+Alt+O' : 'Ctrl+Shift+O',
+      'rerun-command': mac ? 'Meta+Alt+R' : 'Ctrl+Shift+R',
       'move-pane-left': '',
       'move-pane-right': '',
       'move-pane-up': '',
@@ -329,18 +330,59 @@ describe('SettingsManager', () => {
   );
 
   it.each([
-    ['sparse', { 'close-tab': 'Alt+X' }],
-    ['changed complete', { ...LEGACY_KEYBINDINGS, 'palette-toggle': 'Alt+K' }],
-    ['explicit empty', { ...LEGACY_KEYBINDINGS, 'palette-toggle': '' }],
-    ['extra key', { ...LEGACY_KEYBINDINGS, custom: 'Alt+J' }],
+    ['sparse', { 'close-tab': 'Alt+X' }, { 'close-tab': 'Alt+X' }],
+    ['changed complete', { ...LEGACY_KEYBINDINGS, 'palette-toggle': 'Alt+K' }, { 'palette-toggle': 'Alt+K' }],
+    ['explicit empty', { ...LEGACY_KEYBINDINGS, 'palette-toggle': '' }, { 'palette-toggle': '' }],
+    ['extra key', { ...LEGACY_KEYBINDINGS, custom: 'Alt+J' }, { custom: 'Alt+J' }],
     ['missing key', Object.fromEntries(
       Object.entries(LEGACY_KEYBINDINGS).filter(([key]) => key !== 'rerun-command'),
-    )],
-  ])('preserves the user-owned %s keybinding map', async (_name, keybindings) => {
-    for (const platformName of ['win32', 'darwin'] as const) {
+    ), {}],
+  ])('keeps the user-owned bindings of a %s map and moves its old defaults', async (_name, keybindings, kept) => {
+    for (const platformName of ['win32', 'linux', 'darwin'] as const) {
       const { actual, defaults } = await loadKeybindings(platformName, () => keybindings);
-      expect(actual).toEqual({ ...defaults, ...keybindings });
+      expect(actual).toEqual({ ...defaults, ...kept });
     }
+  });
+
+  it.each(['win32', 'linux', 'darwin'] as const)(
+    'moves %s bindings still at the pre-audit defaults and keeps customized ones',
+    async (platformName) => {
+      const mac = platformName === 'darwin';
+      const { actual, defaults } = await loadKeybindings(platformName, (current) => ({
+        ...current,
+        'search-toggle': mac ? 'Meta+F' : 'Ctrl+F',
+        'close-tab': mac ? 'Meta+W' : 'Ctrl+W',
+        'split-right': mac ? 'Meta+\\' : 'Ctrl+\\',
+        'rename-pane': 'F2',
+        'copy-command': 'Ctrl+Alt+C',
+        'toggle-sidebar': 'Alt+S',
+        'history-toggle': mac ? 'Meta+Shift+H' : 'Ctrl+Shift+H',
+      }));
+      expect(actual).toEqual({
+        ...defaults,
+        'toggle-sidebar': 'Alt+S',
+        'history-toggle': mac ? 'Meta+Shift+H' : 'Ctrl+Shift+H',
+      });
+    },
+  );
+
+  it('migrates once, persists the result, and then keeps a restored old default', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      keybindings: { 'close-tab': process.platform === 'darwin' ? 'Meta+W' : 'Ctrl+W', 'rename-pane': 'F2' },
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const migrated = manager.get().keybindings;
+    expect(migrated['rename-pane']).toBe(process.platform === 'darwin' ? 'Meta+Shift+F2' : 'Ctrl+Shift+F2');
+    expect(migrated).not.toHaveProperty('$keybindingsSchema');
+
+    // The user deliberately chooses F2 again after the migration.
+    manager.set({ keybindings: { ...migrated, 'rename-pane': 'F2' } });
+    const saved = JSON.parse(String(vi.mocked(fsMock.writeFileSync).mock.calls.filter(([file]) => String(file).endsWith('settings.json.tmp')).at(-1)![1]));
+    expect(saved.keybindings).toMatchObject({ 'rename-pane': 'F2', $keybindingsSchema: '2' });
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify(saved));
+    expect(new SettingsManager().get().keybindings['rename-pane']).toBe('F2');
   });
 
   it('rejects shortcut updates whose merged map exceeds the entry limit', async () => {
