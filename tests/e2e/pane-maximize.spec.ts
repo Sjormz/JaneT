@@ -664,7 +664,8 @@ test('stages and commits changes from Source Control', async ({}, testInfo) => {
   const repoPath = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-e2e-source-control-'));
   let app: Awaited<ReturnType<typeof launchApp>> | undefined;
   try {
-    execFileSync('git', ['init', '-b', 'main'], { cwd: repoPath });
+    // A long branch name exercises truncation at the default project-tools width.
+    execFileSync('git', ['init', '-b', 'feature/source-control-layout-regression'], { cwd: repoPath });
     execFileSync('git', ['config', 'user.email', 'janet-e2e@example.com'], { cwd: repoPath });
     execFileSync('git', ['config', 'user.name', 'JaneT E2E'], { cwd: repoPath });
     fs.writeFileSync(path.join(repoPath, 'base.txt'), 'base\n', 'utf-8');
@@ -723,6 +724,21 @@ test('stages and commits changes from Source Control', async ({}, testInfo) => {
     await expect(createBranch).toHaveClass(/git-section-action/);
     await expect(createBranch.locator('xpath=ancestor::div[contains(@class,"git-section-header")]')).toContainText('Branches');
     await expect(sourceControl.getByText('Create branch…')).toHaveCount(0);
+    await expect(repo.locator('.git-pill.dirty')).toBeVisible();
+    await expect.poll(() => sourceControl.evaluate((tree) => {
+      const panel = tree.getBoundingClientRect();
+      const branch = tree.querySelector('.git-repo-branch')!;
+      const badge = tree.querySelector('.git-pill.dirty')!.getBoundingClientRect();
+      const worktreeName = tree.querySelector('.git-worktree-item.current .branch-name')!;
+      const name = worktreeName.getBoundingClientRect();
+      return {
+        branchTruncated: branch.scrollWidth > branch.clientWidth,
+        badgeInside: badge.width > 0 && badge.left >= panel.left && badge.right <= panel.right,
+        worktreeNameInside: name.right <= panel.right,
+        // The branch note gives up space before the worktree name collapses.
+        worktreeNameReadable: name.width >= Math.min(worktreeName.scrollWidth, 120),
+      };
+    })).toEqual({ branchTruncated: true, badgeInside: true, worktreeNameInside: true, worktreeNameReadable: true });
     await sourceControl.screenshot({ path: testInfo.outputPath('source-control.png') });
 
     const refreshSourceControl = sourceControl.getByRole('button', { name: 'Refresh Source Control' });

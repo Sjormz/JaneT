@@ -366,10 +366,41 @@
   .git-tree-dir svg { flex-shrink: 0; }
 
   .git-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
     margin-left: 6px;
     color: var(--text-tertiary);
     font-size: 10px;
+    white-space: nowrap;
   }
+
+  .git-repo-path > svg { flex-shrink: 0; }
+
+  .git-repo-branch,
+  .git-worktree-branch {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The worktree name keeps priority up to a cap; the branch note absorbs the rest.
+     A shrinkable name would lose sub-pixel widths and ellipsize even when it fits. */
+  .git-worktree-item .branch-name {
+    flex-shrink: 0;
+    max-width: 70%;
+  }
+
+  .git-worktree-note {
+    display: flex;
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+  }
+
+  .git-worktree-panes { flex-shrink: 0; white-space: pre; }
 
   .git-message {
     padding: 5px 14px;

@@ -447,6 +447,18 @@ test('recaptures the shipped public screenshot set from the real app', async () 
       await expect.poll(async () => (await terminal.locator('.xterm-rows > div').allTextContents()).join(''))
         .toContain(`PS ${fixturePath}>`);
     }
+    expect(await sourceControl.evaluate((tree) => {
+      const panel = tree.getBoundingClientRect();
+      const badge = tree.querySelector('.git-repo-path .git-pill.dirty')!.getBoundingClientRect();
+      const name = tree.querySelector('.git-worktree-item.current .branch-name')!;
+      const text = document.createRange();
+      text.selectNodeContents(name);
+      return {
+        badgeInside: badge.width > 0 && badge.left >= panel.left && badge.right <= panel.right,
+        // scrollWidth rounds away sub-pixel overflow that still triggers an ellipsis.
+        worktreeNameFits: text.getBoundingClientRect().width <= name.getBoundingClientRect().width,
+      };
+    })).toEqual({ badgeInside: true, worktreeNameFits: true });
     await capture('source-control.png', page);
 
     const bodyText = await page.locator('body').innerText();
