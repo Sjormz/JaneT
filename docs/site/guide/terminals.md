@@ -36,6 +36,8 @@ When a supported shell reports command boundaries, use **Previous semantic comma
 
 JaneT installs semantic markers for new local Bash, Zsh, Fish, Windows PowerShell, and PowerShell 7 sessions where possible, preserving existing prompt hooks. Unsupported shells still work as ordinary terminals, but may not provide semantic command navigation or reliable command completion notifications.
 
+Zsh sessions load your own startup files before JaneT adds its integration: `.zshenv`, then `.zshrc`, plus `.zprofile` and `.zlogin` for login shells. JaneT reads them from your `ZDOTDIR` when it is set in the environment JaneT was started from, otherwise from your home folder. A `ZDOTDIR` exported by `~/.zshenv`, such as `~/.config/zsh`, is used for the files that follow. Inside the session, `ZDOTDIR` keeps your value, so nested Zsh shells use your configuration.
+
 Completed command history is local and bounded to the latest 256 entries. It stores command text, timing, outcome, and working directory, but not terminal output or imported shell-history files. Open **Open command history** from the command palette to search it; choosing a result pastes the command into the focused terminal without running it.
 
 ## Use snippets and the command palette
