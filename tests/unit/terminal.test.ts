@@ -198,7 +198,7 @@ describe('TerminalManager', () => {
     manager.cleanup();
   });
 
-  it('clears the temporary ZDOTDIR before running Zsh startup commands', async () => {
+  it('leaves the temporary ZDOTDIR before running Zsh startup commands', async () => {
     mocks.spawnMock.mockReturnValue(new MockPty());
 
     const { TerminalManager } = await loadTerminalManager();
@@ -207,10 +207,41 @@ describe('TerminalManager', () => {
 
     const env = mocks.spawnMock.mock.calls[0][2].env as NodeJS.ProcessEnv;
     const zshrc = fs.readFileSync(path.join(env.ZDOTDIR!, '.zshrc'), 'utf8');
-    expect(zshrc).toMatch(/^unset ZDOTDIR\n\[ -f ~\/\.zshrc \]/);
-    expect(zshrc.indexOf('unset ZDOTDIR')).toBeLessThan(zshrc.indexOf("eval 'echo once'"));
+    // A nested zsh started by a startup command must see the user's ZDOTDIR
+    // (or none), never JaneT's shim directory, so it cannot replay commands.
+    const restoreUser = zshrc.indexOf('export ZDOTDIR="$__janet_user_zdotdir"');
+    const unsetForHome = zshrc.indexOf('unset ZDOTDIR');
+    const sourceUser = zshrc.indexOf('builtin source "$__janet_user_zdotdir/.zshrc"');
+    const startup = zshrc.indexOf("eval 'echo once'");
+    expect(restoreUser).toBeGreaterThan(-1);
+    expect(unsetForHome).toBeGreaterThan(-1);
+    expect(restoreUser).toBeLessThan(sourceUser);
+    expect(unsetForHome).toBeLessThan(sourceUser);
+    expect(sourceUser).toBeLessThan(startup);
+    expect(zshrc).not.toContain('export ZDOTDIR="$__janet_zdotdir"');
+    for (const name of ['.zshenv', '.zprofile', '.zlogin']) {
+      expect(fs.readFileSync(path.join(env.ZDOTDIR!, name), 'utf8')).not.toContain("eval 'echo once'");
+    }
 
     manager.cleanup();
+  });
+
+  it('passes an inherited custom ZDOTDIR to the Zsh shims instead of discarding it', async () => {
+    vi.stubEnv('ZDOTDIR', '/home/user/.config/zsh');
+    try {
+      mocks.spawnMock.mockReturnValue(new MockPty());
+      const { TerminalManager } = await loadTerminalManager();
+      const manager = new TerminalManager();
+      manager.create('term-custom-zdotdir', undefined, '/bin/zsh', () => {});
+
+      const env = mocks.spawnMock.mock.calls[0][2].env as NodeJS.ProcessEnv;
+      expect(env.ZDOTDIR).toContain('janet-shell-init-');
+      expect(env.JANET_ZSH_USER_ZDOTDIR).toBe('/home/user/.config/zsh');
+      expect(fs.readdirSync(env.ZDOTDIR!).sort()).toEqual(['.zlogin', '.zprofile', '.zshenv', '.zshrc']);
+      manager.cleanup();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('runs integrated startup commands from shell init instead of PTY input', async () => {
