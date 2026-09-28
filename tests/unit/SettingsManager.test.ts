@@ -253,6 +253,51 @@ describe('SettingsManager', () => {
     expect(new SettingsManager().get()).toMatchObject({ theme: 'dracula', notificationThresholdSeconds: 10 });
   });
 
+  it('falls back to defaults for hand-edited appearance and worktree values that runtime updates reject', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      theme: 'neon',
+      fontSize: 200,
+      fontFamily: 'x'.repeat(8_193),
+      sidebarSide: 'top',
+      gitWorktreeBaseDir: 42,
+      gitWorktreeNameTemplate: { value: '{repo}' },
+      notificationsEnabled: true,
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const settings = new SettingsManager().get();
+    expect(settings).toMatchObject({
+      theme: 'one-dark',
+      fontSize: 14,
+      sidebarSide: 'right',
+      gitWorktreeBaseDir: '../',
+      gitWorktreeNameTemplate: '{repo}-{branch}',
+      notificationsEnabled: true,
+    });
+    expect(settings.fontFamily.length).toBeLessThanOrEqual(8_192);
+    expect(settings.fontFamily).not.toBe('x'.repeat(8_193));
+  });
+
+  it.each([9, 25, 14.5, '14', null])('replaces an out-of-range stored font size: %s', async (value) => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({ theme: 'gruvbox', fontSize: value }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    expect(new SettingsManager().get()).toMatchObject({ theme: 'gruvbox', fontSize: 14 });
+  });
+
+  it('keeps valid stored appearance and worktree values', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      theme: 'solarized-light', fontSize: 24, sidebarSide: 'left',
+      gitWorktreeBaseDir: '/work/trees', gitWorktreeNameTemplate: '{branch}',
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    expect(new SettingsManager().get()).toMatchObject({
+      theme: 'solarized-light', fontSize: 24, sidebarSide: 'left',
+      gitWorktreeBaseDir: '/work/trees', gitWorktreeNameTemplate: '{branch}',
+    });
+  });
+
   it.each([0, 1.5, 86_401, '10'])('rejects malformed live notification threshold atomically: %s', async (value) => {
     const fsMock = await import('fs');
     const { SettingsManager } = await import('../../src/main/settings');

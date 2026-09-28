@@ -419,6 +419,17 @@ export class SettingsManager {
       notificationThresholdSeconds: isValidNotificationThreshold(storedSettings.notificationThresholdSeconds)
         ? storedSettings.notificationThresholdSeconds
         : 10,
+      // Hand-edited or older files are held to the same rules as runtime updates.
+      theme: isValidTheme(storedSettings.theme) ? storedSettings.theme : DEFAULT_SETTINGS.theme,
+      fontSize: isValidFontSize(storedSettings.fontSize) ? storedSettings.fontSize : DEFAULT_SETTINGS.fontSize,
+      fontFamily: isValidFontFamily(storedSettings.fontFamily) ? storedSettings.fontFamily : DEFAULT_SETTINGS.fontFamily,
+      sidebarSide: isValidSidebarSide(storedSettings.sidebarSide) ? storedSettings.sidebarSide : DEFAULT_SETTINGS.sidebarSide,
+      gitWorktreeBaseDir: isValidWorkspaceString(storedSettings.gitWorktreeBaseDir)
+        ? storedSettings.gitWorktreeBaseDir
+        : DEFAULT_SETTINGS.gitWorktreeBaseDir,
+      gitWorktreeNameTemplate: isValidWorkspaceString(storedSettings.gitWorktreeNameTemplate)
+        ? storedSettings.gitWorktreeNameTemplate
+        : DEFAULT_SETTINGS.gitWorktreeNameTemplate,
     } as AppSettings;
     return { settings: this.deserialize(stored) };
   }
@@ -846,12 +857,10 @@ function isValidSettingsUpdate(updates: Partial<AppSettings>): boolean {
   return (updates.mainDirectorySetupSkipped === undefined || typeof updates.mainDirectorySetupSkipped === 'boolean')
     && (updates.mainDirectory === undefined || updates.mainDirectory === null
       || (typeof updates.mainDirectory === 'string' && path.isAbsolute(updates.mainDirectory) && updates.mainDirectory.length <= 8192 && !updates.mainDirectory.includes('\0')))
-    && (updates.theme === undefined || ['tokyo-night', 'dracula', 'one-dark', 'solarized-light', 'gruvbox'].includes(updates.theme))
-    && (updates.fontSize === undefined
-      || (Number.isInteger(updates.fontSize) && updates.fontSize >= 10 && updates.fontSize <= 24))
-    && (updates.fontFamily === undefined
-      || (typeof updates.fontFamily === 'string' && updates.fontFamily.length <= MAX_WORKSPACE_STRING_LENGTH))
-    && (updates.sidebarSide === undefined || updates.sidebarSide === 'left' || updates.sidebarSide === 'right')
+    && (updates.theme === undefined || isValidTheme(updates.theme))
+    && (updates.fontSize === undefined || isValidFontSize(updates.fontSize))
+    && (updates.fontFamily === undefined || isValidFontFamily(updates.fontFamily))
+    && (updates.sidebarSide === undefined || isValidSidebarSide(updates.sidebarSide))
     && (updates.transparency === undefined || TRANSPARENCY_PREFERENCES.includes(updates.transparency))
     && (updates.notificationsEnabled === undefined || typeof updates.notificationsEnabled === 'boolean')
     && (updates.notificationThresholdSeconds === undefined || isValidNotificationThreshold(updates.notificationThresholdSeconds))
@@ -873,17 +882,35 @@ function isValidSettingsUpdate(updates: Partial<AppSettings>): boolean {
       && updates.workspaceTabs.every(isValidRuntimeWorkspacePreset)
       && hasUniqueIds(updates.workspaceTabs)))
 
-    && (updates.gitWorktreeBaseDir === undefined
-      || (typeof updates.gitWorktreeBaseDir === 'string'
-        && updates.gitWorktreeBaseDir.length <= MAX_WORKSPACE_STRING_LENGTH))
-    && (updates.gitWorktreeNameTemplate === undefined
-      || (typeof updates.gitWorktreeNameTemplate === 'string'
-        && updates.gitWorktreeNameTemplate.length <= MAX_WORKSPACE_STRING_LENGTH))
+    && (updates.gitWorktreeBaseDir === undefined || isValidWorkspaceString(updates.gitWorktreeBaseDir))
+    && (updates.gitWorktreeNameTemplate === undefined || isValidWorkspaceString(updates.gitWorktreeNameTemplate))
     && (updates.session === undefined || isValidRuntimeSession(updates.session));
 }
 
 function isValidNotificationThreshold(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 86_400;
+}
+
+const THEME_NAMES: readonly ThemeName[] = ['tokyo-night', 'dracula', 'one-dark', 'solarized-light', 'gruvbox'];
+
+function isValidTheme(value: unknown): value is ThemeName {
+  return THEME_NAMES.includes(value as ThemeName);
+}
+
+function isValidFontSize(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 10 && Number(value) <= 24;
+}
+
+function isValidFontFamily(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= MAX_WORKSPACE_STRING_LENGTH;
+}
+
+function isValidSidebarSide(value: unknown): value is AppSettings['sidebarSide'] {
+  return value === 'left' || value === 'right';
+}
+
+function isValidWorkspaceString(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= MAX_WORKSPACE_STRING_LENGTH;
 }
 
 function isValidRuntimeSnippet(value: unknown): boolean {
