@@ -101,8 +101,21 @@ const initialWindowMaterial = (() => {
   }
 })();
 
+/** This machine's hostname (empty if unavailable), used to accept only local OSC 7 cwd reports. */
+const localHostname = (() => {
+  const prefix = '--janet-local-hostname=';
+  const arg = process.argv.find((value) => value.startsWith(prefix));
+  try {
+    const hostname = arg ? decodeURIComponent(arg.slice(prefix.length)) : '';
+    return /^[A-Za-z0-9._-]{1,253}$/.test(hostname) ? hostname : '';
+  } catch {
+    return '';
+  }
+})();
+
 const api = {
   initialWindowMaterial,
+  localHostname,
   // Terminal
   terminalCreate: (params: {
     id: string;

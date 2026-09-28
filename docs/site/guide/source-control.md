@@ -5,7 +5,7 @@ description: Review repository status, stage changes, commit, sync, manage branc
 
 # Source Control
 
-JaneT's **Source Control** panel follows the repository for the focused local terminal. It provides common Git operations alongside the terminal; Git itself must be available on the system.
+JaneT's **Source Control** panel follows the repository for the focused local terminal. It provides common Git operations alongside the terminal; Git itself must be available on the system. It uses the same local directory as Explorer, so directories reported from an SSH session or a network share are not followed; see [How Explorer follows the terminal](/guide/files-editor#how-explorer-follows-the-terminal).
 
 ![JaneT Source Control panel with staged and unstaged changes alongside terminals](/screenshots/source-control.png)
 

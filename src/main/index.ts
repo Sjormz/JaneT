@@ -318,6 +318,18 @@ function refreshWindowMaterial(): void {
   sendRendererEvent(window, 'app:windowMaterial', state);
 }
 
+/** Renderer argument carrying `os.hostname()`; read by the preload. */
+const LOCAL_HOSTNAME_ARG = '--janet-local-hostname=';
+
+function localHostname(): string {
+  try {
+    const hostname = os.hostname();
+    return /^[A-Za-z0-9._-]{1,253}$/.test(hostname) ? hostname : '';
+  } catch {
+    return '';
+  }
+}
+
 function createWindow() {
   // Remove the default application menu (File / Edit / View / Window).
   // JaneT uses a fully custom in-renderer titlebar.
@@ -346,7 +358,11 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       // Read synchronously by the preload so the first frame already matches the window material.
-      additionalArguments: [`${WINDOW_MATERIAL_ARG}${JSON.stringify(initialMaterial)}`],
+      // The local hostname lets the renderer accept OSC 7 cwd reports only from this machine.
+      additionalArguments: [
+        `${WINDOW_MATERIAL_ARG}${JSON.stringify(initialMaterial)}`,
+        `${LOCAL_HOSTNAME_ARG}${encodeURIComponent(localHostname())}`,
+      ],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
