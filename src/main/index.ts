@@ -28,6 +28,7 @@ import {
   RENDERER_SCHEME_REGISTRATION,
 } from './rendererProtocol';
 import {
+  WORKSPACE_AWAIT_USER_FOR_CLOSE_CHANNEL,
   WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL,
   WorkspaceClosePreparationCoordinator,
   WorkspaceLifecycleController,
@@ -842,6 +843,9 @@ function registerIpcHandlers() {
 
   handle(WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL, (event, resolution: unknown) => {
     return closePreparation.resolve(event.sender, resolution);
+  });
+  handle(WORKSPACE_AWAIT_USER_FOR_CLOSE_CHANNEL, (event, acknowledgement: unknown) => {
+    return closePreparation.awaitUser(event.sender, acknowledgement);
   });
 
   // === Window controls (for custom titlebar) ===

@@ -3,11 +3,20 @@ export type WorkspacePrepareForCloseDecision = 'saved' | 'discarded' | 'cancel';
 
 export const WORKSPACE_PREPARE_FOR_CLOSE_CHANNEL = 'workspace:prepareForClose';
 export const WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL = 'workspace:resolvePrepareForClose';
+export const WORKSPACE_AWAIT_USER_FOR_CLOSE_CHANNEL = 'workspace:awaitUserForClose';
 
 export interface WorkspacePrepareForCloseRequest {
   requestId: string;
   reason: WorkspaceCloseReason;
 }
+
+/** Renderer acknowledgement that it is showing the user a close prompt. */
+export interface WorkspacePrepareForCloseAcknowledgement {
+  requestId: string;
+}
+
+type RendererUnavailableEvent = 'destroyed' | 'render-process-gone' | 'did-navigate';
+const RENDERER_UNAVAILABLE_EVENTS: readonly RendererUnavailableEvent[] = ['destroyed', 'render-process-gone', 'did-navigate'];
 
 export interface WorkspacePrepareForCloseResolution {
   requestId: string;
@@ -17,8 +26,8 @@ export interface WorkspacePrepareForCloseResolution {
 export interface WorkspaceCloseRenderer {
   isDestroyed(): boolean;
   send(channel: string, ...args: unknown[]): void;
-  once(event: 'destroyed' | 'render-process-gone', listener: (...args: unknown[]) => void): unknown;
-  removeListener(event: 'destroyed' | 'render-process-gone', listener: (...args: unknown[]) => void): unknown;
+  once(event: RendererUnavailableEvent, listener: (...args: unknown[]) => void): unknown;
+  removeListener(event: RendererUnavailableEvent, listener: (...args: unknown[]) => void): unknown;
 }
 
 export interface WorkspaceLifecycleDependencies {
@@ -33,19 +42,44 @@ interface PendingClosePreparation {
   promise: Promise<WorkspacePrepareForCloseDecision>;
   resolve(decision: WorkspacePrepareForCloseDecision): void;
   onUnavailable(): void;
-  timeout: ReturnType<typeof setTimeout>;
+  /** Null once the renderer acknowledged a user prompt: then only the user or renderer loss settles it. */
+  timeout: ReturnType<typeof setTimeout> | null;
 }
 
 function isPrepareForCloseDecision(value: unknown): value is WorkspacePrepareForCloseDecision {
   return value === 'saved' || value === 'discarded' || value === 'cancel';
 }
 
-/** Owns the single main-to-renderer dirty-editor close handshake. */
+/**
+ * Owns the single main-to-renderer dirty-editor close handshake.
+ *
+ * The timeout only protects against a renderer that never answers. Once the
+ * renderer acknowledges that it is asking the user (for example "Save changes
+ * before closing?"), the request waits for the user's decision, and is
+ * cancelled only if the renderer is destroyed, crashes or navigates away.
+ */
 export class WorkspaceClosePreparationCoordinator {
   private nextRequestId = 1;
   private pending: PendingClosePreparation | null = null;
 
   constructor(private readonly timeoutMs = 30_000) {}
+
+  /** Stop the unresponsive-renderer timeout because the user is being asked. */
+  awaitUser(renderer: WorkspaceCloseRenderer, value: unknown): boolean {
+    const pending = this.pending;
+    if (
+      !pending
+      || pending.renderer !== renderer
+      || typeof value !== 'object'
+      || value === null
+      || (value as Partial<WorkspacePrepareForCloseAcknowledgement>).requestId !== pending.request.requestId
+    ) {
+      return false;
+    }
+    if (pending.timeout) clearTimeout(pending.timeout);
+    pending.timeout = null;
+    return true;
+  }
 
   request(
     renderer: WorkspaceCloseRenderer,
@@ -75,12 +109,11 @@ export class WorkspaceClosePreparationCoordinator {
       onUnavailable: () => this.settle(pending, 'cancel'),
       timeout: setTimeout(() => this.settle(pending, 'cancel'), this.timeoutMs),
     });
-    pending.timeout.unref?.();
+    pending.timeout?.unref?.();
     this.pending = pending;
 
     try {
-      renderer.once('destroyed', pending.onUnavailable);
-      renderer.once('render-process-gone', pending.onUnavailable);
+      for (const event of RENDERER_UNAVAILABLE_EVENTS) renderer.once(event, pending.onUnavailable);
       if (renderer.isDestroyed()) {
         this.settle(pending, 'cancel');
       } else {
@@ -119,10 +152,9 @@ export class WorkspaceClosePreparationCoordinator {
   ): void {
     if (this.pending !== pending) return;
     this.pending = null;
-    clearTimeout(pending.timeout);
+    if (pending.timeout) clearTimeout(pending.timeout);
     try {
-      pending.renderer.removeListener('destroyed', pending.onUnavailable);
-      pending.renderer.removeListener('render-process-gone', pending.onUnavailable);
+      for (const event of RENDERER_UNAVAILABLE_EVENTS) pending.renderer.removeListener(event, pending.onUnavailable);
     } catch {}
     pending.resolve(decision);
   }

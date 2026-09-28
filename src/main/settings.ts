@@ -545,7 +545,8 @@ function cloneSavedTab(value: unknown): SavedTab | undefined {
   return {
     id: tab.id,
     ...(typeof tab.groupId === 'string' && tab.groupId.length <= 256 ? { groupId: tab.groupId } : {}),
-    ...(tab.isProject === true ? { isProject: true } : {}),
+    // Keep explicit `false`: it records that the tab is a session, not a legacy project.
+    ...(typeof tab.isProject === 'boolean' ? { isProject: tab.isProject } : {}),
     title: tab.title,
     type: tab.type,
     ...(typeof tab.cwd === 'string' ? { cwd: tab.cwd } : {}),

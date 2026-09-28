@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  WORKSPACE_AWAIT_USER_FOR_CLOSE_CHANNEL,
   WORKSPACE_PREPARE_FOR_CLOSE_CHANNEL,
   WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL,
   WorkspaceClosePreparationCoordinator,
@@ -9,11 +10,13 @@ import {
   type WorkspacePrepareForCloseResolution,
 } from '../../src/main/workspaceLifecycle';
 
+type UnavailableEvent = 'destroyed' | 'render-process-gone' | 'did-navigate';
+
 class FakeRenderer implements WorkspaceCloseRenderer {
   destroyed = false;
   readonly send = vi.fn<(channel: string, ...args: unknown[]) => void>();
   private readonly unavailableListeners = new Map<
-    'destroyed' | 'render-process-gone',
+    UnavailableEvent,
     Set<(...args: unknown[]) => void>
   >();
 
@@ -22,7 +25,7 @@ class FakeRenderer implements WorkspaceCloseRenderer {
   }
 
   once(
-    event: 'destroyed' | 'render-process-gone',
+    event: UnavailableEvent,
     listener: (...args: unknown[]) => void,
   ): this {
     const listeners = this.unavailableListeners.get(event) ?? new Set();
@@ -32,7 +35,7 @@ class FakeRenderer implements WorkspaceCloseRenderer {
   }
 
   removeListener(
-    event: 'destroyed' | 'render-process-gone',
+    event: UnavailableEvent,
     listener: (...args: unknown[]) => void,
   ): this {
     this.unavailableListeners.get(event)?.delete(listener);
@@ -44,7 +47,7 @@ class FakeRenderer implements WorkspaceCloseRenderer {
     this.emitUnavailable('destroyed');
   }
 
-  emitUnavailable(event: 'destroyed' | 'render-process-gone'): void {
+  emitUnavailable(event: UnavailableEvent): void {
     const listeners = [...(this.unavailableListeners.get(event) ?? [])];
     this.unavailableListeners.delete(event);
     listeners.forEach((listener) => listener());
@@ -160,6 +163,61 @@ describe('WorkspaceClosePreparationCoordinator', () => {
       vi.useRealTimers();
     }
   });
+
+  it.each(['window-close', 'application-quit', 'update-install'] as const)(
+    'waits for the user after the renderer shows a %s prompt',
+    async (reason) => {
+      vi.useFakeTimers();
+      try {
+        const coordinator = new WorkspaceClosePreparationCoordinator(1_000);
+        const renderer = new FakeRenderer();
+        let settled: string | undefined;
+        const pending = coordinator.request(renderer, reason).then((decision) => { settled = decision; return decision; });
+        const request = renderer.send.mock.calls[0][1] as WorkspacePrepareForCloseRequest;
+
+        expect(coordinator.awaitUser(new FakeRenderer(), { requestId: request.requestId })).toBe(false);
+        expect(coordinator.awaitUser(renderer, { requestId: 'old-request' })).toBe(false);
+        expect(coordinator.awaitUser(renderer, null)).toBe(false);
+        expect(coordinator.awaitUser(renderer, { requestId: request.requestId })).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(settled).toBeUndefined();
+
+        expect(coordinator.resolve(renderer, { requestId: request.requestId, resolution: 'saved' })).toBe(true);
+        await expect(pending).resolves.toBe('saved');
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('still cancels an acknowledged prompt when the renderer is lost', async () => {
+    for (const event of ['destroyed', 'render-process-gone', 'did-navigate'] as const) {
+      const coordinator = new WorkspaceClosePreparationCoordinator();
+      const renderer = new FakeRenderer();
+      const pending = coordinator.request(renderer, 'window-close');
+      const request = renderer.send.mock.calls[0][1] as WorkspacePrepareForCloseRequest;
+      expect(coordinator.awaitUser(renderer, { requestId: request.requestId })).toBe(true);
+      renderer.emitUnavailable(event);
+      await expect(pending).resolves.toBe('cancel');
+      expect(coordinator.resolve(renderer, { requestId: request.requestId, resolution: 'saved' })).toBe(false);
+    }
+  });
+
+  it('refuses a late acknowledgement after the unresponsive-renderer timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const coordinator = new WorkspaceClosePreparationCoordinator(1_000);
+      const renderer = new FakeRenderer();
+      const pending = coordinator.request(renderer, 'update-install');
+      const request = renderer.send.mock.calls[0][1] as WorkspacePrepareForCloseRequest;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(pending).resolves.toBe('cancel');
+      expect(coordinator.awaitUser(renderer, { requestId: request.requestId })).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('preload close-preparation bridge', () => {
@@ -186,6 +244,7 @@ describe('preload close-preparation bridge', () => {
     const api = exposeInMainWorld.mock.calls[0]?.[1] as {
       onPrepareForClose(callback: (request: WorkspacePrepareForCloseRequest) => void | Promise<void>): () => void;
       resolvePrepareForClose(resolution: WorkspacePrepareForCloseResolution): Promise<boolean>;
+      awaitUserForClose(acknowledgement: { requestId: string }): Promise<boolean>;
       terminalAcknowledgeOutput(event: {
         source: 'local'; id: string; generation: number; sequence: number;
       }): void;
@@ -208,6 +267,8 @@ describe('preload close-preparation bridge', () => {
       requestId: request.requestId,
       resolution: 'discarded',
     };
+    await expect(api.awaitUserForClose({ requestId: request.requestId })).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith(WORKSPACE_AWAIT_USER_FOR_CLOSE_CHANNEL, { requestId: request.requestId });
     await expect(api.resolvePrepareForClose(resolution)).resolves.toBe(true);
     expect(invoke).toHaveBeenCalledWith(WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL, resolution);
 

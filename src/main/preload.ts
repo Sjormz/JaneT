@@ -4,8 +4,10 @@ import type {
 } from '../shared/files';
 import type { StartupShellDialect } from '../shared/startupCommands';
 import {
+  WORKSPACE_AWAIT_USER_FOR_CLOSE_CHANNEL,
   WORKSPACE_PREPARE_FOR_CLOSE_CHANNEL,
   WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL,
+  type WorkspacePrepareForCloseAcknowledgement,
   type WorkspacePrepareForCloseRequest,
   type WorkspacePrepareForCloseResolution,
 } from './workspaceLifecycle';
@@ -258,6 +260,9 @@ const api = {
   },
   resolvePrepareForClose: (resolution: WorkspacePrepareForCloseResolution): Promise<boolean> =>
     ipcRenderer.invoke(WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL, resolution),
+  /** Tell the main process a close prompt is visible; false means the request already ended. */
+  awaitUserForClose: (acknowledgement: WorkspacePrepareForCloseAcknowledgement): Promise<boolean> =>
+    ipcRenderer.invoke(WORKSPACE_AWAIT_USER_FOR_CLOSE_CHANNEL, acknowledgement),
 
   // Window controls (custom titlebar)
   windowMinimize: () => ipcRenderer.invoke('window:minimize'),
