@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { ArrowDownIcon, ArrowUpIcon, CircleIcon, FolderIcon, SourceControlIcon } from "../icons";
+import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CircleIcon, FolderIcon, SourceControlIcon } from "../icons";
 import { formatGitStatusTitle, GitStatusSummary } from "../gitStatus";
 import Tooltip from './Tooltip';
 
@@ -42,8 +42,8 @@ export default function StatusBar({
         )}
         {gitStatus && (
           <Tooltip label={formatGitStatusTitle(gitStatus)} placement="top">
-            <span className="status-item status-git" aria-label={formatGitStatusTitle(gitStatus)}>
-              <SourceControlIcon size="xs" />
+            <span className={`status-item status-git${gitStatus.staleReason ? ' stale' : ''}`} aria-label={formatGitStatusTitle(gitStatus)}>
+              {gitStatus.staleReason ? <AlertIcon size="xs" className="status-git-stale" /> : <SourceControlIcon size="xs" />}
               <span className="status-git-branch">{gitStatus.branch}</span>
               {gitStatus.changed > 0 && <span className="status-git-dirty"><CircleIcon size={6} /> {gitStatus.changed}</span>}
               {gitStatus.ahead > 0 && <span className="status-git-ahead"><ArrowUpIcon size="xs" />{gitStatus.ahead}</span>}

@@ -1,10 +1,54 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { hostname, tmpdir } from 'os';
+import { delimiter, join } from 'path';
 import pty from 'node-pty';
 import { buildShellInit, STARTUP_READY_MARKER } from '../../src/main/shell-init';
+import { fileUrlToPath } from '../../src/renderer/osc7';
+
+/** Directory names that must survive the OSC 7 encode/decode round trip. */
+const commonNames = [
+  'My Dir',
+  'literal%20name',
+  '100%done',
+  'issue#12',
+  'Ã¥lice æ—¥æœ¬èªž ðŸ˜€',
+  "it's",
+  'semi;colon & amp',
+  'brackets [x] {y} (z)',
+  'tilde~dash-under_score.dot',
+];
+/** Names that are invalid on Windows filesystems. */
+const posixOnlyNames = ['why?', 'back\\slash', 'quote"d', 'star*'];
+
+function makeCwdFixture(names: string[]): { root: string; dirs: string[] } {
+  // The native realpath expands Windows 8.3 short names (RUNNER~1), matching what shells report.
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'janet-osc7-')));
+  const dirs = names.map((name) => {
+    const dir = join(root, name);
+    mkdirSync(dir);
+    return dir;
+  });
+  return { root, dirs };
+}
+
+function osc7Payloads(output: string): string[] {
+  return [...output.matchAll(/\x1b\]7;([^\x07\x1b]*)(?:\x07|\x1b\\)/g)].map(match => match[1]);
+}
+
+function findOnPath(names: string[]): string | undefined {
+  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+    for (const name of names) {
+      const candidate = dir && join(dir, name);
+      if (candidate && existsSync(candidate)) return candidate;
+    }
+  }
+  return undefined;
+}
+
+const pwsh = findOnPath(process.platform === 'win32' ? ['pwsh.exe'] : ['pwsh']);
+const fish = process.platform === 'win32' ? undefined : findOnPath(['fish']);
 
 const OSC_A = '\x1b]133;A\x1b\\';
 const OSC_B = '\x1b]133;B\x1b\\';
@@ -115,13 +159,52 @@ describe('buildShellInit', () => {
       expect(init).toMatch(/\[char\]92/);
     });
 
-    it('references the file:// scheme and the COMPUTERNAME env var', () => {
+    it('reports only FileSystem locations with a portable hostname', () => {
       const init = buildShellInit('powershell.exe');
       expect(init).toContain("']7;file://'");
-      expect(init).toContain('$env:COMPUTERNAME');
+      expect(init).toContain("$__jt_loc.Provider.Name -eq 'FileSystem'");
+      expect(init).toContain('[System.Net.Dns]::GetHostName()');
+      expect(init).not.toContain('$env:COMPUTERNAME');
+      expect(init).toContain('[System.Text.Encoding]::UTF8.GetBytes');
     });
 
-    it('converts backslashes to forward slashes for the URL form', () => {
+    for (const [label, executable] of [
+      ['Windows PowerShell 5.1', powershell],
+      ['PowerShell 7', pwsh],
+    ] as const) {
+      it.skipIf(!executable || !existsSync(executable))(`round-trips cwd reports in ${label}`, () => {
+        const init = buildShellInit('powershell.exe');
+        // PowerShell treats `\` as a path separator on every platform, so it cannot enter
+        // a Unix directory whose name contains one; other POSIX-only names still apply.
+        const names = [...commonNames, ...(process.platform === 'win32' ? [] : posixOnlyNames.filter((name) => !name.includes('\\')))];
+        const { root, dirs } = makeCwdFixture(names);
+        try {
+          for (const dir of dirs) {
+            const output = execFileSync(executable!, [
+              '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+              `${init}\nSet-Location -LiteralPath $env:JANET_TEST_DIR\n$null = prompt`,
+            ], { encoding: 'utf8', env: { ...process.env, JANET_TEST_DIR: dir } });
+            const payload = osc7Payloads(output).at(-1);
+            expect(payload, JSON.stringify(output)).toBeDefined();
+            expect(payload).toMatch(/^file:\/\/[A-Za-z0-9._-]+\/[\x21-\x7e]*$/);
+            expect(fileUrlToPath(payload!, hostname())).toBe(dir.replace(/\\/g, '/'));
+          }
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      }, 60_000);
+
+      it.skipIf(!executable || !existsSync(executable))(`emits no cwd report for non-FileSystem locations in ${label}`, () => {
+        const output = execFileSync(executable!, [
+          '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+          `${buildShellInit('powershell.exe')}\nSet-Location Env:\n$null = prompt\nSet-Location Function:\n$null = prompt`,
+        ], { encoding: 'utf8' });
+        expect(output).toContain(STARTUP_READY_MARKER);
+        expect(osc7Payloads(output)).toEqual([]);
+      }, 30_000);
+    }
+
+    it('converts backslashes to forward slashes before encoding the URL path', () => {
       const init = buildShellInit('powershell.exe');
       // The PS regex `\\` (in PS source) is written as `\\\\` in the JS
       // source. We assert the substring is present.
@@ -277,6 +360,43 @@ describe('buildShellInit', () => {
       expect(init).toContain('file://');
       // The actual OSC 7 escape sequence.
       expect(init).toMatch(/\\033\]7/);
+      expect(init).toContain('__jt_urlencode_path "$PWD"');
+      expect(init).not.toMatch(/file:\/\/%s%s[^\n]*"\$PWD"/);
+    });
+
+    // Git Bash on Windows reports MSYS paths (/c/...), which JaneT does not map.
+    it.skipIf(process.platform === 'win32' || !existsSync(bash))('round-trips cwd reports in a real Bash', () => {
+      const init = buildShellInit('bash');
+      const { root, dirs } = makeCwdFixture([...commonNames, ...posixOnlyNames]);
+      try {
+        for (const dir of dirs) {
+          const output = execFileSync(bash, ['--noprofile', '--norc', '-c', `${init}\ncd -- "$JANET_TEST_DIR" && __jt_osc7`], {
+            encoding: 'utf8', env: { ...process.env, JANET_TEST_DIR: dir, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' },
+          });
+          const [payload] = osc7Payloads(output);
+          expect(payload, JSON.stringify(output)).toMatch(/^file:\/\/[A-Za-z0-9._-]+\/[\x21-\x7e]*$/);
+          expect(fileUrlToPath(payload, hostname())).toBe(dir);
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it.skipIf(process.platform === 'win32' || !existsSync(bash))('encodes control characters so they cannot break the OSC sequence', () => {
+      const { root, dirs: [dir] } = makeCwdFixture(['tab\there\nnew\x1bline']);
+      try {
+        const output = execFileSync(bash, ['--noprofile', '--norc', '-c', `${buildShellInit('bash')}\ncd -- "$JANET_TEST_DIR" && __jt_osc7 && printf '<LOCALE:%s>' "$LC_ALL"`], {
+          encoding: 'utf8', env: { ...process.env, JANET_TEST_DIR: dir, LC_ALL: 'en_US.UTF-8' },
+        });
+        const [payload] = osc7Payloads(output);
+        expect(payload).toContain('tab%09here%0Anew%1Bline');
+        // Decoded controls are rejected so the previous cwd stays in place.
+        expect(fileUrlToPath(payload, hostname())).toBeNull();
+        // The byte-wise encoder must not leak its C locale into the shell.
+        expect(output).toContain('<LOCALE:en_US.UTF-8>');
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
     });
 
     it.skipIf(!existsSync(bash))('keeps every array prompt hook before readiness', () => {
@@ -464,6 +584,24 @@ describe('buildShellInit', () => {
       }
     }, 25_000);
 
+    it.skipIf(!existsSync(zsh))('round-trips cwd reports in a real Zsh', () => {
+      const init = buildShellInit('zsh');
+      const { root, dirs } = makeCwdFixture([...commonNames, ...posixOnlyNames, 'tab\there']);
+      try {
+        for (const dir of dirs) {
+          const output = execFileSync(zsh, ['-f', '-c', `${init}\ncd -- "$JANET_TEST_DIR" && __jt_osc7 && print -rn -- "<LOCALE:$LC_ALL>"`], {
+            encoding: 'utf8', env: { ...process.env, JANET_TEST_DIR: dir, LC_ALL: 'en_US.UTF-8' },
+          });
+          const [payload] = osc7Payloads(output);
+          expect(payload, JSON.stringify(output)).toMatch(/^file:\/\/[A-Za-z0-9._-]+\/[\x21-\x7e]*$/);
+          expect(fileUrlToPath(payload, hostname())).toBe(dir.includes('\t') ? null : dir);
+          expect(output).toContain('<LOCALE:en_US.UTF-8>');
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }, 30_000);
+
     it('does not replace an existing Hermes alias or function', () => {
       const init = buildShellInit('zsh');
       expect(init).toContain('! $+aliases[hermes]');
@@ -501,6 +639,28 @@ describe('buildShellInit', () => {
       expect(init).toContain('__jt_orig_fish_right_prompt $argv');
       expect(init).toContain("printf '\\033]777;janet-ready\\033\\\\' >&2");
     });
+
+    it('percent-encodes the cwd with a validated hostname', () => {
+      const init = buildShellInit('fish');
+      expect(init).toContain('(string escape --style=url -- $PWD)');
+      expect(init).toContain('set -l __jt_host $hostname');
+    });
+
+    it.skipIf(!fish)('round-trips cwd reports in a real Fish', () => {
+      const { root, dirs } = makeCwdFixture([...commonNames, ...posixOnlyNames]);
+      try {
+        for (const dir of dirs) {
+          const output = execFileSync(fish!, ['--no-config', '-c', `${buildShellInit('fish')}\ncd $JANET_TEST_DIR; and fish_prompt`], {
+            encoding: 'utf8', env: { ...process.env, JANET_TEST_DIR: dir },
+          });
+          const [payload] = osc7Payloads(output);
+          expect(payload, JSON.stringify(output)).toMatch(/^file:\/\/[A-Za-z0-9._-]+\/[\x21-\x7e]*$/);
+          expect(fileUrlToPath(payload, hostname())).toBe(dir);
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }, 30_000);
 
     it('inherits terminal graphics without a Hermes-only flag', () => {
       const init = buildShellInit('fish');

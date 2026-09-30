@@ -60,17 +60,17 @@ function createDataTransfer() {
 
 beforeEach(() => {
   gitDetails.mockReset();
-  gitStage.mockReset().mockResolvedValue(true);
-  gitUnstage.mockReset().mockResolvedValue(true);
-  gitDiscard.mockReset().mockResolvedValue(true);
-  gitDeleteUntracked.mockReset().mockResolvedValue(true);
-  gitCommit.mockReset().mockResolvedValue(true);
-  gitFetch.mockReset().mockResolvedValue(true);
-  gitPull.mockReset().mockResolvedValue(true);
-  gitPush.mockReset().mockResolvedValue(true);
-  gitDeleteBranch.mockReset().mockResolvedValue(true);
-  gitRemoveWorktree.mockReset().mockResolvedValue(true);
-  gitPruneWorktrees.mockReset().mockResolvedValue(true);
+  gitStage.mockReset().mockResolvedValue({ ok: true });
+  gitUnstage.mockReset().mockResolvedValue({ ok: true });
+  gitDiscard.mockReset().mockResolvedValue({ ok: true });
+  gitDeleteUntracked.mockReset().mockResolvedValue({ ok: true });
+  gitCommit.mockReset().mockResolvedValue({ ok: true });
+  gitFetch.mockReset().mockResolvedValue({ ok: true });
+  gitPull.mockReset().mockResolvedValue({ ok: true });
+  gitPush.mockReset().mockResolvedValue({ ok: true });
+  gitDeleteBranch.mockReset().mockResolvedValue({ ok: true });
+  gitRemoveWorktree.mockReset().mockResolvedValue({ ok: true });
+  gitPruneWorktrees.mockReset().mockResolvedValue({ ok: true });
   getSettings.mockClear();
   Object.defineProperty(window, 'janet', {
     configurable: true,
@@ -544,8 +544,9 @@ describe('GitTree live refresh', () => {
 
   it('keeps a failed commit message and blocks overlapping Git mutations', async () => {
     gitDetails.mockResolvedValue(details('main'));
-    gitCommit.mockResolvedValue(false);
-    let finishStage!: (value: boolean) => void;
+    const reason = 'Author identity unknown *** Please tell me who you are.';
+    gitCommit.mockResolvedValue({ ok: false, error: reason });
+    let finishStage!: (value: { ok: boolean }) => void;
     gitStage.mockReturnValue(new Promise((resolve) => { finishStage = resolve; }));
     const status: GitStatusResult = {
       ...cleanStatus,
@@ -560,9 +561,10 @@ describe('GitTree live refresh', () => {
     const message = screen.getByLabelText('Commit message');
     fireEvent.change(message, { target: { value: 'Keep this message' } });
     fireEvent.click(screen.getByRole('button', { name: 'Commit staged changes' }));
-    await screen.findByText('Git action failed');
+    const failure = `Git action failed: ${reason}`;
+    await screen.findByText(failure);
     expect(message).toHaveValue('Keep this message');
-    expect(screen.getByText('Git action failed')).toHaveAttribute('role', 'status');
+    expect(screen.getByText(failure)).toHaveAttribute('role', 'status');
 
     const stage = screen.getByRole('button', { name: 'Stage working.ts' });
     fireEvent.click(stage);
@@ -570,12 +572,12 @@ describe('GitTree live refresh', () => {
     expect(screen.getByRole('button', { name: 'Pull' })).toBeDisabled();
     fireEvent.click(stage);
     expect(gitStage).toHaveBeenCalledOnce();
-    await act(async () => finishStage(true));
+    await act(async () => finishStage({ ok: true }));
   });
 
   it('admits only one Git mutation in the same React batch', async () => {
-    let finishStage!: (value: boolean) => void;
-    let finishPull!: (value: boolean) => void;
+    let finishStage!: (value: { ok: boolean }) => void;
+    let finishPull!: (value: { ok: boolean }) => void;
     gitStage.mockReturnValue(new Promise((resolve) => { finishStage = resolve; }));
     gitPull.mockReturnValue(new Promise((resolve) => { finishPull = resolve; }));
     const status: GitStatusResult = {
@@ -593,15 +595,15 @@ describe('GitTree live refresh', () => {
     const stageCalls = gitStage.mock.calls.length;
     const pullCalls = gitPull.mock.calls.length;
     await act(async () => {
-      finishStage(true);
-      finishPull?.(true);
+      finishStage({ ok: true });
+      finishPull?.({ ok: true });
     });
     expect(stageCalls).toBe(1);
     expect(pullCalls).toBe(0);
   });
 
   it('retains the Git mutation lock across a repository round trip', async () => {
-    let finishStage!: (value: boolean) => void;
+    let finishStage!: (value: { ok: boolean }) => void;
     gitStage.mockReturnValue(new Promise((resolve) => { finishStage = resolve; }));
     const status: GitStatusResult = {
       ...cleanStatus,
@@ -622,12 +624,12 @@ describe('GitTree live refresh', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
 
     expect(gitStage).toHaveBeenCalledOnce();
-    await act(async () => finishStage(true));
+    await act(async () => finishStage({ ok: true }));
   });
 
   it('ignores a Git mutation completion after the repository changes', async () => {
     const invalidate = vi.spyOn(refreshCoordinator, 'invalidate');
-    let finishStage!: (value: boolean) => void;
+    let finishStage!: (value: { ok: boolean }) => void;
     gitStage.mockReturnValue(new Promise((resolve) => { finishStage = resolve; }));
     const status: GitStatusResult = {
       ...cleanStatus,
@@ -643,7 +645,7 @@ describe('GitTree live refresh', () => {
     act(() => {
       view.rerender(<GitTree cwdReady repoPath="/two" status={cleanStatus} searching={false} />);
     });
-    await act(async () => finishStage(true));
+    await act(async () => finishStage({ ok: true }));
 
     expect(screen.queryByText('Staged working.ts')).not.toBeInTheDocument();
     expect(invalidate).not.toHaveBeenCalledWith('mutation');
@@ -652,7 +654,7 @@ describe('GitTree live refresh', () => {
 
   it('ignores a Git mutation completion after unmount', async () => {
     const invalidate = vi.spyOn(refreshCoordinator, 'invalidate');
-    let finishStage!: (value: boolean) => void;
+    let finishStage!: (value: { ok: boolean }) => void;
     gitStage.mockReturnValue(new Promise((resolve) => { finishStage = resolve; }));
     const status: GitStatusResult = {
       ...cleanStatus,
@@ -666,17 +668,17 @@ describe('GitTree live refresh', () => {
     invalidate.mockClear();
     view.unmount();
 
-    await act(async () => finishStage(true));
+    await act(async () => finishStage({ ok: true }));
 
     expect(invalidate).not.toHaveBeenCalledWith('mutation');
     invalidate.mockRestore();
   });
 
   it('retains a parent-owned Git mutation lock across unmount and remount', async () => {
-    let finishStage!: (value: boolean) => void;
+    let finishStage!: (value: { ok: boolean }) => void;
     gitStage
       .mockReturnValueOnce(new Promise((resolve) => { finishStage = resolve; }))
-      .mockResolvedValue(true);
+      .mockResolvedValue({ ok: true });
     const mutationLock = { current: null as { repoPath: string } | null };
     const status: GitStatusResult = {
       ...cleanStatus,
@@ -709,7 +711,7 @@ describe('GitTree live refresh', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
 
     expect(gitStage).toHaveBeenCalledOnce();
-    await act(async () => finishStage(true));
+    await act(async () => finishStage({ ok: true }));
     fireEvent.click(screen.getByRole('button', { name: 'Stage working.ts' }));
     await waitFor(() => expect(gitStage).toHaveBeenCalledTimes(2));
   });
@@ -1101,5 +1103,64 @@ describe('GitTree destructive actions', () => {
     openPruneDialog();
     fireEvent.click(screen.getByRole('button', { name: 'Prune' }));
     await waitFor(() => expect(gitPruneWorktrees).toHaveBeenCalledWith({ repoPath: '/repo' }));
+  });
+});
+
+describe('GitTree status failures', () => {
+  const reason = "fatal: detected dubious ownership in repository at '/repo'";
+
+  it('shows why the first status read failed and offers a retry instead of an empty panel', async () => {
+    gitDetails.mockResolvedValue(details('main'));
+    const invalidate = vi.spyOn(refreshCoordinator, 'invalidate');
+    render(<GitTree cwdReady repoPath="/repo" status={null} searching={false} statusError={reason} />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t read Git status');
+    expect(screen.getByRole('alert')).toHaveTextContent(reason);
+    expect(screen.queryByText('Working tree clean')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(invalidate).toHaveBeenCalledWith('manual');
+    invalidate.mockRestore();
+  });
+
+  it('marks a kept snapshot as stale and never calls it clean', async () => {
+    gitDetails.mockResolvedValue(details('main'));
+    render(<GitTree cwdReady repoPath="/repo" status={cleanStatus} searching={false} statusError={reason} />);
+
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Showing the last known status');
+    expect(alert).toHaveTextContent(reason);
+    expect(screen.queryByText('Working tree clean')).not.toBeInTheDocument();
+    expect(screen.getByText('No changes in the last known status')).toBeInTheDocument();
+  });
+
+  it('withholds irreversible file actions while the snapshot is stale', async () => {
+    gitDetails.mockResolvedValue(details('main'));
+    const status: GitStatusResult = {
+      ...cleanStatus,
+      files: [
+        { path: 'working.ts', working_dir: 'M', index: ' ', staged: false, unstaged: true },
+        { path: 'notes.txt', working_dir: '?', index: '?', staged: false, unstaged: true },
+      ],
+      modified: ['working.ts'],
+      created: ['notes.txt'],
+    };
+    const view = render(<GitTree cwdReady repoPath="/repo" status={status} searching={false} statusError={reason} />);
+
+    expect(screen.queryByRole('button', { name: 'Discard all unstaged changes' })).not.toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open working-tree diff for working.ts' }));
+    expect(screen.queryByRole('menuitem', { name: 'Revert changes' })).not.toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open working-tree diff for notes.txt' }));
+    expect(screen.queryByRole('menuitem', { name: 'Delete untracked item' })).not.toBeInTheDocument();
+
+    view.rerender(<GitTree cwdReady repoPath="/repo" status={status} searching={false} statusError={null} />);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Discard all unstaged changes' })).toBeInTheDocument();
+  });
+
+  it('says when branches and worktrees could not be loaded', async () => {
+    gitDetails.mockResolvedValue(null);
+    render(<GitTree cwdReady repoPath="/repo" status={cleanStatus} searching={false} />);
+
+    expect(await screen.findByText('Couldn’t load branches and worktrees.')).toBeInTheDocument();
   });
 });

@@ -18,6 +18,10 @@ function status(current: string, files: string[] = []) {
   };
 }
 
+function ok(value: ReturnType<typeof status>) {
+  return { ok: true as const, value };
+}
+
 const gitFindRepo = vi.fn();
 const gitStatus = vi.fn();
 
@@ -38,9 +42,9 @@ describe('useGitRepository', () => {
   it('shares a refreshable repository status snapshot without re-discovering the repo', async () => {
     gitFindRepo.mockResolvedValue('/repo');
     gitStatus
-      .mockResolvedValueOnce(status('main'))
-      .mockResolvedValueOnce(status('feature/live-refresh', ['src/app.ts']))
-      .mockResolvedValueOnce(status('feature/live-refresh', ['src/app.ts']));
+      .mockResolvedValueOnce(ok(status('main')))
+      .mockResolvedValueOnce(ok(status('feature/live-refresh', ['src/app.ts'])))
+      .mockResolvedValueOnce(ok(status('feature/live-refresh', ['src/app.ts'])));
 
     const { result, unmount } = renderHook(() => useGitRepository('/repo/src', true));
 
@@ -61,13 +65,13 @@ describe('useGitRepository', () => {
   });
 
   it('ignores a stale status response after the cwd moves to another repository', async () => {
-    let resolveOldStatus!: (value: ReturnType<typeof status>) => void;
-    const oldStatus = new Promise<ReturnType<typeof status>>((resolve) => { resolveOldStatus = resolve; });
+    let resolveOldStatus!: (value: ReturnType<typeof ok>) => void;
+    const oldStatus = new Promise<ReturnType<typeof ok>>((resolve) => { resolveOldStatus = resolve; });
     gitFindRepo.mockImplementation(async ({ startPath }: { startPath: string }) => (
       startPath.startsWith('/one') ? '/one' : '/two'
     ));
     gitStatus.mockImplementation(({ repoPath }: { repoPath: string }) => (
-      repoPath === '/one' ? oldStatus : Promise.resolve(status('two-main'))
+      repoPath === '/one' ? oldStatus : Promise.resolve(ok(status('two-main')))
     ));
 
     const { result, rerender, unmount } = renderHook(
@@ -78,11 +82,52 @@ describe('useGitRepository', () => {
 
     rerender({ cwd: '/two/src' });
     await waitFor(() => expect(result.current.status?.current).toBe('two-main'));
-    resolveOldStatus(status('stale-one'));
+    resolveOldStatus(ok(status('stale-one')));
     await act(async () => { await oldStatus; });
 
     expect(result.current.repoPath).toBe('/two');
     expect(result.current.status?.current).toBe('two-main');
+    unmount();
+  });
+
+  it('reports a failed first read as an error without inventing a status', async () => {
+    gitFindRepo.mockResolvedValue('/repo');
+    gitStatus.mockResolvedValue({ ok: false, error: 'fatal: not a git repository' });
+
+    const { result, unmount } = renderHook(() => useGitRepository('/repo', true));
+
+    await waitFor(() => expect(result.current.error).toBe('fatal: not a git repository'));
+    expect(result.current.status).toBeNull();
+    expect(result.current.stale).toBe(false);
+    unmount();
+  });
+
+  it('marks the last good snapshot stale after a failure and clears it on recovery', async () => {
+    gitFindRepo.mockResolvedValue('/repo');
+    gitStatus
+      .mockResolvedValueOnce(ok(status('main', ['a.ts'])))
+      .mockResolvedValueOnce({ ok: false, error: 'Git did not respond for 20 seconds, so JaneT stopped waiting.' })
+      .mockRejectedValueOnce(new Error('IPC channel closed'))
+      .mockResolvedValueOnce(ok(status('main')));
+
+    const { result, unmount } = renderHook(() => useGitRepository('/repo', true));
+    await waitFor(() => expect(result.current.status?.files).toHaveLength(1));
+    expect(result.current).toMatchObject({ error: null, stale: false });
+    const snapshot = result.current.status;
+
+    act(() => refreshCoordinator.invalidate('manual', 'git-status:/repo'));
+    await waitFor(() => expect(result.current.stale).toBe(true));
+    expect(result.current.error).toMatch(/did not respond/);
+    expect(result.current.status).toBe(snapshot);
+
+    act(() => refreshCoordinator.invalidate('manual', 'git-status:/repo'));
+    await waitFor(() => expect(result.current.error).toBe('IPC channel closed'));
+    expect(result.current.stale).toBe(true);
+
+    act(() => refreshCoordinator.invalidate('manual', 'git-status:/repo'));
+    await waitFor(() => expect(result.current.stale).toBe(false));
+    expect(result.current.error).toBeNull();
+    expect(result.current.status?.files).toHaveLength(0);
     unmount();
   });
 });

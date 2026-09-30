@@ -90,6 +90,36 @@ describe('TerminalManager', () => {
     expect(pty.resize).not.toHaveBeenCalled();
   });
 
+  it('retires a resize-evicted terminal like a native exit: timer cleared, exit reported once', () => {
+    vi.useFakeTimers();
+    try {
+      const pty = makePty();
+      pty.resize.mockImplementation(() => {
+        throw new Error('ioctl(2) failed, EBADF');
+      });
+      spawnMock.mockReturnValue(pty);
+      const onExit = vi.fn();
+      const manager = new TerminalManager();
+      // `sh` has no JaneT integration, so startup commands wait on the fallback timer.
+      manager.create('term-evicted', undefined, 'sh', undefined, ['echo later'], onExit);
+      expect(vi.getTimerCount()).toBe(1);
+
+      manager.resize('term-evicted', 100, 30);
+
+      expect(onExit).toHaveBeenCalledOnce();
+      expect(onExit).toHaveBeenCalledWith({ exitCode: -1, signal: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+      vi.runAllTimers();
+      expect(pty.write).not.toHaveBeenCalled();
+
+      // A late native exit for the same PTY must not report the exit twice.
+      pty.emitExit({ exitCode: 0, signal: 0 });
+      expect(onExit).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects malformed ids and caps the number of live terminals', () => {
     spawnMock.mockImplementation(() => makePty());
     const manager = new TerminalManager();

@@ -252,7 +252,11 @@ vi.mock('../../src/renderer/components/TerminalPane', async () => {
     );
   }
 
-  return { default: MockTerminalPane, disposeCachedTerminal: rendererMocks.disposeCachedTerminal };
+  return {
+    default: MockTerminalPane,
+    disposeCachedTerminal: rendererMocks.disposeCachedTerminal,
+    updateTerminalStartingDirectory: () => {},
+  };
 });
 
 // Most scenarios exercise existing Library sessions, not first-install onboarding.
@@ -351,6 +355,7 @@ beforeEach(() => {
       };
     }),
     resolvePrepareForClose: vi.fn().mockResolvedValue(true),
+    awaitUserForClose: vi.fn().mockResolvedValue(true),
     checkForUpdates: vi.fn().mockResolvedValue(undefined),
   };
 });
@@ -1342,7 +1347,7 @@ describe('split panes in the app', () => {
     expect(survivor!.style.flex).toBe('1 1 0%');
   });
 
-  it('applies the close-pane shortcut to the focused pane', async () => {
+  it('applies the close shortcut to the focused pane', async () => {
     render(<App />);
 
     await screen.findByRole('button', { name: 'Add terminals' });
@@ -1398,7 +1403,7 @@ describe('split panes in the app', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
-  it('renames the focused pane with F2 and returns focus to its terminal', async () => {
+  it('renames the focused pane with Ctrl+Shift+F2 and returns focus to its terminal', async () => {
     render(<App />);
 
     await splitFromPalette();
@@ -1409,7 +1414,7 @@ describe('split panes in the app', () => {
     vi.mocked(window.janet.terminalCreate).mockClear();
     vi.mocked(window.janet.terminalDestroy).mockClear();
 
-    fireEvent.keyDown(secondInput, { key: 'F2' });
+    fireEvent.keyDown(secondInput, { key: 'F2', code: 'F2', ctrlKey: true, shiftKey: true });
 
     const dialog = await screen.findByRole('dialog', { name: 'Rename terminal' });
     const nameInput = within(dialog).getByRole('textbox', { name: 'Terminal name' });
@@ -1437,7 +1442,7 @@ describe('split panes in the app', () => {
     expect(savedRoot.children[1]).toMatchObject({ title: 'Tests', terminalType: 'local' });
   });
 
-  it('renames the active tab with Ctrl+F2 while its rail is collapsed', async () => {
+  it('renames the active tab with Ctrl+Shift+I while its rail is collapsed', async () => {
     render(<App />);
 
     const terminal = await screen.findByTestId(/terminal-/);
@@ -1448,7 +1453,7 @@ describe('split panes in the app', () => {
     // The way back to a collapsed rail lives in the titlebar.
     await waitFor(() => expect(rendererMocks.titlebarProps.tabsHidden).toBe(true));
 
-    fireEvent.keyDown(terminalInput, { key: 'F2', ctrlKey: true });
+    fireEvent.keyDown(terminalInput, { key: 'I', code: 'KeyI', ctrlKey: true, shiftKey: true });
 
     const dialog = await screen.findByRole('dialog', { name: 'Rename tab' });
     const nameInput = within(dialog).getByRole('textbox', { name: 'Tab name' });
@@ -1695,14 +1700,17 @@ describe('split panes in the app', () => {
     const terminal = await screen.findByTestId(/terminal-/);
     const terminalId = terminal.textContent!;
     fireEvent.focus(terminal);
-    fireEvent.keyDown(document, { key: 'w', ctrlKey: true });
+    // Plain Ctrl+W stays with the shell (delete the previous word).
+    fireEvent.keyDown(document, { key: 'w', code: 'KeyW', ctrlKey: true });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'W', code: 'KeyW', ctrlKey: true, shiftKey: true });
 
     const dialog = await screen.findByRole('alertdialog');
     expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(screen.getByTestId(`terminal-${terminalId}`)).toBeInTheDocument();
 
-    fireEvent.keyDown(document, { key: 'w', ctrlKey: true });
+    fireEvent.keyDown(document, { key: 'W', code: 'KeyW', ctrlKey: true, shiftKey: true });
     await confirmPendingAction(/^close tab$/i);
     await waitFor(() => {
       expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
@@ -1755,8 +1763,8 @@ describe('split panes in the app', () => {
     await screen.findByTestId(/terminal-/);
     await waitFor(() => {
       expect(rendererMocks.paletteActions).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: 'rename-pane', shortcut: 'F2' }),
-        expect.objectContaining({ id: 'rename-tab', shortcut: 'Ctrl+F2' }),
+        expect.objectContaining({ id: 'rename-pane', shortcut: 'Ctrl+Shift+F2' }),
+        expect.objectContaining({ id: 'rename-tab', shortcut: 'Ctrl+Shift+I' }),
       ]));
     });
 
@@ -2907,7 +2915,7 @@ describe('unsaved editor shutdown handshake', () => {
     const terminal = await screen.findByTestId(/terminal-/);
     const terminalInput = await within(terminal).findByRole('textbox');
     act(() => terminalInput.focus());
-    fireEvent.keyDown(terminalInput, { key: 'F2', ctrlKey: true });
+    fireEvent.keyDown(terminalInput, { key: 'I', code: 'KeyI', ctrlKey: true, shiftKey: true });
     const dialog = await screen.findByRole('dialog', { name: 'Rename tab' });
     const nameInput = within(dialog).getByRole('textbox', { name: 'Tab name' });
     fireEvent.change(nameInput, { target: { value: 'Latest workspace' } });
@@ -3046,5 +3054,171 @@ describe('unsaved editor shutdown handshake', () => {
         resolution: 'saved',
       });
     });
+  });
+
+  it('tells the main process it is waiting for the user before showing the prompt', async () => {
+    const acknowledged = deferred<boolean>();
+    vi.mocked(window.janet.awaitUserForClose).mockReturnValue(acknowledged.promise);
+    render(<App />);
+    const editor = await openSampleEditor();
+    fireEvent.change(editor, { target: { value: 'dirty while waiting\n' } });
+    await waitFor(() => expect(rendererMocks.prepareForCloseHandler).toBeTypeOf('function'));
+
+    let handled!: Promise<void>;
+    act(() => { handled = Promise.resolve(rendererMocks.prepareForCloseHandler!({ requestId: 'ack-close', reason: 'window-close' })); });
+    expect(window.janet.awaitUserForClose).toHaveBeenCalledWith({ requestId: 'ack-close' });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    await act(async () => { acknowledged.resolve(true); await handled; });
+    expect(await screen.findByRole('alertdialog')).toBeInTheDocument();
+    expect(window.janet.resolvePrepareForClose).not.toHaveBeenCalled();
+  });
+
+  it('does not show a prompt for a close request that already ended', async () => {
+    vi.mocked(window.janet.awaitUserForClose).mockResolvedValue(false);
+    render(<App />);
+    const editor = await openSampleEditor();
+    fireEvent.change(editor, { target: { value: 'dirty after timeout\n' } });
+
+    await requestWorkspaceClose('expired-close', 'update-install');
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({ requestId: 'expired-close', resolution: 'cancel' });
+  });
+
+  it.each([
+    ['Discard changes and close', 'discarded', 'application-quit'],
+    ['Save all and close', 'saved', 'update-install'],
+  ] as const)('never leaves the prompt stuck when %s is no longer accepted', async (button, resolution, reason) => {
+    vi.mocked(window.janet.resolvePrepareForClose).mockResolvedValue(false);
+    render(<App />);
+    const editor = await openSampleEditor();
+    fireEvent.change(editor, { target: { value: 'dirty when late\n' } });
+
+    await requestWorkspaceClose('late-close', reason);
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: button }));
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({ requestId: 'late-close', resolution });
+    expect(screen.getByRole('alert')).toHaveTextContent('that close request had already ended');
+    if (resolution === 'saved') {
+      expect(window.janet.fsWriteTextFile).toHaveBeenCalledWith(expect.objectContaining({ content: 'dirty when late\n' }));
+    }
+  });
+
+  it('cancels a close prompt that is dismissed without a decision', async () => {
+    render(<App />);
+    const editor = await openSampleEditor();
+    fireEvent.change(editor, { target: { value: 'dirty then replaced\n' } });
+    await requestWorkspaceClose('replaced-close', 'window-close');
+    await screen.findByRole('alertdialog');
+
+    // Another confirmation replaces the close prompt, then the user dismisses it.
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'close-tab')!.handler());
+    const replacement = await screen.findByRole('alertdialog');
+    expect(replacement).not.toHaveTextContent('before closing JaneT');
+    fireEvent.click(within(replacement).getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => expect(window.janet.resolvePrepareForClose).toHaveBeenCalledWith({
+      requestId: 'replaced-close', resolution: 'cancel',
+    }));
+    expect(window.janet.resolvePrepareForClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('workspace project ownership', () => {
+  const projectSession = (tabs: any[]) => savedSettings({ session: {
+    groups: [{ id: 'work', name: 'Work', directory: '/home/test/work' }],
+    tabs,
+    activeTabId: tabs[0].id,
+  } });
+  const leaf = (cwd: string) => ({ type: 'split', direction: 'vertical', sizes: [1], children: [{ type: 'leaf', cwd }] });
+
+  it('renames only the owning project folder, never a new terminal or worktree opened from it', async () => {
+    window.janet.renameWorkspaceDirectory = vi.fn().mockResolvedValue('/home/test/work/renamed');
+    window.janet.getSettings = vi.fn().mockResolvedValue(projectSession([
+      { id: 'project', title: 'App', type: 'local', groupId: 'work', isProject: true, cwd: '/home/test/work/app', root: leaf('/home/test/work/app') },
+      { id: 'terminal-2', title: 'Terminal 2', type: 'local', groupId: 'work', isProject: false, cwd: '/home/test/work/app', root: leaf('/home/test/work/app') },
+      { id: 'worktree', title: 'app-feature', type: 'local', groupId: 'work', cwd: '/home/test/work/app-feature', root: leaf('/home/test/work/app-feature') },
+    ]));
+    render(<App />);
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps?.tabs).toHaveLength(3));
+    const [project, secondary, worktree] = rendererMocks.verticalTabBarProps.tabs;
+
+    for (const [tab, title] of [[secondary, 'build watcher'], [worktree, 'feature shell']] as const) {
+      await act(async () => { await rendererMocks.verticalTabBarProps.onRenameTab(tab.id, title); });
+      expect(rendererMocks.verticalTabBarProps.tabs.find((item: any) => item.id === tab.id)).toMatchObject({ title, cwd: tab.cwd });
+    }
+    expect(window.janet.renameWorkspaceDirectory).not.toHaveBeenCalled();
+
+    await act(async () => { await rendererMocks.verticalTabBarProps.onRenameTab(project.id, 'renamed'); });
+    expect(window.janet.renameWorkspaceDirectory).toHaveBeenCalledWith({ source: '/home/test/work/app', name: 'renamed' });
+    // Every tab under the renamed folder follows it; the worktree sibling does not.
+    expect(rendererMocks.verticalTabBarProps.tabs.map((tab: any) => tab.cwd)).toEqual([
+      '/home/test/work/renamed', '/home/test/work/renamed', '/home/test/work/app-feature',
+    ]);
+  });
+
+  it('keeps legacy projects and saves explicit ownership for their secondary tabs', async () => {
+    window.janet.renameWorkspaceDirectory = vi.fn().mockResolvedValue('/home/test/work/renamed');
+    window.janet.getSettings = vi.fn().mockResolvedValue(projectSession([
+      { id: 'legacy', title: 'App', type: 'local', groupId: 'work', cwd: '/home/test/work/app', root: leaf('/home/test/work/app') },
+      { id: 'legacy-2', title: 'Terminal 2', type: 'local', groupId: 'work', cwd: '/home/test/work/app', root: leaf('/home/test/work/app') },
+    ]));
+    render(<App />);
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps?.tabs).toHaveLength(2));
+    const [, secondary] = rendererMocks.verticalTabBarProps.tabs;
+
+    await act(async () => { await rendererMocks.verticalTabBarProps.onRenameTab(secondary.id, 'build watcher'); });
+    expect(window.janet.renameWorkspaceDirectory).not.toHaveBeenCalled();
+    expect(window.janet.setSettings).toHaveBeenLastCalledWith({ session: expect.objectContaining({
+      tabs: [expect.objectContaining({ title: 'App', isProject: true }), expect.objectContaining({ title: 'build watcher', isProject: false })],
+    }) });
+  });
+
+  it('selects a surviving tab after deleting a workspace closes several tabs', async () => {
+    const libraryGroup = { id: 'library', name: 'Test library', kind: 'folder', directory: '/home/test' };
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({ session: {
+      groups: [{ id: 'work', name: 'Work', directory: '/home/test/work' }, libraryGroup],
+      tabs: [
+        { id: 'one', title: 'One', type: 'local', groupId: 'work', isProject: true, cwd: '/home/test/work/one', root: leaf('/home/test/work/one') },
+        { id: 'two', title: 'Two', type: 'local', groupId: 'work', isProject: true, cwd: '/home/test/work/two', root: leaf('/home/test/work/two') },
+        { id: 'kept', title: 'Kept', type: 'local', groupId: 'library', cwd: '/home/test', root: leaf('/home/test') },
+      ],
+      activeTabId: 'one',
+    } }));
+    window.janet.workspaceLifecycle = vi.fn().mockResolvedValue({ session: { groups: [libraryGroup], tabs: [], activeTabId: null } });
+    render(<App />);
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps?.tabs).toHaveLength(3));
+    const kept = rendererMocks.verticalTabBarProps.tabs[2];
+
+    act(() => rendererMocks.verticalTabBarProps.onWorkspaceAction('delete', 'work'));
+    await confirmPendingAction(/Delete to Recycle Bin/);
+
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toEqual([expect.objectContaining({ id: kept.id })]));
+    expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(kept.id);
+  });
+
+  it('restarts terminals it stopped when deleting a project fails', async () => {
+    window.janet.workspaceLifecycle = vi.fn().mockRejectedValue(new Error('Could not send the folder to the Recycle Bin.'));
+    window.janet.getSettings = vi.fn().mockResolvedValue(projectSession([
+      { id: 'project', title: 'App', type: 'local', groupId: 'work', isProject: true, cwd: '/home/test/work/app', root: leaf('/home/test/work/app') },
+    ]));
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    const stoppedId = terminal.getAttribute('data-terminal-id')!;
+    const [project] = rendererMocks.verticalTabBarProps.tabs;
+    vi.mocked(window.janet.terminalCreate).mockClear();
+
+    act(() => rendererMocks.verticalTabBarProps.onWorkspaceAction('delete', 'work', project.id));
+    await confirmPendingAction(/Delete to Recycle Bin/);
+
+    expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: stoppedId });
+    expect(await screen.findByText(/JaneT restarted the 1 terminal it stopped/)).toBeInTheDocument();
+    const restarted = await screen.findByTestId(/terminal-/);
+    const restartedId = restarted.getAttribute('data-terminal-id')!;
+    expect(restartedId).not.toBe(stoppedId);
+    expect(window.janet.terminalCreate).toHaveBeenCalledWith(expect.objectContaining({ id: restartedId, cwd: '/home/test/work/app' }));
+    expect(rendererMocks.verticalTabBarProps.tabs).toEqual([expect.objectContaining({ id: project.id, isProject: true })]);
   });
 });

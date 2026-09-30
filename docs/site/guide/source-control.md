@@ -5,7 +5,7 @@ description: Review repository status, stage changes, commit, sync, manage branc
 
 # Source Control
 
-JaneT's **Source Control** panel follows the repository for the focused local terminal. It provides common Git operations alongside the terminal; Git itself must be available on the system.
+JaneT's **Source Control** panel follows the repository for the focused local terminal. It provides common Git operations alongside the terminal; Git itself must be available on the system. It uses the same local directory as Explorer, so directories reported from an SSH session or a network share are not followed; see [How Explorer follows the terminal](/guide/files-editor#how-explorer-follows-the-terminal).
 
 ![JaneT Source Control panel with staged and unstaged changes alongside terminals](/screenshots/source-control.png)
 
@@ -40,6 +40,15 @@ Delete a branch from its row. The safe delete is the default; JaneT asks you to 
 In **Worktrees**, select **Add worktree with new branch** or **Add worktree from existing branch**, then provide a branch and destination directory. New worktrees are separate directories backed by Git; unlike a Library session, they provide isolated working trees.
 
 Select a worktree to open or focus its terminal. Removing a worktree deletes its directory; the default safe removal can be blocked by local changes. Type `FORCE` only when you intend to remove it despite those changes. **Prune stale worktrees…** removes Git records for missing directories; it does not delete working directories. **Worktree defaults** lets you set the suggested parent directory and folder-name template.
+
+## When Git fails
+
+When a Git action fails, the message below the branch line starts with **Git action failed:** followed by Git's own explanation. Examples include a missing commit identity, an authentication error, a branch with unmerged work, or a repository Git does not trust. JaneT removes credentials and terminal control codes from the message and shortens very long output.
+
+- **Status cannot be read.** If Git cannot read the repository when the panel first loads, Source Control shows **Couldn't read Git status** with the reason and a **Retry** button instead of an empty or clean panel.
+- **Status stops refreshing.** If a later refresh fails, the panel keeps the last known changes under a **Showing the last known status** notice with the reason and **Retry**. It does not report **Working tree clean** from an old snapshot. The branch in the status bar is dimmed with a warning icon, and its tooltip starts the reason with **Out of date:**. **Revert changes**, **Discard all unstaged changes**, and **Delete untracked item** are hidden until Git answers again.
+- **Git does not respond.** JaneT stops waiting for Git after 20 seconds without output while reading status, 60 seconds for local actions such as staging, or 5 minutes for commit, branch switching, worktree creation, fetch, pull, and push. The message says Git may be waiting for credentials, a hook, or the network. Git can sometimes finish in the background after JaneT stops waiting, so refresh and check the repository before you retry.
+- **Invalid names are rejected before Git runs.** Branch names must follow Git's branch-name rules. For example, they cannot contain spaces or `..` or end with `.lock`. Branch names, start points, and worktree folders cannot begin with `-`.
 
 ## Discard or delete carefully
 

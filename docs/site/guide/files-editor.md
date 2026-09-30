@@ -21,6 +21,15 @@ JaneT's **Explorer** follows the working directory of the focused local terminal
 
 Explorer lists local files and directories. Select a file to open it in the editor. Drag a file or folder into a compatible terminal to paste its escaped path; use the copy-path button beside an entry to put that path on the clipboard.
 
+### How Explorer follows the terminal
+
+JaneT learns the terminal's current directory from PowerShell, Bash, Zsh, and Fish each time the prompt appears. Explorer and **Source Control** keep showing the last confirmed local directory when a report cannot be used:
+
+- A shell reached over SSH, or another program reporting a different computer's directory, is ignored, so Explorer stays on the last local directory.
+- PowerShell locations that are not folders, such as `Env:` or `HKCU:`, are not reported.
+- Network share paths such as `\\server\share` are not followed. Map the share to a drive letter first, then change to that drive.
+- `cmd.exe` does not report its directory, so Explorer stays at the terminal's starting directory.
+
 ## Edit and save a text file
 
 Select a file in Explorer to open it as a document tab. Edit the text, then choose **Save file** or use the editor's save shortcut. JaneT marks unsaved documents in the document tab. When closing a dirty document or session, review JaneT's prompt before discarding changes.

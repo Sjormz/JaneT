@@ -20,7 +20,13 @@ import { SearchAddon, type ISearchOptions } from '@xterm/addon-search';
 import SearchOverlay from './SearchOverlay';
 import { getTheme, ThemeName } from '../themes';
 import { useKeybindings } from '../KeybindingsContext';
-import { matchesShortcut } from '../keybindings';
+import {
+  isTerminalCopyChord,
+  isTerminalPasteChord,
+  matchesShortcut,
+  rendererPlatform,
+  shortcutKeyFromEvent,
+} from '../keybindings';
 import { fileUrlToPath } from '../osc7';
 import { decodeAgentOsc } from '../agentOsc';
 import type { AgentLifecycleEvent } from '../terminalAwareness';
@@ -488,18 +494,21 @@ export default function TerminalPane({
     };
     container.addEventListener('contextmenu', contextMenuListener, true);
     mountCleanup.push(() => container.removeEventListener('contextmenu', contextMenuListener, true));
+    const clipboardPlatform = rendererPlatform();
     term.attachCustomKeyEventHandler((e) => {
       const currentBindings = kbBindingsRef.current;
-      if (e.type === 'keydown' && !e.altKey && (
-        (e.key.toLowerCase() === 'v' && (e.ctrlKey || e.metaKey))
-        || (e.key === 'Insert' && e.shiftKey && !e.ctrlKey && !e.metaKey)
-      )) {
+      if (e.type === 'keydown' && isTerminalPasteChord(e, clipboardPlatform)) {
         e.preventDefault();
         void pasteClipboard();
         return false;
       }
-      if (e.type === 'keydown' && e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey) && !e.altKey) {
-        copyGestureAtRef.current = Date.now();
+      // Any Ctrl/Cmd+C is a copy gesture a TUI may answer with OSC 52, even
+      // when it reaches the program as an interrupt.
+      if (
+        e.type === 'keydown' && !e.altKey && (e.ctrlKey || e.metaKey)
+        && shortcutKeyFromEvent(e).toLowerCase() === 'c'
+      ) copyGestureAtRef.current = Date.now();
+      if (e.type === 'keydown' && isTerminalCopyChord(e, clipboardPlatform)) {
         const selection = term.getSelection() || retainedSelectionRef.current;
         if (selection) {
           e.preventDefault();
@@ -519,7 +528,9 @@ export default function TerminalPane({
         setSearchVisible((visible) => !visible);
         return false;
       }
-      if (e.type === 'keydown') {
+      // Semantic command marks belong to the shell's normal screen. In a
+      // full-screen program (vim, htop, lazygit), leave these keys to it.
+      if (e.type === 'keydown' && term.buffer.active.type !== 'alternate') {
         const action = matchesShortcut(e, currentBindings['previous-command'])
           ? () => semanticCommands.previous()
           : matchesShortcut(e, currentBindings['next-command'])
@@ -837,8 +848,11 @@ export default function TerminalPane({
         if (cwdDebounce) clearTimeout(cwdDebounce);
         cwdDebounce = setTimeout(() => onCwdChange?.(termId, newCwd), 80);
       };
+      // Reports from another host (e.g. a nested SSH shell) or malformed
+      // reports return null and leave the last valid cwd unchanged.
+      const localHostname = window.janet?.localHostname ?? '';
       lifetimeCleanup.push(term.parser.registerOscHandler(7, (data) => {
-        const path = fileUrlToPath(data);
+        const path = fileUrlToPath(data, localHostname);
         if (path) {
           // OSC 7 is emitted before every local shell prompt. Even when the
           // cwd is unchanged, the command that just completed may have

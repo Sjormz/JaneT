@@ -12,6 +12,7 @@ import {
 import { defaultWorktreePath, GitWorktreeInfo, basename } from '../../shared/gitWorktrees';
 import { refreshCoordinator, useRefreshTask } from '../refreshCoordinator';
 import { GitStatusResult } from '../useGitRepository';
+import type { GitActionResult } from '../../shared/gitResults';
 import { useModalFocus } from '../useModalFocus';
 import { beginTerminalPathDrag, endTerminalPathDrag, formatTerminalPathForPaste, resolveRepositoryPath } from '../terminalPathDrag';
 import Tooltip from './Tooltip';
@@ -32,12 +33,19 @@ interface GitTreeProps {
   repoPath: string | null;
   status: GitStatusResult | null;
   searching: boolean;
+  /** Why the latest status read failed; `status` is then an older snapshot (or null). */
+  statusError?: string | null;
   openLocalTerminals?: Array<{ terminalId: string; cwd: string; lastFocused: number }>;
   onOpenTerminal?: (terminalId: string) => void;
   onOpenLocalTabAt?: (cwd: string, title?: string) => void;
   onCopyTerminalPath?: (path: string) => Promise<void>;
   onOpenFile?: (resource: EditorResource) => void;
   mutationLock?: { current: { repoPath: string } | null };
+}
+
+function gitFailureMessage(reason: string | undefined): string {
+  const detail = reason?.trim();
+  return detail ? `Git action failed: ${detail}` : 'Git action failed';
 }
 
 function normalizeWorktreePath(value: string): string {
@@ -86,6 +94,7 @@ export default function GitTree({
   repoPath,
   status,
   searching,
+  statusError = null,
   openLocalTerminals = [],
   onOpenTerminal,
   onOpenLocalTabAt,
@@ -103,6 +112,7 @@ export default function GitTree({
   });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [detailsUnavailable, setDetailsUnavailable] = useState(false);
   const [worktreeBaseDir, setWorktreeBaseDir] = useState('../');
   const [worktreeTemplate, setWorktreeTemplate] = useState('{repo}-{branch}');
   const [dialog, setDialog] = useState<DialogState | null>(null);
@@ -143,8 +153,9 @@ export default function GitTree({
       if (!mounted.current || generation !== detailsGeneration.current) return;
       setBranches(details?.branches || []);
       setWorktrees(details?.worktrees || []);
+      setDetailsUnavailable(!details);
     } catch {
-      if (mounted.current && generation === detailsGeneration.current) setMessage('Couldn’t load Source Control data');
+      if (mounted.current && generation === detailsGeneration.current) setDetailsUnavailable(true);
     }
   }, []);
 
@@ -152,6 +163,7 @@ export default function GitTree({
     detailsGeneration.current += 1;
     setBranches([]);
     setWorktrees([]);
+    setDetailsUnavailable(false);
     setMessage(null);
     setDialog(null);
   }, [repoPath]);
@@ -172,7 +184,7 @@ export default function GitTree({
     }
   }, [repoPath, status?.current]);
 
-  const runGitAction = async (action: () => Promise<boolean>, success: string): Promise<boolean> => {
+  const runGitAction = async (action: () => Promise<GitActionResult>, success: string): Promise<boolean> => {
     if (!repoPath || gitAction.current) return false;
     const operation = { repoPath };
     gitAction.current = operation;
@@ -180,14 +192,15 @@ export default function GitTree({
     setMessage(null);
     detailsGeneration.current += 1;
     try {
-      const ok = await action();
+      const result = await action();
       if (!mounted.current || gitAction.current !== operation || activeRepoPath.current !== operation.repoPath) return false;
-      setMessage(ok ? success : 'Git action failed');
+      const ok = result?.ok === true;
+      setMessage(ok ? success : gitFailureMessage(result && !result.ok ? result.error : ''));
       if (ok) refreshCoordinator.invalidate('mutation');
       return ok;
     } catch (err: any) {
       if (!mounted.current || gitAction.current !== operation || activeRepoPath.current !== operation.repoPath) return false;
-      setMessage(err?.message || 'Git action failed');
+      setMessage(gitFailureMessage(err?.message));
       return false;
     } finally {
       if (gitAction.current === operation) {
@@ -393,15 +406,19 @@ export default function GitTree({
 
   if (searching) return shell('Searching for Git repositories…');
   if (!repoPath) return shell('No Git repository found', 'Open a local terminal in a Git repository to see changes, branches, and worktrees.');
+  if (statusError && !status) return shell('Couldn’t read Git status', statusError, true);
 
+  // A snapshot kept after a failed refresh is shown only as visibly stale,
+  // and irreversible file actions are withheld until Git answers again.
+  const stale = Boolean(statusError && status);
   const conflictedPaths = new Set(status?.conflicted || []);
   const stagedFiles = status?.files.filter((file) => file.staged) || [];
   const changedFiles = status?.files.filter((file) => file.unstaged || conflictedPaths.has(file.path)) || [];
-  const discardablePaths = changedFiles
+  const discardablePaths = stale ? [] : changedFiles
     .filter((file) => !conflictedPaths.has(file.path) && file.index !== '?' && file.working_dir !== '?')
     .map((file) => file.path);
   const discardablePathSet = new Set(discardablePaths);
-  const untrackedPathSet = new Set(changedFiles
+  const untrackedPathSet = new Set(stale ? [] : changedFiles
     .filter((file) => file.index === '?' && file.working_dir === '?')
     .map((file) => file.path));
 
@@ -498,7 +515,15 @@ export default function GitTree({
           {status && status.behind > 0 && <span className="git-pill behind" aria-label={`${status.behind} commits behind`}><ArrowDownIcon size="xs" />{status.behind}</span>}
         </div>
       </Tooltip>
+      {stale && (
+        <div className="git-status-error" role="alert">
+          <AlertIcon size="xs" />
+          <span className="git-status-error-text">Showing the last known status. Git couldn’t refresh it: {statusError}</span>
+          <button type="button" className="git-retry" onClick={() => refreshCoordinator.invalidate('manual')}>Retry</button>
+        </div>
+      )}
       {message && <div className="git-message" role="status" aria-live="polite">{message}</div>}
+      {detailsUnavailable && <div className="git-message">Couldn’t load branches and worktrees.</div>}
 
       {status && stagedFiles.length > 0 && (
         <GitSection title="Staged Changes" count={stagedFiles.length} expanded={expanded.staged} onToggle={() => toggle('staged')}
@@ -568,7 +593,9 @@ export default function GitTree({
             </div>
           )}
         >
-          {changedFiles.length === 0 && stagedFiles.length === 0 && <div className="git-empty">Working tree clean</div>}
+          {changedFiles.length === 0 && stagedFiles.length === 0 && (
+            <div className="git-empty">{stale ? 'No changes in the last known status' : 'Working tree clean'}</div>
+          )}
           {changedFiles.length > 0 && changesView === 'tree' ? (
             <GitFileTree
               repoPath={repoPath}
@@ -578,8 +605,8 @@ export default function GitTree({
               onCopyTerminalPath={onCopyTerminalPath}
               onOpenFile={onOpenFile}
               onStage={(path) => runGitAction(() => window.janet.gitStage({ repoPath, paths: [path] }), `Staged ${path}`)}
-              onDiscard={(path) => handleDiscard([path])}
-              onDeleteUntracked={handleDeleteUntracked}
+              onDiscard={stale ? undefined : (path) => handleDiscard([path])}
+              onDeleteUntracked={stale ? undefined : handleDeleteUntracked}
             />
           ) : (
             changedFiles.map((file) => (
@@ -683,13 +710,16 @@ export default function GitTree({
     </div>
   );
 
-  function shell(text: string, hint?: string) {
+  function shell(text: string, hint?: string, retry = false) {
     return (
       <div className="git-tree">
         <div className="git-header"><span className="section-title">Source Control</span></div>
-        <div className="git-empty-state">
+        <div className="git-empty-state" role={retry ? 'alert' : undefined}>
           <div className="git-empty">{text}</div>
           {hint && <div className="git-hint">{hint}</div>}
+          {retry && (
+            <button type="button" className="git-retry" onClick={() => refreshCoordinator.invalidate('manual')}>Retry</button>
+          )}
         </div>
       </div>
     );

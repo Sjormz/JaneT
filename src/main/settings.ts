@@ -18,6 +18,15 @@ import {
   normalizeCommandHistory,
   type CommandHistoryEntry,
 } from '../shared/commandHistory';
+import {
+  defaultKeybindingsForPlatform,
+  KEYBINDINGS_SCHEMA_KEY,
+  KEYBINDINGS_SCHEMA_VERSION,
+  migrateKeybindings,
+} from '../shared/keybindings';
+
+export type { KeybindingAction } from '../shared/keybindings';
+export { DEFAULT_KEYBINDINGS } from '../shared/keybindings';
 
 // Mirrors `SavedSession` in src/renderer/sessionRestore.ts. Duplicated as a
 // type-only contract because the main process cannot import the renderer
@@ -67,127 +76,18 @@ export type ThemeName = 'tokyo-night' | 'dracula' | 'one-dark' | 'solarized-ligh
 export type TransparencyPreference = 'system' | 'reduced' | 'off';
 const TRANSPARENCY_PREFERENCES: readonly TransparencyPreference[] = ['system', 'reduced', 'off'];
 
-export type KeybindingAction =
-  | 'search-toggle'
-  | 'palette-toggle'
-  | 'new-terminal'
-  | 'close-tab'
-  | 'settings-toggle'
-  | 'toggle-sidebar'
-  | 'font-increase'
-  | 'font-decrease'
-  | 'font-reset'
-  | 'previous-tab'
-  | 'next-tab'
-  | 'snippets-toggle'
-  | 'history-toggle'
-  | 'split-right'
-  | 'split-down'
-  | 'close-pane'
-  | 'maximize-pane'
-  | 'focus-next-pane'
-  | 'focus-previous-pane'
-  | 'move-pane-left'
-  | 'move-pane-right'
-  | 'move-pane-up'
-  | 'move-pane-down'
-  | 'rename-pane'
-  | 'rename-tab'
-  | 'save-document'
-  | 'close-document'
-  | 'previous-command'
-  | 'next-command'
-  | 'copy-command'
-  | 'copy-command-output'
-  | 'rerun-command';
-
-export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
-  'search-toggle': 'Ctrl+F',
-  'palette-toggle': 'Ctrl+Shift+P',
-  'new-terminal': 'Ctrl+Shift+T',
-  'close-tab': 'Ctrl+W',
-  'settings-toggle': 'Ctrl+,',
-  'toggle-sidebar': 'Ctrl+B',
-  'font-increase': 'Ctrl+Plus',
-  'font-decrease': 'Ctrl+-',
-  'font-reset': 'Ctrl+0',
-  'previous-tab': 'Ctrl+Shift+Tab',
-  'next-tab': 'Ctrl+Tab',
-  'snippets-toggle': '',
-  'history-toggle': '',
-  'split-right': 'Ctrl+\\',
-  'split-down': 'Ctrl+Shift+\\',
-  'close-pane': 'Ctrl+Shift+W',
-  'maximize-pane': '',
-  'focus-next-pane': '',
-  'focus-previous-pane': '',
-  'move-pane-left': '',
-  'move-pane-right': '',
-  'move-pane-up': '',
-  'move-pane-down': '',
-  'rename-pane': 'F2',
-  'rename-tab': 'Ctrl+F2',
-  'save-document': '',
-  'close-document': '',
-  'previous-command': 'Ctrl+Shift+ArrowUp',
-  'next-command': 'Ctrl+Shift+ArrowDown',
-  'copy-command': 'Ctrl+Alt+C',
-  'copy-command-output': 'Ctrl+Alt+O',
-  'rerun-command': 'Ctrl+Alt+R',
-};
-
-function defaultKeybindingsForPlatform(platform: string): Record<KeybindingAction, string> {
-  if (platform !== 'darwin') return { ...DEFAULT_KEYBINDINGS };
-  return {
-    ...DEFAULT_KEYBINDINGS,
-    'search-toggle': 'Meta+F',
-    'palette-toggle': 'Meta+Shift+P',
-    'new-terminal': 'Meta+T',
-    'close-tab': 'Meta+W',
-    'settings-toggle': 'Meta+,',
-    'toggle-sidebar': 'Meta+B',
-    'font-increase': 'Meta+Plus',
-    'font-decrease': 'Meta+-',
-    'font-reset': 'Meta+0',
-    'split-right': 'Meta+\\',
-    'split-down': 'Meta+Shift+\\',
-    'close-pane': 'Meta+Shift+W',
-    'rename-tab': 'Meta+F2',
-  };
-}
-
 const PLATFORM_DEFAULT_KEYBINDINGS = defaultKeybindingsForPlatform(process.platform);
-const PREVIOUS_PLATFORM_DEFAULT_KEYBINDINGS = Object.fromEntries(
-  Object.entries(PLATFORM_DEFAULT_KEYBINDINGS).filter(([action]) => !action.startsWith('move-pane-')),
-);
 
-const LEGACY_KEYBINDINGS: Record<string, string> = {
-  'search-toggle': 'Ctrl+F',
-  'palette-toggle': 'Ctrl+K',
-  'new-terminal': 'Ctrl+N',
-  'close-tab': 'Ctrl+W',
-  'toggle-sidebar': 'Ctrl+B',
-  'font-increase': 'Ctrl+Plus',
-  'font-decrease': 'Ctrl+-',
-  'snippets-toggle': 'Ctrl+Shift+P',
-  'split-right': 'Ctrl+\\',
-  'split-down': 'Ctrl+Shift+\\',
-  'close-pane': 'Ctrl+Shift+W',
-  'rename-pane': 'F2',
-  'rename-tab': 'Ctrl+F2',
-  'previous-command': 'Ctrl+Shift+ArrowUp',
-  'next-command': 'Ctrl+Shift+ArrowDown',
-  'copy-command': 'Ctrl+Alt+C',
-  'copy-command-output': 'Ctrl+Alt+O',
-  'rerun-command': 'Ctrl+Alt+R',
-};
-
-function exactlyMatches(record: Record<string, string>, expected: Record<string, string>): boolean {
-  const keys = Object.keys(record);
-  return keys.length === Object.keys(expected).length
-    && keys.every((key) => record[key] === expected[key]);
+/** A keybinding map as persisted: current bindings plus the default-generation marker. */
+function withKeybindingsSchema(keybindings: Record<string, string>): Record<string, string> {
+  const { [KEYBINDINGS_SCHEMA_KEY]: _schema, ...bindings } = keybindings;
+  return { ...bindings, [KEYBINDINGS_SCHEMA_KEY]: KEYBINDINGS_SCHEMA_VERSION };
 }
 
+function withoutKeybindingsSchema(keybindings: Record<string, string>): Record<string, string> {
+  const { [KEYBINDINGS_SCHEMA_KEY]: _schema, ...bindings } = keybindings;
+  return bindings;
+}
 export interface AppSettings {
   mainDirectory: string | null;
   mainDirectorySetupSkipped: boolean;
@@ -259,7 +159,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   transparency: 'system',
   notificationsEnabled: false,
   notificationThresholdSeconds: 10,
-  keybindings: { ...PLATFORM_DEFAULT_KEYBINDINGS },
+  keybindings: withKeybindingsSchema(PLATFORM_DEFAULT_KEYBINDINGS),
   snippets: [],
   commandHistory: [],
   workspaceTabs: [],
@@ -285,7 +185,7 @@ export class SettingsManager {
     if (this.recoveryRequired) throw new Error('Could not load settings');
     return {
       ...this.cache,
-      keybindings: { ...this.cache.keybindings },
+      keybindings: withoutKeybindingsSchema(this.cache.keybindings),
       snippets: this.cache.snippets.map((snippet) => ({ ...snippet })),
       commandHistory: cloneCommandHistory(this.cache.commandHistory),
       workspaceTabs: this.cache.workspaceTabs
@@ -353,7 +253,7 @@ export class SettingsManager {
       ...updates,
       keybindings: updates.keybindings === undefined
         ? this.cache.keybindings
-        : { ...PLATFORM_DEFAULT_KEYBINDINGS, ...updates.keybindings },
+        : withKeybindingsSchema({ ...PLATFORM_DEFAULT_KEYBINDINGS, ...updates.keybindings }),
       snippets: updates.snippets === undefined ? this.cache.snippets : normalizeSnippets(updates.snippets),
       commandHistory: updates.commandHistory === undefined
         ? this.cache.commandHistory
@@ -395,14 +295,10 @@ export class SettingsManager {
     const storedKeybindings = isBoundedStringRecord(storedSettings.keybindings, MAX_KEYBINDINGS, 256, 256)
       ? storedSettings.keybindings
       : {};
-    const mergedKeybindings = {
+    const mergedKeybindings = withKeybindingsSchema({
       ...PLATFORM_DEFAULT_KEYBINDINGS,
-      ...((exactlyMatches(storedKeybindings, LEGACY_KEYBINDINGS)
-        || exactlyMatches(storedKeybindings, { ...PLATFORM_DEFAULT_KEYBINDINGS, ...LEGACY_KEYBINDINGS })
-        || exactlyMatches(storedKeybindings, { ...PREVIOUS_PLATFORM_DEFAULT_KEYBINDINGS, ...LEGACY_KEYBINDINGS }))
-        ? {}
-        : storedKeybindings),
-    };
+      ...migrateKeybindings(storedKeybindings, process.platform),
+    });
     const stored = {
       ...DEFAULT_SETTINGS,
       ...storedSettings,
@@ -411,7 +307,7 @@ export class SettingsManager {
         && storedSettings.mainDirectory.length <= 8192 && !storedSettings.mainDirectory.includes('\0') ? storedSettings.mainDirectory : null,
       keybindings: isBoundedStringRecord(mergedKeybindings, MAX_KEYBINDINGS, 256, 256)
         ? mergedKeybindings
-        : { ...PLATFORM_DEFAULT_KEYBINDINGS },
+        : withKeybindingsSchema(PLATFORM_DEFAULT_KEYBINDINGS),
       transparency: TRANSPARENCY_PREFERENCES.includes(storedSettings.transparency as TransparencyPreference)
         ? storedSettings.transparency
         : 'system',
@@ -419,6 +315,17 @@ export class SettingsManager {
       notificationThresholdSeconds: isValidNotificationThreshold(storedSettings.notificationThresholdSeconds)
         ? storedSettings.notificationThresholdSeconds
         : 10,
+      // Hand-edited or older files are held to the same rules as runtime updates.
+      theme: isValidTheme(storedSettings.theme) ? storedSettings.theme : DEFAULT_SETTINGS.theme,
+      fontSize: isValidFontSize(storedSettings.fontSize) ? storedSettings.fontSize : DEFAULT_SETTINGS.fontSize,
+      fontFamily: isValidFontFamily(storedSettings.fontFamily) ? storedSettings.fontFamily : DEFAULT_SETTINGS.fontFamily,
+      sidebarSide: isValidSidebarSide(storedSettings.sidebarSide) ? storedSettings.sidebarSide : DEFAULT_SETTINGS.sidebarSide,
+      gitWorktreeBaseDir: isValidWorkspaceString(storedSettings.gitWorktreeBaseDir)
+        ? storedSettings.gitWorktreeBaseDir
+        : DEFAULT_SETTINGS.gitWorktreeBaseDir,
+      gitWorktreeNameTemplate: isValidWorkspaceString(storedSettings.gitWorktreeNameTemplate)
+        ? storedSettings.gitWorktreeNameTemplate
+        : DEFAULT_SETTINGS.gitWorktreeNameTemplate,
     } as AppSettings;
     return { settings: this.deserialize(stored) };
   }
@@ -534,7 +441,8 @@ function cloneSavedTab(value: unknown): SavedTab | undefined {
   return {
     id: tab.id,
     ...(typeof tab.groupId === 'string' && tab.groupId.length <= 256 ? { groupId: tab.groupId } : {}),
-    ...(tab.isProject === true ? { isProject: true } : {}),
+    // Keep explicit `false`: it records that the tab is a session, not a legacy project.
+    ...(typeof tab.isProject === 'boolean' ? { isProject: tab.isProject } : {}),
     title: tab.title,
     type: tab.type,
     ...(typeof tab.cwd === 'string' ? { cwd: tab.cwd } : {}),
@@ -846,19 +754,17 @@ function isValidSettingsUpdate(updates: Partial<AppSettings>): boolean {
   return (updates.mainDirectorySetupSkipped === undefined || typeof updates.mainDirectorySetupSkipped === 'boolean')
     && (updates.mainDirectory === undefined || updates.mainDirectory === null
       || (typeof updates.mainDirectory === 'string' && path.isAbsolute(updates.mainDirectory) && updates.mainDirectory.length <= 8192 && !updates.mainDirectory.includes('\0')))
-    && (updates.theme === undefined || ['tokyo-night', 'dracula', 'one-dark', 'solarized-light', 'gruvbox'].includes(updates.theme))
-    && (updates.fontSize === undefined
-      || (Number.isInteger(updates.fontSize) && updates.fontSize >= 10 && updates.fontSize <= 24))
-    && (updates.fontFamily === undefined
-      || (typeof updates.fontFamily === 'string' && updates.fontFamily.length <= MAX_WORKSPACE_STRING_LENGTH))
-    && (updates.sidebarSide === undefined || updates.sidebarSide === 'left' || updates.sidebarSide === 'right')
+    && (updates.theme === undefined || isValidTheme(updates.theme))
+    && (updates.fontSize === undefined || isValidFontSize(updates.fontSize))
+    && (updates.fontFamily === undefined || isValidFontFamily(updates.fontFamily))
+    && (updates.sidebarSide === undefined || isValidSidebarSide(updates.sidebarSide))
     && (updates.transparency === undefined || TRANSPARENCY_PREFERENCES.includes(updates.transparency))
     && (updates.notificationsEnabled === undefined || typeof updates.notificationsEnabled === 'boolean')
     && (updates.notificationThresholdSeconds === undefined || isValidNotificationThreshold(updates.notificationThresholdSeconds))
     && (updates.keybindings === undefined
       || (isBoundedStringRecord(updates.keybindings, MAX_KEYBINDINGS, 256, 256)
         && isBoundedStringRecord(
-          { ...PLATFORM_DEFAULT_KEYBINDINGS, ...updates.keybindings },
+          withKeybindingsSchema({ ...PLATFORM_DEFAULT_KEYBINDINGS, ...updates.keybindings }),
           MAX_KEYBINDINGS,
           256,
           256,
@@ -873,17 +779,35 @@ function isValidSettingsUpdate(updates: Partial<AppSettings>): boolean {
       && updates.workspaceTabs.every(isValidRuntimeWorkspacePreset)
       && hasUniqueIds(updates.workspaceTabs)))
 
-    && (updates.gitWorktreeBaseDir === undefined
-      || (typeof updates.gitWorktreeBaseDir === 'string'
-        && updates.gitWorktreeBaseDir.length <= MAX_WORKSPACE_STRING_LENGTH))
-    && (updates.gitWorktreeNameTemplate === undefined
-      || (typeof updates.gitWorktreeNameTemplate === 'string'
-        && updates.gitWorktreeNameTemplate.length <= MAX_WORKSPACE_STRING_LENGTH))
+    && (updates.gitWorktreeBaseDir === undefined || isValidWorkspaceString(updates.gitWorktreeBaseDir))
+    && (updates.gitWorktreeNameTemplate === undefined || isValidWorkspaceString(updates.gitWorktreeNameTemplate))
     && (updates.session === undefined || isValidRuntimeSession(updates.session));
 }
 
 function isValidNotificationThreshold(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 86_400;
+}
+
+const THEME_NAMES: readonly ThemeName[] = ['tokyo-night', 'dracula', 'one-dark', 'solarized-light', 'gruvbox'];
+
+function isValidTheme(value: unknown): value is ThemeName {
+  return THEME_NAMES.includes(value as ThemeName);
+}
+
+function isValidFontSize(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 10 && Number(value) <= 24;
+}
+
+function isValidFontFamily(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= MAX_WORKSPACE_STRING_LENGTH;
+}
+
+function isValidSidebarSide(value: unknown): value is AppSettings['sidebarSide'] {
+  return value === 'left' || value === 'right';
+}
+
+function isValidWorkspaceString(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= MAX_WORKSPACE_STRING_LENGTH;
 }
 
 function isValidRuntimeSnippet(value: unknown): boolean {

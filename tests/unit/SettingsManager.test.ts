@@ -23,7 +23,7 @@ const LEGACY_KEYBINDINGS = {
 };
 
 async function loadKeybindings(
-  platformName: 'win32' | 'darwin',
+  platformName: 'win32' | 'linux' | 'darwin',
   storedForDefaults: (defaults: Record<string, string>) => Record<string, string>,
 ): Promise<{ actual: Record<string, string>; defaults: Record<string, string> }> {
   const fsMock = await import('fs');
@@ -97,7 +97,7 @@ describe('SettingsManager', () => {
       session: {
         tabs: [
           { id: 'remote', title: 'Remote', type: 'ssh', root: remoteLeaf },
-          { id: 'mixed', title: 'Mixed', type: 'local', root: mixedRoot, selectedPanePath: [1], maximizedPanePath: [2] },
+          { id: 'mixed', title: 'Mixed', type: 'local', isProject: false, root: mixedRoot, selectedPanePath: [1], maximizedPanePath: [2] },
           { id: 'project', title: 'Project', type: 'local', isProject: true, root: { type: 'split', direction: 'vertical', children: [], sizes: [] } },
           { id: 'remote-project', title: 'Keep project', type: 'local', isProject: true, root: remoteLeaf },
         ],
@@ -114,6 +114,8 @@ describe('SettingsManager', () => {
     expect(settings.session.tabs.map((tab) => tab.id)).toEqual(['mixed', 'project', 'remote-project']);
     expect(settings.session.tabs[2].root).toEqual({ type: 'split', direction: 'vertical', children: [], sizes: [] });
     expect(settings.session.tabs[0].root).toEqual({ ...mixedRoot, children: [localLeaf, { ...localLeaf, title: 'Last' }], sizes: [2, 4] });
+    // Explicit session ownership survives, so restore never re-infers a project.
+    expect(settings.session.tabs.map((tab) => tab.isProject)).toEqual([false, true, true]);
     expect(settings.session.tabs[0]).not.toHaveProperty('selectedPanePath');
     expect(settings.session.tabs[0]).not.toHaveProperty('maximizedPanePath');
     expect(settings.session.sidebarSection).toBe('files');
@@ -177,12 +179,13 @@ describe('SettingsManager', () => {
     expect(settings.workspaceTabs).toEqual([]);
     expect(settings.notificationsEnabled).toBe(false);
     expect(settings.notificationThresholdSeconds).toBe(10);
+    const mac = process.platform === 'darwin';
     expect(settings.keybindings).toMatchObject({
-      'previous-command': 'Ctrl+Shift+ArrowUp',
-      'next-command': 'Ctrl+Shift+ArrowDown',
-      'copy-command': 'Ctrl+Alt+C',
-      'copy-command-output': 'Ctrl+Alt+O',
-      'rerun-command': 'Ctrl+Alt+R',
+      'previous-command': mac ? 'Meta+ArrowUp' : 'Ctrl+Shift+ArrowUp',
+      'next-command': mac ? 'Meta+ArrowDown' : 'Ctrl+Shift+ArrowDown',
+      'copy-command': mac ? 'Meta+Alt+C' : 'Ctrl+Shift+K',
+      'copy-command-output': mac ? 'Meta+Alt+O' : 'Ctrl+Shift+O',
+      'rerun-command': mac ? 'Meta+Alt+R' : 'Ctrl+Shift+R',
       'move-pane-left': '',
       'move-pane-right': '',
       'move-pane-up': '',
@@ -251,6 +254,51 @@ describe('SettingsManager', () => {
     }));
     const { SettingsManager } = await import('../../src/main/settings');
     expect(new SettingsManager().get()).toMatchObject({ theme: 'dracula', notificationThresholdSeconds: 10 });
+  });
+
+  it('falls back to defaults for hand-edited appearance and worktree values that runtime updates reject', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      theme: 'neon',
+      fontSize: 200,
+      fontFamily: 'x'.repeat(8_193),
+      sidebarSide: 'top',
+      gitWorktreeBaseDir: 42,
+      gitWorktreeNameTemplate: { value: '{repo}' },
+      notificationsEnabled: true,
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const settings = new SettingsManager().get();
+    expect(settings).toMatchObject({
+      theme: 'one-dark',
+      fontSize: 14,
+      sidebarSide: 'right',
+      gitWorktreeBaseDir: '../',
+      gitWorktreeNameTemplate: '{repo}-{branch}',
+      notificationsEnabled: true,
+    });
+    expect(settings.fontFamily.length).toBeLessThanOrEqual(8_192);
+    expect(settings.fontFamily).not.toBe('x'.repeat(8_193));
+  });
+
+  it.each([9, 25, 14.5, '14', null])('replaces an out-of-range stored font size: %s', async (value) => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({ theme: 'gruvbox', fontSize: value }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    expect(new SettingsManager().get()).toMatchObject({ theme: 'gruvbox', fontSize: 14 });
+  });
+
+  it('keeps valid stored appearance and worktree values', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      theme: 'solarized-light', fontSize: 24, sidebarSide: 'left',
+      gitWorktreeBaseDir: '/work/trees', gitWorktreeNameTemplate: '{branch}',
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    expect(new SettingsManager().get()).toMatchObject({
+      theme: 'solarized-light', fontSize: 24, sidebarSide: 'left',
+      gitWorktreeBaseDir: '/work/trees', gitWorktreeNameTemplate: '{branch}',
+    });
   });
 
   it.each([0, 1.5, 86_401, '10'])('rejects malformed live notification threshold atomically: %s', async (value) => {
@@ -329,18 +377,59 @@ describe('SettingsManager', () => {
   );
 
   it.each([
-    ['sparse', { 'close-tab': 'Alt+X' }],
-    ['changed complete', { ...LEGACY_KEYBINDINGS, 'palette-toggle': 'Alt+K' }],
-    ['explicit empty', { ...LEGACY_KEYBINDINGS, 'palette-toggle': '' }],
-    ['extra key', { ...LEGACY_KEYBINDINGS, custom: 'Alt+J' }],
+    ['sparse', { 'close-tab': 'Alt+X' }, { 'close-tab': 'Alt+X' }],
+    ['changed complete', { ...LEGACY_KEYBINDINGS, 'palette-toggle': 'Alt+K' }, { 'palette-toggle': 'Alt+K' }],
+    ['explicit empty', { ...LEGACY_KEYBINDINGS, 'palette-toggle': '' }, { 'palette-toggle': '' }],
+    ['extra key', { ...LEGACY_KEYBINDINGS, custom: 'Alt+J' }, { custom: 'Alt+J' }],
     ['missing key', Object.fromEntries(
       Object.entries(LEGACY_KEYBINDINGS).filter(([key]) => key !== 'rerun-command'),
-    )],
-  ])('preserves the user-owned %s keybinding map', async (_name, keybindings) => {
-    for (const platformName of ['win32', 'darwin'] as const) {
+    ), {}],
+  ])('keeps the user-owned bindings of a %s map and moves its old defaults', async (_name, keybindings, kept) => {
+    for (const platformName of ['win32', 'linux', 'darwin'] as const) {
       const { actual, defaults } = await loadKeybindings(platformName, () => keybindings);
-      expect(actual).toEqual({ ...defaults, ...keybindings });
+      expect(actual).toEqual({ ...defaults, ...kept });
     }
+  });
+
+  it.each(['win32', 'linux', 'darwin'] as const)(
+    'moves %s bindings still at the pre-audit defaults and keeps customized ones',
+    async (platformName) => {
+      const mac = platformName === 'darwin';
+      const { actual, defaults } = await loadKeybindings(platformName, (current) => ({
+        ...current,
+        'search-toggle': mac ? 'Meta+F' : 'Ctrl+F',
+        'close-tab': mac ? 'Meta+W' : 'Ctrl+W',
+        'split-right': mac ? 'Meta+\\' : 'Ctrl+\\',
+        'rename-pane': 'F2',
+        'copy-command': 'Ctrl+Alt+C',
+        'toggle-sidebar': 'Alt+S',
+        'history-toggle': mac ? 'Meta+Shift+H' : 'Ctrl+Shift+H',
+      }));
+      expect(actual).toEqual({
+        ...defaults,
+        'toggle-sidebar': 'Alt+S',
+        'history-toggle': mac ? 'Meta+Shift+H' : 'Ctrl+Shift+H',
+      });
+    },
+  );
+
+  it('migrates once, persists the result, and then keeps a restored old default', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      keybindings: { 'close-tab': process.platform === 'darwin' ? 'Meta+W' : 'Ctrl+W', 'rename-pane': 'F2' },
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const migrated = manager.get().keybindings;
+    expect(migrated['rename-pane']).toBe(process.platform === 'darwin' ? 'Meta+Shift+F2' : 'Ctrl+Shift+F2');
+    expect(migrated).not.toHaveProperty('$keybindingsSchema');
+
+    // The user deliberately chooses F2 again after the migration.
+    manager.set({ keybindings: { ...migrated, 'rename-pane': 'F2' } });
+    const saved = JSON.parse(String(vi.mocked(fsMock.writeFileSync).mock.calls.filter(([file]) => String(file).endsWith('settings.json.tmp')).at(-1)![1]));
+    expect(saved.keybindings).toMatchObject({ 'rename-pane': 'F2', $keybindingsSchema: '2' });
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify(saved));
+    expect(new SettingsManager().get().keybindings['rename-pane']).toBe('F2');
   });
 
   it('rejects shortcut updates whose merged map exceeds the entry limit', async () => {

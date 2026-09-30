@@ -4,8 +4,10 @@ import type {
 } from '../shared/files';
 import type { StartupShellDialect } from '../shared/startupCommands';
 import {
+  WORKSPACE_AWAIT_USER_FOR_CLOSE_CHANNEL,
   WORKSPACE_PREPARE_FOR_CLOSE_CHANNEL,
   WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL,
+  type WorkspacePrepareForCloseAcknowledgement,
   type WorkspacePrepareForCloseRequest,
   type WorkspacePrepareForCloseResolution,
 } from './workspaceLifecycle';
@@ -17,6 +19,8 @@ import type {
   WriteLocalTextFileRequest,
 } from '../shared/textFiles';
 import type { GitDiffRequest, GitDiffResult } from '../shared/gitDiff';
+import type { GitActionResult, GitResult } from '../shared/gitResults';
+import type { GitStatusResult } from './git';
 import type { CommandNotificationPayload } from '../shared/commandNotifications';
 
 export interface UpdateProgress {
@@ -101,8 +105,21 @@ const initialWindowMaterial = (() => {
   }
 })();
 
+/** This machine's hostname (empty if unavailable), used to accept only local OSC 7 cwd reports. */
+const localHostname = (() => {
+  const prefix = '--janet-local-hostname=';
+  const arg = process.argv.find((value) => value.startsWith(prefix));
+  try {
+    const hostname = arg ? decodeURIComponent(arg.slice(prefix.length)) : '';
+    return /^[A-Za-z0-9._-]{1,253}$/.test(hostname) ? hostname : '';
+  } catch {
+    return '';
+  }
+})();
+
 const api = {
   initialWindowMaterial,
+  localHostname,
   // Terminal
   terminalCreate: (params: {
     id: string;
@@ -144,7 +161,7 @@ const api = {
     ipcRenderer.invoke('fs:writeTextFile', params),
 
   // Git
-  gitStatus: (params: { repoPath: string }) =>
+  gitStatus: (params: { repoPath: string }): Promise<GitResult<GitStatusResult>> =>
     ipcRenderer.invoke('git:status', params),
   gitBranches: (params: { repoPath: string }) =>
     ipcRenderer.invoke('git:branches', params),
@@ -154,37 +171,37 @@ const api = {
     ipcRenderer.invoke('git:log', params),
   gitFindRepo: (params: { startPath: string }) =>
     ipcRenderer.invoke('git:findRepo', params),
-  gitCheckout: (params: { repoPath: string; branch: string }) =>
+  gitCheckout: (params: { repoPath: string; branch: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:checkout', params),
-  gitCreateBranch: (params: { repoPath: string; branch: string; startPoint?: string; checkout?: boolean }) =>
+  gitCreateBranch: (params: { repoPath: string; branch: string; startPoint?: string; checkout?: boolean }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:createBranch', params),
-  gitDeleteBranch: (params: { repoPath: string; branch: string; force?: boolean }) =>
+  gitDeleteBranch: (params: { repoPath: string; branch: string; force?: boolean }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:deleteBranch', params),
-  gitStage: (params: { repoPath: string; paths: string[] }) =>
+  gitStage: (params: { repoPath: string; paths: string[] }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:stage', params),
-  gitUnstage: (params: { repoPath: string; paths: string[] }) =>
+  gitUnstage: (params: { repoPath: string; paths: string[] }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:unstage', params),
-  gitDiscard: (params: { repoPath: string; paths: string[] }) =>
+  gitDiscard: (params: { repoPath: string; paths: string[] }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:discard', params),
-  gitDeleteUntracked: (params: { repoPath: string; path: string }) =>
+  gitDeleteUntracked: (params: { repoPath: string; path: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:deleteUntracked', params),
   gitDiff: (params: GitDiffRequest): Promise<GitDiffResult> =>
     ipcRenderer.invoke('git:diff', params),
-  gitCommit: (params: { repoPath: string; message: string }) =>
+  gitCommit: (params: { repoPath: string; message: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:commit', params),
-  gitFetch: (params: { repoPath: string }) =>
+  gitFetch: (params: { repoPath: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:fetch', params),
-  gitPull: (params: { repoPath: string }) =>
+  gitPull: (params: { repoPath: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:pull', params),
-  gitPush: (params: { repoPath: string }) =>
+  gitPush: (params: { repoPath: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:push', params),
   gitWorktrees: (params: { repoPath: string }) =>
     ipcRenderer.invoke('git:worktrees', params),
-  gitAddWorktree: (params: { repoPath: string; worktreePath: string; branch: string; createBranch?: boolean; startPoint?: string }) =>
+  gitAddWorktree: (params: { repoPath: string; worktreePath: string; branch: string; createBranch?: boolean; startPoint?: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:addWorktree', params),
-  gitRemoveWorktree: (params: { repoPath: string; worktreePath: string; force?: boolean }) =>
+  gitRemoveWorktree: (params: { repoPath: string; worktreePath: string; force?: boolean }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:removeWorktree', params),
-  gitPruneWorktrees: (params: { repoPath: string }) =>
+  gitPruneWorktrees: (params: { repoPath: string }): Promise<GitActionResult> =>
     ipcRenderer.invoke('git:pruneWorktrees', params),
 
   // Settings
@@ -243,6 +260,9 @@ const api = {
   },
   resolvePrepareForClose: (resolution: WorkspacePrepareForCloseResolution): Promise<boolean> =>
     ipcRenderer.invoke(WORKSPACE_RESOLVE_PREPARE_FOR_CLOSE_CHANNEL, resolution),
+  /** Tell the main process a close prompt is visible; false means the request already ended. */
+  awaitUserForClose: (acknowledgement: WorkspacePrepareForCloseAcknowledgement): Promise<boolean> =>
+    ipcRenderer.invoke(WORKSPACE_AWAIT_USER_FOR_CLOSE_CHANNEL, acknowledgement),
 
   // Window controls (custom titlebar)
   windowMinimize: () => ipcRenderer.invoke('window:minimize'),

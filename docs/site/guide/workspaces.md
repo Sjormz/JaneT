@@ -56,10 +56,14 @@ Library sessions share the linked folder. They are not copies and do not create 
 
 Use the context menu on a workspace or project in the sidebar. Renaming a managed workspace or project also renames its folder on disk and updates JaneT's saved paths. Library session names are labels; they do not rename the linked folder.
 
+Only the project itself owns its folder. A terminal you open from a project, such as a new terminal or a Git worktree opened from Source Control, appears as a session: **Rename session** changes only its name, and it offers **Close session** instead of **Delete project…** or **Keep in Library…**. Renaming or deleting such a session never renames, moves, or deletes the project or worktree folder.
+
 - **Close session** stops that session's terminals and keeps its files. A project may offer **Close all terminals…** when it contains multiple panes.
 - **Keep in Library…** promotes a managed project to a destination outside temporary storage. JaneT copies the project, verifies the copy, adds a Library entry, and then sends the original to the OS Recycle Bin/Trash. Save editor changes and stop external processes that may be writing files first. Existing destinations are not merged or overwritten; symlinks cannot be promoted automatically.
 - **Remove from Library…** unlinks the folder and stops its sessions. It does not delete the folder or its files.
 - **Delete workspace…** or **Delete project…** asks for confirmation, then sends managed files to the OS Recycle Bin/Trash. Check the confirmation before proceeding.
+
+**Keep in Library…** and **Delete…** stop the affected terminals before touching files. If the operation then fails, JaneT leaves the files in place, shows the reason, and starts fresh terminals in the stopped panes at their last known folders. Startup commands configured for those panes run again, as they do after restarting JaneT.
 
 If a linked folder is unavailable, select **Locate folder** beside it and choose its current location. This updates the link without moving its files.
 
@@ -74,3 +78,5 @@ The project tools (Explorer and Source Control) collapse to an icon strip with t
 JaneT saves workspace groups, projects, sessions, pane layouts, and terminal directories automatically. If the last session is closed, JaneT keeps the empty state after restart until you create or open work again.
 
 Closing JaneT ends its managed local terminal sessions. Restarting restores the saved workspace structure into fresh shells, and configured startup commands run again. Save editor changes and finish foreground terminal tasks before closing.
+
+If editor files have unsaved changes when you close JaneT, quit, or install an update, JaneT asks whether to **Save all and close**, **Discard changes and close**, or **Cancel**. The prompt waits for your choice for as long as it is open. If that close request has already ended when you choose, JaneT closes the prompt, keeps running, and says so; any files you chose to save are saved, and you can close or install the update again.

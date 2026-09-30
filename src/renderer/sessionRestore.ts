@@ -1,5 +1,5 @@
 import { PaneNode, TerminalLeaf, SplitNode, genId } from './types';
-import { normalizeWorkspaceGroups, type WorkspaceGroup } from '../shared/workspaceGroups';
+import { normalizeWorkspaceGroups, resolveLegacyWorkspaceProjects, type WorkspaceGroup } from '../shared/workspaceGroups';
 import type { StartupShellDialect } from '../shared/startupCommands';
 import { isStartupShellDialect, sanitizeStartupCommands } from '../shared/startupCommands';
 
@@ -235,7 +235,7 @@ export function normalizeSession(raw: unknown): SavedSession {
       tabs.push({
         id: tab.id,
         ...(typeof tab.groupId === 'string' && tab.groupId.length <= 256 ? { groupId: tab.groupId } : {}),
-        ...(tab.isProject === true ? { isProject: true } : {}),
+        ...(typeof tab.isProject === 'boolean' ? { isProject: tab.isProject } : {}),
         title: tab.title,
         type: tab.type,
         ...(typeof tab.cwd === 'string' ? { cwd: tab.cwd } : {}),
@@ -246,9 +246,10 @@ export function normalizeSession(raw: unknown): SavedSession {
     }
   }
 
+  const groups = obj.groups !== undefined ? normalizeWorkspaceGroups(obj.groups) : undefined;
   return {
-    tabs,
-    ...(obj.groups !== undefined ? { groups: normalizeWorkspaceGroups(obj.groups) } : {}),
+    tabs: resolveLegacyWorkspaceProjects(tabs, groups ?? [], (tab) => countSavedPaneLeaves(tab.root, MAX_RESTORED_TERMINALS) !== 0),
+    ...(groups !== undefined ? { groups } : {}),
     activeTabId: typeof obj.activeTabId === 'string' ? obj.activeTabId : null,
     sidebarOpen: obj.sidebarOpen !== false,
     tabsOpen: obj.tabsOpen !== false,

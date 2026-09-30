@@ -7,7 +7,11 @@ import {
   KeybindingAction,
   KEYBINDING_LABELS,
   formatShortcut,
-  formatShortcutForDisplay, shortcutKeycaps } from '../keybindings';
+  formatShortcutForDisplay,
+  normalizeShortcutText,
+  rendererPlatform,
+  shortcutConflict,
+  shortcutKeycaps } from '../keybindings';
 import { PencilIcon, XCloseIcon } from '../icons';
 import Tooltip from './Tooltip';
 import ConfirmationDialog from './ConfirmationDialog';
@@ -56,7 +60,7 @@ export default function ShortcutEditor({ open, onClose }: ShortcutEditorProps) {
         setCapturing(null);
         return;
       }
-      if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+      if (['Control', 'Shift', 'Alt', 'AltGraph', 'Meta', 'OS', 'CapsLock'].includes(e.key)) return;
       const shortcut = formatShortcut(e.nativeEvent);
       if (!shortcut.includes('+') && !/^F(?:[1-9]|1[0-2])$/.test(shortcut)) return;
       setBinding(action, shortcut);
@@ -66,7 +70,18 @@ export default function ShortcutEditor({ open, onClose }: ShortcutEditorProps) {
   );
 
   const keys = Object.keys(KEYBINDING_LABELS) as KeybindingAction[];
-  const platform = navigator.platform.toLowerCase().includes('mac') ? 'darwin' : '';
+  const platform = rendererPlatform();
+  // Warn (without refusing) when a shortcut shadows keys terminal programs,
+  // keyboard layouts, or the OS need, or when another action already uses it.
+  const shortcutWarning = (action: KeybindingAction, shortcut: string): string | null => {
+    if (!shortcut) return null;
+    const conflict = shortcutConflict(shortcut, platform);
+    if (conflict) return conflict;
+    const normalized = normalizeShortcutText(shortcut);
+    const other = keys.find((candidate) => candidate !== action
+      && normalizeShortcutText(bindings[candidate] ?? '') === normalized);
+    return other ? `Also assigned to “${KEYBINDING_LABELS[other]}”. Only one of them runs.` : null;
+  };
 
   return createPortal(
     <><MotionPresence>{open &&
@@ -97,7 +112,9 @@ export default function ShortcutEditor({ open, onClose }: ShortcutEditorProps) {
         {keys.map((action) => {
           const shortcut = bindings[action];
           const displayedShortcut = shortcut ? formatShortcutForDisplay(shortcut, platform) : 'unassigned';
-          return <div key={action} className="shortcut-row">
+          const warning = shortcutWarning(action, shortcut);
+          const warningId = `shortcut-warning-${action}`;
+          return <React.Fragment key={action}><div className="shortcut-row">
             <span className="shortcut-label">{KEYBINDING_LABELS[action]}</span>
             {capturing === action ? (
               <div
@@ -118,6 +135,7 @@ export default function ShortcutEditor({ open, onClose }: ShortcutEditorProps) {
                   className="shortcut-key"
                   onClick={() => handleStartCapture(action)}
                   aria-label={`${KEYBINDING_LABELS[action]} (currently ${displayedShortcut})`}
+                  aria-describedby={warning ? warningId : undefined}
                 >
                   <span className="shortcut-keys-text keycaps">
                     {shortcut
@@ -128,7 +146,9 @@ export default function ShortcutEditor({ open, onClose }: ShortcutEditorProps) {
                 </button>
               </Tooltip>
             )}
-          </div>;
+          </div>
+          {warning && <p id={warningId} className="shortcut-warning" role="status">{warning}</p>}
+          </React.Fragment>;
         })}
       </div>
       <button className="shortcut-reset-btn" onClick={() => setConfirmingReset(true)}>
