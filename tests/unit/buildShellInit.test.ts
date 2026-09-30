@@ -23,7 +23,8 @@ const commonNames = [
 const posixOnlyNames = ['why?', 'back\\slash', 'quote"d', 'star*'];
 
 function makeCwdFixture(names: string[]): { root: string; dirs: string[] } {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'janet-osc7-')));
+  // The native realpath expands Windows 8.3 short names (RUNNER~1), matching what shells report.
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'janet-osc7-')));
   const dirs = names.map((name) => {
     const dir = join(root, name);
     mkdirSync(dir);
@@ -173,7 +174,9 @@ describe('buildShellInit', () => {
     ] as const) {
       it.skipIf(!executable || !existsSync(executable))(`round-trips cwd reports in ${label}`, () => {
         const init = buildShellInit('powershell.exe');
-        const names = [...commonNames, ...(process.platform === 'win32' ? [] : posixOnlyNames)];
+        // PowerShell treats `\` as a path separator on every platform, so it cannot enter
+        // a Unix directory whose name contains one; other POSIX-only names still apply.
+        const names = [...commonNames, ...(process.platform === 'win32' ? [] : posixOnlyNames.filter((name) => !name.includes('\\')))];
         const { root, dirs } = makeCwdFixture(names);
         try {
           for (const dir of dirs) {

@@ -86,7 +86,9 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "  try {",
       "    $__jt_loc = $ExecutionContext.SessionState.Path.CurrentLocation",
       "    if ($__jt_loc -and $__jt_loc.Provider.Name -eq 'FileSystem' -and $__jt_loc.ProviderPath) {",
-      "      $__jt_path = [string]$__jt_loc.ProviderPath -replace '\\\\','/'",
+      // Backslash is a separator only on Windows; on Unix it is a filename character.
+      "      $__jt_path = [string]$__jt_loc.ProviderPath",
+      "      if ([System.IO.Path]::DirectorySeparatorChar -eq '\\') { $__jt_path = $__jt_path -replace '\\\\','/' }",
       "      if (-not $__jt_path.StartsWith('/')) { $__jt_path = '/' + $__jt_path }",
       "      $__jt_url = New-Object System.Text.StringBuilder",
       "      foreach ($__jt_byte in [System.Text.Encoding]::UTF8.GetBytes($__jt_path)) {",
