@@ -347,6 +347,7 @@ beforeEach(() => {
       },
     }),
     selectLocalDirectory: vi.fn().mockResolvedValue(null),
+    workspaceDirectory: vi.fn(async ({ parent }: { parent: string }) => parent),
     getSettings: vi.fn().mockResolvedValue(savedSettings({ notificationsEnabled: false, notificationThresholdSeconds: 10 })),
     getSettingsRecoveryState: vi.fn().mockResolvedValue({ previousAvailable: false }),
     restorePreviousSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] }),
@@ -2620,7 +2621,7 @@ describe('split panes in the app', () => {
 
     render(<App />);
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(64));
-    act(() => rendererMocks.sidebarProps.onOpenWorktree('/home/test-feature', '/home/test'));
+    await act(async () => { await rendererMocks.sidebarProps.onOpenWorktree('/home/test-feature', '/home/test'); });
 
     expect(await screen.findByRole('alert')).toHaveTextContent('up to 64 projects');
     expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(64);
@@ -3280,7 +3281,7 @@ describe('workspace project ownership', () => {
     } }));
     render(<App />);
     await screen.findByTestId(/terminal-/);
-    act(() => rendererMocks.sidebarProps.onOpenWorktree('/home/test/repo-feature', '/home/test/repo'));
+    await act(async () => { await rendererMocks.sidebarProps.onOpenWorktree('/home/test/repo-feature', '/home/test/repo'); });
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
     const worktree = rendererMocks.verticalTabBarProps.tabs[1];
     expect(worktree).toMatchObject({ title: 'repo-feature', groupId: 'library', cwd: '/home/test/repo-feature', isProject: true });
@@ -3290,7 +3291,7 @@ describe('workspace project ownership', () => {
 
     // Opening it again focuses the existing project.
     act(() => rendererMocks.verticalTabBarProps.onSelectTab('repo'));
-    act(() => rendererMocks.sidebarProps.onOpenWorktree('/home/test/repo-feature', '/home/test/repo'));
+    await act(async () => { await rendererMocks.sidebarProps.onOpenWorktree('/home/test/repo-feature', '/home/test/repo'); });
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(worktree.id));
     expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2);
   });
@@ -3302,7 +3303,7 @@ describe('workspace project ownership', () => {
     ]));
     render(<App />);
     await screen.findByTestId(/terminal-/);
-    act(() => rendererMocks.sidebarProps.onOpenWorktree('/home/test/work/app-feature', '/home/test/work/app'));
+    await act(async () => { await rendererMocks.sidebarProps.onOpenWorktree('/home/test/work/app-feature', '/home/test/work/app'); });
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.groups).toHaveLength(2));
     const entry = rendererMocks.verticalTabBarProps.groups[1];
     expect(entry).toMatchObject({ kind: 'folder', name: 'app-feature', directory: '/home/test/work/app-feature' });

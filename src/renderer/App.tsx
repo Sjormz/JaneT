@@ -1036,8 +1036,19 @@ function AppInner({ initialSettings, persistSettings }: {
   }, []);
 
   /** Open a Git worktree as a Library project; worktrees never become Workspace projects. */
-  const openWorktreeProject = useCallback((worktreePath: string, repoPath: string | null) => {
-    const existing = tabsRef.current.find((tab) => sameDirectory(tab.cwd, worktreePath));
+  const openWorktreeProject = useCallback(async (gitWorktreePath: string, repoPath: string | null) => {
+    const findExisting = (directory: string) => tabsRef.current.find((tab) => sameDirectory(tab.cwd, directory));
+    let existing = findExisting(gitWorktreePath);
+    // Git reports forward-slash paths; store the folder as Library links do (resolved, native separators).
+    let worktreePath = gitWorktreePath;
+    if (!existing) {
+      try { worktreePath = await window.janet.workspaceDirectory({ parent: gitWorktreePath }); }
+      catch (error) {
+        setDirectoryActionError(error instanceof Error ? error.message : String(error));
+        return;
+      }
+      existing = findExisting(worktreePath);
+    }
     if (existing) {
       selectTerminalTab(existing.id);
       return;
@@ -1054,7 +1065,7 @@ function AppInner({ initialSettings, persistSettings }: {
     let group = activeLibrary
       ?? libraryGroups.filter((candidate) => containsDirectory(candidate.directory!, repository))
         .sort((left, right) => normalizeDirectory(right.directory!).length - normalizeDirectory(left.directory!).length)[0]
-      ?? libraryGroups.find((candidate) => sameDirectory(candidate.directory, worktreePath));
+      ?? libraryGroups.find((candidate) => sameDirectory(candidate.directory, worktreePath) || sameDirectory(candidate.directory, gitWorktreePath));
     const name = worktreePath.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop() || worktreePath;
     if (!group) {
       // A Workspace repository's worktree gets its own Library entry.
@@ -2211,7 +2222,7 @@ function AppInner({ initialSettings, persistSettings }: {
       gitRepository={gitRepository}
       openLocalTerminals={openLocalTerminals}
       onOpenTerminal={openTerminal}
-      onOpenWorktree={openWorktreeProject}
+      onOpenWorktree={(worktreePath, repoPath) => { void openWorktreeProject(worktreePath, repoPath); }}
       onCopyTerminalPath={copyTerminalPath}
       onOpenFile={openEditorFile}
     />

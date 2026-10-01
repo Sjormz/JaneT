@@ -82,7 +82,7 @@ test('renames the focused pane and active tab without interrupting xterm input',
     await page.waitForLoadState('domcontentloaded');
     const terminals = page.locator('.terminal-container');
     await expect(terminals).toHaveCount(2);
-    await expect(page.getByRole('button', { name: 'Show terminal tabs' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Show workspace list' })).toBeVisible();
     await expect.poll(async () => terminals.nth(1).locator('.xterm-rows').innerText(), { timeout: 15_000 }).not.toBe('');
     const terminalInputs = page.locator('.xterm-helper-textarea');
     await expect(terminalInputs).toHaveCount(2);
@@ -114,7 +114,7 @@ test('renames the focused pane and active tab without interrupting xterm input',
       .toContain(PANE_MARKER);
 
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+F2' : 'Control+Shift+KeyI');
-    const tabName = page.getByRole('dialog', { name: 'Rename tab' }).getByRole('textbox', { name: 'Tab name' });
+    const tabName = page.getByRole('dialog', { name: 'Rename project' }).getByRole('textbox', { name: 'Project name' });
     await expect(tabName).toHaveValue('Two panes');
     // Ctrl+Shift+I is a Chromium DevTools chord; JaneT has no menu accelerator for it.
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
@@ -157,7 +157,7 @@ test('renames the focused pane and active tab without interrupting xterm input',
       .toHaveAttribute('aria-label', 'Left — Local terminal pane');
     await expect(page.locator('.xterm-helper-textarea').nth(1))
       .toHaveAttribute('aria-label', 'Tests — Local terminal pane');
-    await page.getByRole('button', { name: 'Show terminal tabs' }).click();
+    await page.getByRole('button', { name: 'Show workspace list' }).click();
     await expect(page.locator('.vtab-item').filter({ hasText: 'JaneT - fixes' })).toBeVisible();
   } finally {
     await forceClose(app);

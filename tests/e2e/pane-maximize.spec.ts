@@ -121,7 +121,7 @@ async function launchApp(settings: unknown, prefix: string, existingUserData?: s
   }
 }
 
-async function launchTwoPaneApp(): Promise<{ browser: Browser; electronProcess: ChildProcess; page: Page; userData: string }> {
+async function launchTwoPaneApp(extraTabs: unknown[] = []): Promise<{ browser: Browser; electronProcess: ChildProcess; page: Page; userData: string }> {
   return launchApp({
     theme: 'tokyo-night',
     fontSize: 14,
@@ -133,13 +133,14 @@ async function launchTwoPaneApp(): Promise<{ browser: Browser; electronProcess: 
         id: 'two-pane-tab',
         title: 'two panes',
         type: 'local',
+        isProject: true,
         root: {
           type: 'split',
           direction: 'vertical',
           sizes: [1, 1],
           children: [{ type: 'leaf', title: 'left' }, { type: 'leaf', title: 'right' }],
         },
-      }],
+      }, ...extraTabs],
       activeTabId: 'two-pane-tab',
       sidebarOpen: true,
       tabsOpen: true,
@@ -253,12 +254,14 @@ test('restores the selected maximized pane structurally in a second Electron pro
   }
 });
 
-test('focuses the first terminal after clicking a terminal tab', async () => {
-  const { browser, electronProcess, page, userData } = await launchTwoPaneApp();
+test('focuses the first terminal after clicking a project', async () => {
+  const { browser, electronProcess, page, userData } = await launchTwoPaneApp([{
+    id: 'one-pane-tab', title: 'one pane', type: 'local', isProject: true, root: { type: 'leaf', title: 'single' },
+  }]);
 
   try {
     await expect(page.locator('.terminal-container')).toHaveCount(2);
-    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+T' : 'Control+Shift+T');
+    await page.locator('.vtab-item').filter({ hasText: 'one pane' }).click();
     await expect(page.locator('.terminal-container')).toHaveCount(1);
     await page.locator('.vtab-item').filter({ hasText: 'two panes' }).click();
     await expect(page.locator('.terminal-container')).toHaveCount(2);
@@ -570,6 +573,7 @@ test('focuses the exact worktree MRU across tabs and a maximized layout without 
             id: 'parent-tab',
             title: 'parent terminals',
             type: 'local',
+            isProject: true,
             cwd: repoPath,
             root: {
               type: 'split',
@@ -585,6 +589,7 @@ test('focuses the exact worktree MRU across tabs and a maximized layout without 
             id: 'nested-tab',
             title: 'nested terminal',
             type: 'local',
+            isProject: true,
             cwd: nestedPath,
             root: { type: 'leaf', title: 'nested owner', terminalType: 'local', cwd: nestedPath },
           },

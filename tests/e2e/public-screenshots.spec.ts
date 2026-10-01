@@ -218,7 +218,7 @@ function writeSettings(userData: string): void {
     session: {
       tabs: [
         {
-          id: 'demo-workspace', title: 'Demo workspace', type: 'local', cwd: fixturePath,
+          id: 'demo-workspace', title: 'Demo workspace', type: 'local', isProject: true, cwd: fixturePath,
           root: {
             type: 'split', direction: 'vertical', sizes: [1, 1],
             children: [
@@ -229,7 +229,7 @@ function writeSettings(userData: string): void {
           selectedPanePath: [0],
         },
         {
-          id: 'command-demo', title: 'Command demo', type: 'local', cwd: fixturePath,
+          id: 'command-demo', title: 'Command demo', type: 'local', isProject: true, cwd: fixturePath,
           root: { type: 'leaf', title: 'Commands', terminalType: 'local', cwd: fixturePath },
         },
       ],

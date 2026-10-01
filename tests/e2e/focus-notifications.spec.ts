@@ -32,8 +32,8 @@ test('records focus decisions and project busy/unread activity without command o
     notificationThresholdSeconds: 10,
     workspaceTabs: [],
     session: { groups: [{ id: 'activity', name: 'Activity', directory: userData }], tabs: [
-      { id: 'work', groupId: 'activity', title: 'Work', type: 'local', cwd: userData, root: { type: 'leaf', cwd: userData } },
-      { id: 'other', groupId: 'activity', title: 'Other', type: 'local', cwd: userData, root: { type: 'leaf', cwd: userData } },
+      { id: 'work', groupId: 'activity', title: 'Work', type: 'local', isProject: true, cwd: userData, root: { type: 'leaf', cwd: userData } },
+      { id: 'other', groupId: 'activity', title: 'Other', type: 'local', isProject: true, cwd: userData, root: { type: 'leaf', cwd: userData } },
     ], activeTabId: 'work' },
   }));
   let app: ElectronApplication | undefined;
