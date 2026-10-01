@@ -1,23 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
-  isWorkspaceGroup, isWorkspaceProject, normalizeWorkspaceGroups, ownsWorkspaceProjectFolder, resolveLegacyWorkspaceProjects,
+  containsDirectory, isWorkspaceGroup, normalizeWorkspaceGroups, ownsWorkspaceProjectFolder, resolveLegacyWorkspaceProjects, sameDirectory,
 } from '../../src/shared/workspaceGroups';
 import { normalizeSession } from '../../src/renderer/sessionRestore';
 
 describe('workspace group persistence', () => {
-  it('treats only explicitly flagged tabs as projects', () => {
-    const groups = [{ id: 'work', name: 'Work', directory: 'C:\\Work\\' }];
-    for (const cwd of ['c:/work/app', 'C:\\Work\\App\\']) {
-      expect(isWorkspaceProject({ groupId: 'work', cwd, isProject: true }, groups)).toBe(true);
-      // A new terminal, worktree, or folder opened in a project folder is a session.
-      expect(isWorkspaceProject({ groupId: 'work', cwd }, groups)).toBe(false);
-      expect(isWorkspaceProject({ groupId: 'work', cwd, isProject: false }, groups)).toBe(false);
-    }
-    expect(isWorkspaceProject({ groupId: 'work', cwd: undefined, isProject: true }, groups)).toBe(false);
-    expect(isWorkspaceProject({ groupId: 'work', cwd: 'C:/Work', isProject: true }, [{ ...groups[0], kind: 'folder' }])).toBe(true);
-    expect(isWorkspaceProject({ groupId: 'legacy', cwd: 'C:/Work/App', isProject: true }, [{ id: 'legacy', name: 'Old' }])).toBe(false);
+  it('compares directories by path segments, case-folding Windows paths', () => {
+    expect(sameDirectory('C:\\Work\\App\\', 'c:/work/app')).toBe(true);
+    expect(sameDirectory('/home/Work', '/home/work')).toBe(false);
+    expect(sameDirectory(undefined, '/home/work')).toBe(false);
+    expect(containsDirectory('C:/Work', 'c:\\work\\app\\src')).toBe(true);
+    expect(containsDirectory('C:/Work', 'C:/Work')).toBe(true);
+    expect(containsDirectory('C:/Work', 'C:/Workshop')).toBe(false);
   });
-
   it('lets only the owning project rename a temporary workspace folder', () => {
     const groups = [{ id: 'work', name: 'Work', directory: 'C:\\Work\\' }];
     expect(ownsWorkspaceProjectFolder({ groupId: 'work', cwd: 'c:/work/app', isProject: true }, groups)).toBe(true);
@@ -73,15 +68,18 @@ describe('workspace group persistence', () => {
         { id: 'terminal-2', title: 'Terminal 2', type: 'local', groupId: 'work', cwd: 'C:/Work/App', root: { type: 'leaf' } },
       ],
     });
-    expect(session.tabs.map((tab) => tab.isProject)).toEqual([true, false]);
+    // The secondary tab was a session; it now merges into the project it was opened from.
+    expect(session.tabs.map((tab) => [tab.id, tab.isProject])).toEqual([['project', true]]);
+    expect(session.tabs[0].root).toMatchObject({ type: 'split', children: [{ type: 'leaf' }, { type: 'leaf', cwd: 'C:/Work/App' }] });
   });
-  it('preserves linked folder paths and multiple session memberships', () => {
+  it('preserves linked folder paths and folds several sessions into one Library project', () => {
     const group = { id: 'project', name: 'Project X', kind: 'folder', directory: 'C:/Projects/X', collapsed: true };
     const session = normalizeSession({ groups: [group], tabs: ['dev', 'test'].map((id) => ({
       id, title: id, type: 'local', groupId: 'project', cwd: group.directory, root: { type: 'leaf', cwd: group.directory },
     })) });
     expect(session.groups).toEqual([group]);
-    expect(session.tabs.map((tab) => tab.groupId)).toEqual(['project', 'project']);
+    expect(session.tabs.map((tab) => [tab.id, tab.groupId, tab.isProject])).toEqual([['dev', 'project', true]]);
+    expect(session.tabs[0].root).toMatchObject({ type: 'split', children: [{ cwd: group.directory }, { cwd: group.directory }] });
     expect(isWorkspaceGroup({ id: 'bad', name: 'Bad', kind: 'folder' })).toBe(false);
     expect(isWorkspaceGroup({ ...group, directory: '\0' })).toBe(false);
   });

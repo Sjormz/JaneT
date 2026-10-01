@@ -342,10 +342,33 @@ describe('normalizeSession', () => {
       id: `tab-${index}`,
       title: `Tab ${index}`,
       type: 'local',
+      isProject: true,
       root: { type: 'leaf' },
     }));
 
     expect(normalizeSession({ tabs }).tabs).toHaveLength(64);
+  });
+
+  it('folds v0.14.1 sessions into their project on restore and never restores a session', () => {
+    const result = normalizeSession({
+      groups: [{ id: 'work', name: 'Work', directory: '/work' }],
+      tabs: [
+        { id: 'app', title: 'App', type: 'local', groupId: 'work', isProject: true, cwd: '/work/app', root: { type: 'leaf', cwd: '/work/app' } },
+        { id: 'watch', title: 'Watch', type: 'local', groupId: 'work', isProject: false, cwd: '/work/app',
+          selectedPanePath: [0], root: { type: 'split', direction: 'vertical', sizes: [1], children: [
+            { type: 'leaf', title: 'watcher', startupCommands: ['npm run watch'], startupShellDialect: 'posix' }] } },
+      ],
+      activeTabId: 'watch',
+    });
+    expect(result.tabs.map((tab) => [tab.id, tab.isProject])).toEqual([['app', true]]);
+    expect(result.activeTabId).toBe('app');
+    const restored = restorePaneTree(result.tabs[0].root)!;
+    const watcher = leafIdAtPanePath(restored, result.tabs[0].selectedPanePath!);
+    expect(serializePaneTree(restored, {}, { includeStartupCommands: true })).toMatchObject({ children: [{ cwd: '/work/app' }, {
+      title: 'watcher', cwd: '/work/app', startupCommands: ['npm run watch'], startupShellDialect: 'posix',
+    }] });
+    expect(watcher).toBe(getAllLeafIds(restored)[1]);
+    expect(normalizeSession(result)).toEqual(result);
   });
 
   it('caps restored terminal leaves across all retained tabs', () => {

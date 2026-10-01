@@ -32,6 +32,7 @@ describe('keyboard shortcut defaults', () => {
       'search-toggle': 'Ctrl+Shift+F',
       'palette-toggle': 'Ctrl+Shift+P',
       'new-terminal': 'Ctrl+Shift+T',
+      'add-terminals': 'Ctrl+Shift+`',
       'close-tab': 'Ctrl+Shift+W',
       'settings-toggle': 'Ctrl+,',
       'toggle-sidebar': 'Ctrl+Shift+B',
@@ -66,6 +67,8 @@ describe('keyboard shortcut defaults', () => {
     expect(defaultKeybindingsForPlatform('darwin')).toMatchObject({
       'palette-toggle': 'Meta+Shift+P',
       'new-terminal': 'Meta+T',
+      // Cmd+` is the macOS window switcher; VS Code uses Control+Shift+` on macOS too.
+      'add-terminals': 'Ctrl+Shift+`',
       'close-tab': 'Meta+W',
       'settings-toggle': 'Meta+,',
       'font-reset': 'Meta+0',
@@ -105,6 +108,11 @@ describe('matchesShortcut', () => {
     expect(matchesShortcut(keydown({ key: '%', code: 'Digit5', ctrlKey: true, shiftKey: true }), 'Ctrl+Shift+5')).toBe(true);
     expect(matchesShortcut(keydown({ key: '"', code: 'Quote', ctrlKey: true, shiftKey: true }), "Ctrl+Shift+'")).toBe(true);
     expect(matchesShortcut(keydown({ key: '\\', code: 'Backslash', metaKey: true }), 'Meta+\\')).toBe(true);
+    // Add terminals: Shift turns ` into ~ on US layouts; UK reports ¬ and German a dead key.
+    expect(matchesShortcut(keydown({ key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true }), 'Ctrl+Shift+`')).toBe(true);
+    expect(matchesShortcut(keydown({ key: '¬', code: 'Backquote', ctrlKey: true, shiftKey: true }), 'Ctrl+Shift+`')).toBe(true);
+    expect(matchesShortcut(keydown({ key: 'Dead', code: 'Backquote', ctrlKey: true, shiftKey: true }), 'Ctrl+Shift+`')).toBe(true);
+    expect(matchesShortcut(keydown({ key: '`', code: 'Backquote', ctrlKey: true }), 'Ctrl+Shift+`')).toBe(false);
   });
 
   it('keeps Shift significant so Ctrl+\\ and Ctrl+_ still reach the shell', () => {
@@ -224,7 +232,8 @@ describe('shortcutConflict', () => {
 });
 
 describe('keybinding migration', () => {
-  const OLD_WINDOWS: Record<KeybindingAction, string> = {
+  // Schema 1 had no add-terminals action.
+  const OLD_WINDOWS: Record<Exclude<KeybindingAction, 'add-terminals'>, string> = {
     'search-toggle': 'Ctrl+F', 'palette-toggle': 'Ctrl+Shift+P', 'new-terminal': 'Ctrl+Shift+T', 'close-tab': 'Ctrl+W',
     'settings-toggle': 'Ctrl+,', 'toggle-sidebar': 'Ctrl+B', 'font-increase': 'Ctrl+Plus', 'font-decrease': 'Ctrl+-',
     'font-reset': 'Ctrl+0', 'previous-tab': 'Ctrl+Shift+Tab', 'next-tab': 'Ctrl+Tab', 'snippets-toggle': '',
@@ -234,7 +243,7 @@ describe('keybinding migration', () => {
     'close-document': '', 'previous-command': 'Ctrl+Shift+ArrowUp', 'next-command': 'Ctrl+Shift+ArrowDown',
     'copy-command': 'Ctrl+Alt+C', 'copy-command-output': 'Ctrl+Alt+O', 'rerun-command': 'Ctrl+Alt+R',
   };
-  const OLD_MAC: Record<KeybindingAction, string> = {
+  const OLD_MAC: Record<Exclude<KeybindingAction, 'add-terminals'>, string> = {
     ...OLD_WINDOWS,
     'search-toggle': 'Meta+F', 'palette-toggle': 'Meta+Shift+P', 'new-terminal': 'Meta+T', 'close-tab': 'Meta+W',
     'settings-toggle': 'Meta+,', 'toggle-sidebar': 'Meta+B', 'font-increase': 'Meta+Plus', 'font-decrease': 'Meta+-',
@@ -280,6 +289,28 @@ describe('keybinding migration', () => {
 
   it('keeps unknown actions', () => {
     expect(migrateKeybindings({ ...OLD_WINDOWS, custom: 'Alt+J' }, 'win32')).toMatchObject({ custom: 'Alt+J' });
+  });
+
+  it.each(PLATFORMS)('gives a %s schema 2 map only the new add-terminals default and keeps every stored value', (platform) => {
+    const { 'add-terminals': _added, ...schema2 } = defaultKeybindingsForPlatform(platform);
+    // A deliberate schema-2 choice of an old schema-1 default (F2) is not moved again.
+    const stored = { ...schema2, 'rename-pane': 'F2', [KEYBINDINGS_SCHEMA_KEY]: '2' };
+    expect(migrateKeybindings(stored, platform)).toEqual({
+      ...defaultKeybindingsForPlatform(platform), 'rename-pane': 'F2',
+    });
+  });
+
+  it('keeps "New project" on the stored new-terminal key and its customization', () => {
+    const { 'add-terminals': _added, ...schema2 } = defaultKeybindingsForPlatform('win32');
+    expect(migrateKeybindings({ ...schema2, 'new-terminal': 'Ctrl+Shift+N', [KEYBINDINGS_SCHEMA_KEY]: '2' }, 'win32'))
+      .toMatchObject({ 'new-terminal': 'Ctrl+Shift+N', 'add-terminals': 'Ctrl+Shift+`' });
+  });
+
+  it('leaves add-terminals unassigned when a schema 2 customization already uses its chord', () => {
+    const { 'add-terminals': _added, ...schema2 } = defaultKeybindingsForPlatform('linux');
+    const migrated = migrateKeybindings({ ...schema2, 'history-toggle': 'Ctrl+Shift+`', [KEYBINDINGS_SCHEMA_KEY]: '2' }, 'linux');
+    expect(migrated['history-toggle']).toBe('Ctrl+Shift+`');
+    expect(migrated['add-terminals']).toBe('');
   });
 });
 

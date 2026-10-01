@@ -11,28 +11,35 @@ export const MAX_WORKSPACE_GROUPS = 64;
 
 type ProjectCandidate = { groupId?: string; cwd?: string; isProject?: boolean };
 
-function normalizeDirectory(value: string): string {
+/** Comparable form of a directory path: forward slashes, no trailing slash, case-folded on Windows paths. */
+export function normalizeDirectory(value: string): string {
   const normalized = value.replaceAll('\\', '/').replace(/\/+$/, '');
   return /^(?:[a-z]:|\/\/)/i.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
-function isDirectChildDirectory(directory: string, parent: string): boolean {
+export function isDirectChildDirectory(directory: string, parent: string): boolean {
   const base = normalizeDirectory(parent);
   const child = normalizeDirectory(directory);
   return child !== base && child.slice(0, child.lastIndexOf('/')) === base;
 }
 
-/**
- * Only explicitly flagged tabs are projects. A terminal that merely starts in a
- * project folder (a new terminal, a Git worktree, a folder opened from Files)
- * is a session and never owns that folder.
- */
-export function isWorkspaceProject(tab: ProjectCandidate, groups: WorkspaceGroup[]): boolean {
-  const group = groups.find((entry) => entry.id === tab.groupId);
-  return Boolean(group?.directory && tab.cwd && tab.isProject === true);
+export function sameDirectory(left: string | undefined, right: string | undefined): boolean {
+  return Boolean(left && right && normalizeDirectory(left) === normalizeDirectory(right));
 }
 
-/** True only for the project that owns a temporary workspace's direct child folder. */
+/** True when `child` is `parent` or a path descendant of it (not a similarly prefixed sibling). */
+export function containsDirectory(parent: string, child: string): boolean {
+  const base = normalizeDirectory(parent);
+  const candidate = normalizeDirectory(child);
+  return candidate === base || candidate.startsWith(`${base}/`);
+}
+
+/**
+ * True only for the project that owns a Workspace's direct child folder. Every
+ * other project (a Library project, a Git worktree project, or a project that
+ * starts somewhere else) is a named set of terminals: renaming it changes only
+ * its label, and removing it never touches files.
+ */
 export function ownsWorkspaceProjectFolder(tab: ProjectCandidate, groups: WorkspaceGroup[]): boolean {
   const group = groups.find((entry) => entry.id === tab.groupId);
   return Boolean(group && !group.kind && group.directory && tab.cwd && tab.isProject === true
@@ -40,15 +47,15 @@ export function ownsWorkspaceProjectFolder(tab: ProjectCandidate, groups: Worksp
 }
 
 /**
- * Sessions saved before project ownership was explicit stored no `isProject`
- * value. Resolve them once. A tab for a temporary workspace's direct child
- * folder is that folder's project when it has no terminals (only projects
- * outlive their last terminal) or when the workspace has no explicit project
- * and it is the first tab for that folder; later tabs sharing the folder were
- * opened from it. Workspaces that already contain explicit projects were
- * saved by a build that flags every new project, so their unflagged tabs stay
- * sessions. Every other unflagged tab becomes an explicit session, so this
- * inference never runs again once the session is saved.
+ * Tabs saved before project ownership was explicit stored no `isProject`
+ * value. A tab for a Workspace's direct child folder is that folder's project
+ * when it has no terminals (only projects outlive their last terminal) or when
+ * the workspace has no explicit project and it is the first tab for that
+ * folder; later tabs sharing the folder were opened from it. Workspaces that
+ * already contain explicit projects were saved by a build that flags every new
+ * project, so their unflagged tabs were sessions. Every other unflagged tab is
+ * marked `isProject: false` here; `migrateSessionsToProjects` then folds those
+ * former sessions into projects.
  */
 export function resolveLegacyWorkspaceProjects<T extends ProjectCandidate>(
   tabs: T[],

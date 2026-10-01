@@ -97,7 +97,7 @@ describe('SettingsManager', () => {
       session: {
         tabs: [
           { id: 'remote', title: 'Remote', type: 'ssh', root: remoteLeaf },
-          { id: 'mixed', title: 'Mixed', type: 'local', isProject: false, root: mixedRoot, selectedPanePath: [1], maximizedPanePath: [2] },
+          { id: 'mixed', title: 'Mixed', type: 'local', isProject: true, root: mixedRoot, selectedPanePath: [1], maximizedPanePath: [2] },
           { id: 'project', title: 'Project', type: 'local', isProject: true, root: { type: 'split', direction: 'vertical', children: [], sizes: [] } },
           { id: 'remote-project', title: 'Keep project', type: 'local', isProject: true, root: remoteLeaf },
         ],
@@ -114,8 +114,8 @@ describe('SettingsManager', () => {
     expect(settings.session.tabs.map((tab) => tab.id)).toEqual(['mixed', 'project', 'remote-project']);
     expect(settings.session.tabs[2].root).toEqual({ type: 'split', direction: 'vertical', children: [], sizes: [] });
     expect(settings.session.tabs[0].root).toEqual({ ...mixedRoot, children: [localLeaf, { ...localLeaf, title: 'Last' }], sizes: [2, 4] });
-    // Explicit session ownership survives, so restore never re-infers a project.
-    expect(settings.session.tabs.map((tab) => tab.isProject)).toEqual([false, true, true]);
+    // Explicit project ownership survives, so restore never re-infers it.
+    expect(settings.session.tabs.map((tab) => tab.isProject)).toEqual([true, true, true]);
     expect(settings.session.tabs[0]).not.toHaveProperty('selectedPanePath');
     expect(settings.session.tabs[0]).not.toHaveProperty('maximizedPanePath');
     expect(settings.session.sidebarSection).toBe('files');
@@ -427,9 +427,23 @@ describe('SettingsManager', () => {
     // The user deliberately chooses F2 again after the migration.
     manager.set({ keybindings: { ...migrated, 'rename-pane': 'F2' } });
     const saved = JSON.parse(String(vi.mocked(fsMock.writeFileSync).mock.calls.filter(([file]) => String(file).endsWith('settings.json.tmp')).at(-1)![1]));
-    expect(saved.keybindings).toMatchObject({ 'rename-pane': 'F2', $keybindingsSchema: '2' });
+    expect(saved.keybindings).toMatchObject({ 'rename-pane': 'F2', $keybindingsSchema: '3' });
     (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify(saved));
     expect(new SettingsManager().get().keybindings['rename-pane']).toBe('F2');
+  });
+
+  it('adds the add-terminals default to a schema 2 map and keeps its deliberate old choices', async () => {
+    const fsMock = await import('fs');
+    const { DEFAULT_KEYBINDINGS } = await import('../../src/shared/keybindings');
+    const { 'add-terminals': _added, ...schema2 } = DEFAULT_KEYBINDINGS;
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      keybindings: { ...schema2, 'rename-pane': 'F2', 'new-terminal': 'Ctrl+Shift+N', $keybindingsSchema: '2' },
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const keybindings = new SettingsManager().get().keybindings;
+    expect(keybindings['rename-pane']).toBe('F2');
+    expect(keybindings['new-terminal']).toBe('Ctrl+Shift+N');
+    expect(keybindings['add-terminals']).toBe(process.platform === 'darwin' ? 'Ctrl+Shift+`' : DEFAULT_KEYBINDINGS['add-terminals']);
   });
 
   it('rejects shortcut updates whose merged map exceeds the entry limit', async () => {
@@ -840,6 +854,27 @@ describe('SettingsManager', () => {
     expect(JSON.stringify(saved)).not.toContain('echo mutated');
   });
 
+  it('folds saved sessions into projects once on load, without touching other settings', async () => {
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({
+      session: {
+        groups: [{ id: 'work', name: 'Work', directory: 'C:/Work' }, { id: 'repo', name: 'Repo', kind: 'folder', directory: 'C:/Repo' }],
+        tabs: [
+          { id: 'app', title: 'App', type: 'local', groupId: 'work', isProject: true, cwd: 'C:/Work/App', root: { type: 'leaf', cwd: 'C:/Work/App' } },
+          { id: 'terminal-2', title: 'Terminal 2', type: 'local', groupId: 'work', isProject: false, cwd: 'C:/Work/App', root: { type: 'leaf' } },
+          { id: 'repo-shell', title: 'Terminal 3', type: 'local', groupId: 'repo', isProject: false, cwd: 'C:/Repo', root: { type: 'leaf' } },
+        ],
+        activeTabId: 'terminal-2', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+      },
+    }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const session = new SettingsManager().get().session;
+    expect(session.tabs.map((tab) => [tab.id, tab.groupId, tab.isProject])).toEqual([['app', 'work', true], ['repo-shell', 'repo', true]]);
+    expect(session.tabs[0].root).toMatchObject({ type: 'split', children: [{ cwd: 'C:/Work/App' }, { cwd: 'C:/Work/App' }] });
+    expect(session.activeTabId).toBe('app');
+    expect(session.groups).toHaveLength(2);
+  });
+
   it('preserves a saved session across reload', async () => {
     const fsMock = await import('fs');
     const { SettingsManager } = await import('../../src/main/settings');
@@ -852,6 +887,7 @@ describe('SettingsManager', () => {
             id: 'tab-1',
             title: 'JaneT - fixes',
             type: 'local',
+            isProject: true,
             cwd: 'C:/repo',
             selectedPanePath: [1],
             maximizedPanePath: [1],
@@ -861,6 +897,7 @@ describe('SettingsManager', () => {
             id: 'tab-2',
             title: 'Tools',
             type: 'local',
+            isProject: true,
             root: { type: 'leaf', title: 'shell' },
           },
         ],

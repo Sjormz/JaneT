@@ -24,7 +24,7 @@ export default function EmptyWorkspace({ groups, mainDirectory, onRequest }: {
           </optgroup>)}
         </select>
       </label>
-      <p>Create a project folder here. Add terminals now or start a session later.</p>
+      <p>Create a project here. Add terminals now or whenever you’re ready.</p>
     </>}
     <div className="fresh-profile-entry-actions" role="group" aria-label={selected ? 'Selected location' : 'Get started'}>
       <button type="button" className="empty-workspace-primary" onClick={() => onRequest({ action: 'create', groupId: selected?.id })}>

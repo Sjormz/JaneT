@@ -46,7 +46,7 @@ function makeProps(overrides: Partial<SidebarProps> = {}): SidebarProps {
       error: null,
       stale: false,
     },
-    onOpenLocalTabAt: vi.fn(),
+    onOpenWorktree: vi.fn(),
     ...overrides,
   };
 }
@@ -205,7 +205,7 @@ describe('Sidebar project tools', () => {
       deleted: [],
       conflicted: [],
     };
-    const onOpenLocalTabAt = vi.fn();
+    const onOpenWorktree = vi.fn();
     const onCopyTerminalPath = vi.fn().mockResolvedValue(undefined);
     const onOpenFile = vi.fn();
     render(
@@ -220,7 +220,7 @@ describe('Sidebar project tools', () => {
             error: 'fatal: not a git repository',
             stale: true,
           },
-          onOpenLocalTabAt,
+          onOpenWorktree,
           onCopyTerminalPath,
           onOpenFile,
         })}
@@ -233,7 +233,7 @@ describe('Sidebar project tools', () => {
       status,
       searching: true,
       statusError: 'fatal: not a git repository',
-      onOpenLocalTabAt,
+      onOpenWorktree,
       onCopyTerminalPath,
       onOpenFile,
       mutationLock: expect.objectContaining({ current: null }),

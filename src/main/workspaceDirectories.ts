@@ -1,5 +1,39 @@
 import * as fs from 'node:fs/promises';
+import { lstatSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
+
+const GIT_LINK_FILE_LIMIT = 4096;
+const WORKTREE_GIT_LINK = /^gitdir:\s*\S.*[\\/]worktrees[\\/][^\\/\r\n]+\s*$/m;
+
+/**
+ * True when `directory` is a linked Git worktree: its `.git` is a small file
+ * pointing into another repository's `.git/worktrees`. Reads one file; never
+ * runs Git. Used once while migrating saved sessions.
+ */
+export function isLinkedGitWorktreeSync(directory: string): boolean {
+  if (typeof directory !== 'string' || !path.isAbsolute(directory) || directory.includes('\0')) return false;
+  try {
+    const marker = path.join(directory, '.git');
+    const info = lstatSync(marker);
+    if (!info.isFile() || info.size > GIT_LINK_FILE_LIMIT) return false;
+    return WORKTREE_GIT_LINK.test(readFileSync(marker, 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when `directory` has a `.git` file instead of a `.git` folder, as a
+ * linked Git worktree or a submodule does. Its Git data lives elsewhere, so
+ * JaneT must never rename, move, or recycle it.
+ */
+export async function hasGitLinkFile(directory: string): Promise<boolean> {
+  try {
+    return (await fs.lstat(path.join(directory, '.git'))).isFile();
+  } catch {
+    return false;
+  }
+}
 
 export async function requireDirectory(value: unknown): Promise<string> {
   if (typeof value !== 'string' || value.length > 8192 || value.includes('\0') || !path.isAbsolute(value)) {
