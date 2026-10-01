@@ -1,5 +1,6 @@
 import { PaneNode, TerminalLeaf, SplitNode, genId } from './types';
-import { normalizeWorkspaceGroups, resolveLegacyWorkspaceProjects, type WorkspaceGroup } from '../shared/workspaceGroups';
+import { normalizeWorkspaceGroups, type WorkspaceGroup } from '../shared/workspaceGroups';
+import { migrateSessionsToProjects } from '../shared/sessionMigration';
 import type { StartupShellDialect } from '../shared/startupCommands';
 import { isStartupShellDialect, sanitizeStartupCommands } from '../shared/startupCommands';
 
@@ -246,11 +247,17 @@ export function normalizeSession(raw: unknown): SavedSession {
     }
   }
 
-  const groups = obj.groups !== undefined ? normalizeWorkspaceGroups(obj.groups) : undefined;
-  return {
-    tabs: resolveLegacyWorkspaceProjects(tabs, groups ?? [], (tab) => countSavedPaneLeaves(tab.root, MAX_RESTORED_TERMINALS) !== 0),
-    ...(groups !== undefined ? { groups } : {}),
+  const savedGroups = obj.groups !== undefined ? normalizeWorkspaceGroups(obj.groups) : undefined;
+  // Sidebar entries are always projects now; fold former sessions into them.
+  const migrated = migrateSessionsToProjects({
+    tabs, groups: savedGroups ?? [],
     activeTabId: typeof obj.activeTabId === 'string' ? obj.activeTabId : null,
+  });
+  const groups = savedGroups !== undefined || migrated.groups.length > 0 ? migrated.groups : undefined;
+  return {
+    tabs: migrated.tabs,
+    ...(groups !== undefined ? { groups } : {}),
+    activeTabId: migrated.activeTabId,
     sidebarOpen: obj.sidebarOpen !== false,
     tabsOpen: obj.tabsOpen !== false,
     sidebarSection: section,

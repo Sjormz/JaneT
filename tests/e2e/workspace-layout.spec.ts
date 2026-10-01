@@ -231,11 +231,11 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
       .toBe(true);
     reports.push(compactPaneReport);
 
-    await page.getByRole('button', { name: 'Show terminal tabs' }).click();
+    await page.getByRole('button', { name: 'Show workspace list' }).click();
     const activeTab = page.locator('.vtab-item.active');
     await activeTab.hover();
     await activeTab.click({ button: 'right' });
-    const tabClose = page.getByRole('menuitem', { name: 'Close session' });
+    const tabClose = page.getByRole('menuitem', { name: 'Close all terminals…' });
     await expect(tabClose).toBeVisible();
     const tabCloseBox = await tabClose.boundingBox();
     expect(tabCloseBox).not.toBeNull();
@@ -414,14 +414,14 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
 
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(800, 600));
     await expect.poll(() => page.evaluate(() => innerWidth)).toBeLessThanOrEqual(800);
-    const compactTabs = page.getByRole('button', { name: 'Show terminal tabs' });
+    const compactTabs = page.getByRole('button', { name: 'Show workspace list' });
     await expect(compactTabs).toBeVisible();
     await expect.poll(async () => Math.round(
       await workspaceTools.evaluate((element) => element.getBoundingClientRect().width),
     )).toBe(250);
 
     // With the rail collapsed, its way back lives in the titlebar and the tools sit directly against the terminal.
-    await expect(page.locator('.titlebar').getByRole('button', { name: 'Show terminal tabs' })).toBeVisible();
+    await expect(page.locator('.titlebar').getByRole('button', { name: 'Show workspace list' })).toBeVisible();
     const compactTools = await workspaceTools.boundingBox();
     const compactTerminal = await page.locator('.terminal-area').boundingBox();
     expect(compactTools).not.toBeNull();
@@ -490,7 +490,10 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
 
 test('consumes Hermes plugin lifecycle output through the local PTY', async ({}, testInfo) => {
   const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-awareness-e2e-'));
-  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(terminalSettings(userData)));
+  const settings = terminalSettings(userData);
+  settings.session.tabs.push({ id: 'second-project', groupId: 'fixture-library', title: 'Second project', type: 'local',
+    isProject: true, cwd: userData, root: { type: 'leaf', cwd: userData } });
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(settings));
   const pluginDir = path.join(root, 'integrations', 'hermes-agent-awareness');
   const probePath = path.join(userData, 'emit-hermes-awareness.py');
   const sessionReadyPath = path.join(userData, 'session-ready');
@@ -586,13 +589,12 @@ print("TUI_AWARENESS_OK")
     const firstTab = page.locator('.vtab-item').first();
     await expect.poll(() => fs.existsSync(sessionReadyPath)).toBe(true);
     await expect(firstTab).toHaveAttribute('aria-label', /Hermes · Ready/);
-    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+T' : 'Control+Shift+T');
     await expect(page.locator('.vtab-item')).toHaveCount(2);
-
-    await page.locator('.vtab-item').nth(1).click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Close session', exact: true }).click();
-    await page.getByRole('alertdialog').getByRole('button', { name: 'Close tab' }).click();
-    await expect(page.locator('.vtab-item')).toHaveCount(1);
+    // Visit another project and come back; the running agent keeps reporting to its own project.
+    await page.locator('.vtab-item').nth(1).click();
+    await expect(page.locator('.vtab-item').nth(1)).toHaveClass(/active/);
+    await firstTab.click();
+    await expect(firstTab).toHaveClass(/active/);
 
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
     await expect.poll(() => page.evaluate(() => window.janet.isWindowFocused())).toBe(true);

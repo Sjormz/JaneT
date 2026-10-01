@@ -28,7 +28,8 @@ export interface SidebarProps {
   gitRepository: GitRepositoryState;
   openLocalTerminals?: Array<{ terminalId: string; cwd: string; lastFocused: number }>;
   onOpenTerminal?: (terminalId: string) => void;
-  onOpenLocalTabAt?: (cwd: string, title?: string) => void;
+  /** Open a Git worktree as a Library project (or focus its existing project). */
+  onOpenWorktree?: (worktreePath: string, repoPath: string | null) => void;
   onCopyTerminalPath?: (path: string) => Promise<void>;
   onOpenFile?: (resource: EditorResource) => void;
 }
@@ -55,7 +56,7 @@ export default function Sidebar({
   gitRepository,
   openLocalTerminals,
   onOpenTerminal,
-  onOpenLocalTabAt,
+  onOpenWorktree,
   onCopyTerminalPath,
   onOpenFile,
 }: SidebarProps) {
@@ -144,7 +145,7 @@ export default function Sidebar({
             statusError={gitRepository.error}
             openLocalTerminals={openLocalTerminals}
             onOpenTerminal={onOpenTerminal}
-            onOpenLocalTabAt={onOpenLocalTabAt}
+            onOpenWorktree={onOpenWorktree}
             onCopyTerminalPath={onCopyTerminalPath}
             onOpenFile={onOpenFile}
             mutationLock={gitMutationLock}

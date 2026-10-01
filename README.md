@@ -19,14 +19,14 @@
   <a href="https://github.com/Sjormz/JaneT/releases/latest"><strong>Download JaneT</strong></a>
 </p>
 
-JaneT keeps real local shell sessions, split terminal panes, project files, and everyday Git work together in one desktop app. Organize work into workspaces and Library sessions, browse and edit files beside your terminals, and restore your workspace layout when you reopen the app.
+JaneT keeps real local shells, split terminal panes, project files, and everyday Git work together in one desktop app. Organize work into projects in temporary workspaces or in Library entries linked to your own folders, browse and edit files beside your terminals, and restore your workspace layout when you reopen the app.
 
 ![JaneT desktop workspace with two local terminals, the Workspaces sidebar, and Explorer](docs/site/public/screenshots/workspace-overview.png)
 
 ## Features
 
-- Local PTY-backed terminals with tabs, resizable split panes, and configurable shortcuts
-- Workspaces for temporary projects and Library sessions for existing folders
+- Local PTY-backed terminals grouped into projects, with resizable split panes and configurable shortcuts
+- Workspaces for temporary projects and Library entries for existing folders and Git worktrees
 - File browsing and a built-in editor for supported text files
 - Git status, staging, commits, branches, and worktree management
 - Command search, snippets, semantic command navigation, and optional focus-away notifications

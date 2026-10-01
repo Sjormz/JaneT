@@ -100,8 +100,8 @@ test('sets up a main directory and restores independent linked-folder sessions',
     });
     await page.locator('.vtab-name').getByText('Temporary', { exact: true }).click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Rename project', exact: true }).click();
-    await page.getByRole('textbox', { name: 'Tab name', exact: true }).fill('Renamed project');
-    await page.getByRole('textbox', { name: 'Tab name', exact: true }).press('Enter');
+    await page.getByRole('textbox', { name: 'Project name', exact: true }).fill('Renamed project');
+    await page.getByRole('textbox', { name: 'Project name', exact: true }).press('Enter');
     await expect.poll(() => fs.existsSync(path.join(main, 'First group', 'Renamed project', 'keep.txt'))).toBe(true);
     await expect.poll(() => settings().session.tabs[0]?.cwd).toBe(path.join(main, 'First group', 'Renamed project'));
     await folders.closeProjectTerminals('Renamed project');
@@ -115,13 +115,13 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await expect(page.getByRole('dialog')).toHaveCount(0).catch(async () => { throw new Error(await page.getByRole('dialog').innerText()); });
     expect(fs.readFileSync(path.join(main, 'Renamed workspace', 'Renamed project', 'keep.txt'), 'utf8')).toBe('keep');
     await page.locator('.vtab-name').getByText('Renamed project', { exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Start session', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Start terminals', exact: true })).toBeVisible();
     await expect(page.locator('.terminal-container')).toHaveCount(0);
     const emptyClosed = app.waitForEvent('close');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
     await emptyClosed; app = undefined;
     app = await launch(); page = await app.firstWindow(); folders = new FolderSessions(page, app);
-    await expect(page.getByRole('heading', { name: 'Start session', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Start terminals', exact: true })).toBeVisible();
     await expect(page.locator('.terminal-container')).toHaveCount(0);
     await createWorkspace(page, 'Experiment A', [{}, {}], 'Research');
     await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -182,7 +182,7 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await page.locator('.vtab-name').getByText('Testing', { exact: true }).click();
     await folders.closeProjectTerminals('Testing');
     await folders.projectAction('Development', 'Remove project…');
-    await page.getByRole('button', { name: 'Remove from Library', exact: true }).click();
+    await page.getByRole('button', { name: 'Remove project', exact: true }).click();
     await expect(page.locator('.vtab-name').getByText('Development', { exact: true })).toHaveCount(0);
     await expect(page.locator('.vtab-name').getByText('Testing', { exact: true })).toBeVisible();
     expect(fs.readdirSync(project)).toEqual(['keep.txt']);
@@ -223,6 +223,91 @@ test('sets up a main directory and restores independent linked-folder sessions',
     if (app) {
       const stopped = app.waitForEvent('close', { timeout: 5000 });
       await app.evaluate(({ app: instance }) => instance.exit(0)).catch(() => {});
+      await stopped;
+    }
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('opens Git worktrees from Source Control as Library projects without touching their folders', async () => {
+  test.setTimeout(90_000);
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-worktree-e2e-'));
+  const profile = path.join(root, 'profile');
+  const workspace = path.join(root, 'Work');
+  const app = path.join(workspace, 'App');
+  const appFeature = path.join(workspace, 'App-feature');
+  const repo = path.join(root, 'Repo');
+  const repoFeature = path.join(root, 'Repo-feature');
+  fs.mkdirSync(profile);
+  fs.mkdirSync(workspace);
+  for (const [directory, feature, branch] of [[app, appFeature, 'app-feature'], [repo, repoFeature, 'repo-feature']]) {
+    execFileSync('git', ['init', directory]);
+    execFileSync('git', ['-C', directory, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'Initial']);
+    execFileSync('git', ['-C', directory, 'worktree', 'add', '-b', branch, feature]);
+  }
+  const leaf = (cwd: string) => ({ type: 'leaf', cwd });
+  const settingsPath = path.join(profile, 'settings.json');
+  fs.writeFileSync(settingsPath, JSON.stringify({ mainDirectory: root, session: {
+    groups: [{ id: 'work', name: 'Work', directory: workspace }, { id: 'repo', name: 'Repo', kind: 'folder', directory: repo }],
+    tabs: [
+      { id: 'app', title: 'App', type: 'local', groupId: 'work', isProject: true, cwd: app, root: leaf(app) },
+      { id: 'repo-project', title: 'Repo', type: 'local', groupId: 'repo', isProject: true, cwd: repo, root: leaf(repo) },
+    ],
+    activeTabId: 'repo-project', sidebarOpen: true, tabsOpen: true, sidebarSection: 'git',
+  } }));
+  const settings = () => JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: profile };
+  delete env.ELECTRON_RUN_AS_NODE; delete env.ELECTRON_NO_ATTACH_CONSOLE;
+  let electronApp: ElectronApplication | undefined;
+  try {
+    electronApp = await electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env: Object.fromEntries(Object.entries(env)
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string')) });
+    const page = await electronApp.firstWindow();
+    const project = (name: string) => page.locator('.vtab-item').filter({ has: page.locator('.vtab-name', { hasText: name }) });
+    await expect(project('Repo')).toHaveClass(/active/);
+
+    // A Library repository's worktree becomes another project of that Library entry.
+    await page.getByRole('button', { name: 'Open worktree Repo-feature as a Library project' }).click({ timeout: 20_000 });
+    await expect(project('Repo-feature')).toHaveClass(/active/);
+    await expect(page.getByRole('region', { name: 'Repo', exact: true }).locator('.project-entry')).toHaveCount(2);
+    await expect(project('Repo-feature').getByRole('img', { name: 'Worktree project' })).toBeVisible();
+    await expect(page.locator('.terminal-container')).toHaveCount(1);
+    await expect.poll(() => settings().session.tabs.find((tab: any) => tab.title === 'Repo-feature'))
+      .toMatchObject({ groupId: 'repo', cwd: repoFeature, isProject: true });
+
+    // Renaming a worktree project changes only its label.
+    await project('Repo-feature').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Rename project', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Project name', exact: true }).fill('Feature review');
+    await page.getByRole('textbox', { name: 'Project name', exact: true }).press('Enter');
+    await expect(project('Feature review')).toBeVisible();
+    await expect.poll(() => settings().session.tabs.find((tab: any) => tab.title === 'Feature review')?.cwd).toBe(repoFeature);
+    expect(fs.existsSync(path.join(repoFeature, '.git'))).toBe(true);
+
+    // A Workspace project's worktree gets its own Library entry.
+    await project('App').click();
+    await page.getByRole('button', { name: 'Open worktree App-feature as a Library project' }).click({ timeout: 20_000 });
+    const entry = page.getByRole('region', { name: 'App-feature', exact: true });
+    await expect(entry.locator('.project-entry')).toHaveCount(1);
+    await expect(entry.getByRole('img', { name: 'Worktree project' })).toBeVisible();
+    await expect.poll(() => settings().session.groups.find((group: any) => group.directory === appFeature))
+      .toMatchObject({ kind: 'folder', name: 'App-feature' });
+
+    // Removing it, or its Library entry, never touches the worktree.
+    await project('App-feature').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Remove project…', exact: true }).click();
+    await page.getByRole('button', { name: 'Remove project', exact: true }).click();
+    await expect(project('App-feature')).toHaveCount(0);
+    await entry.locator('.workspace-group-name').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Remove from Library…', exact: true }).click();
+    await page.getByRole('button', { name: 'Remove from Library', exact: true }).click();
+    await expect(entry).toHaveCount(0);
+    for (const folder of [appFeature, repoFeature]) expect(fs.readFileSync(path.join(folder, '.git'), 'utf8')).toMatch(/^gitdir:/);
+    expect(execFileSync('git', ['-C', app, 'worktree', 'list'], { encoding: 'utf8' })).toContain('App-feature');
+  } finally {
+    if (electronApp) {
+      const stopped = electronApp.waitForEvent('close', { timeout: 5000 });
+      await electronApp.evaluate(({ app: instance }) => instance.exit(0)).catch(() => {});
       await stopped;
     }
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

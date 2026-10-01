@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { isWorkspaceGroup, MAX_WORKSPACE_GROUPS, normalizeWorkspaceGroups, type WorkspaceGroup } from '../shared/workspaceGroups';
 import { app } from 'electron';
+import { migrateSessionsToProjects, type SessionMigrationOptions } from '../shared/sessionMigration';
+import { isLinkedGitWorktreeSync } from './workspaceDirectories';
 import { DEFAULT_TERMINAL_FONT_FAMILY, normalizeTerminalFontFamily } from '../shared/typography';
 import type { StartupShellDialect } from '../shared/startupCommands';
 import {
@@ -389,7 +391,7 @@ export class SettingsManager {
         .map(cloneWorkspaceTabPreset)
         .filter((preset): preset is AppSettings['workspaceTabs'][number] => Boolean(preset))
         .filter(uniqueIdFilter()),
-      session: cloneSavedSession(settings.session),
+      session: cloneSavedSession(settings.session, { isLinkedWorktree: isLinkedGitWorktreeSync }),
     };
   }
 
@@ -441,7 +443,7 @@ function cloneSavedTab(value: unknown): SavedTab | undefined {
   return {
     id: tab.id,
     ...(typeof tab.groupId === 'string' && tab.groupId.length <= 256 ? { groupId: tab.groupId } : {}),
-    // Keep explicit `false`: it records that the tab is a session, not a legacy project.
+    // Keep explicit `false` (saved by v0.14.1 for sessions) until cloneSavedSession folds it into a project.
     ...(typeof tab.isProject === 'boolean' ? { isProject: tab.isProject } : {}),
     title: tab.title,
     type: tab.type,
@@ -463,7 +465,7 @@ function cloneSavedPanePath(value: unknown, root: SavedPaneNode): number[] | und
   return node.type === 'leaf' ? [...value] : undefined;
 }
 
-function cloneSavedSession(value: unknown): SavedSession {
+function cloneSavedSession(value: unknown, migration: SessionMigrationOptions = {}): SavedSession {
   const session = value && typeof value === 'object' ? value as Partial<SavedSession> : {};
   const tabs: SavedTab[] = [];
   let terminalCount = 0;
@@ -477,10 +479,17 @@ function cloneSavedSession(value: unknown): SavedSession {
       tabs.push(tab);
     }
   }
-  return {
-    tabs,
-    ...(session.groups !== undefined ? { groups: normalizeWorkspaceGroups(session.groups) } : {}),
+  const savedGroups = session.groups !== undefined ? normalizeWorkspaceGroups(session.groups) : undefined;
+  // Every sidebar entry is a project; fold entries saved as sessions into projects once.
+  const migrated = migrateSessionsToProjects({
+    tabs, groups: savedGroups ?? [],
     activeTabId: typeof session.activeTabId === 'string' ? session.activeTabId : null,
+  }, migration);
+  const groups = savedGroups !== undefined || migrated.groups.length > 0 ? migrated.groups : undefined;
+  return {
+    tabs: migrated.tabs,
+    ...(groups !== undefined ? { groups } : {}),
+    activeTabId: migrated.activeTabId,
     sidebarOpen: typeof session.sidebarOpen === 'boolean' ? session.sidebarOpen : EMPTY_SESSION.sidebarOpen,
     tabsOpen: typeof session.tabsOpen === 'boolean' ? session.tabsOpen : EMPTY_SESSION.tabsOpen,
     sidebarSection: session.sidebarSection === 'git'

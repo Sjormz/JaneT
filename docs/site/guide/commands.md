@@ -23,7 +23,7 @@ Supported shells mark command boundaries as you work. Use **Previous semantic co
 
 *Semantic markers help you move between commands in a terminal buffer.*
 
-These actions depend on shell integration. New local PowerShell, Bash, Zsh, and Fish sessions receive it where supported; other shells still work as terminals.
+These actions depend on shell integration. New local PowerShell, Bash, Zsh, and Fish terminals receive it where supported; other shells still work as terminals.
 
 ## Search command history
 

@@ -133,6 +133,38 @@ A per-platform migration runs once in `SettingsManager.parse()` (`migrateKeybind
 
 The migrated map is saved with the marker on the next settings write. The renderer writes its bindings on startup, so a later deliberate choice of an old key (for example F2) is kept.
 
+## Addendum — 1 October 2026: projects replace terminal tabs
+
+Sidebar entries are now always projects (see `docs/site/guide/workspaces.md`). Two shortcut changes follow.
+
+### New project (`new-terminal`)
+
+The action id stays `new-terminal` so stored bindings keep working, but it now opens **Create project** for the Workspace or Library entry that holds the active project (else the first Workspace, else the first Library entry, else first-run setup). The default keys do not change: `Ctrl+Shift+T` on Windows and Linux, `Cmd+T` on macOS. They already passed this audit; Windows Terminal, GNOME Terminal, kitty, iTerm2 and Terminal.app use the same keys for "new tab", which is now the closest equivalent of "new project". A user who customized the key keeps it with the new meaning.
+
+### Add terminals to current project (`add-terminals`, new)
+
+The pane **+** button ("Add terminals") gets its own action and is in the command palette.
+
+| Candidate | Prior art | Conflicts found | Verdict |
+| --- | --- | --- | --- |
+| `` Ctrl+Shift+` `` | VS Code "Terminal: Create New Terminal" on Windows, Linux **and** macOS | xterm.js 6 sends nothing for it (`Keyboard.ts`: Ctrl+Shift only encodes `-`, `2`, `6`), so no shell, readline, ZLE, PSReadLine, vim, tmux or TUI key is lost. Not an OS key on Windows, GNOME, KDE or macOS (the Windows input-language hotkey can be set to a bare grave accent, not this chord). Not Ctrl+Alt/AltGr. Not a Monaco default. Not used by any other JaneT default. Plain `` Ctrl+` `` (NUL in real xterm) stays with the terminal because Shift must match. | **Chosen, all platforms** |
+| `Ctrl+Shift+Enter` | kitty "new window" in the current layout | xterm.js sends `\r` for any Ctrl/Shift+Enter, so programs would lose an Enter variant some agent TUIs read; Monaco "insert line above". | Rejected |
+| `Ctrl+Shift+N` | Windows Terminal / GNOME / kitty "new window" | Means a new *window* everywhere else; JaneT has no second window, so the mnemonic would mislead. | Rejected |
+| `Ctrl+Shift+D` / `Alt+Shift+D` | Windows Terminal duplicate/split pane | `Alt+Shift+D` is Meta (`M-D`, readline kill-word) in shells; Windows Terminal's binding is a split, which JaneT already has on `Ctrl+Shift+5`. | Rejected |
+| macOS `Cmd+D` / `Cmd+Shift+D` | iTerm2 and Terminal.app split pane | Captured app shortcuts preempt Monaco's `Cmd+D` (add next occurrence), a heavily used editor key; split is already `Cmd+\`. | Rejected |
+| macOS `` Cmd+` `` | — | Reserved by macOS (cycle windows); `shortcutConflict` already warns. | Rejected |
+| macOS `Cmd+Enter` | kitty new window | Monaco "insert line below" while the editor has focus. | Rejected |
+
+So `add-terminals` defaults to `` Ctrl+Shift+` `` on every platform, matching VS Code exactly. On macOS this is a Control chord, like the existing `Ctrl+Tab` defaults, because the Command candidates are reserved or would take editor keys; Control+Shift+` still reaches no terminal program. `shortcutKeyFromEvent` maps the physical Backquote key when Shift produces `~` (US), `¬` (UK) or a dead key (German), so the chord follows the key, not the layout's character. The unit test that checks every default against `shortcutConflict` and for duplicates covers it on all three platforms.
+
+### Migration (schema 3)
+
+`KEYBINDINGS_SCHEMA_VERSION` is now `3`:
+
+1. Schema 3 maps are left alone.
+2. A schema 2 map keeps every stored value, including deliberate choices of old schema 1 defaults, and only gains defaults for actions it lacks (`add-terminals`). If that default equals one of the user's own chords, `add-terminals` is left unassigned.
+3. Older maps (schema 1, legacy) migrate as before; `add-terminals` is a missing action there too and gets its default under the same collision rule.
+
 ## Verification limits
 
 - Unit and component tests dispatch realistic `key`/`code` pairs.

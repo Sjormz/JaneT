@@ -3,7 +3,7 @@ layout: home
 hero:
   name: JaneT
   text: Your terminal workspace, explained.
-  tagline: Learn to organize shells, work with local files and Git, and keep your context across sessions.
+  tagline: Learn to organize shells, work with local files and Git, and keep your context between launches.
   actions:
     - theme: brand
       text: Get started
@@ -13,7 +13,7 @@ hero:
       link: https://github.com/Sjormz/JaneT/releases/latest
 features:
   - title: Terminals that stay flexible
-    details: Work in tabs and split panes, search output, and use your preferred local shell.
+    details: Organize terminals into projects and split panes, search output, and use your preferred local shell.
     link: /guide/terminals
   - title: Files and Git beside your shell
     details: Browse and edit local files, then review changes in Source Control.

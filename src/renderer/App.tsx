@@ -1,6 +1,9 @@
 import React, { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import { flushSync } from 'react-dom';
-import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, isWorkspaceProject, ownsWorkspaceProjectFolder, rebaseDirectory, type WorkspaceGroup } from '../shared/workspaceGroups';
+import {
+  DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, containsDirectory, normalizeDirectory, ownsWorkspaceProjectFolder, rebaseDirectory,
+  sameDirectory, type WorkspaceGroup,
+} from '../shared/workspaceGroups';
 import EmptyWorkspace, { type WorkspaceEntryRequest } from './components/EmptyWorkspace';
 import Titlebar from './components/Titlebar';
 import VerticalTabBar from './components/VerticalTabBar';
@@ -261,6 +264,7 @@ function AppInner({ initialSettings, persistSettings }: {
   const [workspaceCreatorOpen, setWorkspaceCreatorOpen] = useState(false);
   const [workspaceEntryRequest, setWorkspaceEntryRequest] = useState<WorkspaceEntryRequest>();
   const [sessionSaveFailed, setSessionSaveFailed] = useState(false);
+  const [directoryActionError, setDirectoryActionError] = useState('');
   const [maximizedLeafByTab, setMaximizedLeafByTabState] = useState<Record<string, string | null>>(
     initialState.maximizedLeafByTab,
   );
@@ -547,9 +551,6 @@ function AppInner({ initialSettings, persistSettings }: {
   const terminalCount = useCallback(() => (
     tabsRef.current.reduce((total, tab) => total + countLeaves(tab.root), 0)
   ), []);
-  const canAddTerminalTab = useCallback(() => (
-    tabsRef.current.length < MAX_RESTORED_TABS && terminalCount() < MAX_RESTORED_TERMINALS
-  ), [terminalCount]);
 
   // Track terminal registrations
   const handleTerminalReady = useCallback((termId: string) => {
@@ -1016,45 +1017,84 @@ function AppInner({ initialSettings, persistSettings }: {
     [],
   );
 
-  // === Tab management ===
+  // === Project management ===
 
-  const addTab = useCallback(
-    (
-      type: 'local' = 'local',
-      cwd?: string,
-      title?: string,
-    ): boolean => {
-      if (!canAddTerminalTab()) {
-        return false;
-      }
-      if (groupsRef.current.length === 0) {
-        if (!mainDirectory && !homeDir) return false;
-        const nextGroups: WorkspaceGroup[] = [mainDirectory ? { ...DEFAULT_WORKSPACE_GROUP }
-          : { id: DEFAULT_WORKSPACE_GROUP.id, name: 'Home', kind: 'folder', directory: homeDir }];
-        groupsRef.current = nextGroups;
-        setGroups(nextGroups);
-      }
-      const tab: TabInfo = {
-        id: genId('tab'),
-        title: title || `Terminal ${tabs.length + 1}`,
-        groupId: tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)?.groupId ?? groupsRef.current[0]?.id,
-        type,
-        cwd: cwd ?? tabsRef.current.find((item) => item.id === activeTabIdRef.current)?.cwd ?? mainDirectory ?? undefined,
-        root: createTabRoot(type),
-      };
-      const next = [...tabsRef.current, tab];
-      setBroadcastRecipientIds(new Set());
-      tabsRef.current = next;
-      setTabs(next);
-      setActiveTabId(tab.id);
-      return true;
-    },
-    [canAddTerminalTab, tabs.length, mainDirectory, homeDir],
-  );
+  /**
+   * "New project": open the create-project page for the Workspace or Library
+   * entry that owns the active project, else the first Workspace, else the
+   * first Library entry, else the normal first-run setup.
+   */
+  const requestNewProject = useCallback(() => {
+    const active = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current);
+    const currentGroups = groupsRef.current;
+    const target = currentGroups.find((group) => group.id === active?.groupId)
+      ?? currentGroups.find((group) => group.kind !== 'folder')
+      ?? currentGroups[0];
+    responsiveTabsCollapsedRef.current = false;
+    setTabsOpen(true);
+    setWorkspaceEntryRequest(target ? { action: 'create', groupId: target.id } : { action: 'create' });
+  }, []);
 
-  const openLocalTabAt = useCallback((cwd: string, title?: string) => {
-    addTab('local', cwd, title);
-  }, [addTab]);
+  /** Open a Git worktree as a Library project; worktrees never become Workspace projects. */
+  const openWorktreeProject = useCallback(async (gitWorktreePath: string, repoPath: string | null) => {
+    const findExisting = (directory: string) => tabsRef.current.find((tab) => sameDirectory(tab.cwd, directory));
+    let existing = findExisting(gitWorktreePath);
+    // Git reports forward-slash paths; store the folder as Library links do (resolved, native separators).
+    let worktreePath = gitWorktreePath;
+    if (!existing) {
+      try { worktreePath = await window.janet.workspaceDirectory({ parent: gitWorktreePath }); }
+      catch (error) {
+        setDirectoryActionError(error instanceof Error ? error.message : String(error));
+        return;
+      }
+      existing = findExisting(worktreePath);
+    }
+    if (existing) {
+      selectTerminalTab(existing.id);
+      return;
+    }
+    if (tabsRef.current.length >= MAX_RESTORED_TABS || terminalCount() >= MAX_RESTORED_TERMINALS) {
+      setDirectoryActionError('Close a terminal or remove a project first. JaneT supports up to 64 projects and 64 terminals.');
+      return;
+    }
+    const repository = repoPath ?? worktreePath;
+    const libraryGroups = groupsRef.current.filter((group) => group.kind === 'folder' && group.directory);
+    const active = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current);
+    const activeLibrary = libraryGroups.find((group) => group.id === active?.groupId && containsDirectory(group.directory!, repository));
+    // A repository in Library gets the worktree as another project of its entry.
+    let group = activeLibrary
+      ?? libraryGroups.filter((candidate) => containsDirectory(candidate.directory!, repository))
+        .sort((left, right) => normalizeDirectory(right.directory!).length - normalizeDirectory(left.directory!).length)[0]
+      ?? libraryGroups.find((candidate) => sameDirectory(candidate.directory, worktreePath) || sameDirectory(candidate.directory, gitWorktreePath));
+    const name = worktreePath.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop() || worktreePath;
+    if (!group) {
+      // A Workspace repository's worktree gets its own Library entry.
+      if (groupsRef.current.length >= MAX_WORKSPACE_GROUPS) {
+        setDirectoryActionError('The 64 workspace and Library entry limit has been reached. Remove an entry first.');
+        return;
+      }
+      group = { id: genId('folder'), name: name.slice(0, 256), kind: 'folder', directory: worktreePath };
+      groupsRef.current = [...groupsRef.current, group];
+    } else {
+      const expanded = group.id;
+      groupsRef.current = groupsRef.current.map((item) => item.id === expanded ? { ...item, collapsed: false } : item);
+    }
+    setGroups(groupsRef.current);
+    const root = mapLeaves(createTabRoot('local'), (leaf) => ({ ...leaf, cwd: worktreePath }));
+    const tab: TabInfo = {
+      id: genId('tab'), title: name.slice(0, 256), groupId: group.id, type: 'local', cwd: worktreePath, isProject: true, root,
+    };
+    const next = [...tabsRef.current, tab];
+    const firstTerminalId = getAllLeafIds(root)[0] ?? null;
+    setBroadcastRecipientIds(new Set());
+    tabsRef.current = next;
+    terminalFocusTargetIdRef.current = firstTerminalId;
+    restoreTerminalFocusRef.current = firstTerminalId !== null;
+    setFocusedTerminalId(firstTerminalId);
+    setTabs(next);
+    setActiveTabId(tab.id);
+    setTerminalFocusRequest((request) => request + 1);
+  }, [selectTerminalTab, terminalCount]);
 
   const closeTab = useCallback(
     (tabId: string) => {
@@ -1224,6 +1264,8 @@ function AppInner({ initialSettings, persistSettings }: {
     if (editorDocuments.documents.some((document) => rebaseDirectory(document.resolvedPath, source, '__renamed__') !== document.resolvedPath)) {
       throw new Error('Close editor files in this folder before renaming it. Your changes have not been touched.');
     }
+    // The main process renames only folders the saved session says JaneT manages.
+    if (!await persistSession()) throw new Error('Workspace changes could not be saved, so nothing was renamed. Try again.');
     directoryRenameBusy.current = true;
     try {
       const target = await window.janet.renameWorkspaceDirectory({ source, name });
@@ -1254,9 +1296,9 @@ function AppInner({ initialSettings, persistSettings }: {
   const renameTab = async (tabId: string, title: string) => {
     const tab = tabsRef.current.find((item) => item.id === tabId);
     if (!tab) return;
-    if (!title.trim()) throw new Error(tab.isProject ? 'Enter a project name.' : 'Enter a session name.');
-    // Only the project that owns a temporary workspace folder renames it. New
-    // terminals, worktrees and folders opened from a project just change title.
+    if (!title.trim()) throw new Error('Enter a project name.');
+    // Only a Workspace project renames the folder it owns. Library and worktree
+    // projects are named sets of terminals: renaming changes only their label.
     if (ownsWorkspaceProjectFolder(tab, groupsRef.current)) await renameDirectory(tab.cwd!, title);
     updateTab(tabId, (item) => ({ ...item, title }));
     await persistSession();
@@ -1364,12 +1406,8 @@ function AppInner({ initialSettings, persistSettings }: {
       const owners = collectTerminalOwners(tab).filter((owner) => owner.termId === leafId);
       if (owners.length === 0) return;
 
+      // Projects outlive their terminals: closing the last one keeps the project.
       const newRoot = removePane(tab.root, leafId);
-      const isProject = isWorkspaceProject(tab, groupsRef.current);
-      if (!newRoot && !isProject) {
-        closeTab(tabId);
-        return;
-      }
       const nextRoot = newRoot ? ensureSplitRoot(newRoot) : { id: genId('split'), type: 'split' as const, direction: 'vertical' as const, children: [], sizes: [] };
       const next = current.map((candidate) => candidate.id === tabId ? { ...candidate, root: nextRoot } : candidate);
       teardownTerminalOwners(owners);
@@ -1385,46 +1423,21 @@ function AppInner({ initialSettings, persistSettings }: {
         setFocusedTerminalId(getAllLeafIds(nextRoot)[0] ?? null);
       }
     },
-    [closeTab, teardownTerminalOwners],
+    [teardownTerminalOwners],
   );
 
-  const requestCloseTab = useCallback((tabId: string) => {
+  /** "Close all terminals…": the project, its files and open editors stay. */
+  const requestCloseAllTerminals = useCallback((tabId: string) => {
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
-    if (!tab) return;
-    const paneCount = getAllLeafIds(tab.root).length;
-    if (isWorkspaceProject(tab, groupsRef.current)) {
-      if (!paneCount) return;
-      setPendingDestructiveAction({
-        title: `Close all terminals in ${tab.title}?`,
-        description: 'Running terminal processes will end. The project, its files and open editors will stay available.',
-        confirmLabel: 'Close all terminals',
-        run: () => { for (const leafId of getAllLeafIds(tab.root)) handleClosePane(tabId, leafId); },
-        fallbackFocus: firstTerminalFocusTarget,
-      });
-      return;
-    }
-    const dirtyDocuments = (editorDocuments.documentsByTab[tabId] ?? []).filter(isEditorDocumentDirty);
-    if (dirtyDocuments.length > 0) {
-      const dirtyKeys = dirtyDocuments.map((document) => document.key);
-      setPendingDestructiveAction({
-        title: `Save ${dirtyDocuments.length} changed ${dirtyDocuments.length === 1 ? 'file' : 'files'} before closing ${tab.title}?`,
-        description: `Closing this terminal tab will also close its editor documents and end ${paneCount} terminal ${paneCount === 1 ? 'session' : 'sessions'}. Save the changed files, or explicitly discard them and close.`,
-        confirmLabel: 'Discard and close',
-        run: () => closeTab(tabId),
-        secondaryLabel: 'Save all and close',
-        runSecondary: () => saveEditorDocumentSequence(dirtyKeys, () => closeTab(tabId)),
-        fallbackFocus: firstTerminalFocusTarget,
-      });
-      return;
-    }
+    if (!tab || getAllLeafIds(tab.root).length === 0) return;
     setPendingDestructiveAction({
-      title: `Close ${tab.title}?`,
-      description: `Close this terminal tab and its ${paneCount} pane${paneCount === 1 ? '' : 's'}? Its terminal sessions will end; detached jobs may continue outside JaneT.`,
-      confirmLabel: 'Close tab',
-      run: () => closeTab(tabId),
+      title: `Close all terminals in ${tab.title}?`,
+      description: 'Running terminal processes will end. The project, its files and open editors will stay available.',
+      confirmLabel: 'Close all terminals',
+      run: () => { for (const leafId of getAllLeafIds(tab.root)) handleClosePane(tabId, leafId); },
       fallbackFocus: firstTerminalFocusTarget,
     });
-  }, [closeTab, handleClosePane, editorDocuments.documentsByTab, saveEditorDocumentSequence]);
+  }, [handleClosePane]);
 
   useEffect(() => {
     if (!window.janet.onPrepareForClose || !window.janet.resolvePrepareForClose) return undefined;
@@ -1504,20 +1517,16 @@ function AppInner({ initialSettings, persistSettings }: {
   const requestClosePane = useCallback((tabId: string, leafId: string) => {
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
     if (!tab) return;
-    if (getAllLeafIds(tab.root).length === 1 && !isWorkspaceProject(tab, groupsRef.current)) {
-      requestCloseTab(tabId);
-      return;
-    }
     const leaf = findLeaf(tab.root, leafId);
     const paneTitle = leaf?.title?.trim();
     setPendingDestructiveAction({
       title: paneTitle ? `Close ${paneTitle}?` : 'Close terminal pane?',
-      description: 'Close this terminal pane? Its terminal session will end; detached jobs may continue outside JaneT.',
+      description: 'Close this terminal pane? Its shell and running program will end; detached jobs may continue outside JaneT. The project stays.',
       confirmLabel: 'Close pane',
       run: () => handleClosePane(tabId, leafId),
       fallbackFocus: firstTerminalFocusTarget,
     });
-  }, [handleClosePane, requestCloseTab]);
+  }, [handleClosePane]);
 
   const requestCloseActiveTerminal = useCallback(() => {
     const tab = tabsRef.current.find(tab => tab.id === activeTabIdRef.current);
@@ -1525,6 +1534,19 @@ function AppInner({ initialSettings, persistSettings }: {
     const leafId = preferredLeafId(tab, focusedTerminalIdRef.current, maximizedLeafByTabRef.current[tab.id]);
     if (leafId) requestClosePane(tab.id, leafId);
   }, [requestClosePane]);
+
+  /** The pane "+" button: add terminals to the active project. */
+  const requestAddTerminals = useCallback(() => {
+    const tab = tabsRef.current.find((candidate) => candidate.id === activeTabIdRef.current);
+    if (!tab) return;
+    editorDocuments.selectSurface(tab.id, 'terminal');
+    if (countLeaves(tab.root) > 0) {
+      setAddTerminalsTabId(tab.id);
+      return;
+    }
+    // A project without terminals already shows the inline "Start terminals" form.
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('.empty-project-terminals input[type="number"]')?.focus());
+  }, [editorDocuments.selectSurface]);
 
   const handleResizePane = useCallback(
     (tabId: string, splitId: string, dividerIndex: number, leftFraction: number) => {
@@ -1563,17 +1585,17 @@ function AppInner({ initialSettings, persistSettings }: {
     setTerminalFocusRequest((request) => request + 1);
   }, [editorDocuments.selectSurface, handleMovePane]);
 
-  const addSessionTerminals = async (tabId: string, preset: WorkspaceTabPreset) => {
+  const addProjectTerminals = async (tabId: string, preset: WorkspaceTabPreset) => {
     if (directoryRenameBusy.current) throw new Error('Wait for the folder rename to finish.');
     const tab = tabsRef.current.find(item => item.id === tabId);
-    if (!tab) throw new Error('This session was closed. Select it again.');
+    if (!tab) throw new Error('This project was removed. Select a project and try again.');
     const group = groupsRef.current.find(item => item.id === tab.groupId);
     const cwd = await window.janet.workspaceDirectory({ parent: tab.cwd || group?.directory || homeDir });
     if (directoryRenameBusy.current) throw new Error('The folder is being renamed. Try again afterward.');
     const root = restorePaneTree(preset.root);
     if (!root || countLeaves(root) === 0) throw new Error('Invalid terminal configuration.');
     if (terminalCount() + countLeaves(root) > MAX_RESTORED_TERMINALS) throw new Error('Terminal limit reached. Close a terminal first.');
-    if (!tabsRef.current.some(item => item.id === tabId)) throw new Error('This session was closed. Select it again.');
+    if (!tabsRef.current.some(item => item.id === tabId)) throw new Error('This project was removed. Select a project and try again.');
     const addition = mapLeaves(root, leaf => ({ ...leaf, terminalType: 'local' as const, cwd }));
     const next = tabsRef.current.map(item => item.id !== tabId ? item : { ...item, root: arrangePaneGrid([item.root, addition]) });
     const newTerminalId = getAllLeafIds(addition)[0];
@@ -1583,7 +1605,6 @@ function AppInner({ initialSettings, persistSettings }: {
     setMaximizedLeafByTab(current => ({ ...current, [tabId]: null }));
     setGroups(current => current.map(item => item.id === tab.groupId ? { ...item, collapsed: false } : item));
   };
-  const [directoryActionError, setDirectoryActionError] = useState('');
   /** Replace stopped panes with fresh terminals at their last known directory. Returns the count. */
   const restartStoppedTerminals = (tabIds: ReadonlySet<string>, stoppedIds: ReadonlySet<string>): number => {
     const replacements = new Map<string, string>();
@@ -1618,10 +1639,10 @@ function AppInner({ initialSettings, persistSettings }: {
     const group = groupsRef.current.find((entry) => entry.id === groupId);
     const project = projectId ? tabsRef.current.find((tab) => tab.id === projectId && tab.groupId === groupId) : undefined;
     if (!group || (projectId && !project)) return;
-    // Sessions opened inside a project never own its folder.
-    if (project && !isWorkspaceProject(project, groupsRef.current)) return;
+    // Only a Workspace project's own folder can be deleted or kept. Every other
+    // project (Library, worktree, or starting elsewhere) is only removed from JaneT.
+    if (project && !ownsWorkspaceProjectFolder(project, groupsRef.current)) action = 'unlink';
     if (!project && !group.directory) action = 'unlink';
-    if (project?.isProject && group.kind === 'folder') action = 'unlink';
     const affected = tabsRef.current.filter((tab) => project ? tab.id === project.id : tab.groupId === group.id);
     if (affected.some((tab) => (editorDocuments.documentsByTab[tab.id] ?? []).some(isEditorDocumentDirty))) {
       setDirectoryActionError('Save or close changed editor files before deleting, keeping, or removing this entry.');
@@ -1639,13 +1660,17 @@ function AppInner({ initialSettings, persistSettings }: {
     const count = affected.reduce((sum, tab) => sum + countLeaves(tab.root), 0);
     setDirectoryActionError('');
     setPendingDestructiveAction({
-      title: action === 'keep' ? `Keep ${name} in Library?` : action === 'unlink' ? `Remove ${name}${group.kind === 'folder' ? ' from Library' : ''}?` : `Delete ${name}?`,
+      title: action === 'keep' ? `Keep ${name} in Library?`
+        : action === 'unlink' ? `Remove ${name}${!project && group.kind === 'folder' ? ' from Library' : ''}?` : `Delete ${name}?`,
       description: action === 'keep'
         ? `Copy and verify ${source} inside ${destinationParent}, then send the temporary original to the Recycle Bin. Its ${count} terminals will stop and reopen at the saved location. Close external programs using these files first. Large projects may take a while.`
         : action === 'unlink'
-          ? `Remove this ${group.kind === 'folder' ? 'Library entry' : 'workspace'} and stop its ${count} terminals? Files will not be deleted.`
-          : `Send ${source} and ALL files and subfolders inside it to the Recycle Bin? This closes ${affected.length} project/session entries and stops ${count} terminals. Detached jobs may continue; close external programs using these files first.`,
-      confirmLabel: action === 'keep' ? 'Keep in Library' : action === 'unlink' ? (group.kind === 'folder' ? 'Remove from Library' : 'Remove workspace') : 'Delete to Recycle Bin',
+          ? project
+            ? `Remove this project from JaneT and stop its ${count} terminals? Its files and folder will not be touched.`
+            : `Remove this ${group.kind === 'folder' ? 'Library entry' : 'workspace'} and stop its ${count} terminals? Files will not be deleted.`
+          : `Send ${source} and ALL files and subfolders inside it to the Recycle Bin? This removes ${affected.length} ${affected.length === 1 ? 'project' : 'projects'} and stops ${count} terminals. Detached jobs may continue; close external programs using these files first.`,
+      confirmLabel: action === 'keep' ? 'Keep in Library'
+        : action === 'unlink' ? (project ? 'Remove project' : group.kind === 'folder' ? 'Remove from Library' : 'Remove workspace') : 'Delete to Recycle Bin',
       destructive: action !== 'keep',
       fallbackFocus: firstTerminalFocusTarget,
       run: async () => {
@@ -1658,7 +1683,7 @@ function AppInner({ initialSettings, persistSettings }: {
         directoryRenameBusy.current = true;
         const stopped = new Set<string>();
         try {
-          // Confirmation explicitly authorizes stopping only these sessions. Await native teardown before filesystem work.
+          // Confirmation explicitly authorizes stopping only these terminals. Await native teardown before filesystem work.
           for (const tab of affected) {
             for (const owner of collectTerminalOwners(tab)) {
               if (owner.type !== 'local') continue;
@@ -1703,7 +1728,7 @@ function AppInner({ initialSettings, persistSettings }: {
     }
     if (tabsRef.current.length >= MAX_RESTORED_TABS
       || terminalCount() + countLeaves(root) > MAX_RESTORED_TERMINALS) {
-      throw new Error('Close a workspace or terminal first. JaneT supports up to 64 workspaces and 64 terminals.');
+      throw new Error('Close a terminal or remove a project first. JaneT supports up to 64 projects and 64 terminals.');
     }
     if (!groupsRef.current.some((existing) => existing.id === group.id)
       && groupsRef.current.length >= MAX_WORKSPACE_GROUPS) throw new Error('The 64-group limit has been reached.');
@@ -1721,14 +1746,14 @@ function AppInner({ initialSettings, persistSettings }: {
       root = mapLeaves(root, (leaf) => ({ ...leaf, cwd: leaf.cwd || directory }));
     }
     if (tabsRef.current.length >= MAX_RESTORED_TABS || terminalCount() + countLeaves(root) > MAX_RESTORED_TERMINALS) {
-      throw new Error('Close a workspace or terminal first. JaneT supports up to 64 workspaces and 64 terminals.');
+      throw new Error('Close a terminal or remove a project first. JaneT supports up to 64 projects and 64 terminals.');
     }
     setGroups((current) => current.some((existing) => existing.id === group.id)
       ? current.map((existing) => existing.id === group.id ? { ...existing, collapsed: false } : existing)
       : [...current, group]);
     const tab: TabInfo = {
       id: genId('tab'), title: preset.name, groupId: group.id, type: 'local', cwd: directory, root,
-      ...(preset.createProject ? { isProject: true } : {}),
+      isProject: true,
     };
     const nextTabs = [...tabsRef.current, tab];
     tabsRef.current = nextTabs;
@@ -1744,7 +1769,7 @@ function AppInner({ initialSettings, persistSettings }: {
     const { directory, name, projects } = await window.janet.listWorkspaceProjects(selected);
     if (groupsRef.current.some((group) => group.directory === directory)) throw new Error('This folder is already in Workspaces or Library.');
     if (groupsRef.current.length >= MAX_WORKSPACE_GROUPS) throw new Error('The 64-group limit has been reached.');
-    if (tabsRef.current.length + projects.length > MAX_RESTORED_TABS) throw new Error('Close a project first. JaneT supports up to 64 projects and sessions.');
+    if (tabsRef.current.length + projects.length > MAX_RESTORED_TABS) throw new Error('Remove a project first. JaneT supports up to 64 projects.');
     const group: WorkspaceGroup = { id: genId('group'), name, directory };
     const imported: TabInfo[] = projects.map((project) => ({
       id: genId('tab'), title: project.name, type: 'local', groupId: group.id,
@@ -1923,7 +1948,8 @@ function AppInner({ initialSettings, persistSettings }: {
     const unsub1 = on('palette-toggle', () => {
       setPaletteVisible((v) => !v);
     });
-    const unsub2 = on('new-terminal', () => addTab('local'));
+    const unsub2 = on('new-terminal', requestNewProject);
+    const unsubAddTerminals = on('add-terminals', requestAddTerminals);
     const unsub3 = on('close-tab', requestCloseActiveTerminal);
     const unsub4 = on('toggle-sidebar', toggleWorkspaceTools);
     const unsub5 = on('font-increase', () => persistFontSize(Math.min(24, fontSize + 1)));
@@ -1945,10 +1971,10 @@ function AppInner({ initialSettings, persistSettings }: {
     });
     return () => {
       unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7();
-      unsub8(); unsub9(); unsub10(); unsub11(); unsub12(); unsub13(); unsub14();
+      unsub8(); unsub9(); unsub10(); unsub11(); unsub12(); unsub13(); unsub14(); unsubAddTerminals();
     };
   }, [
-    on, addTab, requestCloseActiveTerminal, activeTabId, toggleWorkspaceTools, persistFontSize, fontSize,
+    on, requestNewProject, requestAddTerminals, requestCloseActiveTerminal, activeTabId, toggleWorkspaceTools, persistFontSize, fontSize,
     cycleTerminalTab, activeDocumentKey, saveEditorDocument, requestCloseEditorDocument,
     documentCloseFallbackFocus,
   ]);
@@ -2000,23 +2026,29 @@ function AppInner({ initialSettings, persistSettings }: {
   const paletteActions = useMemo<CommandAction[]>(() => {
     const actions: CommandAction[] = [
       {
-        id: 'new-terminal', label: 'New terminal tab', category: 'Tabs',
-        shortcut: bindings['new-terminal'], handler: () => addTab('local'),
+        id: 'new-terminal', label: 'New project', category: 'Projects',
+        keywords: ['create', 'project', 'workspace', 'library'],
+        shortcut: bindings['new-terminal'], handler: requestNewProject,
+      },
+      {
+        id: 'add-terminals', label: 'Add terminals to current project', category: 'Terminals',
+        keywords: ['new terminal', 'terminal', 'pane'],
+        shortcut: bindings['add-terminals'], handler: requestAddTerminals,
       },
       {
         id: 'close-tab', label: 'Close current terminal', category: 'Terminals',
         shortcut: bindings['close-tab'], handler: requestCloseActiveTerminal,
       },
       {
-        id: 'previous-tab', label: 'Previous terminal tab', category: 'Tabs',
+        id: 'previous-tab', label: 'Previous project', category: 'Projects',
         shortcut: bindings['previous-tab'], handler: () => cycleTerminalTab(-1),
       },
       {
-        id: 'next-tab', label: 'Next terminal tab', category: 'Tabs',
+        id: 'next-tab', label: 'Next project', category: 'Projects',
         shortcut: bindings['next-tab'], handler: () => cycleTerminalTab(1),
       },
       {
-        id: 'rename-tab', label: 'Rename current tab', category: 'Tabs',
+        id: 'rename-tab', label: 'Rename current project', category: 'Projects',
         shortcut: bindings['rename-tab'], handler: requestRenameTab,
       },
       {
@@ -2170,7 +2202,7 @@ function AppInner({ initialSettings, persistSettings }: {
 
     return actions;
   }, [
-    activeTab, activeTabId, sidebarTerminalId, activeDocumentKey, addTab, requestCloseActiveTerminal,
+    activeTab, activeTabId, sidebarTerminalId, activeDocumentKey, requestNewProject, requestAddTerminals, requestCloseActiveTerminal,
     handleSplitPane, requestClosePane, handleToggleMaximizePane, cycleTerminalPane, cycleTerminalTab, moveActivePane,
     requestRenamePane, requestRenameTab, saveEditorDocument, requestCloseEditorDocument,
     documentCloseFallbackFocus,
@@ -2190,7 +2222,7 @@ function AppInner({ initialSettings, persistSettings }: {
       gitRepository={gitRepository}
       openLocalTerminals={openLocalTerminals}
       onOpenTerminal={openTerminal}
-      onOpenLocalTabAt={openLocalTabAt}
+      onOpenWorktree={(worktreePath, repoPath) => { void openWorktreeProject(worktreePath, repoPath); }}
       onCopyTerminalPath={copyTerminalPath}
       onOpenFile={openEditorFile}
     />
@@ -2277,7 +2309,7 @@ function AppInner({ initialSettings, persistSettings }: {
           onEntryRequestHandled={() => setWorkspaceEntryRequest(undefined)}
           onCreatorOpenChange={setWorkspaceCreatorOpen}
           onSelectTab={selectTerminalTab}
-          onCloseTab={requestCloseTab}
+          onCloseTab={requestCloseAllTerminals}
           onWorkspaceTabLaunch={openWorkspaceTab}
           onImportWorkspace={importWorkspace}
           onRenameTab={renameTab}
@@ -2326,16 +2358,13 @@ function AppInner({ initialSettings, persistSettings }: {
             onRetryDocument={(key) => { void editorDocuments.retryDocument(key); }}
             onCloseDocument={requestCloseEditorDocument}
             terminal={getAllLeafIds(activeTab.root).length === 0 ? (
-              (isWorkspaceProject(activeTab, groups) || groups.some(group => group.id === activeTab.groupId && group.kind === 'folder')) ? <div className="empty-project-setup">
+              <div className="empty-project-setup">
                 <AddTerminalsDialog key={activeTab.id} inline
-                  group={groups.find(group => group.id === activeTab.groupId)!}
+                  group={groups.find(group => group.id === activeTab.groupId) ?? DEFAULT_WORKSPACE_GROUP}
                   onClose={() => {}}
-                  onSubmit={preset => addSessionTerminals(activeTab.id, preset)}
+                  onSubmit={preset => addProjectTerminals(activeTab.id, preset)}
                 />
-              </div> : <section className="editor-state" aria-label="No terminals open">
-                <strong>No terminals open</strong>
-                <button onClick={() => requestCloseTab(activeTab.id)}>Close session</button>
-              </section>
+              </div>
             ) : (
               <SplitPane
                 node={activeTab.root}
@@ -2422,8 +2451,8 @@ function AppInner({ initialSettings, persistSettings }: {
       <UpdateBanner />
       <RenameDialog
         open={renameTarget !== null}
-        title={renameTarget?.kind === 'tab' ? 'Rename tab' : 'Rename terminal'}
-        inputLabel={renameTarget?.kind === 'tab' ? 'Tab name' : 'Terminal name'}
+        title={renameTarget?.kind === 'tab' ? 'Rename project' : 'Rename terminal'}
+        inputLabel={renameTarget?.kind === 'tab' ? 'Project name' : 'Terminal name'}
         initialValue={renameTarget?.initialValue ?? ''}
         fallbackFocus={() => terminalFocusTarget(renameTarget?.terminalId ?? null)}
         onCancel={() => setRenameTarget(null)}
@@ -2432,7 +2461,7 @@ function AppInner({ initialSettings, persistSettings }: {
       <AddTerminalsDialog open={addTerminalsTabId !== null}
         group={groups.find(group => group.id === tabs.find(tab => tab.id === addTerminalsTabId)?.groupId) ?? DEFAULT_WORKSPACE_GROUP}
         onClose={() => setAddTerminalsTabId(null)}
-        onSubmit={preset => addTerminalsTabId ? addSessionTerminals(addTerminalsTabId, preset) : Promise.resolve()}
+        onSubmit={preset => addTerminalsTabId ? addProjectTerminals(addTerminalsTabId, preset) : Promise.resolve()}
       />
       <ConfirmationDialog
         open={broadcastConfirmationOpen}
@@ -2568,7 +2597,7 @@ export default function App() {
         <ConfirmationDialog
           open={confirmDefaults}
           title="Use default settings?"
-          description="JaneT will permanently replace the unreadable settings file, including saved tabs and custom shortcuts."
+          description="JaneT will permanently replace the unreadable settings file, including saved workspaces, projects and custom shortcuts."
           confirmLabel="Use defaults"
           fallbackFocus={firstTerminalFocusTarget}
           onCancel={() => setConfirmDefaults(false)}

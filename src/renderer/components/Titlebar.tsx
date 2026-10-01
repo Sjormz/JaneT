@@ -122,8 +122,8 @@ export default function Titlebar({
           <span className="titlebar-app-name">JaneT</span>
         </div>
         {tabsHidden && onShowTabs && (
-          <Tooltip label="Show terminal tabs" placement="bottom">
-            <button type="button" className="titlebar-icon-btn titlebar-rail-toggle" onClick={onShowTabs} aria-label="Show terminal tabs">
+          <Tooltip label="Show workspace list" placement="bottom">
+            <button type="button" className="titlebar-icon-btn titlebar-rail-toggle" onClick={onShowTabs} aria-label="Show workspace list">
               <SidebarIcon size="sm" />
             </button>
           </Tooltip>

@@ -11,7 +11,7 @@ import MotionPresence from './MotionPresence';
 import Tooltip from './Tooltip';
 import MainDirectory from './MainDirectory';
 import RenameDialog from './RenameDialog';
-import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, isWorkspaceProject, rebaseDirectory, type WorkspaceGroup } from '../../shared/workspaceGroups';
+import { DEFAULT_WORKSPACE_GROUP, MAX_WORKSPACE_GROUPS, ownsWorkspaceProjectFolder, rebaseDirectory, type WorkspaceGroup } from '../../shared/workspaceGroups';
 import type { AgentStatus } from '../terminalAwareness';
 import type { GitWorktreeInfo } from '../../shared/gitWorktrees';
 import { useGlidingSelection } from './motion';
@@ -276,7 +276,7 @@ export default function VerticalTabBar({
         <div className="vtab-header-actions">
           <Tooltip label="Choose existing workspace" placement="bottom"><button className="vtab-header-btn" aria-label="Choose existing workspace" disabled={folderBusy} onClick={() => void importWorkspace()}><FolderOpenIcon size="sm" /></button></Tooltip>
           <Tooltip label="New workspace" placement="bottom"><button ref={workspaceAddButtonRef} className="vtab-header-btn" aria-label="New workspace" onClick={openWorkspaceForm}><PlusIcon size="sm" /></button></Tooltip>
-          <Tooltip label="Collapse terminal tabs" placement="bottom"><button className="vtab-header-btn" aria-label="Collapse terminal tabs" onClick={onCollapse}><SidebarCollapseLeftIcon size="sm" /></button></Tooltip>
+          <Tooltip label="Collapse workspace list" placement="bottom"><button className="vtab-header-btn" aria-label="Collapse workspace list" onClick={onCollapse}><SidebarCollapseLeftIcon size="sm" /></button></Tooltip>
         </div>
       </div>
 
@@ -351,7 +351,7 @@ export default function VerticalTabBar({
                       if (e.key === 'Escape') setEditingTabId(null);
                     }}
                     autoFocus
-                    aria-label="Tab name"
+                    aria-label="Project name"
                   />
                 ) : (
                   <div className="vtab-name" title={tab.title}>
@@ -403,14 +403,13 @@ export default function VerticalTabBar({
             <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const group = tabMenu.group!; closeTabMenu(); onWorkspaceAction?.(group.kind === 'folder' || !group.directory ? 'unlink' : 'delete', group.id); }}>{tabMenu.group.kind === 'folder' ? 'Remove from Library…' : !tabMenu.group.directory ? 'Remove workspace…' : 'Delete workspace…'}</button>
           </>}
           {tabMenu.tab && <>
-          <button role="menuitem" onClick={() => { startRename(tabMenu.tab!); closeTabMenu(); }}>
-            {isWorkspaceProject(tabMenu.tab, groups) ? 'Rename project' : 'Rename session'}
-          </button>
-          {isWorkspaceProject(tabMenu.tab, groups) && <>
-            {groups.find(group => group.id === tabMenu.tab!.groupId)?.kind !== 'folder' && <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const tab = tabMenu.tab!; closeTabMenu(); onWorkspaceAction?.('keep', tab.groupId!, tab.id); }}>Keep in Library…</button>}
-            <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const tab = tabMenu.tab!; closeTabMenu(); onWorkspaceAction?.(tab.isProject && groups.find(group => group.id === tab.groupId)?.kind === 'folder' ? 'unlink' : 'delete', tab.groupId!, tab.id); }}>{tabMenu.tab.isProject && groups.find(group => group.id === tabMenu.tab!.groupId)?.kind === 'folder' ? 'Remove project…' : 'Delete project…'}</button>
-          </>}
-          <button role="menuitem" disabled={isWorkspaceProject(tabMenu.tab, groups) && countLeaves(tabMenu.tab.root) === 0} onClick={() => { const id = tabMenu.tab!.id; closeTabMenu(); onCloseTab(id); }}>{isWorkspaceProject(tabMenu.tab, groups) ? 'Close all terminals…' : 'Close session'}</button>
+          <button role="menuitem" onClick={() => { startRename(tabMenu.tab!); closeTabMenu(); }}>Rename project</button>
+          {/* Only a Workspace project owns its folder; every other project is only removed from JaneT. */}
+          {ownsWorkspaceProjectFolder(tabMenu.tab, groups) ? <>
+            <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const tab = tabMenu.tab!; closeTabMenu(); onWorkspaceAction?.('keep', tab.groupId!, tab.id); }}>Keep in Library…</button>
+            <button role="menuitem" disabled={!onWorkspaceAction} onClick={() => { const tab = tabMenu.tab!; closeTabMenu(); onWorkspaceAction?.('delete', tab.groupId!, tab.id); }}>Delete project…</button>
+          </> : <button role="menuitem" disabled={!onWorkspaceAction || !tabMenu.tab.groupId} onClick={() => { const tab = tabMenu.tab!; closeTabMenu(); onWorkspaceAction?.('unlink', tab.groupId!, tab.id); }}>Remove project…</button>}
+          <button role="menuitem" disabled={countLeaves(tabMenu.tab.root) === 0} onClick={() => { const id = tabMenu.tab!.id; closeTabMenu(); onCloseTab(id); }}>Close all terminals…</button>
           </>}
         </div>}</MotionPresence>,
         document.body,

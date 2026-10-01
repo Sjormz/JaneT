@@ -37,7 +37,7 @@ export default function WorkspaceForm({ terminalsOnly = false, group, submitting
     const root = withTerminals ? serializePaneTree(createWorkspaceRoot(terminals), {}, { includeStartupCommands: true })
       : { type: 'split' as const, direction: 'vertical' as const, children: [], sizes: [] };
     onSubmit({
-      id: genId('workspace'), name: name.trim() || 'Session', type: 'local', root,
+      id: genId('workspace'), name: name.trim() || 'Terminals', type: 'local', root,
       terminalCount: withTerminals ? count : 0,
       createProject: !terminalsOnly,
       splitDirection: root.type === 'split' ? root.direction : 'vertical',
@@ -86,7 +86,7 @@ export default function WorkspaceForm({ terminalsOnly = false, group, submitting
           <label className="form-field">
             <span>Custom command</span>
             <input aria-label="Custom command" className="form-input workspace-custom-command" value={customCommand} onChange={(event) => setCustomCommand(event.target.value)} placeholder="e.g. npm run dev" maxLength={MAX_STARTUP_COMMAND_LENGTH} required aria-describedby={`${formId}-command-help`} />
-            <span id={`${formId}-command-help`} className="workspace-form-help">Runs in all terminals. Saved with this {terminalsOnly ? 'session' : 'project'}; avoid passwords or tokens.</span>
+            <span id={`${formId}-command-help`} className="workspace-form-help">Runs in all terminals. Saved with this project; avoid passwords or tokens.</span>
           </label>
         )}
         <p className="workspace-form-help">Every terminal opens in {terminalsOnly || group?.kind === 'folder' ? 'this folder' : 'the new project folder'}. Your layout restores automatically.</p>

@@ -10,7 +10,7 @@ import { FileSystemManager } from './filesystem';
 import { GitManager } from './git';
 import { SettingsManager, type ThemeName, type TransparencyPreference } from './settings';
 import { requireDirectory, createWorkspaceDirectory, renameWorkspaceDirectory, listWorkspaceProjects } from './workspaceDirectories';
-import { WorkspaceFileOperations } from './workspaceFileOperations';
+import { WorkspaceFileOperations, assertManagedFolderRename } from './workspaceFileOperations';
 import { sendRendererEvent } from './rendererEvents';
 import * as os from 'node:os';
 import { applyWindowMaterial, recordInitialWindowMaterial, resolveWindowMaterial, THEME_WINDOW, WINDOW_MATERIAL_ARG, windowMaterialOptions, type WindowMaterialState } from './windowMaterial';
@@ -808,6 +808,7 @@ function registerIpcHandlers() {
     if (!request || typeof request !== 'object' || Array.isArray(request)) throw new Error('Invalid rename request');
     const { source, name } = request as { source?: unknown; name?: unknown };
     const directory = await requireDirectory(source);
+    await assertManagedFolderRename(settingsManager.get().session, directory);
     fsManager.releaseDirectory(directory);
     return renameWorkspaceDirectory(source, name);
   });

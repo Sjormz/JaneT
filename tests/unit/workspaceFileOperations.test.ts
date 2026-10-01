@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { WorkspaceFileOperations } from '../../src/main/workspaceFileOperations';
+import { WorkspaceFileOperations, assertManagedFolderRename } from '../../src/main/workspaceFileOperations';
 import type { AppSettings, SavedSession } from '../../src/main/settings';
 
 const roots: string[] = [];
@@ -18,7 +18,7 @@ async function fixture() {
   await fs.writeFile(path.join(project, '.git', 'config'), 'repo');
   await fs.writeFile(path.join(project, 'keep.txt'), 'important');
   let session: SavedSession = { groups: [{ id: 'work', name: 'Work', directory: workspace }],
-    tabs: [{ id: 'project', title: 'Experiment', groupId: 'work', type: 'local', cwd: project, root: { type: 'leaf', cwd: project } }],
+    tabs: [{ id: 'project', title: 'Experiment', groupId: 'work', type: 'local', isProject: true, cwd: project, root: { type: 'leaf', cwd: project } }],
     activeTabId: 'project', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files' };
   const trash = vi.fn(async (source: string) => { await fs.rename(source, path.join(root, 'recycled')); });
   const setSession = vi.fn((next: SavedSession) => { session = next; });
@@ -48,15 +48,31 @@ describe('temporary workspace file operations', () => {
     expect(result.session.groups).toHaveLength(whole ? 0 : 1);
     expect(await fs.readFile(path.join(f.root, 'recycled', ...(whole ? ['Experiment'] : []), 'keep.txt'), 'utf8')).toBe('important');
   });
-  it('recycles a Library child project while retaining its parent entry', async () => {
+  it('never recycles or moves a Library project folder', async () => {
     const f = await fixture();
     f.session.groups![0].kind = 'folder';
     await expect(f.operations.run({ action: 'keep', groupId: 'work', projectId: 'project', destinationParent: f.library })).rejects.toThrow('Only managed');
-    const result = await f.operations.run({ action: 'delete', groupId: 'work', projectId: 'project' });
-    expect(f.dependencies.trash).toHaveBeenCalledWith(f.project);
-    expect(result.session.groups).toHaveLength(1);
-    expect(result.session.tabs).toEqual([]);
-    expect((await fs.stat(f.workspace)).isDirectory()).toBe(true);
+    await expect(f.operations.run({ action: 'delete', groupId: 'work', projectId: 'project' })).rejects.toThrow('Only managed');
+    expect(f.dependencies.trash).not.toHaveBeenCalled();
+    expect(f.dependencies.setSession).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(f.project, 'keep.txt'), 'utf8')).toBe('important');
+  });
+  it.each([undefined, false])('deletes or keeps only entries saved as projects (isProject=%s)', async (isProject) => {
+    const f = await fixture();
+    if (isProject === undefined) delete f.session.tabs[0].isProject; else f.session.tabs[0].isProject = isProject;
+    await expect(f.operations.run({ action: 'delete', groupId: 'work', projectId: 'project' })).rejects.toThrow('Only a project');
+    await expect(f.operations.run({ action: 'keep', groupId: 'work', projectId: 'project', destinationParent: f.library })).rejects.toThrow('Only a project');
+    expect(f.dependencies.trash).not.toHaveBeenCalled();
+  });
+  it.each([false, true])('never recycles or moves a Git worktree folder (workspace=%s)', async (whole) => {
+    const f = await fixture();
+    await fs.rm(path.join(f.project, '.git'), { recursive: true });
+    await fs.writeFile(path.join(f.project, '.git'), 'gitdir: C:/repo/.git/worktrees/Experiment\n');
+    await expect(f.operations.run({ action: 'delete', groupId: 'work', ...(whole ? {} : { projectId: 'project' }) })).rejects.toThrow('Git worktree');
+    if (!whole) await expect(f.operations.run({ action: 'keep', groupId: 'work', projectId: 'project', destinationParent: f.library })).rejects.toThrow('Git worktree');
+    expect(f.dependencies.trash).not.toHaveBeenCalled();
+    expect(f.dependencies.setSession).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(f.project, 'keep.txt'), 'utf8')).toBe('important');
   });
   it('rejects Library deletion, root targets, blank IDs and sessions without their own directory', async () => {
     const f = await fixture();
@@ -133,5 +149,39 @@ describe('temporary workspace file operations', () => {
     expect(result.warning).toContain('original could not be recycled');
     expect(f.session.groups?.[1].kind).toBe('folder');
     expect(await fs.readFile(path.join(f.project, 'keep.txt'), 'utf8')).toBe('important');
+  });
+});
+
+describe('managed folder rename', () => {
+  it('allows a workspace folder and the folder its project owns', async () => {
+    const f = await fixture();
+    await expect(assertManagedFolderRename(f.session, f.workspace)).resolves.toBeUndefined();
+    await expect(assertManagedFolderRename(f.session, f.project)).resolves.toBeUndefined();
+  });
+  it('refuses Library entries, Library and worktree projects, and folders holding them', async () => {
+    const f = await fixture();
+    const worktree = path.join(f.root, 'Experiment-feature');
+    await fs.mkdir(worktree);
+    const session: SavedSession = { ...f.session,
+      groups: [...f.session.groups!, { id: 'library', name: 'Permanent', kind: 'folder', directory: f.library },
+        { id: 'tree', name: 'Experiment-feature', kind: 'folder', directory: worktree }],
+      tabs: [...f.session.tabs,
+        { id: 'library-project', title: 'Permanent', groupId: 'library', type: 'local', isProject: true, cwd: f.library, root: { type: 'leaf' } },
+        { id: 'worktree-project', title: 'Feature', groupId: 'library', type: 'local', isProject: true, cwd: worktree, root: { type: 'leaf' } }] };
+    for (const folder of [f.library, worktree, f.root]) {
+      await expect(assertManagedFolderRename(session, folder)).rejects.toThrow('Nothing was renamed');
+    }
+    // A workspace folder that holds a Library entry is not renamed either.
+    session.groups!.push({ id: 'nested', name: 'Nested', kind: 'folder', directory: f.project });
+    await expect(assertManagedFolderRename(session, f.workspace)).rejects.toThrow('Library entry');
+    await expect(assertManagedFolderRename(session, f.project)).rejects.toThrow('Library entry');
+  });
+  it('refuses a project folder that is not saved as a project or is a Git worktree', async () => {
+    const f = await fixture();
+    const session = { ...f.session, tabs: [{ ...f.session.tabs[0], isProject: false }] };
+    await expect(assertManagedFolderRename(session, f.project)).rejects.toThrow('Nothing was renamed');
+    await fs.rm(path.join(f.project, '.git'), { recursive: true });
+    await fs.writeFile(path.join(f.project, '.git'), 'gitdir: /repo/.git/worktrees/Experiment\n');
+    await expect(assertManagedFolderRename(f.session, f.project)).rejects.toThrow('Git worktree');
   });
 });

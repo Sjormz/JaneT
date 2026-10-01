@@ -111,10 +111,10 @@ function writeSettings(userData: string, project: string, theme: ThemeName): voi
     session: {
       groups: [{ id: 'demo-library', name: 'Demo library', kind: 'folder', directory: project }],
       tabs: [
-        { id: 'demo-workspace', groupId: 'demo-library', title: 'Demo workspace', type: 'local', cwd: project,
+        { id: 'demo-workspace', groupId: 'demo-library', title: 'Demo workspace', type: 'local', isProject: true, cwd: project,
           root: { type: 'split', direction: 'vertical', sizes: [1, 1], children: [leaf('Workspace'), leaf('Checks')] },
           selectedPanePath: [0] },
-        { id: 'command-demo', groupId: 'demo-library', title: 'Command demo', type: 'local', cwd: project, root: leaf('Commands') },
+        { id: 'command-demo', groupId: 'demo-library', title: 'Command demo', type: 'local', isProject: true, cwd: project, root: leaf('Commands') },
       ],
       activeTabId: 'demo-workspace', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
     },
@@ -218,7 +218,7 @@ for (const theme of themes.filter((name) => !themeFilter || themeFilter.includes
           await shot('07-terminal-search', page);
           await page.getByRole('button', { name: 'Close search' }).click();
         });
-        const showTabs = page.getByRole('button', { name: 'Show terminal tabs' });
+        const showTabs = page.getByRole('button', { name: 'Show workspace list' });
         const ensureTabs = async () => { if (await showTabs.count()) await showTabs.click(); };
         const palette = () => page.getByRole('button', { name: /^Open command palette/ }).click();
         await step('palette', async () => {
@@ -306,7 +306,7 @@ for (const theme of themes.filter((name) => !themeFilter || themeFilter.includes
         });
         await step('collapsed-chrome', async () => {
           await page.getByRole('button', { name: 'Collapse project tools' }).click();
-          await page.getByRole('button', { name: 'Collapse terminal tabs' }).click();
+          await page.getByRole('button', { name: 'Collapse workspace list' }).click();
           await shot('23-chrome-collapsed', page);
         });
         await step('single-pane-tab', async () => {

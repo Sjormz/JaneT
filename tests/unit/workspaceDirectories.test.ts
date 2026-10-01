@@ -2,7 +2,9 @@ import { afterEach, expect, it } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createWorkspaceDirectory, listWorkspaceProjects, requireDirectory, renameWorkspaceDirectory } from '../../src/main/workspaceDirectories';
+import {
+  createWorkspaceDirectory, hasGitLinkFile, isLinkedGitWorktreeSync, listWorkspaceProjects, requireDirectory, renameWorkspaceDirectory,
+} from '../../src/main/workspaceDirectories';
 import { rebaseDirectory } from '../../src/shared/workspaceGroups';
 
 const roots: string[] = [];
@@ -62,4 +64,25 @@ it('creates managed folders without merging existing data or escaping the chosen
   await expect(requireDirectory('relative')).rejects.toThrow('absolute');
   await fs.symlink(workspace, path.join(root, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
   await expect(createWorkspaceDirectory(root, 'linked')).rejects.toThrow('already exists');
+});
+
+it('recognizes linked Git worktrees from their .git file without running Git', async () => {
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'janet-worktree-')); roots.push(root);
+  const repo = path.join(root, 'repo');
+  const worktree = path.join(root, 'repo-feature');
+  const submodule = path.join(repo, 'vendor');
+  await fs.mkdir(path.join(repo, '.git'), { recursive: true });
+  await fs.mkdir(worktree);
+  await fs.mkdir(submodule);
+  await fs.writeFile(path.join(worktree, '.git'), `gitdir: ${path.join(repo, '.git', 'worktrees', 'repo-feature')}\n`);
+  await fs.writeFile(path.join(submodule, '.git'), 'gitdir: ../.git/modules/vendor\n');
+  expect(isLinkedGitWorktreeSync(worktree)).toBe(true);
+  expect(isLinkedGitWorktreeSync(repo)).toBe(false);
+  expect(isLinkedGitWorktreeSync(submodule)).toBe(false);
+  expect(isLinkedGitWorktreeSync(path.join(root, 'missing'))).toBe(false);
+  expect(isLinkedGitWorktreeSync('relative/repo-feature')).toBe(false);
+  // Both worktrees and submodules keep their Git data elsewhere, so neither is moved or recycled.
+  expect(await hasGitLinkFile(worktree)).toBe(true);
+  expect(await hasGitLinkFile(submodule)).toBe(true);
+  expect(await hasGitLinkFile(repo)).toBe(false);
 });
