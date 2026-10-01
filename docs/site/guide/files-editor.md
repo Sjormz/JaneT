@@ -5,7 +5,7 @@ description: Browse local project files, open text files, and save edits in Jane
 
 # Files and editor
 
-JaneT's **Explorer** follows the working directory of the focused local terminal. Browse the project, open supported text files in the built-in editor, and switch back to the terminal without leaving the session.
+JaneT's **Explorer** follows the working directory of the focused local terminal. Browse the project, open supported text files in the built-in editor, and switch back to the terminal without leaving the project.
 
 ![JaneT built-in editor with a source file open beside the workspace tools](/screenshots/built-in-editor.png)
 
@@ -32,7 +32,7 @@ JaneT learns the terminal's current directory from PowerShell, Bash, Zsh, and Fi
 
 ## Edit and save a text file
 
-Select a file in Explorer to open it as a document tab. Edit the text, then choose **Save file** or use the editor's save shortcut. JaneT marks unsaved documents in the document tab. When closing a dirty document or session, review JaneT's prompt before discarding changes.
+Select a file in Explorer to open it as a document tab. Edit the text, then choose **Save file** or use the editor's save shortcut. JaneT marks unsaved documents in the document tab. When closing a dirty document or JaneT itself, review JaneT's prompt before discarding changes.
 
 The editor accepts UTF-8 text files up to 2 MiB. It does not open binary files or files with invalid UTF-8 data. Git diff documents are previews and cannot be edited or saved as source files. JaneT uses Monaco's detected language support and applies the selected app theme and text size.
 

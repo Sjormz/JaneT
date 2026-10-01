@@ -5,7 +5,7 @@ description: Review repository status, stage changes, commit, sync, manage branc
 
 # Source Control
 
-JaneT's **Source Control** panel follows the repository for the focused local terminal. It provides common Git operations alongside the terminal; Git itself must be available on the system. It uses the same local directory as Explorer, so directories reported from an SSH session or a network share are not followed; see [How Explorer follows the terminal](/guide/files-editor#how-explorer-follows-the-terminal).
+JaneT's **Source Control** panel follows the repository for the focused local terminal. It provides common Git operations alongside the terminal; Git itself must be available on the system. It uses the same local directory as Explorer, so directories reported from an SSH connection or a network share are not followed; see [How Explorer follows the terminal](/guide/files-editor#how-explorer-follows-the-terminal).
 
 ![JaneT Source Control panel with staged and unstaged changes alongside terminals](/screenshots/source-control.png)
 
@@ -37,9 +37,16 @@ Delete a branch from its row. The safe delete is the default; JaneT asks you to 
 
 ## Create and manage worktrees
 
-In **Worktrees**, select **Add worktree with new branch** or **Add worktree from existing branch**, then provide a branch and destination directory. New worktrees are separate directories backed by Git; unlike a Library session, they provide isolated working trees.
+In **Worktrees**, select **Add worktree with new branch** or **Add worktree from existing branch**, then provide a branch and destination directory. New worktrees are separate directories backed by Git; unlike several projects in one Library entry, they provide isolated working trees.
 
-Select a worktree to open or focus its terminal. Removing a worktree deletes its directory; the default safe removal can be blocked by local changes. Type `FORCE` only when you intend to remove it despite those changes. **Prune stale worktrees…** removes Git records for missing directories; it does not delete working directories. **Worktree defaults** lets you set the suggested parent directory and folder-name template.
+Select a worktree to open it. If a terminal is already open in it, JaneT focuses that terminal. Otherwise JaneT opens the worktree as a **Library project** with one terminal in the worktree folder, marked with a **w** badge:
+
+- When the repository is in a Library entry, the worktree becomes another project of that entry.
+- When the repository is a Workspace project, JaneT adds a Library entry for the worktree folder with one project in it.
+
+Selecting the worktree again later selects its existing project. Renaming the project changes only its name, and **Remove project…** removes it from JaneT without touching the worktree. See [Open a Git worktree as a project](/guide/workspaces#open-a-git-worktree-as-a-project).
+
+Removing a worktree from Source Control deletes its directory; the default safe removal can be blocked by local changes. Type `FORCE` only when you intend to remove it despite those changes. **Prune stale worktrees…** removes Git records for missing directories; it does not delete working directories. **Worktree defaults** lets you set the suggested parent directory and folder-name template.
 
 ## When Git fails
 

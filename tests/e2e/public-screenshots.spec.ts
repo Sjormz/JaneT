@@ -27,6 +27,7 @@ const screenshotNames = [
   'workspace-creation.png',
   'workspace-overview.png',
   'workspace-setup-sidebar.png',
+  'worktree-library-project.png',
 ] as const;
 // Page captures cannot see Mica or vibrancy, so full transparency would publish half-transparent PNGs.
 // Reduced keeps the in-app glass over an opaque window: the closest faithful picture (docs/design/liquid-glass.md).
@@ -460,6 +461,18 @@ test('recaptures the shipped public screenshot set from the real app', async () 
       };
     })).toEqual({ badgeInside: true, worktreeNameFits: true });
     await capture('source-control.png', page);
+
+    // A Git worktree opens as a Library project; worktrees never become Workspace projects.
+    runGit(['worktree', 'add', '-b', 'review', path.join(fixturePath, 'worktrees', 'review')]);
+    await sourceControl.getByRole('button', { name: 'Refresh Source Control' }).click();
+    await sourceControl.getByRole('button', { name: 'Open worktree review as a Library project' }).click({ timeout: 20_000 });
+    const worktreeEntry = page.getByRole('region', { name: 'review', exact: true });
+    await expect(worktreeEntry.locator('.vtab-item.active')).toBeVisible();
+    await expect(worktreeEntry.getByRole('img', { name: 'Worktree project' })).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('.terminal-container')).toHaveCount(1);
+    await warmTerminal(page, page.locator('.terminal-container'));
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await capture('worktree-library-project.png', page.locator('.workspace-tabs-rail'));
 
     const bodyText = await page.locator('body').innerText();
     expect(bodyText).not.toMatch(/pckpr|JaneT-polish|projects\\JaneT/i);

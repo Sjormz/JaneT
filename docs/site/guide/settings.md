@@ -30,7 +30,7 @@ On Linux and earlier versions of Windows, the window itself stays solid, but pan
 
 ## Motion
 
-Panels, menus, and selections animate briefly to show what changed. For example, collapsing a sidebar slides it away, and the highlighted tab glides to the new one. Terminal text never animates. To turn animation off, enable your operating system's reduce-motion setting: on macOS, **Reduce motion** in Accessibility > Display; on Windows, **Animation effects** in Accessibility > Visual effects. JaneT then changes views instantly.
+Panels, menus, and selections animate briefly to show what changed. For example, collapsing a sidebar slides it away, and the highlighted project glides to the new one. Terminal text never animates. To turn animation off, enable your operating system's reduce-motion setting: on macOS, **Reduce motion** in Accessibility > Display; on Windows, **Animation effects** in Accessibility > Visual effects. JaneT then changes views instantly.
 
 ## Get background notifications
 

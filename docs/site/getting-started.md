@@ -36,7 +36,7 @@ On first launch, JaneT asks you to choose a main directory. This is the parent f
 
 1. Select **New workspace** in the Workspaces side panel and enter a workspace name.
 2. In the new workspace, open its context menu and select **Add project**.
-3. Enter a project name. To open terminals immediately, select **Add terminals**, choose the initial count and launcher, then select **Create project**. Terminals are optional; you can create the project first and open a session later.
+3. Enter a project name. To open terminals immediately, select **Add terminals**, choose the initial count and launcher, then select **Create project**. Terminals are optional; you can create the project first and start terminals later.
 
 ![Create workspace dialog asking for a name](/screenshots/workspace-creation.png)
 
@@ -46,10 +46,12 @@ On first launch, JaneT asks you to choose a main directory. This is the parent f
 
 *Add terminals during project setup or start them later from the project.*
 
-![JaneT workspace sidebar with projects and a terminal session](/screenshots/workspace-overview.png)
+![JaneT workspace sidebar with a workspace, its projects, and a project's terminals](/screenshots/workspace-overview.png)
 
-*The Workspaces sidebar groups project folders and their terminal sessions.*
+*The sidebar groups projects under their workspace or Library entry; the selected project's terminals fill the window.*
 
-To work in a folder that already exists, select **Add Library entry** beside Library and choose the folder. Library links use the existing directory in place; they do not copy it or create an isolated worktree.
+To work in a folder that already exists, select **Add Library entry** beside Library, choose the folder, then add a project to it. Library links use the existing directory in place; JaneT never renames, moves, or deletes it, and it does not create an isolated worktree.
 
-JaneT saves workspace structure and pane layouts automatically. When you reopen the app, saved sessions start fresh local shells; shell process state is not restored. See [Workspaces and Library](/guide/workspaces) for folder, project, and session details, and [Terminals and panes](/guide/terminals) to arrange your shell workspace.
+To create another project later, press **New project** (`Ctrl+Shift+T`, or `Cmd+T` on macOS).
+
+JaneT saves workspace structure and pane layouts automatically. When you reopen the app, saved projects start fresh local shells; shell process state is not restored. See [Workspaces and Library](/guide/workspaces) for folder and project details, and [Terminals and panes](/guide/terminals) to arrange your shell workspace.

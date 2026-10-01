@@ -13,20 +13,21 @@ JaneT's shortcuts stay out of the way of your shell and terminal programs. On Wi
 | --- | --- | --- |
 | Open command palette | `Ctrl+Shift+P` | `Cmd+Shift+P` |
 | Search terminal output | `Ctrl+Shift+F` | `Cmd+F` |
-| New terminal tab | `Ctrl+Shift+T` | `Cmd+T` |
+| New project | `Ctrl+Shift+T` | `Cmd+T` |
+| Add terminals to current project | `` Ctrl+Shift+` `` | `` Ctrl+Shift+` `` |
 | Close current terminal | `Ctrl+Shift+W` | `Cmd+W` |
 | Open settings | `Ctrl+,` | `Cmd+,` |
 | Show or hide workspace tools | `Ctrl+Shift+B` | `Cmd+B` |
 | Increase terminal text size | `Ctrl+Plus` | `Cmd+Plus` |
 | Decrease terminal text size | `Ctrl+-` | `Cmd+-` |
 | Reset terminal text size | `Ctrl+0` | `Cmd+0` |
-| Previous terminal tab | `Ctrl+Shift+Tab` | `Ctrl+Shift+Tab` |
-| Next terminal tab | `Ctrl+Tab` | `Ctrl+Tab` |
+| Previous project | `Ctrl+Shift+Tab` | `Ctrl+Shift+Tab` |
+| Next project | `Ctrl+Tab` | `Ctrl+Tab` |
 | Split pane right | `Ctrl+Shift+5` | `Cmd+\` |
 | Split pane below | `Ctrl+Shift+'` | `Cmd+Shift+\` |
 | Close current pane | Unassigned | `Cmd+Shift+W` |
 | Rename current terminal | `Ctrl+Shift+F2` | `Cmd+Shift+F2` |
-| Rename current tab | `Ctrl+Shift+I` | `Cmd+F2` |
+| Rename current project | `Ctrl+Shift+I` | `Cmd+F2` |
 | Previous semantic command | `Ctrl+Shift+ArrowUp` | `Cmd+ArrowUp` |
 | Next semantic command | `Ctrl+Shift+ArrowDown` | `Cmd+ArrowDown` |
 | Copy semantic command | `Ctrl+Shift+K` | `Cmd+Option+C` |
@@ -43,7 +44,11 @@ JaneT's shortcuts stay out of the way of your shell and terminal programs. On Wi
 
 Shortcuts follow the key you press, not the character it types, so `Ctrl+Shift+5` works even though Shift turns `5` into `%`. `Ctrl+Plus` works with the `=` key, the numpad `+` key, or a layout's own `+` key. On other keyboard layouts, digit and punctuation shortcuts use the key in the same position as on a US keyboard.
 
-**Close current terminal** closes the focused pane, or the tab when it has only one pane. On Windows and Linux it covers **Close current pane**, which you can still assign if you want a separate shortcut.
+**New project** opens **Create project** for the Workspace or Library entry that holds the current project; see [Create a project from the keyboard](/guide/workspaces#create-a-project-from-the-keyboard). **Add terminals to current project** opens **Add terminals**, like the **+** button on a pane; in a project without terminals it moves to the **Start terminals** form.
+
+`` Ctrl+Shift+` `` is the key to the left of `1` on a US keyboard, the same key Visual Studio Code uses to create a terminal. It sends nothing to terminal programs, so no shell or TUI key is lost. JaneT uses it on macOS too, because `` Cmd+` `` switches windows there.
+
+**Close current terminal** closes the focused pane. Closing a project's last pane keeps the project, ready for **Start terminals**. On Windows and Linux it covers **Close current pane**, which you can still assign if you want a separate shortcut.
 
 The semantic command shortcuts need [shell integration](/guide/terminals#navigate-completed-commands) and apply to the shell's normal screen. While a full-screen program such as vim, htop, or lazygit is running, those keys go to the program.
 
@@ -81,6 +86,8 @@ Versions of JaneT after 0.14.0 changed several defaults so they no longer block 
 | Split pane below | `Ctrl+Shift+\` | `Cmd+Shift+\` (unchanged) |
 | Close current pane | `Ctrl+Shift+W` | `Cmd+Shift+W` (unchanged) |
 | Rename current terminal | `F2` | `F2` |
-| Rename current tab | `Ctrl+F2` | `Cmd+F2` (unchanged) |
+| Rename current project (was Rename current tab) | `Ctrl+F2` | `Cmd+F2` (unchanged) |
 | Previous and next semantic command | `Ctrl+Shift+ArrowUp` and `Ctrl+Shift+ArrowDown` (unchanged) | `Ctrl+Shift+ArrowUp` and `Ctrl+Shift+ArrowDown` |
 | Copy semantic command, output, and rerun | `Ctrl+Alt+C`, `Ctrl+Alt+O`, `Ctrl+Alt+R` | `Ctrl+Option+C`, `Ctrl+Option+O`, `Ctrl+Option+R` |
+
+The next version after 0.14.1 replaced terminal tabs with projects. **New terminal tab** became **New project** on the same key (`Ctrl+Shift+T`, or `Cmd+T` on macOS); if you had changed that key, your choice now opens **New project**. **Previous project**, **Next project**, and **Rename current project** keep their keys. The new **Add terminals to current project** action gets `` Ctrl+Shift+` `` unless one of your own shortcuts already uses it; then it stays unassigned.
