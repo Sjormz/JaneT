@@ -7,14 +7,14 @@ description: Browse local project files, open text files, and save edits in Jane
 
 JaneT's **Explorer** follows the working directory of the focused local terminal. Browse the project, open supported text files in the built-in editor, and switch back to the terminal without leaving the project.
 
-![JaneT built-in editor with a source file open beside the workspace tools](/screenshots/built-in-editor.png)
+![JaneT built-in editor with a source file open beside the project tools](/screenshots/built-in-editor.png)
 
 *The editor opens as a document surface alongside the terminal.*
 
 ## Browse a project
 
 1. Focus a local terminal in the project you want to inspect.
-2. Open the workspace tools with **Show or hide workspace tools** if they are hidden.
+2. Open the project tools with **Show or hide project tools** if they are hidden.
 3. Select **Explorer**. Its starting directory follows the focused terminal's current directory.
 4. Open folders, use **Back to previous folder**, or select **Browse parent folders** to navigate elsewhere.
 5. Select **Show hidden files** when you need dotfiles or other hidden entries. Use **Refresh files** to reload the current folder.

@@ -25,7 +25,7 @@ export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   'add-terminals': 'Add terminals to current project',
   'close-tab': 'Close current terminal',
   'settings-toggle': 'Open settings',
-  'toggle-sidebar': 'Show or hide workspace tools',
+  'toggle-sidebar': 'Show or hide project tools',
   'font-increase': 'Increase terminal text size',
   'font-decrease': 'Decrease terminal text size',
   'font-reset': 'Reset terminal text size',

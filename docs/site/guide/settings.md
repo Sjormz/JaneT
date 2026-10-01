@@ -1,6 +1,6 @@
 ---
 title: Settings
-description: Change JaneT's appearance, transparency, workspace tools position, notifications, and keyboard shortcuts.
+description: Change JaneT's appearance, transparency, project tools position, notifications, and keyboard shortcuts.
 ---
 
 # Settings

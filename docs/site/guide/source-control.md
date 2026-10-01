@@ -14,7 +14,7 @@ JaneT's **Source Control** panel follows the repository for the focused local te
 ## Review and stage changes
 
 1. Focus a terminal whose current directory is inside the repository.
-2. Open the workspace tools and select **Source Control**.
+2. Open the project tools and select **Source Control**.
 3. Review the current branch, changed-file count, and ahead/behind indicators.
 4. Select a changed file to inspect its diff.
 5. Use the file action to stage a file, or use **Stage all changes**. Review **Staged Changes**, then unstage individual files or all staged changes if needed.

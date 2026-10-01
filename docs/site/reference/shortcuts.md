@@ -17,7 +17,7 @@ JaneT's shortcuts stay out of the way of your shell and terminal programs. On Wi
 | Add terminals to current project | `` Ctrl+Shift+` `` | `` Ctrl+Shift+` `` |
 | Close current terminal | `Ctrl+Shift+W` | `Cmd+W` |
 | Open settings | `Ctrl+,` | `Cmd+,` |
-| Show or hide workspace tools | `Ctrl+Shift+B` | `Cmd+B` |
+| Show or hide project tools | `Ctrl+Shift+B` | `Cmd+B` |
 | Increase terminal text size | `Ctrl+Plus` | `Cmd+Plus` |
 | Decrease terminal text size | `Ctrl+-` | `Cmd+-` |
 | Reset terminal text size | `Ctrl+0` | `Cmd+0` |
@@ -81,7 +81,7 @@ Versions of JaneT after 0.14.0 changed several defaults so they no longer block 
 | --- | --- | --- |
 | Search terminal output | `Ctrl+F` | `Cmd+F` (unchanged) |
 | Close current terminal | `Ctrl+W` | `Cmd+W` (unchanged) |
-| Show or hide workspace tools | `Ctrl+B` | `Cmd+B` (unchanged) |
+| Show or hide project tools | `Ctrl+B` | `Cmd+B` (unchanged) |
 | Split pane right | `Ctrl+\` | `Cmd+\` (unchanged) |
 | Split pane below | `Ctrl+Shift+\` | `Cmd+Shift+\` (unchanged) |
 | Close current pane | `Ctrl+Shift+W` | `Cmd+Shift+W` (unchanged) |
