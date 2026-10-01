@@ -1660,6 +1660,10 @@ describe('split panes in the app', () => {
     } }));
     render(<App />);
     await screen.findByRole('button', { name: 'Create project' });
+    // Shortcut handlers register in an effect; wait for that observable state before pressing keys.
+    await waitFor(() => expect(rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')).toMatchObject({
+      label: 'New project', shortcut: 'Ctrl+Shift+T',
+    }));
     fireEvent.keyDown(document, { key: 'T', code: 'KeyT', ctrlKey: true, shiftKey: true });
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.entryRequest).toEqual({ action: 'create', groupId: 'work' }));
   });
