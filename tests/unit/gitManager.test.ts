@@ -498,10 +498,13 @@ describe('GitManager working tree actions', { timeout: 30_000 }, () => {
       await expect(manager.log(repository, 1)).resolves.toMatchObject([
         { message: 'guarded environment', author_name: 'JaneT Test', author_email: 'janet@example.invalid' },
       ]);
-      await expect(manager.details(repository)).resolves.toMatchObject({
+      const details = await manager.details(repository);
+      expect(details).toMatchObject({
         branches: [{ name: 'main', current: true, isRemote: false }],
-        worktrees: [{ path: repository, branch: 'main' }],
+        worktrees: [{ branch: 'main' }],
       });
+      // Git uses forward slashes on Windows; compare the actual directories.
+      expect(details?.worktrees.map((tree) => fs.realpathSync(tree.path))).toEqual([fs.realpathSync(repository)]);
       await expect(manager.status(repository)).resolves.toMatchObject({
         ok: true, value: { current: 'main', files: [{ path: 'guard-env.txt', staged: false }] },
       });
