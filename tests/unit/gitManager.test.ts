@@ -503,8 +503,8 @@ describe('GitManager working tree actions', { timeout: 30_000 }, () => {
         branches: [{ name: 'main', current: true, isRemote: false }],
         worktrees: [{ branch: 'main' }],
       });
-      // Git uses forward slashes on Windows; compare the actual directories.
-      expect(details?.worktrees.map((tree) => fs.realpathSync(tree.path))).toEqual([fs.realpathSync(repository)]);
+      // Native realpath also expands Windows 8.3 aliases used by the temp directory.
+      expect(details?.worktrees.map((tree) => fs.realpathSync.native(tree.path))).toEqual([fs.realpathSync.native(repository)]);
       await expect(manager.status(repository)).resolves.toMatchObject({
         ok: true, value: { current: 'main', files: [{ path: 'guard-env.txt', staged: false }] },
       });
