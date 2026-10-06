@@ -29,6 +29,12 @@ Use the toolbar buttons at the top of Source Control:
 - **Pull** runs `git pull --ff-only`. If Git cannot fast-forward, use the terminal to decide how to integrate the changes.
 - **Push** sends the current branch to its configured upstream. Configure remotes and credentials with Git or your credential manager.
 
+## Git configuration and environment
+
+Source Control uses your repository and normal Git configuration files. Configure your commit identity, credential helper, and SSH settings there rather than relying on shell environment overrides.
+
+For safety, Source Control actions, status, history, and branch/worktree lists do not pass inherited `GIT_*` variables or command overrides such as `VISUAL`, `EDITOR`, `PAGER`, and `SSH_ASKPASS` to Git. This includes environment-only commit identities, alternate configuration paths, and `GIT_SSH_COMMAND`. If your workflow depends on those overrides, run its Git commands in the terminal instead. Repository hooks still run during actions such as committing.
+
 ## Create and switch branches
 
 Use the **Branches** section to switch to a listed local branch or create a branch. Creating a branch checks it out immediately; you can optionally choose a start point. JaneT will not switch branches when Git refuses, for example when local changes would be overwritten.

@@ -9,7 +9,7 @@ import { MAX_GIT_ERROR_LENGTH, type GitActionResult, type GitFailure, type GitRe
 
 let simpleGit: any = null;
 try {
-  simpleGit = require('simple-git');
+  simpleGit = require('simple-git').simpleGit;
 } catch {
   // simple-git is optional at runtime; IPC methods report Git as unavailable.
 }
