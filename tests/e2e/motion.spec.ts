@@ -129,8 +129,8 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       const tools = page.getByRole('button', { name: /^(Collapse|Expand) project tools$/ });
       await expectOneResizePerTerminal(page, () => tools.click());
       await expectOneResizePerTerminal(page, () => tools.click());
-      await expectOneResizePerTerminal(page, () => page.getByRole('button', { name: 'Collapse terminal tabs', exact: true }).click());
-      await expectOneResizePerTerminal(page, () => page.getByRole('button', { name: 'Show terminal tabs', exact: true }).click());
+      await expectOneResizePerTerminal(page, () => page.getByRole('button', { name: 'Collapse workspace list', exact: true }).click());
+      await expectOneResizePerTerminal(page, () => page.getByRole('button', { name: 'Show workspace list', exact: true }).click());
       expect(await page.locator('.terminal-container').evaluateAll(elements => elements.map(el => el.getAttribute('data-terminal-id')))).toEqual(terminalIds);
       await expect(page.locator('html')).not.toHaveAttribute('data-layout-transition');
 

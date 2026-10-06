@@ -37,7 +37,8 @@ interface GitTreeProps {
   statusError?: string | null;
   openLocalTerminals?: Array<{ terminalId: string; cwd: string; lastFocused: number }>;
   onOpenTerminal?: (terminalId: string) => void;
-  onOpenLocalTabAt?: (cwd: string, title?: string) => void;
+  /** Open a Git worktree as a Library project (or focus its existing project). */
+  onOpenWorktree?: (worktreePath: string, repoPath: string | null) => void;
   onCopyTerminalPath?: (path: string) => Promise<void>;
   onOpenFile?: (resource: EditorResource) => void;
   mutationLock?: { current: { repoPath: string } | null };
@@ -97,7 +98,7 @@ export default function GitTree({
   statusError = null,
   openLocalTerminals = [],
   onOpenTerminal,
-  onOpenLocalTabAt,
+  onOpenWorktree,
   onCopyTerminalPath,
   onOpenFile,
   mutationLock,
@@ -482,11 +483,11 @@ export default function GitTree({
           const paneNote = openTerminals.length > 1 ? ` · ${openTerminals.length} panes` : open ? ' · open' : '';
           return (
             <div key={tree.path} className={`git-worktree-item${current ? ' current' : ''}${open ? ' open' : ''}`} aria-current={current ? 'location' : undefined}>
-              <Tooltip label={open ? `Focus terminal at ${tree.path}` : `Open ${tree.path} in a terminal`} placement="right">
+              <Tooltip label={open ? `Focus terminal at ${tree.path}` : `Open ${tree.path} as a Library project`} placement="right">
                 <button
                   className="git-row-main"
-                  onClick={() => openTerminal ? onOpenTerminal?.(openTerminal.terminalId) : onOpenLocalTabAt?.(tree.path, basename(tree.path))}
-                  aria-label={open ? `Focus worktree ${basename(tree.path)} terminal` : `Open worktree ${basename(tree.path)} in a terminal`}
+                  onClick={() => openTerminal ? onOpenTerminal?.(openTerminal.terminalId) : onOpenWorktree?.(tree.path, repoPath)}
+                  aria-label={open ? `Focus worktree ${basename(tree.path)} terminal` : `Open worktree ${basename(tree.path)} as a Library project`}
                 >
                   <FolderIcon size="xs" />
                   <span className="branch-name">{basename(tree.path)}</span>

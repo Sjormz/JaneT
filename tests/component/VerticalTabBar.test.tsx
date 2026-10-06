@@ -111,15 +111,20 @@ describe('VerticalTabBar', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Remove workspace…' }));
     expect(action).toHaveBeenCalledWith('unlink', 'default');
   });
-  it('offers close for a root session, including an empty session left by an older version', () => {
+  it('offers only removal for a project that owns no workspace folder, and nothing to close without terminals', () => {
     const close = vi.fn();
+    const action = vi.fn();
     renderTabs({ groups: [{ id: 'work', name: 'Work', directory: 'C:/Work' }],
-      tabs: [{ ...tabs[0], groupId: 'work', cwd: 'C:/Work', root: { id: 'empty', type: 'split', direction: 'vertical', children: [], sizes: [] } }], onCloseTab: close });
+      tabs: [{ ...tabs[0], groupId: 'work', cwd: 'C:/Work', isProject: true, root: { id: 'empty', type: 'split', direction: 'vertical', children: [], sizes: [] } }],
+      onCloseTab: close, onWorkspaceAction: action });
     fireEvent.contextMenu(screen.getByRole('button', { name: /^Main app/ }));
     expect(screen.queryByRole('menuitem', { name: 'Delete project…' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: 'Close all terminals…' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Close session' }));
-    expect(close).toHaveBeenCalledWith('tab-1');
+    expect(screen.queryByRole('menuitem', { name: 'Keep in Library…' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /session/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Close all terminals…' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Remove project…' }));
+    expect(action).toHaveBeenCalledWith('unlink', 'work', 'tab-1');
+    expect(close).not.toHaveBeenCalled();
   });
   it('opens the project form for an empty-state destination request', async () => {
     const handled = vi.fn();
@@ -156,9 +161,8 @@ describe('VerticalTabBar', () => {
     const view = renderTabs({ groups: [{ id: 'default', name: 'Work', directory: 'C:/temp/Work' }],
       tabs: [
         { ...tabs[0], groupId: 'default', cwd: 'C:/temp/Work/App', isProject: true },
-        // A new terminal or Git worktree opened from the project is only a session.
-        { ...tabs[1], groupId: 'default', cwd: 'C:/temp/Work/App' },
-        { ...tabs[1], id: 'worktree', title: 'App-feature', groupId: 'default', cwd: 'C:/temp/Work/App-feature' },
+        // A project that starts below another project's folder owns nothing.
+        { ...tabs[1], groupId: 'default', cwd: 'C:/temp/Work/App/src', isProject: true },
       ], onWorkspaceAction: action });
     fireEvent.contextMenu(screen.getByRole('button', { name: /^Main app Local/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Keep in Library…' }));
@@ -166,14 +170,23 @@ describe('VerticalTabBar', () => {
     fireEvent.contextMenu(screen.getByRole('button', { name: /^Main app Local/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete project…' }));
     expect(action).toHaveBeenCalledWith('delete', 'default', 'tab-1');
-    for (const name of [/^Tools Local/, /^App-feature Local/]) {
-      fireEvent.contextMenu(screen.getByRole('button', { name }));
-      expect(screen.getByRole('menuitem', { name: 'Rename session' })).toBeInTheDocument();
-      expect(screen.queryByRole('menuitem', { name: 'Delete project…' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('menuitem', { name: 'Keep in Library…' })).not.toBeInTheDocument();
-      fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
-    }
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^Tools Local/ }));
+    expect(screen.getByRole('menuitem', { name: 'Rename project' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Delete project…' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Keep in Library…' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Remove project…' }));
+    expect(action).toHaveBeenLastCalledWith('unlink', 'default', 'tab-2');
     view.unmount();
+    // A Git worktree project in Library is label-only too.
+    const worktreeView = renderTabs({ groups: [{ id: 'tree', name: 'App-feature', kind: 'folder', directory: 'C:/temp/Work/App-feature' }],
+      tabs: [{ ...tabs[1], id: 'worktree', title: 'App-feature', groupId: 'tree', cwd: 'C:/temp/Work/App-feature', isProject: true }],
+      onWorkspaceAction: action });
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^App-feature Local/ }));
+    expect(screen.queryByRole('menuitem', { name: 'Delete project…' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Keep in Library…' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Remove project…' }));
+    expect(action).toHaveBeenLastCalledWith('unlink', 'tree', 'worktree');
+    worktreeView.unmount();
     renderTabs({ groups: [{ id: 'linked', name: 'Repo', kind: 'folder', directory: 'C:/repo' }], tabs: [], onWorkspaceAction: action });
     expect(screen.getByRole('heading', { name: 'Library' })).toBeInTheDocument();
     fireEvent.contextMenu(screen.getByRole('button', { name: /^Repo/, expanded: true }));
@@ -200,7 +213,7 @@ describe('VerticalTabBar', () => {
     renderTabs({ tabs: [tabs[0]], onCloseTab });
     expect(screen.queryByRole('button', { name: /close main app/i })).not.toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole('button', { name: /^Main app Local/ }), { key: 'F10', shiftKey: true });
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Close session' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Close all terminals…' }));
     expect(onCloseTab).toHaveBeenCalledWith(tabs[0].id);
   });
 
@@ -256,8 +269,8 @@ describe('VerticalTabBar', () => {
     expect(screen.queryByRole('button', { name: /^rename project$/i })).not.toBeInTheDocument();
     fireEvent.contextMenu(opener);
     expect(screen.getByRole('menu').closest('.motion-presence')?.parentElement).toBe(document.body);
-    fireEvent.click(screen.getByRole('menuitem', { name: /rename session/i }));
-    const nameInput = screen.getByRole('textbox', { name: /^tab name$/i });
+    fireEvent.click(screen.getByRole('menuitem', { name: /rename project/i }));
+    const nameInput = screen.getByRole('textbox', { name: /^project name$/i });
     expect(nameInput).toHaveAttribute('maxlength', '256');
     fireEvent.change(nameInput, { target: { value: 'Renamed' } });
     fireEvent.keyDown(nameInput, { key: 'Enter' });
@@ -277,8 +290,8 @@ describe('VerticalTabBar', () => {
     fireEvent.keyDown(opener, { key: 'ContextMenu' });
 
     const menu = screen.getByRole('menu', { name: 'Actions for Main app' });
-    const rename = screen.getByRole('menuitem', { name: 'Rename session' });
-    const save = screen.getByRole('menuitem', { name: 'Close session' });
+    const rename = screen.getByRole('menuitem', { name: 'Rename project' });
+    const save = screen.getByRole('menuitem', { name: 'Close all terminals…' });
     await waitFor(() => expect(rename).toHaveFocus());
     fireEvent.keyDown(menu, { key: 'ArrowUp' });
     expect(save).toHaveFocus();
@@ -289,7 +302,7 @@ describe('VerticalTabBar', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 
     fireEvent.keyDown(opener, { key: 'F10', shiftKey: true });
-    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Rename session' })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Rename project' })).toHaveFocus());
   });
 
   it('closes the tab context menu when clicking outside it', () => {
@@ -386,7 +399,7 @@ describe('VerticalTabBar', () => {
     const onCollapse = vi.fn();
     renderTabs({ onCollapse });
 
-    fireEvent.click(screen.getByRole('button', { name: /collapse terminal tabs/i }));
+    fireEvent.click(screen.getByRole('button', { name: /collapse workspace list/i }));
     expect(onCollapse).toHaveBeenCalledOnce();
   });
   it('creates a group without launching terminals and can collapse a populated group', async () => {
@@ -440,7 +453,7 @@ describe('VerticalTabBar', () => {
     const close = vi.fn();
     renderTabs({ onCloseTab: close });
     fireEvent.contextMenu(screen.getByRole('button', { name: /Main app Local/ }));
-    expect(screen.getByRole('menuitem', { name: 'Rename session' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Rename project' })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'Rename workspace' })).not.toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /^Move to / })).not.toBeInTheDocument();
 

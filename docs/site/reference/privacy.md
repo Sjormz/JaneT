@@ -9,7 +9,7 @@ JaneT is a local desktop app. It launches local shell processes, reads files you
 
 ## Saved on this computer
 
-JaneT saves settings and workspace structure in its Electron user-data directory. That includes layout, project and session paths, theme, shortcuts, snippets, notification preferences, and recent command history. Command history stores command text, timing, outcome, and working directory, but not terminal output. Closing the app ends managed terminal processes; reopening it starts fresh shells in the saved structure.
+JaneT saves settings and workspace structure in its Electron user-data directory. That includes layout, workspace, Library, and project paths, theme, shortcuts, snippets, notification preferences, and recent command history. Command history stores command text, timing, outcome, and working directory, but not terminal output. Closing the app ends managed terminal processes; reopening it starts fresh shells in the saved structure.
 
 Editor documents are files on your disk. JaneT does not turn them into a separate synced copy. A copied or dragged image can be written to a temporary local file so a terminal application can receive its path.
 

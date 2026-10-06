@@ -119,11 +119,11 @@ describe('GitTree live refresh', () => {
       />,
     );
 
-    const current = (await screen.findByRole('button', { name: 'Open worktree y in a terminal' }))
+    const current = (await screen.findByRole('button', { name: 'Open worktree y as a Library project' }))
       .closest('.git-worktree-item');
     expect(current).toHaveClass('current');
     expect(current).toHaveAttribute('aria-current', 'location');
-    expect(screen.getByRole('button', { name: 'Open worktree z in a terminal' }).closest('.git-worktree-item'))
+    expect(screen.getByRole('button', { name: 'Open worktree z as a Library project' }).closest('.git-worktree-item'))
       .not.toHaveClass('current');
   });
 
@@ -140,7 +140,7 @@ describe('GitTree live refresh', () => {
       ],
     });
     const onOpenTerminal = vi.fn();
-    const onOpenLocalTabAt = vi.fn();
+    const onOpenWorktree = vi.fn();
     render(
       <GitTree
         cwdReady
@@ -155,7 +155,7 @@ describe('GitTree live refresh', () => {
           { terminalId: 'main', cwd: 'C:/repo', lastFocused: 9 },
         ]}
         onOpenTerminal={onOpenTerminal}
-        onOpenLocalTabAt={onOpenLocalTabAt}
+        onOpenWorktree={onOpenWorktree}
       />,
     );
 
@@ -165,7 +165,7 @@ describe('GitTree live refresh', () => {
     fireEvent.click(cleanup);
 
     expect(onOpenTerminal).toHaveBeenCalledWith('newer');
-    expect(onOpenLocalTabAt).not.toHaveBeenCalled();
+    expect(onOpenWorktree).not.toHaveBeenCalled();
 
     const nested = screen.getByRole('button', { name: 'Focus worktree nested terminal' });
     expect(nested).toHaveTextContent('feature/nested · open');
@@ -174,6 +174,26 @@ describe('GitTree live refresh', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Focus worktree repo terminal' }));
     expect(onOpenTerminal).toHaveBeenLastCalledWith('main');
+  });
+
+  it('opens a worktree without a terminal as a Library project of its repository', async () => {
+    gitDetails.mockResolvedValue({
+      branches: [{ name: 'main', current: true, label: 'main', isRemote: false }],
+      worktrees: [
+        { path: 'C:/repo', head: 'abc123', branch: 'main', bare: false, detached: false },
+        { path: 'C:/repo-feature', head: 'def456', branch: 'feature', bare: false, detached: false },
+      ],
+    });
+    const onOpenTerminal = vi.fn();
+    const onOpenWorktree = vi.fn();
+    render(
+      <GitTree cwdReady repoPath="C:/repo" status={cleanStatus} searching={false}
+        openLocalTerminals={[{ terminalId: 'main', cwd: 'C:/repo', lastFocused: 1 }]}
+        onOpenTerminal={onOpenTerminal} onOpenWorktree={onOpenWorktree} />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Open worktree repo-feature as a Library project' }));
+    expect(onOpenWorktree).toHaveBeenCalledWith('C:/repo-feature', 'C:/repo');
+    expect(onOpenTerminal).not.toHaveBeenCalled();
   });
 
   it('puts worktrees first and keeps create actions compact in their section headers', async () => {
@@ -1008,7 +1028,7 @@ describe('GitTree live refresh', () => {
     expect(folder).not.toHaveAttribute('draggable');
     expect(screen.getByRole('button', { name: 'Show changes as a flat list' })).not.toHaveAttribute('draggable');
     expect(await screen.findByRole('button', { name: 'Current branch main' })).not.toHaveAttribute('draggable');
-    expect(await screen.findByRole('button', { name: 'Open worktree repo in a terminal' })).not.toHaveAttribute('draggable');
+    expect(await screen.findByRole('button', { name: 'Open worktree repo as a Library project' })).not.toHaveAttribute('draggable');
     fireEvent.contextMenu(row);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Copy path' }));
     expect(onCopyTerminalPath).toHaveBeenCalledWith('C:/repo/src/nested/app.ts');

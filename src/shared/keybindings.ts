@@ -13,6 +13,7 @@ export type KeybindingAction =
   | 'search-toggle'
   | 'palette-toggle'
   | 'new-terminal'
+  | 'add-terminals'
   | 'close-tab'
   | 'settings-toggle'
   | 'toggle-sidebar'
@@ -43,11 +44,17 @@ export type KeybindingAction =
   | 'copy-command-output'
   | 'rerun-command';
 
-/** Windows and Linux defaults. */
+/**
+ * Windows and Linux defaults. The `new-terminal` id is kept for stored
+ * bindings; since schema 3 it means "New project". `add-terminals` adds
+ * terminals to the current project (VS Code's Ctrl+Shift+` "Create New
+ * Terminal", which xterm.js encodes as nothing, so no program loses it).
+ */
 export const DEFAULT_KEYBINDINGS: Readonly<Record<KeybindingAction, string>> = Object.freeze({
   'search-toggle': 'Ctrl+Shift+F',
   'palette-toggle': 'Ctrl+Shift+P',
   'new-terminal': 'Ctrl+Shift+T',
+  'add-terminals': 'Ctrl+Shift+`',
   'close-tab': 'Ctrl+Shift+W',
   'settings-toggle': 'Ctrl+,',
   'toggle-sidebar': 'Ctrl+Shift+B',
@@ -79,7 +86,11 @@ export const DEFAULT_KEYBINDINGS: Readonly<Record<KeybindingAction, string>> = O
   'rerun-command': 'Ctrl+Shift+R',
 });
 
-/** macOS overrides of the Windows and Linux defaults. */
+/**
+ * macOS overrides of the Windows and Linux defaults. `add-terminals` keeps
+ * Ctrl+Shift+` (VS Code's macOS key too): Cmd+` is the macOS window switcher,
+ * and Cmd+D / Cmd+Enter would take Monaco's multi-cursor and insert-line keys.
+ */
 const MAC_KEYBINDINGS: Readonly<Partial<Record<KeybindingAction, string>>> = Object.freeze({
   'search-toggle': 'Meta+F',
   'palette-toggle': 'Meta+Shift+P',
@@ -118,10 +129,12 @@ export function defaultKeybindingsForPlatform(platform: string): Record<Keybindi
  * settings schema does not change, and is never exposed to the renderer.
  */
 export const KEYBINDINGS_SCHEMA_KEY = '$keybindingsSchema';
-export const KEYBINDINGS_SCHEMA_VERSION = '2';
+export const KEYBINDINGS_SCHEMA_VERSION = '3';
+/** Schema 2 (2026-09-28 audit) had every current action except `add-terminals`. */
+const SCHEMA_2 = '2';
 
 /** Windows and Linux defaults shipped before the 2026-09-28 shortcut audit. */
-const SCHEMA_1_DEFAULT_KEYBINDINGS: Readonly<Record<KeybindingAction, string>> = Object.freeze({
+const SCHEMA_1_DEFAULT_KEYBINDINGS: Readonly<Record<Exclude<KeybindingAction, 'add-terminals'>, string>> = Object.freeze({
   'search-toggle': 'Ctrl+F',
   'palette-toggle': 'Ctrl+Shift+P',
   'new-terminal': 'Ctrl+Shift+T',
@@ -214,7 +227,7 @@ function earlierDefaultsFor(action: string, platform: string): Set<string> {
   if (Object.hasOwn(current, action)) values.add(current[action]);
   // Before macOS had its own defaults, a Mac saved the Ctrl-based map.
   if (platform === 'darwin' && Object.hasOwn(SCHEMA_1_DEFAULT_KEYBINDINGS, action)) {
-    values.add(SCHEMA_1_DEFAULT_KEYBINDINGS[action as KeybindingAction]);
+    values.add((SCHEMA_1_DEFAULT_KEYBINDINGS as Record<string, string>)[action]);
   }
   // The earliest sparse defaults (such as Ctrl+K for the palette) on every platform.
   if (Object.hasOwn(LEGACY_KEYBINDINGS, action)) values.add(LEGACY_KEYBINDINGS[action]);
@@ -225,6 +238,8 @@ function earlierDefaultsFor(action: string, platform: string): Set<string> {
  * Bring a stored keybinding map up to the current default generation.
  *
  * - A map already written against the current schema is returned unchanged.
+ * - A schema 2 map keeps every stored value; only actions it lacks (added in
+ *   schema 3: `add-terminals`) receive their defaults.
  * - An untouched legacy map (the historical exact-match cases) becomes the
  *   current defaults.
  * - Otherwise each binding that still equals a default this platform shipped
@@ -241,6 +256,32 @@ export function migrateKeybindings(
   const defaults = defaultKeybindingsForPlatform(platform);
   const { [KEYBINDINGS_SCHEMA_KEY]: schema, ...bindings } = stored;
   if (schema === KEYBINDINGS_SCHEMA_VERSION) return bindings;
+
+  const withCustomizedWinning = (migrated: Record<string, string>, moved: Set<string>) => {
+    // A customized binding wins over a moved default that now shares its chord.
+    const customized = new Set(
+      Object.entries(migrated)
+        .filter(([action, value]) => value && !moved.has(action))
+        .map(([, value]) => normalizeShortcutText(value)),
+    );
+    for (const action of moved) {
+      if (migrated[action] && customized.has(normalizeShortcutText(migrated[action]))) migrated[action] = '';
+    }
+    return migrated;
+  };
+
+  if (schema === SCHEMA_2) {
+    // Schema 2 values are all deliberate or current defaults, and `new-terminal`
+    // keeps its key with the "New project" meaning. Only new actions get defaults.
+    const migrated: Record<string, string> = { ...bindings };
+    const moved = new Set<string>();
+    for (const action of KEYBINDING_ACTIONS) {
+      if (Object.hasOwn(bindings, action)) continue;
+      migrated[action] = defaults[action];
+      moved.add(action);
+    }
+    return withCustomizedWinning(migrated, moved);
+  }
 
   const schema1 = schema1DefaultsForPlatform(platform);
   const schema1WithoutMovePane = Object.fromEntries(
@@ -260,16 +301,7 @@ export function migrateKeybindings(
     migrated[action] = defaults[action];
     moved.add(action);
   }
-  // A customized binding wins over a moved default that now shares its chord.
-  const customized = new Set(
-    Object.entries(migrated)
-      .filter(([action, value]) => value && !moved.has(action))
-      .map(([, value]) => normalizeShortcutText(value)),
-  );
-  for (const action of moved) {
-    if (migrated[action] && customized.has(normalizeShortcutText(migrated[action]))) migrated[action] = '';
-  }
-  return migrated;
+  return withCustomizedWinning(migrated, moved);
 }
 
 /** Order-insensitive, case-insensitive form of a stored shortcut for comparison. */

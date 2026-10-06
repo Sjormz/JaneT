@@ -168,9 +168,12 @@ describe('release tooling', () => {
     const { defaultKeybindingsForPlatform } = await import('../../src/renderer/keybindings');
     const windows = defaultKeybindingsForPlatform('win32');
     const macos = defaultKeybindingsForPlatform('darwin');
-    const display = (shortcut: string) => shortcut
-      ? `\`${shortcut.replace(/^Meta/, 'Cmd').replace(/\+Alt\+/, '+Option+')}\``
-      : 'Unassigned';
+    const display = (shortcut: string) => {
+      if (!shortcut) return 'Unassigned';
+      const text = shortcut.replace(/^Meta/, 'Cmd').replace(/\+Alt\+/, '+Option+');
+      // Markdown needs a double-backtick code span around a shortcut that contains a backtick.
+      return text.includes('`') ? `\`\` ${text} \`\`` : `\`${text}\``;
+    };
     const { KEYBINDING_LABELS } = await import('../../src/renderer/keybindings');
     const rows = Object.entries(KEYBINDING_LABELS)
       .filter(([action]) => !action.startsWith('move-pane-')) as Array<[keyof typeof windows, string]>;
@@ -186,7 +189,7 @@ describe('release tooling', () => {
     const workspaces = fs.readFileSync(path.join(projectRoot, 'docs', 'site', 'guide', 'workspaces.md'), 'utf8');
     const activity = fs.readFileSync(path.join(projectRoot, 'docs', 'site', 'guide', 'agent-activity.md'), 'utf8');
 
-    expect(workspaces).toContain('Closing JaneT ends its managed local terminal sessions');
+    expect(workspaces).toContain('Closing JaneT ends its managed local terminals');
     expect(workspaces).toContain('Restarting restores the saved workspace structure into fresh shells');
     expect(workspaces).toContain('startup commands run again');
     expect(activity).toContain('Agent lifecycle status is bounded metadata, not an authenticated security signal');

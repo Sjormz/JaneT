@@ -20,11 +20,11 @@ export default function AddTerminalsDialog({ group, onSubmit, onClose, inline = 
   const close = () => { if (!busy) onClose(); };
   useEffect(() => { if (open) { setBusy(false); setError(''); } }, [open]);
   useModalFocus({ open: open && !inline, containerRef: ref, onClose: close, initialFocusSelector: 'input[type="number"]' });
-  const title = inline ? 'Start session' : 'Add terminals';
+  const title = inline ? 'Start terminals' : 'Add terminals';
   const content = <div ref={ref} className={inline ? 'empty-project-terminals' : 'workspace-modal'} role={inline ? 'region' : 'dialog'} aria-modal={inline ? undefined : true} aria-label={title}>
       <div className="workspace-modal-header"><h2>{title}</h2>{!inline && <button aria-label="Close add terminals" disabled={busy} onClick={close}><XCloseIcon /></button>}</div>
       {error && <p className="form-error" role="alert">{error}</p>}
-      <WorkspaceForm terminalsOnly group={group} submitting={busy} submitLabel={busy ? inline ? 'Starting session…' : 'Adding terminals…' : title} onSubmit={async preset => {
+      <WorkspaceForm terminalsOnly group={group} submitting={busy} submitLabel={busy ? inline ? 'Starting terminals…' : 'Adding terminals…' : title} onSubmit={async preset => {
         setBusy(true); setError('');
         try { await onSubmit(preset); onClose(); }
         catch (err) { setError(err instanceof Error ? err.message : String(err)); setBusy(false); }

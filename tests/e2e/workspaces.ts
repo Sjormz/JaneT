@@ -5,7 +5,7 @@ import { serializePaneTree } from '../../src/renderer/sessionRestore';
 export function terminalSettings(directory: string) {
   return { mainDirectory: directory, session: {
     groups: [{ id: 'fixture-library', name: 'Test library', kind: 'folder', directory }],
-    tabs: [{ id: 'fixture-session', groupId: 'fixture-library', title: 'Terminal', type: 'local', cwd: directory,
+    tabs: [{ id: 'fixture-session', groupId: 'fixture-library', title: 'Terminal', type: 'local', isProject: true, cwd: directory,
       root: { type: 'leaf', cwd: directory } }],
     activeTabId: 'fixture-session', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
   } };
@@ -58,7 +58,7 @@ export async function restoreWorkspaceFixture(page: Page, name: string, terminal
   try {
     await page.evaluate(async ({ session, groups, root, name }) => {
       await window.janet.setSettings({ session: { ...session, groups,
-        tabs: [...(session?.tabs ?? []).filter((tab: any) => tab.id !== 'fixture-restored'), { id: 'fixture-restored', title: name, groupId: groups[0].id, type: 'local', root }],
+        tabs: [...(session?.tabs ?? []).filter((tab: any) => tab.id !== 'fixture-restored'), { id: 'fixture-restored', title: name, groupId: groups[0].id, type: 'local', isProject: true, root }],
         activeTabId: 'fixture-restored', tabsOpen: true,
       } });
     }, { session, groups, root, name });

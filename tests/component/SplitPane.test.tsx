@@ -270,6 +270,25 @@ function savedSettings(overrides: any = {}) {
   } };
 }
 
+const projectLeaf = () => ({ type: 'split', direction: 'vertical', sizes: [1], children: [{ type: 'leaf', cwd: '/home/test' }] });
+
+/** Two saved Library projects; call before render. The first one is active. */
+function seedTwoProjects() {
+  window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({ session: {
+    tabs: [
+      { id: 'saved-work', title: 'Terminal', type: 'local', groupId: 'library', isProject: true, cwd: '/home/test', root: projectLeaf() },
+      { id: 'second-work', title: 'Terminal 2', type: 'local', groupId: 'library', isProject: true, cwd: '/home/test', root: projectLeaf() },
+    ],
+    activeTabId: 'saved-work',
+  } }));
+}
+
+/** Switch to the second seeded project, which mounts its terminal. */
+async function openSecondProject() {
+  await waitFor(() => expect(rendererMocks.verticalTabBarProps?.tabs).toHaveLength(2));
+  act(() => rendererMocks.verticalTabBarProps.onSelectTab(rendererMocks.verticalTabBarProps.tabs[1].id));
+}
+
 beforeEach(() => {
   mountedTermIds.length = 0;
   readyTermIds.length = 0;
@@ -328,6 +347,7 @@ beforeEach(() => {
       },
     }),
     selectLocalDirectory: vi.fn().mockResolvedValue(null),
+    workspaceDirectory: vi.fn(async ({ parent }: { parent: string }) => parent),
     getSettings: vi.fn().mockResolvedValue(savedSettings({ notificationsEnabled: false, notificationThresholdSeconds: 10 })),
     getSettingsRecoveryState: vi.fn().mockResolvedValue({ previousAvailable: false }),
     restorePreviousSettings: vi.fn().mockResolvedValue({ keybindings: {}, workspaceTabs: [] }),
@@ -573,15 +593,15 @@ describe('split panes in the app', () => {
     expect(window.janet.terminalWrite).not.toHaveBeenCalledWith(expect.objectContaining({ data: 'must not fan out' }));
   });
 
-  it('keeps recipients scoped to the visible tab', async () => {
+  it('keeps recipients scoped to the visible project', async () => {
+    seedTwoProjects();
     render(<App />);
     await splitFromPalette();
     screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i }).forEach((checkbox) => fireEvent.click(checkbox));
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Start broadcast input' }));
     expect(screen.getByRole('status', { name: /broadcast input active/i })).toBeInTheDocument();
 
-    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
+    await openSecondProject();
     expect(screen.queryByRole('status', { name: /broadcast input active/i })).toBeNull();
     expect(screen.getAllByRole('checkbox', { name: /include .* in broadcast input/i })).toHaveLength(1);
   });
@@ -848,7 +868,8 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(historyUpdates()).toHaveLength(1));
 
     fireEvent.click(screen.getByRole('button', { name: /close (?:pane|terminal)/i }));
-    await confirmPendingAction(/^close tab$/i);
+    // Closing a project's last terminal keeps the project but removes the terminal's ownership.
+    await confirmPendingAction(/^close pane$/i);
     await act(async () => blocker.resolve());
     await waitFor(() => expect(screen.queryAllByTestId(/terminal-/)).toHaveLength(0));
     await act(async () => Promise.resolve());
@@ -905,10 +926,10 @@ describe('split panes in the app', () => {
     const termId = terminal.dataset.terminalId!;
     const staleHandler = rendererMocks.semanticCommandHandlers.get(termId)!;
     const oldTabId = rendererMocks.verticalTabBarProps.tabs[0].id;
-    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
     act(() => rendererMocks.verticalTabBarProps.onCloseTab(oldTabId));
-    await confirmPendingAction(/close tab/i);
+    await confirmPendingAction(/close all terminals/i);
+    await waitFor(() => expect(screen.queryAllByTestId(/terminal-/)).toHaveLength(0));
+    expect(rendererMocks.verticalTabBarProps.tabs.map((tab: { id: string }) => tab.id)).toEqual([oldTabId]);
     act(() => staleHandler({ command: 'secret', output: 'secret', startedAt: 0, completedAt: 10_000, durationMs: 10_000 }));
     expect(window.janet.notifyCommandCompleted).not.toHaveBeenCalled();
   });
@@ -1047,15 +1068,15 @@ describe('split panes in the app', () => {
     expect(channel).not.toHaveTextContent(secondTerminalId);
   });
 
-  it('marks a background turn outcome unseen and acknowledges it when its tab is selected', async () => {
+  it('marks a background turn outcome unseen and acknowledges it when its project is selected', async () => {
+    seedTwoProjects();
     render(<App />);
     const firstTerminal = await screen.findByTestId(/terminal-/);
     const firstTerminalId = firstTerminal.dataset.terminalId!;
     const firstTabId = rendererMocks.verticalTabBarProps.tabs[0].id;
     const channel = screen.getByRole('status', { name: 'Terminal status announcements' });
 
-    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
+    await openSecondProject();
 
     const emit = rendererMocks.agentEventHandlers.get(firstTerminalId)!;
     act(() => {
@@ -1128,10 +1149,9 @@ describe('split panes in the app', () => {
     const oldTabId = rendererMocks.verticalTabBarProps.tabs[0].id;
     const channel = screen.getByRole('status', { name: 'Terminal status announcements' });
 
-    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
     act(() => rendererMocks.verticalTabBarProps.onCloseTab(oldTabId));
-    await confirmPendingAction(/close tab/i);
+    await confirmPendingAction(/close all terminals/i);
+    await waitFor(() => expect(screen.queryAllByTestId(/terminal-/)).toHaveLength(0));
 
     act(() => staleEmit({
       version: 1, provider: 'hermes', event: 'attention.request',
@@ -1442,7 +1462,7 @@ describe('split panes in the app', () => {
     expect(savedRoot.children[1]).toMatchObject({ title: 'Tests', terminalType: 'local' });
   });
 
-  it('renames the active tab with Ctrl+Shift+I while its rail is collapsed', async () => {
+  it('renames the active project with Ctrl+Shift+I while its rail is collapsed', async () => {
     render(<App />);
 
     const terminal = await screen.findByTestId(/terminal-/);
@@ -1455,8 +1475,8 @@ describe('split panes in the app', () => {
 
     fireEvent.keyDown(terminalInput, { key: 'I', code: 'KeyI', ctrlKey: true, shiftKey: true });
 
-    const dialog = await screen.findByRole('dialog', { name: 'Rename tab' });
-    const nameInput = within(dialog).getByRole('textbox', { name: 'Tab name' });
+    const dialog = await screen.findByRole('dialog', { name: 'Rename project' });
+    const nameInput = within(dialog).getByRole('textbox', { name: 'Project name' });
     expect(nameInput).toHaveValue('Terminal');
     await waitFor(() => {
       expect(nameInput).toHaveFocus();
@@ -1466,7 +1486,7 @@ describe('split panes in the app', () => {
     fireEvent.keyDown(nameInput, { key: 'Enter' });
 
     await waitFor(() => {
-      expect(screen.queryByRole('dialog', { name: 'Rename tab' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: 'Rename project' })).not.toBeInTheDocument();
       expect(terminalInput).toHaveFocus();
     });
     act(() => rendererMocks.titlebarProps.onShowTabs());
@@ -1474,15 +1494,16 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs[0].title).toBe('JaneT - fixes'));
   });
 
-  it('cycles terminal tabs with Ctrl+Tab while the tab rail is collapsed', async () => {
+  it('cycles projects with Ctrl+Tab while the project rail is collapsed', async () => {
+    seedTwoProjects();
     render(<App />);
 
     const firstTerminalTestId = (await screen.findByTestId(/terminal-/)).getAttribute('data-testid')!;
-    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
-    const [firstTab, secondTab] = rendererMocks.verticalTabBarProps.tabs;
-    expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(secondTab.id);
-    const secondTerminalTestId = screen.getByTestId(/terminal-/).getAttribute('data-testid')!;
+    await openSecondProject();
+    const [, secondTab] = rendererMocks.verticalTabBarProps.tabs;
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(secondTab.id));
+    const secondTerminalTestId = (await screen.findByTestId(/terminal-/)).getAttribute('data-testid')!;
+    expect(secondTerminalTestId).not.toBe(firstTerminalTestId);
     act(() => rendererMocks.verticalTabBarProps.onCollapse());
 
     fireEvent.keyDown(document, { key: 'Tab', ctrlKey: true });
@@ -1597,14 +1618,84 @@ describe('split panes in the app', () => {
     expect(rendererMocks.verticalTabBarProps.entryRequest).toEqual({ action: 'create', groupId: undefined });
   });
 
-  it('opens standalone terminals in Library after workspace setup was skipped', async () => {
+  it('routes New project to the first-run setup when there is no Workspace or Library entry', async () => {
     window.janet.getSettings = vi.fn().mockResolvedValue({ mainDirectory: null, mainDirectorySetupSkipped: true, keybindings: {}, workspaceTabs: [] });
     render(<App />);
     await screen.findByRole('region', { name: 'Choose where to work' });
-    await waitFor(() => expect(rendererMocks.sidebarProps.explorerSource?.cwd).toBe('/home/test'));
+    await waitFor(() => expect(rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')).toMatchObject({
+      label: 'New project', shortcut: 'Ctrl+Shift+T',
+    }));
+    fireEvent.keyDown(document, { key: 'T', code: 'KeyT', ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.entryRequest).toEqual({ action: 'create' }));
+    // No terminal or Home entry is created behind the user's back.
+    expect(screen.queryAllByTestId(/terminal-/)).toHaveLength(0);
+    expect(rendererMocks.verticalTabBarProps.groups).toEqual([]);
+    expect(window.janet.terminalCreate).not.toHaveBeenCalled();
+  });
+
+  it('opens Add project for the Workspace or Library entry that owns the active project', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({ session: {
+      groups: [{ id: 'work', name: 'Work', directory: '/home/test/work' }, { id: 'library', name: 'Test library', kind: 'folder', directory: '/home/test' }],
+      tabs: [
+        { id: 'app', title: 'App', type: 'local', groupId: 'work', isProject: true, cwd: '/home/test/work/app', root: projectLeaf() },
+        { id: 'repo', title: 'Repo', type: 'local', groupId: 'library', isProject: true, cwd: '/home/test', root: projectLeaf() },
+      ],
+      activeTabId: 'repo',
+    } }));
+    render(<App />);
+    await screen.findByTestId(/terminal-/);
+    fireEvent.keyDown(document, { key: 'T', code: 'KeyT', ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.entryRequest).toEqual({ action: 'create', groupId: 'library' }));
+    act(() => rendererMocks.verticalTabBarProps.onEntryRequestHandled());
+    act(() => rendererMocks.verticalTabBarProps.onSelectTab(rendererMocks.verticalTabBarProps.tabs[0].id));
     act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
-    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
-    expect(rendererMocks.verticalTabBarProps.groups).toEqual([expect.objectContaining({ kind: 'folder', name: 'Home' })]);
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.entryRequest).toEqual({ action: 'create', groupId: 'work' }));
+    expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2);
+  });
+
+  it('opens Add project in the first Workspace when no project is active', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({ session: {
+      groups: [{ id: 'library', name: 'Test library', kind: 'folder', directory: '/home/test' }, { id: 'work', name: 'Work', directory: '/home/test/work' }],
+      tabs: [], activeTabId: null,
+    } }));
+    render(<App />);
+    await screen.findByRole('button', { name: 'Create project' });
+    // Shortcut handlers register in an effect; wait for that observable state before pressing keys.
+    await waitFor(() => expect(rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')).toMatchObject({
+      label: 'New project', shortcut: 'Ctrl+Shift+T',
+    }));
+    fireEvent.keyDown(document, { key: 'T', code: 'KeyT', ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.entryRequest).toEqual({ action: 'create', groupId: 'work' }));
+  });
+
+  it('opens Add terminals for the active project with Ctrl+Shift+` and the command palette', async () => {
+    render(<App />);
+    const terminal = await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.paletteActions.find((action) => action.id === 'add-terminals')).toMatchObject({
+      label: 'Add terminals to current project', shortcut: 'Ctrl+Shift+`',
+    }));
+    fireEvent.focus(terminal);
+    // Shift turns ` into ~ on US layouts.
+    fireEvent.keyDown(document, { key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true });
+    const dialog = await screen.findByRole('dialog', { name: 'Add terminals' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close add terminals' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add terminals' })).not.toBeInTheDocument());
+    act(() => rendererMocks.paletteActions.find((action) => action.id === 'add-terminals')!.handler());
+    expect(await screen.findByRole('dialog', { name: 'Add terminals' })).toBeInTheDocument();
+    expect(window.janet.terminalCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('focuses the inline Start terminals form when the project has no terminals', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({ session: {
+      tabs: [{ id: 'empty', title: 'Empty', type: 'local', groupId: 'library', isProject: true, cwd: '/home/test',
+        root: { type: 'split', direction: 'vertical', sizes: [], children: [] } }],
+      activeTabId: 'empty',
+    } }));
+    render(<App />);
+    const region = await screen.findByRole('region', { name: 'Start terminals' });
+    fireEvent.keyDown(document, { key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(within(region).getByRole('spinbutton')).toHaveFocus());
+    expect(screen.queryByRole('dialog', { name: 'Add terminals' })).not.toBeInTheDocument();
   });
 
   it('routes linking a Library folder independently of workspace creation', async () => {
@@ -1711,13 +1802,13 @@ describe('split panes in the app', () => {
     expect(screen.getByTestId(`terminal-${terminalId}`)).toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: 'W', code: 'KeyW', ctrlKey: true, shiftKey: true });
-    await confirmPendingAction(/^close tab$/i);
+    await confirmPendingAction(/^close pane$/i);
     await waitFor(() => {
       expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
     });
   });
 
-  it('routes the terminal-tab close control through the same confirmation gate', async () => {
+  it('routes the project Close all terminals control through the same confirmation gate', async () => {
     render(<App />);
 
     const terminal = await screen.findByTestId(/terminal-/);
@@ -1729,7 +1820,7 @@ describe('split panes in the app', () => {
     });
 
     expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
-    await confirmPendingAction(/^close tab$/i);
+    await confirmPendingAction(/^close all terminals$/i);
     await waitFor(() => {
       expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
     });
@@ -1750,14 +1841,14 @@ describe('split panes in the app', () => {
     });
 
     expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
-    await confirmPendingAction(/^close tab$/i);
+    await confirmPendingAction(/^close pane$/i);
     await waitFor(() => {
       expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
       expect(screen.queryAllByTestId(/terminal-/)).toHaveLength(0);
     });
   });
 
-  it('exposes pane and tab rename through the command palette', async () => {
+  it('exposes terminal and project rename through the command palette', async () => {
     render(<App />);
 
     await screen.findByTestId(/terminal-/);
@@ -1774,7 +1865,7 @@ describe('split panes in the app', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
     act(() => rendererMocks.paletteActions.find((action) => action.id === 'rename-tab')!.handler());
-    expect(await screen.findByRole('dialog', { name: 'Rename tab' })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Rename project' })).toBeInTheDocument();
   });
 
   it('applies the command-palette close action to the focused pane', async () => {
@@ -2366,6 +2457,7 @@ describe('split panes in the app', () => {
             id: 'tab-1',
             title: 'project',
             type: 'local',
+            isProject: true,
             cwd: 'C:/repo',
             root: {
               type: 'split',
@@ -2385,6 +2477,7 @@ describe('split panes in the app', () => {
             id: 'tab-2',
             title: 'docs',
             type: 'local',
+            isProject: true,
             root: { type: 'leaf' },
           },
         ],
@@ -2425,6 +2518,7 @@ describe('split panes in the app', () => {
             id: 'tab-1',
             title: 'project',
             type: 'local',
+            isProject: true,
             root: {
               type: 'split',
               direction: 'vertical',
@@ -2436,6 +2530,7 @@ describe('split panes in the app', () => {
             id: 'tab-2',
             title: 'docs',
             type: 'local',
+            isProject: true,
             root: { type: 'leaf' },
           },
         ],
@@ -2483,8 +2578,8 @@ describe('split panes in the app', () => {
       workspaceTabs: [],
       session: {
         tabs: [
-          { id: 'tab-1', title: 'main', type: 'local', cwd: 'C:/repo', root: { type: 'leaf', cwd: 'C:/repo' } },
-          { id: 'tab-2', title: 'cleanup', type: 'local', cwd: 'C:/worktrees/cleanup', root: { type: 'leaf', cwd: 'C:/worktrees/cleanup' } },
+          { id: 'tab-1', title: 'main', type: 'local', isProject: true, cwd: 'C:/repo', root: { type: 'leaf', cwd: 'C:/repo' } },
+          { id: 'tab-2', title: 'cleanup', type: 'local', isProject: true, cwd: 'C:/worktrees/cleanup', root: { type: 'leaf', cwd: 'C:/worktrees/cleanup' } },
         ],
         activeTabId: 'tab-1',
         sidebarOpen: true,
@@ -2517,9 +2612,9 @@ describe('split panes in the app', () => {
     }));
   });
 
-  it('does not create an unsaveable terminal tab beyond the session budget', async () => {
+  it('does not open a worktree project beyond the saved project budget', async () => {
     const tabs = new Array(64).fill(null).map((_, index) => ({
-      id: `saved-${index}`, title: `Saved ${index}`, type: 'local', root: { type: 'leaf' },
+      id: `saved-${index}`, title: `Saved ${index}`, type: 'local', isProject: true, root: { type: 'leaf' },
     }));
     window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
@@ -2530,14 +2625,16 @@ describe('split panes in the app', () => {
 
     render(<App />);
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(64));
-    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
+    await act(async () => { await rendererMocks.sidebarProps.onOpenWorktree('/home/test-feature', '/home/test'); });
 
+    expect(await screen.findByRole('alert')).toHaveTextContent('up to 64 projects');
     expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(64);
+    expect(rendererMocks.verticalTabBarProps.groups).toHaveLength(1);
   });
 
   it('does not split a pane beyond the shared terminal budget', async () => {
     const tabs = new Array(64).fill(null).map((_, index) => ({
-      id: `saved-${index}`, title: `Saved ${index}`, type: 'local', root: { type: 'leaf' },
+      id: `saved-${index}`, title: `Saved ${index}`, type: 'local', isProject: true, root: { type: 'leaf' },
     }));
     window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({
       keybindings: {}, workspaceTabs: [],
@@ -2769,7 +2866,7 @@ describe('editor documents in the app', () => {
     });
   });
 
-  it('keeps a dirty terminal workspace on Cancel and tears it down on explicit discard', async () => {
+  it('keeps the project and its unsaved editor when all of its terminals close', async () => {
     render(<App />);
 
     const terminal = await screen.findByTestId(/terminal-/);
@@ -2780,22 +2877,18 @@ describe('editor documents in the app', () => {
 
     act(() => rendererMocks.verticalTabBarProps.onCloseTab(tabId));
     let dialog = await screen.findByRole('alertdialog');
-    expect(within(dialog).getByRole('button', { name: 'Discard and close' })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent('open editors will stay available');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
-
-    expect(screen.getByRole('textbox', { name: 'Editing sample.ts' })).toHaveValue('unsaved workspace change\n');
     expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
-    expect(rendererMocks.verticalTabBarProps.tabs.some((tab: { id: string }) => tab.id === tabId)).toBe(true);
 
     act(() => rendererMocks.verticalTabBarProps.onCloseTab(tabId));
     dialog = await screen.findByRole('alertdialog');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard and close' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close all terminals' }));
 
-    await waitFor(() => {
-      expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId });
-      expect(screen.queryByRole('tab', { name: /sample\.ts/i })).not.toBeInTheDocument();
-      expect(rendererMocks.verticalTabBarProps.tabs.some((tab: { id: string }) => tab.id === tabId)).toBe(false);
-    });
+    await waitFor(() => expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: terminalId }));
+    expect(screen.getByRole('textbox', { name: 'Editing sample.ts' })).toHaveValue('unsaved workspace change\n');
+    expect(rendererMocks.verticalTabBarProps.tabs.map((tab: { id: string }) => tab.id)).toEqual([tabId]);
+    expect(rendererMocks.verticalTabBarProps.dirtyTabIds.has(tabId)).toBe(true);
     expect(window.janet.fsWriteTextFile).not.toHaveBeenCalled();
   });
 });
@@ -2836,6 +2929,15 @@ describe('unsaved editor shutdown handshake', () => {
     render(<App />);
     await splitFromPalette();
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    // Define this persistence test's selected pane explicitly; split autofocus
+    // has its own behavioral tests and is not this test's setup condition.
+    const secondTerminal = screen.getAllByTestId(/terminal-/)[1];
+    const secondInput = within(secondTerminal).getByRole('textbox');
+    act(() => secondInput.focus());
+    await waitFor(() => {
+      expect(secondInput).toHaveFocus();
+      expect(secondTerminal.closest('.terminal-leaf')).toHaveAttribute('aria-current', 'true');
+    });
     await waitFor(() => expect(rendererMocks.prepareForCloseHandler).toBeTypeOf('function'));
     const maximizePane = rendererMocks.paletteActions.find((action) => action.id === 'maximize-pane')!;
     vi.mocked(window.janet.setSettings).mockClear();
@@ -2861,11 +2963,10 @@ describe('unsaved editor shutdown handshake', () => {
     });
   });
 
-  it('persists a same-batch active tab selection before close', async () => {
+  it('persists a same-batch active project selection before close', async () => {
+    seedTwoProjects();
     render(<App />);
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps.onSelectTab).toBeTypeOf('function'));
-    act(() => rendererMocks.paletteActions.find((action) => action.id === 'new-terminal')!.handler());
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps?.tabs).toHaveLength(2));
     const [firstTab, secondTab] = rendererMocks.verticalTabBarProps.tabs;
     act(() => rendererMocks.verticalTabBarProps.onSelectTab(firstTab.id));
     await waitFor(() => expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(firstTab.id));
@@ -2916,8 +3017,8 @@ describe('unsaved editor shutdown handshake', () => {
     const terminalInput = await within(terminal).findByRole('textbox');
     act(() => terminalInput.focus());
     fireEvent.keyDown(terminalInput, { key: 'I', code: 'KeyI', ctrlKey: true, shiftKey: true });
-    const dialog = await screen.findByRole('dialog', { name: 'Rename tab' });
-    const nameInput = within(dialog).getByRole('textbox', { name: 'Tab name' });
+    const dialog = await screen.findByRole('dialog', { name: 'Rename project' });
+    const nameInput = within(dialog).getByRole('textbox', { name: 'Project name' });
     fireEvent.change(nameInput, { target: { value: 'Latest workspace' } });
 
     await act(async () => {
@@ -3134,46 +3235,137 @@ describe('workspace project ownership', () => {
   } });
   const leaf = (cwd: string) => ({ type: 'split', direction: 'vertical', sizes: [1], children: [{ type: 'leaf', cwd }] });
 
-  it('renames only the owning project folder, never a new terminal or worktree opened from it', async () => {
+  it.each([
+    { groupCount: 64, worktree: false },
+    { groupCount: 63, worktree: true },
+  ])('rejects workspace import before changing state at capacity ($groupCount groups, worktree=$worktree)', async ({ groupCount, worktree }) => {
+    const groups = Array.from({ length: groupCount }, (_, index) => ({
+      id: `group-${index}`, name: `Group ${index}`, kind: 'folder', directory: `/home/test/library-${index}`,
+    }));
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({ session: {
+      groups,
+      tabs: [{ id: 'existing', title: 'Existing', type: 'local', groupId: 'group-0', isProject: true,
+        cwd: '/home/test/library-0', root: leaf('/home/test/library-0') }],
+      activeTabId: 'existing',
+    } }));
+    window.janet.listWorkspaceProjects = vi.fn().mockResolvedValue({
+      directory: '/home/test/imported', name: 'Imported', projects: [
+        { directory: '/home/test/imported/app', name: 'App' },
+        ...(worktree ? [{ directory: '/home/test/imported/feature', name: 'Feature', isWorktree: true }] : []),
+      ],
+    });
+    render(<App />);
+    await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.groups).toHaveLength(groupCount));
+    const beforeGroups = rendererMocks.verticalTabBarProps.groups;
+    const beforeTabs = rendererMocks.verticalTabBarProps.tabs;
+    const beforeActive = rendererMocks.verticalTabBarProps.activeTabId;
+    await act(async () => {
+      await expect(rendererMocks.verticalTabBarProps.onImportWorkspace('/home/test/imported')).rejects.toThrow('64-group limit');
+    });
+    expect(window.janet.listWorkspaceProjects).toHaveBeenCalledWith('/home/test/imported');
+    expect(rendererMocks.verticalTabBarProps.groups).toBe(beforeGroups);
+    expect(rendererMocks.verticalTabBarProps.tabs).toBe(beforeTabs);
+    expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(beforeActive);
+    expect(rendererMocks.verticalTabBarProps.groups).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'Imported' })]));
+    expect(rendererMocks.verticalTabBarProps.tabs).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: 'Feature' })]));
+  });
+
+  it('renames only a Workspace project folder; Library and worktree projects change only their label', async () => {
     window.janet.renameWorkspaceDirectory = vi.fn().mockResolvedValue('/home/test/work/renamed');
-    window.janet.getSettings = vi.fn().mockResolvedValue(projectSession([
-      { id: 'project', title: 'App', type: 'local', groupId: 'work', isProject: true, cwd: '/home/test/work/app', root: leaf('/home/test/work/app') },
-      { id: 'terminal-2', title: 'Terminal 2', type: 'local', groupId: 'work', isProject: false, cwd: '/home/test/work/app', root: leaf('/home/test/work/app') },
-      { id: 'worktree', title: 'app-feature', type: 'local', groupId: 'work', cwd: '/home/test/work/app-feature', root: leaf('/home/test/work/app-feature') },
-    ]));
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({ session: {
+      groups: [
+        { id: 'work', name: 'Work', directory: '/home/test/work' },
+        { id: 'library', name: 'Repo', kind: 'folder', directory: '/home/test/repo' },
+      ],
+      tabs: [
+        { id: 'project', title: 'App', type: 'local', groupId: 'work', isProject: true, cwd: '/home/test/work/app', root: leaf('/home/test/work/app') },
+        { id: 'repo', title: 'Repo', type: 'local', groupId: 'library', isProject: true, cwd: '/home/test/repo', root: leaf('/home/test/repo') },
+        { id: 'worktree', title: 'repo-feature', type: 'local', groupId: 'library', isProject: true, cwd: '/home/test/repo-feature', root: leaf('/home/test/repo-feature') },
+      ],
+      activeTabId: 'project',
+    } }));
     render(<App />);
     await waitFor(() => expect(rendererMocks.verticalTabBarProps?.tabs).toHaveLength(3));
-    const [project, secondary, worktree] = rendererMocks.verticalTabBarProps.tabs;
+    const [project, library, worktree] = rendererMocks.verticalTabBarProps.tabs;
 
-    for (const [tab, title] of [[secondary, 'build watcher'], [worktree, 'feature shell']] as const) {
+    for (const [tab, title] of [[library, 'Main repo'], [worktree, 'Feature work']] as const) {
       await act(async () => { await rendererMocks.verticalTabBarProps.onRenameTab(tab.id, title); });
       expect(rendererMocks.verticalTabBarProps.tabs.find((item: any) => item.id === tab.id)).toMatchObject({ title, cwd: tab.cwd });
     }
     expect(window.janet.renameWorkspaceDirectory).not.toHaveBeenCalled();
+    expect(rendererMocks.verticalTabBarProps.groups[1]).toMatchObject({ name: 'Repo', directory: '/home/test/repo' });
 
+    vi.mocked(window.janet.setSettings).mockClear();
     await act(async () => { await rendererMocks.verticalTabBarProps.onRenameTab(project.id, 'renamed'); });
     expect(window.janet.renameWorkspaceDirectory).toHaveBeenCalledWith({ source: '/home/test/work/app', name: 'renamed' });
-    // Every tab under the renamed folder follows it; the worktree sibling does not.
+    // The main process checks the saved session, so it is saved before the rename request.
+    expect(vi.mocked(window.janet.setSettings).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(window.janet.renameWorkspaceDirectory).mock.invocationCallOrder[0]);
     expect(rendererMocks.verticalTabBarProps.tabs.map((tab: any) => tab.cwd)).toEqual([
-      '/home/test/work/renamed', '/home/test/work/renamed', '/home/test/work/app-feature',
+      '/home/test/work/renamed', '/home/test/repo', '/home/test/repo-feature',
     ]);
   });
 
-  it('keeps legacy projects and saves explicit ownership for their secondary tabs', async () => {
-    window.janet.renameWorkspaceDirectory = vi.fn().mockResolvedValue('/home/test/work/renamed');
+  it('folds legacy sessions into their project and saves only projects', async () => {
     window.janet.getSettings = vi.fn().mockResolvedValue(projectSession([
       { id: 'legacy', title: 'App', type: 'local', groupId: 'work', cwd: '/home/test/work/app', root: leaf('/home/test/work/app') },
-      { id: 'legacy-2', title: 'Terminal 2', type: 'local', groupId: 'work', cwd: '/home/test/work/app', root: leaf('/home/test/work/app') },
+      { id: 'legacy-2', title: 'Terminal 2', type: 'local', groupId: 'work', cwd: '/home/test/work/app', root: leaf('/home/test/work/app/src') },
     ]));
     render(<App />);
-    await waitFor(() => expect(rendererMocks.verticalTabBarProps?.tabs).toHaveLength(2));
-    const [, secondary] = rendererMocks.verticalTabBarProps.tabs;
+    await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    expect(rendererMocks.verticalTabBarProps.tabs).toEqual([expect.objectContaining({ title: 'App', isProject: true })]);
+    await waitFor(() => expect(window.janet.setSettings).toHaveBeenLastCalledWith({ session: expect.objectContaining({
+      tabs: [expect.objectContaining({ title: 'App', isProject: true, root: expect.objectContaining({
+        children: [expect.objectContaining({ cwd: '/home/test/work/app' }), expect.objectContaining({ cwd: '/home/test/work/app/src' })],
+      }) })],
+    }) }));
+  });
 
-    await act(async () => { await rendererMocks.verticalTabBarProps.onRenameTab(secondary.id, 'build watcher'); });
-    expect(window.janet.renameWorkspaceDirectory).not.toHaveBeenCalled();
-    expect(window.janet.setSettings).toHaveBeenLastCalledWith({ session: expect.objectContaining({
-      tabs: [expect.objectContaining({ title: 'App', isProject: true }), expect.objectContaining({ title: 'build watcher', isProject: false })],
-    }) });
+  it('opens a worktree of a Library repository as a project under that Library entry', async () => {
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({ session: {
+      groups: [{ id: 'library', name: 'Repo', kind: 'folder', directory: '/home/test/repo' }],
+      tabs: [{ id: 'repo', title: 'Repo', type: 'local', groupId: 'library', isProject: true, cwd: '/home/test/repo', root: leaf('/home/test/repo') }],
+      activeTabId: 'repo',
+    } }));
+    render(<App />);
+    await screen.findByTestId(/terminal-/);
+    await act(async () => { await rendererMocks.sidebarProps.onOpenWorktree('/home/test/repo-feature', '/home/test/repo'); });
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2));
+    const worktree = rendererMocks.verticalTabBarProps.tabs[1];
+    expect(worktree).toMatchObject({ title: 'repo-feature', groupId: 'library', cwd: '/home/test/repo-feature', isProject: true });
+    expect(rendererMocks.verticalTabBarProps.groups).toHaveLength(1);
+    expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(worktree.id);
+    await waitFor(() => expect(window.janet.terminalCreate).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: '/home/test/repo-feature' })));
+
+    // Opening it again focuses the existing project.
+    act(() => rendererMocks.verticalTabBarProps.onSelectTab('repo'));
+    await act(async () => { await rendererMocks.sidebarProps.onOpenWorktree('/home/test/repo-feature', '/home/test/repo'); });
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(worktree.id));
+    expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(2);
+  });
+
+  it('opens a worktree of a Workspace project as its own Library entry and removes it without touching files', async () => {
+    window.janet.workspaceLifecycle = vi.fn();
+    window.janet.getSettings = vi.fn().mockResolvedValue(projectSession([
+      { id: 'project', title: 'App', type: 'local', groupId: 'work', isProject: true, cwd: '/home/test/work/app', root: leaf('/home/test/work/app') },
+    ]));
+    render(<App />);
+    await screen.findByTestId(/terminal-/);
+    await act(async () => { await rendererMocks.sidebarProps.onOpenWorktree('/home/test/work/app-feature', '/home/test/work/app'); });
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.groups).toHaveLength(2));
+    const entry = rendererMocks.verticalTabBarProps.groups[1];
+    expect(entry).toMatchObject({ kind: 'folder', name: 'app-feature', directory: '/home/test/work/app-feature' });
+    const worktree = rendererMocks.verticalTabBarProps.tabs[1];
+    expect(worktree).toMatchObject({ groupId: entry.id, cwd: '/home/test/work/app-feature', isProject: true });
+
+    act(() => rendererMocks.verticalTabBarProps.onWorkspaceAction('delete', entry.id, worktree.id));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Its files and folder will not be touched');
+    await confirmPendingAction(/^Remove project$/);
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.tabs).toHaveLength(1));
+    expect(window.janet.workspaceLifecycle).not.toHaveBeenCalled();
+    expect(rendererMocks.verticalTabBarProps.groups).toHaveLength(2);
   });
 
   it('selects a surviving tab after deleting a workspace closes several tabs', async () => {

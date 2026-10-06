@@ -199,7 +199,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
     session: {
       tabs: [
         {
-          id: 'visual-active', title: 'Active workspace', type: 'local', cwd: neutralCwd,
+          id: 'visual-active', title: 'Active workspace', type: 'local', isProject: true, cwd: neutralCwd,
           root: {
             type: 'split', direction: 'vertical', sizes: [1, 1],
             children: [
@@ -216,15 +216,15 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
           selectedPanePath: [0],
         },
         {
-          id: 'visual-running', title: 'Running agent', type: 'local', cwd: neutralCwd,
+          id: 'visual-running', title: 'Running agent', type: 'local', isProject: true, cwd: neutralCwd,
           root: { type: 'leaf', title: 'Running', terminalType: 'local', cwd: neutralCwd },
         },
         {
-          id: 'visual-finished', title: 'Finished agent', type: 'local', cwd: neutralCwd,
+          id: 'visual-finished', title: 'Finished agent', type: 'local', isProject: true, cwd: neutralCwd,
           root: { type: 'leaf', title: 'Finished', terminalType: 'local', cwd: neutralCwd },
         },
         {
-          id: 'visual-exited', title: 'Exited shell', type: 'local', cwd: neutralCwd,
+          id: 'visual-exited', title: 'Exited shell', type: 'local', isProject: true, cwd: neutralCwd,
           root: { type: 'leaf', title: 'Exited', terminalType: 'local', cwd: neutralCwd },
         },
       ],
@@ -320,7 +320,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
         await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
           .toEqual(viewport);
         if (viewport.width === 800) {
-          const showTabs = page.getByRole('button', { name: 'Show terminal tabs' });
+          const showTabs = page.getByRole('button', { name: 'Show workspace list' });
           await expect(showTabs).toBeVisible();
           await showTabs.click();
         }
@@ -419,7 +419,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
         expect(menuBox!.y).toBeGreaterThanOrEqual(0);
         expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(viewport.width + 1);
         expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(viewport.height + 1);
-        await expect(menu.getByRole('menuitem', { name: 'Rename session' })).toBeFocused();
+        await expect(menu.getByRole('menuitem', { name: 'Rename project' })).toBeFocused();
         await page.evaluate(() => document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
         await expect(menu).toBeHidden();
         await expect(activeTab).toBeFocused();
@@ -432,7 +432,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
           clientX: point.x,
           clientY: point.y,
         })), { x: viewport.width - 1, y: viewport.height - 1 });
-        await expect(menu.getByRole('menuitem', { name: 'Rename session' })).toBeFocused();
+        await expect(menu.getByRole('menuitem', { name: 'Rename project' })).toBeFocused();
         await page.keyboard.press('Escape');
         await expect(menu).toBeHidden();
         await expect(activeTab).toBeFocused();

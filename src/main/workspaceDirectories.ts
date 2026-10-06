@@ -1,5 +1,58 @@
 import * as fs from 'node:fs/promises';
+import { lstatSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
+
+const GIT_LINK_FILE_LIMIT = 4096;
+const WORKTREE_GIT_LINK = /^gitdir:\s*\S.*[\\/]worktrees[\\/][^\\/\r\n]+\s*$/m;
+
+/**
+ * True when `directory` is a linked Git worktree: its `.git` is a small file
+ * pointing into another repository's `.git/worktrees`. Reads one file; never
+ * runs Git. Used once while migrating saved sessions.
+ */
+export function isLinkedGitWorktreeSync(directory: string): boolean {
+  if (typeof directory !== 'string' || !path.isAbsolute(directory) || directory.includes('\0')) return false;
+  try {
+    const marker = path.join(directory, '.git');
+    const info = lstatSync(marker);
+    if (!info.isFile() || info.size > GIT_LINK_FILE_LIMIT) return false;
+    return WORKTREE_GIT_LINK.test(readFileSync(marker, 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when `directory` has a `.git` file instead of a `.git` folder, as a
+ * linked Git worktree or a submodule does. Its Git data lives elsewhere, so
+ * JaneT must never rename, move, or recycle it.
+ */
+export async function hasGitLinkFile(directory: string): Promise<boolean> {
+  try {
+    const marker = await fs.lstat(path.join(directory, '.git'));
+    return marker.isFile() || marker.isSymbolicLink();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+/** Inspect every real descendant before moving or recycling a managed tree.
+ * Do not follow directory links or walk repository metadata. Inspection errors
+ * propagate: an unreadable folder cannot be assumed safe to move or delete.
+ */
+export async function assertNoGitLinkedFolders(directory: string): Promise<void> {
+  const pending = [directory];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (await hasGitLinkFile(current)) {
+      throw new Error(`${current} is a Git worktree or submodule. JaneT never moves or deletes it; remove it with Git first. Nothing was removed or renamed.`);
+    }
+    for (const entry of await fs.readdir(current, { withFileTypes: true })) {
+      if (entry.name !== '.git' && entry.isDirectory() && !entry.isSymbolicLink()) pending.push(path.join(current, entry.name));
+    }
+  }
+}
 
 export async function requireDirectory(value: unknown): Promise<string> {
   if (typeof value !== 'string' || value.length > 8192 || value.includes('\0') || !path.isAbsolute(value)) {
@@ -14,7 +67,7 @@ export async function requireDirectory(value: unknown): Promise<string> {
   }
 }
 
-export async function listWorkspaceProjects(value: unknown): Promise<{ directory: string; name: string; projects: { directory: string; name: string }[] }> {
+export async function listWorkspaceProjects(value: unknown): Promise<{ directory: string; name: string; projects: { directory: string; name: string; isWorktree?: boolean }[] }> {
   const directory = await requireDirectory(value);
   if ((await fs.lstat(value as string)).isSymbolicLink()) throw new Error('Choose a workspace folder, not a linked directory.');
   if (path.dirname(directory) === directory) throw new Error('Choose a workspace folder, not a drive root.');
@@ -23,7 +76,10 @@ export async function listWorkspaceProjects(value: unknown): Promise<{ directory
     directory,
     name: path.basename(directory),
     projects: entries.filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
-      .map((entry) => ({ name: entry.name, directory: path.join(directory, entry.name) }))
+      .map((entry) => {
+        const child = path.join(directory, entry.name);
+        return { name: entry.name, directory: child, ...(isLinkedGitWorktreeSync(child) ? { isWorktree: true } : {}) };
+      })
       .sort((a, b) => a.name.localeCompare(b.name)),
   };
 }

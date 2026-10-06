@@ -126,7 +126,7 @@ describe('ShortcutEditor', () => {
       { key: 'T', code: 'KeyT', ctrlKey: true, shiftKey: true },
     );
     const history = await screen.findByRole('button', { name: /open command history \(currently Ctrl\+Shift\+T\)/i });
-    expect(history).toHaveAccessibleDescription(/also assigned to “new terminal tab”/i);
+    expect(history).toHaveAccessibleDescription(/also assigned to “new project”/i);
   });
 
   it('preserves custom shortcuts when reset confirmation is cancelled', async () => {

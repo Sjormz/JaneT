@@ -15,7 +15,7 @@ Open **Settings** and check **Notify when long commands finish**. Notifications 
 
 ## JaneT says it could not load workspace settings
 
-At startup, choose **Try again** to retry loading. If it is offered, **Restore previous** restores the prior saved settings. **Use defaults** replaces the unreadable settings file, including saved tabs and custom shortcuts; JaneT asks you to confirm before doing this.
+At startup, choose **Try again** to retry loading. If it is offered, **Restore previous** restores the prior saved settings. **Use defaults** replaces the unreadable settings file, including saved workspaces, projects, and custom shortcuts; JaneT asks you to confirm before doing this.
 
 ## An update failed
 

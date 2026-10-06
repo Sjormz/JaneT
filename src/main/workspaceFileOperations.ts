@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import type { AppSettings, SavedPaneNode, SavedSession } from './settings';
-import { requireDirectory, validateDirectoryName } from './workspaceDirectories';
+import { assertNoGitLinkedFolders, requireDirectory, validateDirectoryName } from './workspaceDirectories';
 import { MAX_WORKSPACE_GROUPS, rebaseDirectory } from '../shared/workspaceGroups';
 
 export interface WorkspaceLifecycleRequest {
@@ -58,6 +58,41 @@ async function directoryManifest(directory: string): Promise<string> {
   return JSON.stringify(entries);
 }
 
+const actualPath = (value: string) => fs.realpath(value).catch(() => path.resolve(value));
+
+/**
+ * JaneT renames only folders it manages: a Workspace folder, or the folder a
+ * Workspace project owns (a direct child of its workspace). Library entries,
+ * Library and worktree projects, and anything containing them are never
+ * renamed. `current` is the resolved source directory.
+ */
+export async function assertManagedFolderRename(session: SavedSession, current: string): Promise<void> {
+  const groups = session.groups ?? [];
+  const same = (left: string, right: string) => path.relative(left, right) === '';
+  let managed = false;
+  for (const group of groups) {
+    if (!group.kind && group.directory && same(await actualPath(group.directory), current)) managed = true;
+  }
+  for (const tab of session.tabs) {
+    const group = groups.find((entry) => entry.id === tab.groupId);
+    if (managed || tab.isProject !== true || !tab.cwd || !group || group.kind || !group.directory) continue;
+    if (same(await actualPath(tab.cwd), current) && same(path.dirname(current), await actualPath(group.directory))) managed = true;
+  }
+  if (!managed) throw new Error('JaneT renames only workspace folders and the folders their projects own. Nothing was renamed.');
+  for (const group of groups) {
+    if (group.kind !== 'folder' || !group.directory) continue;
+    const directory = await actualPath(group.directory);
+    if (contains(current, directory) || contains(directory, current)) throw new Error('This folder overlaps a Library entry, which JaneT never moves. Nothing was renamed.');
+  }
+  for (const tab of session.tabs) {
+    const group = groups.find((entry) => entry.id === tab.groupId);
+    if (group?.kind === 'folder' && tab.cwd && contains(current, await actualPath(tab.cwd))) {
+      throw new Error('This folder contains a Library project, which JaneT never moves. Nothing was renamed.');
+    }
+  }
+  await assertNoGitLinkedFolders(current);
+}
+
 export class WorkspaceFileOperations {
   // ponytail: one file operation at a time; use per-directory locks only if concurrent transfers are needed.
   private busy = false;
@@ -81,14 +116,17 @@ export class WorkspaceFileOperations {
       const session = settings.session;
       const groups = session.groups ?? [];
       const group = groups.find((entry) => entry.id === request.groupId);
-      if (!group || !group.directory || (group.kind === 'folder' && (request.action !== 'delete' || !request.projectId))) throw new Error('Only managed temporary workspaces can be deleted or kept.');
+      // Library entries (and every project in them) belong to the user: JaneT only forgets them.
+      if (!group || !group.directory || group.kind === 'folder') throw new Error('Only managed temporary workspaces can be deleted or kept.');
       const base = await plainDirectory(group.directory);
       const project = request.projectId ? session.tabs.find((tab) => tab.id === request.projectId && tab.groupId === group.id) : undefined;
-      if (request.projectId && (!project || !project.cwd)) throw new Error('Project directory is unavailable.');
+      if (request.projectId && (!project || project.isProject !== true)) throw new Error('Only a project can be deleted or kept.');
+      if (project && !project.cwd) throw new Error('Project directory is unavailable.');
       const source = project ? await plainDirectory(project.cwd!) : base;
       if (request.expectedDirectory !== undefined && (typeof request.expectedDirectory !== 'string'
         || path.relative(source, path.resolve(request.expectedDirectory)) !== '')) throw new Error('The directory changed after confirmation. Review the action again.');
-      if (project && (path.dirname(source) !== base || source === base)) throw new Error('This session does not own a project folder. Close the session instead.');
+      if (project && (path.dirname(source) !== base || source === base)) throw new Error('This project does not own a workspace folder. Remove it from JaneT instead.');
+      await assertNoGitLinkedFolders(source);
       const protectedPaths = [...this.dependencies.protectedPaths, ...(settings.mainDirectory ? [settings.mainDirectory] : [])];
       if (path.dirname(source) === source || protectedPaths.some((protectedPath) => contains(source, path.resolve(protectedPath)))) {
         throw new Error('This directory is a protected root and cannot be removed.');
@@ -102,10 +140,10 @@ export class WorkspaceFileOperations {
       }
       const affected = session.tabs.filter((tab) => project ? tab.id === project.id : tab.groupId === group.id);
       for (const tab of session.tabs.filter((tab) => !affected.includes(tab))) {
-        if (tab.cwd && contains(source, path.resolve(tab.cwd))) throw new Error('Another session uses this directory. Close that session first.');
+        if (tab.cwd && contains(source, path.resolve(tab.cwd))) throw new Error('Another project uses this directory. Remove that project first.');
         const usesSource = (node: SavedPaneNode): boolean => node.type === 'split' ? node.children.some(usesSource)
           : Boolean(node.cwd && contains(source, path.resolve(node.cwd)));
-        if (usesSource(tab.root)) throw new Error('Another terminal uses this directory. Close that session first.');
+        if (usesSource(tab.root)) throw new Error('A terminal in another project uses this directory. Close that terminal first.');
       }
       this.dependencies.release(source);
       if (request.action === 'delete') {

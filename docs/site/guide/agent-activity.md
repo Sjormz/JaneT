@@ -23,7 +23,7 @@ Agent lifecycle status is bounded metadata, not an authenticated security signal
 | Red | Unseen failure. |
 | Muted | No integration, or the process ended or disconnected. |
 
-Visiting a project acknowledges its unseen results. Activity is live session state, so a restarted terminal must establish its own status again.
+Visiting a project acknowledges its unseen results. Activity is live terminal state, so a restarted terminal must establish its own status again.
 
 ## Codex CLI
 
@@ -37,6 +37,6 @@ Type `hermes` or `hermes --tui` in a new local terminal. JaneT adds activity obs
 
 ## When an indicator is incomplete
 
-Hermes launch setup covers PowerShell, Bash, Zsh, and Fish. It does not automatically follow an explicit binary path, nested shell, `cmd.exe`, SSH, WSL, or container host. Those sessions remain usable as ordinary terminals. An uninstrumented long-running TUI is a shell command; JaneT cannot infer the agent's turn completion from terminal silence.
+Hermes launch setup covers PowerShell, Bash, Zsh, and Fish. It does not automatically follow an explicit binary path, nested shell, `cmd.exe`, SSH, WSL, or container host. Those terminals remain usable as ordinary terminals. An uninstrumented long-running TUI is a shell command; JaneT cannot infer the agent's turn completion from terminal silence.
 
 Hook delivery can also be blocked or delayed by the agent's own policy or runtime. Treat the indicator as a cue to inspect the agent terminal, not as confirmation that a tool succeeded. For implementation details and diagnostics, see the [activity integration notes](https://github.com/Sjormz/JaneT/blob/main/docs/terminal-activity.md).
