@@ -249,6 +249,12 @@ export function migrateSessionsToProjects<T extends MigratableTab>(
         groups[groups.findIndex((entry) => entry.id === group.id)] = library;
       }
       if (library) {
+        // Distinct saved projects may share the same worktree folder. Relocate
+        // each project intact; only former sessions are folded into a project.
+        if (linkedProjects.has(session.id)) {
+          convert(index, { groupId: library.id, cwd: sessionCwd });
+          return;
+        }
         const existing = projectsIn(library.id).find((project) => sameDirectory(project.cwd, sessionCwd))
           ?? (library.id === group?.id ? undefined : projectsIn(library.id)[0]);
         if (existing) merge(index, existing, sessionCwd);

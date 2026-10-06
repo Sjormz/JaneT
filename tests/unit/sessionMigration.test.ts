@@ -198,6 +198,30 @@ describe('migrating saved sessions into projects', () => {
     expect(migrate(result.tabs, result.groups, result.activeTabId, () => true)).toEqual(result);
   });
 
+  it.each([false, true])('preserves distinct flagged projects sharing a worktree and folds only former sessions (full=%s)', (full) => {
+    const groups = full ? [work, ...Array.from({ length: 63 }, (_, index) => ({ id: `g${index}`, name: `G${index}` }))] : [work];
+    const cwd = 'C:/Work/Feature';
+    const first = { ...tab('first', 'work', cwd, true, split(leaf(undefined, { title: 'first-a' }), leaf(undefined, { title: 'first-b' }))),
+      selectedPanePath: [1], maximizedPanePath: [1] };
+    const second = { ...tab('second', 'work', cwd, true, split(leaf(undefined, { title: 'second-a' }), leaf(undefined, { title: 'second-b' }))),
+      selectedPanePath: [1], maximizedPanePath: [1] };
+    const session = tab('session', 'work', cwd, false, split(leaf(undefined, { title: 'session' })));
+    const result = migrate([first, second, session], groups, 'second', (directory) => directory === cwd);
+    expect(result.tabs.map((entry) => entry.id)).toEqual(['first', 'second']);
+    const library = result.groups.find((entry) => entry.kind === 'folder' && entry.directory === cwd)!;
+    expect(library).toBeDefined();
+    expect(result.tabs[1]).toEqual({ ...second, groupId: library.id });
+    expect(result.tabs[0]).toMatchObject({ id: 'first', title: 'first', groupId: library.id, isProject: true });
+    expect(leaves(result.tabs[0].root).map((item) => item.title)).toEqual(['first-a', 'first-b', 'session']);
+    let selected = result.tabs[0].root;
+    for (const index of result.tabs[0].selectedPanePath!) selected = (selected as Extract<MigrationPaneNode, { type: 'split' }>).children[index];
+    expect(selected).toMatchObject({ title: 'first-b' });
+    expect(result.tabs[0].maximizedPanePath).toEqual(result.tabs[0].selectedPanePath);
+    expect(result.activeTabId).toBe('second');
+    expect(migrate(result.tabs, result.groups, result.activeTabId, (directory) => directory === cwd)).toEqual(result);
+    expect(result.groups).toHaveLength(full ? 64 : 2);
+  });
+
   it('reuses a full group as Library when its only project is a linked worktree', () => {
     const groups = [work, ...Array.from({ length: 63 }, (_, index) => ({ id: `g${index}`, name: `G${index}` }))];
     const result = migrate([tab('feature', 'work', 'C:/Work/Feature', true, split(leaf()))], groups, 'feature', () => true);
