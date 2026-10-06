@@ -2929,6 +2929,15 @@ describe('unsaved editor shutdown handshake', () => {
     render(<App />);
     await splitFromPalette();
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(2));
+    // Define this persistence test's selected pane explicitly; split autofocus
+    // has its own behavioral tests and is not this test's setup condition.
+    const secondTerminal = screen.getAllByTestId(/terminal-/)[1];
+    const secondInput = within(secondTerminal).getByRole('textbox');
+    act(() => secondInput.focus());
+    await waitFor(() => {
+      expect(secondInput).toHaveFocus();
+      expect(secondTerminal.closest('.terminal-leaf')).toHaveAttribute('aria-current', 'true');
+    });
     await waitFor(() => expect(rendererMocks.prepareForCloseHandler).toBeTypeOf('function'));
     const maximizePane = rendererMocks.paletteActions.find((action) => action.id === 'maximize-pane')!;
     vi.mocked(window.janet.setSettings).mockClear();
@@ -3225,6 +3234,42 @@ describe('workspace project ownership', () => {
     activeTabId: tabs[0].id,
   } });
   const leaf = (cwd: string) => ({ type: 'split', direction: 'vertical', sizes: [1], children: [{ type: 'leaf', cwd }] });
+
+  it.each([
+    { groupCount: 64, worktree: false },
+    { groupCount: 63, worktree: true },
+  ])('rejects workspace import before changing state at capacity ($groupCount groups, worktree=$worktree)', async ({ groupCount, worktree }) => {
+    const groups = Array.from({ length: groupCount }, (_, index) => ({
+      id: `group-${index}`, name: `Group ${index}`, kind: 'folder', directory: `/home/test/library-${index}`,
+    }));
+    window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({ session: {
+      groups,
+      tabs: [{ id: 'existing', title: 'Existing', type: 'local', groupId: 'group-0', isProject: true,
+        cwd: '/home/test/library-0', root: leaf('/home/test/library-0') }],
+      activeTabId: 'existing',
+    } }));
+    window.janet.listWorkspaceProjects = vi.fn().mockResolvedValue({
+      directory: '/home/test/imported', name: 'Imported', projects: [
+        { directory: '/home/test/imported/app', name: 'App' },
+        ...(worktree ? [{ directory: '/home/test/imported/feature', name: 'Feature', isWorktree: true }] : []),
+      ],
+    });
+    render(<App />);
+    await screen.findByTestId(/terminal-/);
+    await waitFor(() => expect(rendererMocks.verticalTabBarProps.groups).toHaveLength(groupCount));
+    const beforeGroups = rendererMocks.verticalTabBarProps.groups;
+    const beforeTabs = rendererMocks.verticalTabBarProps.tabs;
+    const beforeActive = rendererMocks.verticalTabBarProps.activeTabId;
+    await act(async () => {
+      await expect(rendererMocks.verticalTabBarProps.onImportWorkspace('/home/test/imported')).rejects.toThrow('64-group limit');
+    });
+    expect(window.janet.listWorkspaceProjects).toHaveBeenCalledWith('/home/test/imported');
+    expect(rendererMocks.verticalTabBarProps.groups).toBe(beforeGroups);
+    expect(rendererMocks.verticalTabBarProps.tabs).toBe(beforeTabs);
+    expect(rendererMocks.verticalTabBarProps.activeTabId).toBe(beforeActive);
+    expect(rendererMocks.verticalTabBarProps.groups).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'Imported' })]));
+    expect(rendererMocks.verticalTabBarProps.tabs).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: 'Feature' })]));
+  });
 
   it('renames only a Workspace project folder; Library and worktree projects change only their label', async () => {
     window.janet.renameWorkspaceDirectory = vi.fn().mockResolvedValue('/home/test/work/renamed');

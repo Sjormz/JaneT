@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import type { AppSettings, SavedPaneNode, SavedSession } from './settings';
-import { hasGitLinkFile, requireDirectory, validateDirectoryName } from './workspaceDirectories';
+import { assertNoGitLinkedFolders, requireDirectory, validateDirectoryName } from './workspaceDirectories';
 import { MAX_WORKSPACE_GROUPS, rebaseDirectory } from '../shared/workspaceGroups';
 
 export interface WorkspaceLifecycleRequest {
@@ -81,9 +81,16 @@ export async function assertManagedFolderRename(session: SavedSession, current: 
   if (!managed) throw new Error('JaneT renames only workspace folders and the folders their projects own. Nothing was renamed.');
   for (const group of groups) {
     if (group.kind !== 'folder' || !group.directory) continue;
-    if (contains(current, await actualPath(group.directory))) throw new Error('This folder contains a Library entry, which JaneT never moves. Nothing was renamed.');
+    const directory = await actualPath(group.directory);
+    if (contains(current, directory) || contains(directory, current)) throw new Error('This folder overlaps a Library entry, which JaneT never moves. Nothing was renamed.');
   }
-  if (await hasGitLinkFile(current)) throw new Error('This folder is a Git worktree or submodule. JaneT never renames it; nothing was renamed.');
+  for (const tab of session.tabs) {
+    const group = groups.find((entry) => entry.id === tab.groupId);
+    if (group?.kind === 'folder' && tab.cwd && contains(current, await actualPath(tab.cwd))) {
+      throw new Error('This folder contains a Library project, which JaneT never moves. Nothing was renamed.');
+    }
+  }
+  await assertNoGitLinkedFolders(current);
 }
 
 export class WorkspaceFileOperations {
@@ -119,11 +126,7 @@ export class WorkspaceFileOperations {
       if (request.expectedDirectory !== undefined && (typeof request.expectedDirectory !== 'string'
         || path.relative(source, path.resolve(request.expectedDirectory)) !== '')) throw new Error('The directory changed after confirmation. Review the action again.');
       if (project && (path.dirname(source) !== base || source === base)) throw new Error('This project does not own a workspace folder. Remove it from JaneT instead.');
-      const linkedFolders = project ? [source] : [source, ...(await fs.readdir(source, { withFileTypes: true }))
-        .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink()).map((entry) => path.join(source, entry.name))];
-      for (const folder of linkedFolders) {
-        if (await hasGitLinkFile(folder)) throw new Error(`${folder} is a Git worktree or submodule. JaneT never moves or deletes it; remove it with Git first. Nothing was removed.`);
-      }
+      await assertNoGitLinkedFolders(source);
       const protectedPaths = [...this.dependencies.protectedPaths, ...(settings.mainDirectory ? [settings.mainDirectory] : [])];
       if (path.dirname(source) === source || protectedPaths.some((protectedPath) => contains(source, path.resolve(protectedPath)))) {
         throw new Error('This directory is a protected root and cannot be removed.');

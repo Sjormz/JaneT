@@ -1768,15 +1768,20 @@ function AppInner({ initialSettings, persistSettings }: {
   const importWorkspace = useCallback(async (selected: string) => {
     const { directory, name, projects } = await window.janet.listWorkspaceProjects(selected);
     if (groupsRef.current.some((group) => group.directory === directory)) throw new Error('This folder is already in Workspaces or Library.');
-    if (groupsRef.current.length >= MAX_WORKSPACE_GROUPS) throw new Error('The 64-group limit has been reached.');
+    const worktrees = projects.filter((project) => project.isWorktree);
+    if (groupsRef.current.length + 1 + worktrees.length > MAX_WORKSPACE_GROUPS) throw new Error('The 64-group limit has been reached. Remove an entry before importing a workspace with worktrees.');
     if (tabsRef.current.length + projects.length > MAX_RESTORED_TABS) throw new Error('Remove a project first. JaneT supports up to 64 projects.');
     const group: WorkspaceGroup = { id: genId('group'), name, directory };
+    const worktreeGroups: WorkspaceGroup[] = worktrees.map((project) => ({
+      id: genId('folder'), name: project.name, kind: 'folder', directory: project.directory,
+    }));
     const imported: TabInfo[] = projects.map((project) => ({
-      id: genId('tab'), title: project.name, type: 'local', groupId: group.id,
+      id: genId('tab'), title: project.name, type: 'local',
+      groupId: worktreeGroups.find((entry) => sameDirectory(entry.directory, project.directory))?.id ?? group.id,
       cwd: project.directory, isProject: true,
       root: { id: genId('split'), type: 'split', direction: 'vertical', children: [], sizes: [] },
     }));
-    groupsRef.current = [...groupsRef.current, group];
+    groupsRef.current = [...groupsRef.current, group, ...worktreeGroups];
     tabsRef.current = [...tabsRef.current, ...imported];
     setGroups(groupsRef.current);
     setTabs(tabsRef.current);

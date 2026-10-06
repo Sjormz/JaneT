@@ -141,7 +141,38 @@ export function migrateSessionsToProjects<T extends MigratableTab>(
   state: SessionMigrationState<T>,
   options: SessionMigrationOptions = {},
 ): SessionMigrationState<T> {
-  const resolved = resolveLegacyWorkspaceProjects(state.tabs, state.groups, (tab) => leavesOf(tab.root).length > 0);
+  const ownership = resolveLegacyWorkspaceProjects(state.tabs, state.groups, (tab) => leavesOf(tab.root).length > 0);
+  // Apply the app-wide budget after identifying ownership, before merging.
+  // Saved order must not let an earlier session displace a project's terminals.
+  let remaining = MAX_PROJECT_TERMINALS;
+  const limited = new Map<T, T>();
+  const reserve = (tab: T) => {
+    const leaves = leavesOf(tab.root);
+    const kept = leaves.slice(0, remaining);
+    remaining -= kept.length;
+    if (kept.length === leaves.length) {
+      limited.set(tab, tab);
+      return;
+    }
+    const root: MigrationPaneNode = kept.length > 0 ? arrangeGrid(kept)
+      : { type: 'split', direction: 'vertical', children: [], sizes: [] };
+    const selectedPanePath = pathOfLeaf(root, leafAtPath(tab.root, tab.selectedPanePath));
+    const maximizedPanePath = pathOfLeaf(root, leafAtPath(tab.root, tab.maximizedPanePath));
+    const { selectedPanePath: _selected, maximizedPanePath: _maximized, ...rest } = tab;
+    limited.set(tab, { ...rest, root,
+      ...(selectedPanePath ? { selectedPanePath } : {}),
+      ...(maximizedPanePath ? { maximizedPanePath } : {}),
+    } as T);
+  };
+  ownership.filter((tab) => tab.isProject === true).forEach(reserve);
+  ownership.filter((tab) => tab.isProject !== true).forEach(reserve);
+  const linkedProjects = new Set(ownership.filter((tab) => tab.isProject === true && tab.cwd
+    && options.isLinkedWorktree?.(tab.cwd)
+    && state.groups.find((group) => group.id === tab.groupId)?.kind !== 'folder').map((tab) => tab.id));
+  const resolved = ownership.map((tab) => {
+    const limitedTab = limited.get(tab)!;
+    return linkedProjects.has(tab.id) ? { ...limitedTab, isProject: false } : limitedTab;
+  });
   if (resolved.every((tab) => tab.isProject === true)) {
     return { tabs: resolved, groups: state.groups, activeTabId: state.activeTabId };
   }
@@ -210,6 +241,12 @@ export function migrateSessionsToProjects<T extends MigratableTab>(
       if (!library && groups.length < MAX_WORKSPACE_GROUPS) {
         library = { id: uniqueGroupId(`folder-${session.id}`), name: basename(sessionCwd).slice(0, 256), kind: 'folder', directory: sessionCwd };
         groups.push(library);
+      }
+      if (!library && linkedProjects.has(session.id) && group && projectsIn(key).length === 0) {
+        // At capacity, reclassify the existing entry rather than leave the only
+        // worktree project owning a folder that filesystem actions could move.
+        library = { ...group, kind: 'folder', directory: sessionCwd };
+        groups[groups.findIndex((entry) => entry.id === group.id)] = library;
       }
       if (library) {
         const existing = projectsIn(library.id).find((project) => sameDirectory(project.cwd, sessionCwd))

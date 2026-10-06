@@ -224,13 +224,9 @@ export function normalizeSession(raw: unknown): SavedSession {
       : 'files';
 
   const tabs: SavedTab[] = [];
-  let terminalCount = 0;
   if (Array.isArray(obj.tabs)) {
     for (const tab of obj.tabs.slice(0, MAX_RESTORED_TABS)) {
-      if (!isValidSavedTab(tab)) continue;
-      const leaves = countSavedPaneLeaves(tab.root, MAX_RESTORED_TERMINALS - terminalCount);
-      if (leaves === null) continue;
-      terminalCount += leaves;
+      if (!isValidSavedTab(tab) || countSavedPaneLeaves(tab.root, MAX_RESTORED_TERMINALS) === null) continue;
       const selectedPanePath = normalizeSavedPanePath(tab.selectedPanePath, tab.root);
       const maximizedPanePath = normalizeSavedPanePath(tab.maximizedPanePath, tab.root);
       tabs.push({

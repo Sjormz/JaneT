@@ -468,14 +468,10 @@ function cloneSavedPanePath(value: unknown, root: SavedPaneNode): number[] | und
 function cloneSavedSession(value: unknown, migration: SessionMigrationOptions = {}): SavedSession {
   const session = value && typeof value === 'object' ? value as Partial<SavedSession> : {};
   const tabs: SavedTab[] = [];
-  let terminalCount = 0;
   if (Array.isArray(session.tabs)) {
     for (const value of session.tabs.slice(0, MAX_SAVED_SESSION_TABS)) {
       const tab = cloneSavedTab(value);
-      if (!tab) continue;
-      const leaves = countSavedPaneLeaves(tab.root, MAX_SAVED_SESSION_TERMINALS - terminalCount);
-      if (leaves === null) continue;
-      terminalCount += leaves;
+      if (!tab || countSavedPaneLeaves(tab.root, MAX_SAVED_SESSION_TERMINALS) === null) continue;
       tabs.push(tab);
     }
   }

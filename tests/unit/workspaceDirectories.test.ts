@@ -48,6 +48,20 @@ it('lists only immediate real child folders as workspace projects', async () => 
   });
   expect(await fs.readFile(path.join(workspace, 'readme.txt'), 'utf8')).toBe('keep');
 });
+it('marks imported linked worktrees without changing their folders or submodule files', async () => {
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'janet-import-worktrees-')); roots.push(root);
+  for (const name of ['Repo', 'Feature', 'Submodule']) await fs.mkdir(path.join(root, name));
+  const marker = 'gitdir: ../Repo/.git/worktrees/Feature\n';
+  await fs.writeFile(path.join(root, 'Feature', '.git'), marker);
+  await fs.writeFile(path.join(root, 'Submodule', '.git'), 'gitdir: ../Repo/.git/modules/Submodule\n');
+  const result = await listWorkspaceProjects(root);
+  expect(result.projects.find((project) => project.name === 'Feature')).toEqual({
+    name: 'Feature', directory: path.join(root, 'Feature'), isWorktree: true,
+  });
+  expect(result.projects.find((project) => project.name === 'Submodule')).not.toHaveProperty('isWorktree');
+  expect(await fs.readFile(path.join(root, 'Feature', '.git'), 'utf8')).toBe(marker);
+});
+
 it('creates managed folders without merging existing data or escaping the chosen parent', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'janet-directories-')); roots.push(root);
   const group = await createWorkspaceDirectory(root, 'Research');

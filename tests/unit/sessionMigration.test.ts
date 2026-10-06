@@ -143,6 +143,24 @@ describe('migrating saved sessions into projects', () => {
     expect(merged.slice(40)).toEqual(Array.from({ length: 24 }, (_, index) => `C:/Work/App/s/${index}`));
   });
 
+  it('enforces one global budget across projects and preserves empty projects and surviving selections', () => {
+    const many = (count: number, prefix: string) => split(...Array.from({ length: count }, (_, index) => leaf(`${prefix}/${index}`)));
+    const result = migrate([
+      tab('first', 'work', 'C:/Work/First', true, many(40, 'C:/Work/First')),
+      { ...tab('second', 'library', 'C:/Repo', true, many(30, 'C:/Repo')), selectedPanePath: [23], maximizedPanePath: [29] },
+      tab('third', 'library', 'C:/Repo/other', true, split(leaf())),
+    ]);
+    expect(result.tabs.map((entry) => [entry.id, leaves(entry.root).length])).toEqual([
+      ['first', 40], ['second', 24], ['third', 0],
+    ]);
+    const second = result.tabs[1];
+    let selected = second.root;
+    for (const index of second.selectedPanePath!) selected = (selected as Extract<MigrationPaneNode, { type: 'split' }>).children[index];
+    expect(selected).toMatchObject({ cwd: 'C:/Repo/23' });
+    expect(second.maximizedPanePath).toBeUndefined();
+    expect(migrate(result.tabs, result.groups, result.activeTabId)).toEqual(result);
+  });
+
   it('turns a recognized worktree session in a Library entry into that entry\'s worktree project', () => {
     const isWorktree = (directory: string) => directory === 'C:/Repo-feature';
     const result = migrate([
@@ -172,12 +190,39 @@ describe('migrating saved sessions into projects', () => {
     expect(migrate(result.tabs, result.groups, result.activeTabId, isWorktree)).toEqual(result);
   });
 
+  it('moves already flagged worktree projects to Library without losing their pane state', () => {
+    const project = { ...tab('feature', 'work', 'C:/Work/Feature', true, split(leaf(), leaf())), selectedPanePath: [1], maximizedPanePath: [1] };
+    const result = migrate([project], [work], 'feature', () => true);
+    expect(result.tabs[0]).toEqual({ ...project, groupId: 'folder-feature' });
+    expect(result.groups[1]).toMatchObject({ kind: 'folder', directory: 'C:/Work/Feature' });
+    expect(migrate(result.tabs, result.groups, result.activeTabId, () => true)).toEqual(result);
+  });
+
+  it('reuses a full group as Library when its only project is a linked worktree', () => {
+    const groups = [work, ...Array.from({ length: 63 }, (_, index) => ({ id: `g${index}`, name: `G${index}` }))];
+    const result = migrate([tab('feature', 'work', 'C:/Work/Feature', true, split(leaf()))], groups, 'feature', () => true);
+    expect(result.groups).toHaveLength(64);
+    expect(result.groups[0]).toEqual({ ...work, kind: 'folder', directory: 'C:/Work/Feature' });
+    expect(result.tabs[0]).toMatchObject({ id: 'feature', groupId: 'work', cwd: 'C:/Work/Feature', isProject: true });
+  });
+
+  it('folds a flagged worktree into another project safely when Library is full', () => {
+    const groups = [work, ...Array.from({ length: 63 }, (_, index) => ({ id: `g${index}`, name: `G${index}` }))];
+    const result = migrate([
+      tab('app', 'work', 'C:/Work/App', true, split(leaf('C:/Work/App'))),
+      tab('feature', 'work', 'C:/Work/Feature', true, split(leaf('C:/Work/Feature'))),
+    ], groups, 'feature', (directory) => directory.endsWith('Feature'));
+    expect(result.tabs).toHaveLength(1);
+    expect(result.tabs[0]).toMatchObject({ id: 'app', cwd: 'C:/Work/App', isProject: true });
+    expect(leaves(result.tabs[0].root).map((item) => item.cwd)).toEqual(['C:/Work/App', 'C:/Work/Feature']);
+  });
+
   it('merges a worktree session like any other when Library is full', () => {
     const groups = [work, ...Array.from({ length: 63 }, (_, index) => ({ id: `g${index}`, name: `G${index}` }))];
     const result = migrate([
       tab('app', 'work', 'C:/Work/App', true, split(leaf('C:/Work/App'))),
       tab('feature', 'work', 'C:/Work/App-feature', false, split(leaf('C:/Work/App-feature'))),
-    ], groups, null, () => true);
+    ], groups, null, (directory) => directory.endsWith('App-feature'));
     expect(result.groups).toHaveLength(64);
     expect(result.tabs.map((entry) => [entry.id, leaves(entry.root).length])).toEqual([['app', 2]]);
   });

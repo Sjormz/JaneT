@@ -1050,7 +1050,34 @@ describe('SettingsManager', () => {
     expect(settings.session.tabs).toEqual([]);
   });
 
-  it('keeps the earliest whole tabs when a loaded session exceeds the shared terminal budget', async () => {
+  it('reserves every project terminal before migrating earlier saved sessions across groups', async () => {
+    const tree = (count: number, prefix: string) => ({
+      type: 'split', direction: 'vertical', sizes: new Array(count).fill(1 / count),
+      children: Array.from({ length: count }, (_, index) => ({ type: 'leaf', title: `${prefix}${index}` })),
+    });
+    const fsMock = await import('fs');
+    (fsMock.readFileSync as any).mockImplementationOnce(() => JSON.stringify({ session: {
+      groups: [{ id: 'a', name: 'A', directory: '/work/a' }, { id: 'b', name: 'B', directory: '/work/b' }],
+      tabs: [
+        { id: 'session', title: 'Session', type: 'local', groupId: 'a', cwd: '/work/a/app', isProject: false, root: tree(30, 'session') },
+        { id: 'a', title: 'A', type: 'local', groupId: 'a', cwd: '/work/a/app', isProject: true, root: tree(20, 'a') },
+        { id: 'b', title: 'B', type: 'local', groupId: 'b', cwd: '/work/b/app', isProject: true, root: tree(20, 'b') },
+      ], activeTabId: 'session',
+    } }));
+    const { SettingsManager } = await import('../../src/main/settings');
+    const session = new SettingsManager().get().session;
+    const titles = (node: typeof session.tabs[number]['root']): (string | undefined)[] => node.type === 'leaf'
+      ? [node.title] : node.children.flatMap(titles);
+    expect(session.tabs.map((tab) => tab.id)).toEqual(['a', 'b']);
+    expect(titles(session.tabs[0].root)).toEqual([
+      ...Array.from({ length: 20 }, (_, index) => `a${index}`),
+      ...Array.from({ length: 24 }, (_, index) => `session${index}`),
+    ]);
+    expect(titles(session.tabs[1].root)).toEqual(Array.from({ length: 20 }, (_, index) => `b${index}`));
+    expect(session.activeTabId).toBe('a');
+  });
+
+  it('keeps the earliest terminals when a loaded session exceeds the shared terminal budget', async () => {
     const split = (leaves: number) => ({
       type: 'split', direction: 'vertical', sizes: new Array(leaves).fill(1 / leaves),
       children: new Array(leaves).fill(null).map(() => ({ type: 'leaf' })),
@@ -1070,6 +1097,9 @@ describe('SettingsManager', () => {
     const settings = new SettingsManager().get();
     expect(settings.theme).toBe('dracula');
     expect(settings.session.tabs.map((tab) => tab.id)).toEqual(['first']);
+    const root = settings.session.tabs[0].root;
+    const count = (node: typeof root): number => node.type === 'leaf' ? 1 : node.children.reduce((sum, child) => sum + count(child), 0);
+    expect(count(root)).toBe(64);
   });
 
   it('rejects runtime sessions that exceed the shared terminal budget without writing', async () => {

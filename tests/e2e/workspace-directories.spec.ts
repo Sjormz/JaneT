@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createWorkspace, ensureProjectTerminalsOpen, restoreWorkspaceFixture } from './workspaces';
+import { forceClose } from './electronLifecycle';
 
 class FolderSessions {
   constructor(private page: Page, private app: ElectronApplication) {}
@@ -57,6 +58,7 @@ test('sets up a main directory and restores independent linked-folder sessions',
   delete env.ELECTRON_RUN_AS_NODE; delete env.ELECTRON_NO_ATTACH_CONSOLE;
   const launch = () => electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) });
   let app: ElectronApplication | undefined;
+  let failure = false;
   try {
     app = await launch();
     let page = await app.firstWindow();
@@ -219,13 +221,17 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await expect(page.getByRole('img', { name: 'Worktree project' })).toBeVisible();
     expect(fs.readdirSync(worktree)).toEqual(['.git']);
     await page.screenshot({ path: testInfo.outputPath('library-worktree-project.png') });
+  } catch (error) {
+    failure = true;
+    throw error;
   } finally {
-    if (app) {
-      const stopped = app.waitForEvent('close', { timeout: 5000 });
-      await app.evaluate(({ app: instance }) => instance.exit(0)).catch(() => {});
-      await stopped;
+    try {
+      await forceClose(app);
+      await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (error) {
+      if (!failure) throw error;
+      console.error('Workspace directory fixture cleanup failed:', error);
     }
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -259,6 +265,7 @@ test('opens Git worktrees from Source Control as Library projects without touchi
   const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: profile };
   delete env.ELECTRON_RUN_AS_NODE; delete env.ELECTRON_NO_ATTACH_CONSOLE;
   let electronApp: ElectronApplication | undefined;
+  let failure = false;
   try {
     electronApp = await electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env: Object.fromEntries(Object.entries(env)
       .filter((entry): entry is [string, string] => typeof entry[1] === 'string')) });
@@ -304,12 +311,71 @@ test('opens Git worktrees from Source Control as Library projects without touchi
     await expect(entry).toHaveCount(0);
     for (const folder of [appFeature, repoFeature]) expect(fs.readFileSync(path.join(folder, '.git'), 'utf8')).toMatch(/^gitdir:/);
     expect(execFileSync('git', ['-C', app, 'worktree', 'list'], { encoding: 'utf8' })).toContain('App-feature');
+  } catch (error) {
+    failure = true;
+    throw error;
   } finally {
-    if (electronApp) {
-      const stopped = electronApp.waitForEvent('close', { timeout: 5000 });
-      await electronApp.evaluate(({ app: instance }) => instance.exit(0)).catch(() => {});
-      await stopped;
+    try {
+      await forceClose(electronApp);
+      await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (error) {
+      if (!failure) throw error;
+      console.error('Workspace directory fixture cleanup failed:', error);
     }
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('imports linked worktree folders as Library projects with label-only rename and removal', async () => {
+  test.setTimeout(90_000);
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-import-worktree-e2e-'));
+  const profile = path.join(root, 'profile');
+  const workspace = path.join(root, 'Imported');
+  const repo = path.join(workspace, 'Repo');
+  const feature = path.join(workspace, 'Feature');
+  fs.mkdirSync(profile); fs.mkdirSync(workspace);
+  execFileSync('git', ['init', repo]);
+  execFileSync('git', ['-C', repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'Initial']);
+  execFileSync('git', ['-C', repo, 'worktree', 'add', '-b', 'feature', feature]);
+  const marker = fs.readFileSync(path.join(feature, '.git'), 'utf8');
+  fs.writeFileSync(path.join(feature, 'keep.txt'), 'keep');
+  const settingsPath = path.join(profile, 'settings.json');
+  fs.writeFileSync(settingsPath, JSON.stringify({ mainDirectory: root, session: {
+    groups: [], tabs: [], activeTabId: null, sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+  } }));
+  const settings = () => JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: profile };
+  delete env.ELECTRON_RUN_AS_NODE; delete env.ELECTRON_NO_ATTACH_CONSOLE;
+  let app: ElectronApplication | undefined;
+  let failed = false;
+  try {
+    app = await electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env: Object.fromEntries(Object.entries(env)
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string')) });
+    const page = await app.firstWindow();
+    await app.evaluate(({ dialog }, selected) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] });
+    }, workspace);
+    await page.getByRole('button', { name: 'Choose existing workspace', exact: true }).last().click();
+    const entry = page.getByRole('region', { name: 'Feature', exact: true });
+    await expect(entry.locator('.project-entry')).toHaveCount(1);
+    await expect(page.getByRole('region', { name: 'Imported', exact: true }).locator('.project-entry')).toHaveCount(1);
+    await expect(entry.getByRole('img', { name: 'Worktree project' })).toBeVisible();
+    await expect.poll(() => settings().session.groups.find((group: any) => group.directory === feature)?.kind).toBe('folder');
+    const folders = new FolderSessions(page, app);
+    await folders.projectAction('Feature', 'Rename project');
+    await page.getByRole('textbox', { name: 'Project name', exact: true }).fill('Review');
+    await page.getByRole('textbox', { name: 'Project name', exact: true }).press('Enter');
+    await expect.poll(() => settings().session.tabs.find((tab: any) => tab.title === 'Review')?.cwd).toBe(feature);
+    await folders.projectAction('Review', 'Remove project…');
+    await page.getByRole('button', { name: 'Remove project', exact: true }).click();
+    await expect(entry.locator('.project-entry')).toHaveCount(0);
+    expect(fs.readFileSync(path.join(feature, '.git'), 'utf8')).toBe(marker);
+    expect(fs.readFileSync(path.join(feature, 'keep.txt'), 'utf8')).toBe('keep');
+    expect(execFileSync('git', ['-C', repo, 'worktree', 'list'], { encoding: 'utf8' })).toContain('Feature');
+  } catch (error) { failed = true; throw error; }
+  finally {
+    try {
+      await forceClose(app);
+      await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (error) { if (!failed) throw error; console.error('Import worktree cleanup failed:', error); }
   }
 });

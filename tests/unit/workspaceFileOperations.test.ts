@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -73,6 +74,35 @@ describe('temporary workspace file operations', () => {
     expect(f.dependencies.trash).not.toHaveBeenCalled();
     expect(f.dependencies.setSession).not.toHaveBeenCalled();
     expect(await fs.readFile(path.join(f.project, 'keep.txt'), 'utf8')).toBe('important');
+  });
+  it.each(['delete-project', 'delete-workspace', 'keep-project'])('protects nested submodules before %s', async (action) => {
+    const f = await fixture();
+    const nested = path.join(f.project, 'packages', 'module');
+    await fs.mkdir(nested, { recursive: true });
+    await fs.writeFile(path.join(nested, '.git'), 'gitdir: ../../.git/modules/packages/module\n');
+    await expect(f.operations.run({ action: action === 'keep-project' ? 'keep' : 'delete', groupId: 'work',
+      ...(action === 'delete-workspace' ? {} : { projectId: 'project' }), destinationParent: f.library })).rejects.toThrow('Git worktree or submodule');
+    expect(f.dependencies.trash).not.toHaveBeenCalled();
+    expect(f.dependencies.setSession).not.toHaveBeenCalled();
+    expect(f.dependencies.release).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(nested, '.git'), 'utf8')).toContain('gitdir:');
+    expect(await fs.readdir(f.library)).toEqual([]);
+  });
+  it('stops safely when a Git marker cannot be inspected', async () => {
+    const f = await fixture();
+    const original = fs.lstat;
+    const inspection = vi.spyOn(fs, 'lstat').mockImplementation((...args) => {
+      if (String(args[0]) === path.join(f.project, '.git')) return Promise.reject(Object.assign(new Error('cannot inspect Git marker'), { code: 'EACCES' }));
+      return original(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      await expect(f.operations.run({ action: 'delete', groupId: 'work', projectId: 'project' })).rejects.toThrow('cannot inspect');
+      await expect(assertManagedFolderRename(f.session, f.project)).rejects.toThrow('cannot inspect');
+    } finally { inspection.mockRestore(); syncBuiltinESMExports(); }
+    expect(f.dependencies.trash).not.toHaveBeenCalled();
+    expect(f.dependencies.setSession).not.toHaveBeenCalled();
+    expect(f.dependencies.release).not.toHaveBeenCalled();
   });
   it('rejects Library deletion, root targets, blank IDs and sessions without their own directory', async () => {
     const f = await fixture();
@@ -175,6 +205,23 @@ describe('managed folder rename', () => {
     session.groups!.push({ id: 'nested', name: 'Nested', kind: 'folder', directory: f.project });
     await expect(assertManagedFolderRename(session, f.workspace)).rejects.toThrow('Library entry');
     await expect(assertManagedFolderRename(session, f.project)).rejects.toThrow('Library entry');
+  });
+  it.each([false, true])('refuses renaming a folder containing a nested Git link (workspace=%s)', async (whole) => {
+    const f = await fixture();
+    const nested = path.join(f.project, 'packages', 'feature');
+    await fs.mkdir(nested, { recursive: true });
+    await fs.writeFile(path.join(nested, '.git'), 'gitdir: /repo/.git/worktrees/feature\n');
+    await expect(assertManagedFolderRename(f.session, whole ? f.workspace : f.project)).rejects.toThrow('Git worktree or submodule');
+  });
+  it('protects managed folders inside Library and Library projects outside their entry folder', async () => {
+    const f = await fixture();
+    f.session.groups!.push({ id: 'outer', name: 'Outer', kind: 'folder', directory: f.main });
+    await expect(assertManagedFolderRename(f.session, f.workspace)).rejects.toThrow('Library entry');
+    f.session.groups!.pop();
+    f.session.groups!.push({ id: 'external', name: 'External', kind: 'folder', directory: f.library });
+    f.session.tabs.push({ id: 'external-project', title: 'External project', groupId: 'external', type: 'local',
+      isProject: true, cwd: f.project, root: { type: 'leaf' } });
+    await expect(assertManagedFolderRename(f.session, f.workspace)).rejects.toThrow('Library project');
   });
   it('refuses a project folder that is not saved as a project or is a Git worktree', async () => {
     const f = await fixture();

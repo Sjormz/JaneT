@@ -42,11 +42,13 @@ Press **New project** (`Ctrl+Shift+T` on Windows and Linux, `Cmd+T` on macOS) to
 2. Choose a folder to use as the workspace. JaneT adds each folder directly inside it as a project, even if that project has no terminals yet.
 3. Select a project and use **Start terminals** when you want terminals in its folder. Folders deeper inside a project stay part of that project; they do not become separate projects. Files directly in the workspace folder stay there and do not appear as projects.
 
+Linked Git worktree folders directly inside the selected workspace become separate Library entries. Importing requires one free entry for the workspace and one for each worktree; if there is not enough room, remove an unused entry and try again. No folders are moved.
+
 ![Workspaces sidebar showing two projects created from the selected folder's direct subfolders](/screenshots/existing-workspace-projects.png)
 
 *Choosing an existing workspace adds its direct subfolders as projects, ready for terminals.*
 
-Choosing a workspace does not move, copy, or change its files. The chosen folder and its projects become managed by Workspaces: **Rename** changes folder names on disk, and **Delete workspace…** or **Delete project…** sends those folders and their contents to the OS Recycle Bin/Trash after confirmation. Use **Library** if you want to link a folder without making it managed workspace storage. JaneT supports up to 64 saved projects, so a workspace with more folders than the available slots cannot be added.
+Choosing a workspace does not move, copy, or change its files. The chosen folder and its ordinary projects become managed by Workspaces: **Rename** changes folder names on disk, and **Delete workspace…** or **Delete project…** sends those folders and their contents to the OS Recycle Bin/Trash after confirmation. Use **Library** if you want to link a folder without making it managed workspace storage. JaneT supports up to 64 saved projects, so a workspace with more folders than the available slots cannot be added.
 
 Choose a real folder; JaneT does not add linked workspace roots or linked child folders as projects.
 
@@ -91,7 +93,7 @@ Right-click a workspace, Library entry, or project in the sidebar.
 - **Remove from Library…** unlinks a Library entry and stops its terminals. It does not delete the folder or its files.
 - **Delete workspace…** or **Delete project…** (Workspaces only) asks for confirmation, then sends the managed folder to the OS Recycle Bin/Trash. Check the confirmation before proceeding.
 
-JaneT refuses to rename, move, or delete a folder that is a Git worktree or submodule, or that contains a Library entry, even inside a workspace. Nothing is changed in that case.
+JaneT refuses to rename, move, or delete a folder that is a Git worktree or submodule, or that contains one at any depth, even inside a workspace. It also protects folders that overlap a Library entry; renaming a folder containing a Library project is blocked too. If JaneT cannot inspect a folder safely, the action stops and the files stay in place. Use Git to remove worktrees or submodules before moving their parent folders.
 
 **Keep in Library…** and **Delete…** stop the affected terminals before touching files. If the operation then fails, JaneT leaves the files in place, shows the reason, and starts fresh terminals in the stopped panes at their last known folders. Startup commands configured for those panes run again, as they do after restarting JaneT.
 
@@ -115,7 +117,7 @@ If editor files have unsaved changes when you close JaneT, quit, or install an u
 
 Versions of JaneT up to 0.14.1 could also save sidebar entries that were not projects, such as a terminal opened with the old **New terminal tab** shortcut or a worktree opened from Source Control. The first time a newer version starts, it folds each of them into a project once, without touching any files:
 
-- Its terminals join the project in the same Workspace or Library entry whose folder matches the entry's folder (or contains it), otherwise the first project there. Each terminal keeps its title, folder, and startup commands. A project's own terminals come first; if the combined layout would exceed 64 terminals, the extra terminals at the end are left out.
+- Its terminals join the project in the same Workspace or Library entry whose folder matches the entry's folder (or contains it), otherwise the first project there. Each terminal keeps its title, folder, and startup commands. Existing projects keep their own terminals before any older entries are merged, regardless of the order they were saved in. The limit is 64 terminals across the app; older entries use the remaining slots in saved order, and extra terminals are left out.
 - In a Library entry with no project yet, the first such entry becomes its project, and later ones join it.
 - In a workspace with no project yet, an entry for a folder directly inside the workspace becomes that folder's project. Any other entry that has terminals becomes a project that owns no folder, so renaming it changes only its name and removing it never touches files. An entry with neither terminals nor a folder is dropped.
-- An entry whose folder is a Git worktree becomes a worktree project in Library, as described in [Open a Git worktree as a project](#open-a-git-worktree-as-a-project).
+- An entry whose folder is a Git worktree becomes a worktree project in Library, including worktrees previously saved as Workspace projects. If all 64 workspace and Library entries are occupied, its terminals join another project in the same workspace; if there is no other project, JaneT reuses that workspace entry as a Library entry for the worktree. These fallbacks keep worktree folders protected and never move files.
