@@ -471,6 +471,48 @@ describe('GitManager working tree actions', { timeout: 30_000 }, () => {
       .toEqual([...actionable].sort());
   });
 
+  it('filters inherited Git overrides while preserving ordinary hook environment', async () => {
+    const repository = initializeRepository();
+    const manager = new GitManager();
+    const hook = path.join(repository, '.git', 'hooks', 'pre-commit');
+    fs.writeFileSync(hook, [
+      '#!/bin/sh',
+      'printf "%s\\n" "${GIT_CONFIG_COUNT-unset}" "${GIT_AUTHOR_NAME-unset}" "${VISUAL-unset}" "${GIT_SSH_COMMAND-unset}" "$JANET_GIT_TEST_MARKER" > guard-env.txt',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    fs.writeFileSync(path.join(repository, 'working.txt'), 'working\n');
+
+    vi.stubEnv('GIT_CONFIG_COUNT', '1');
+    vi.stubEnv('GIT_CONFIG_KEY_0', 'user.name');
+    vi.stubEnv('GIT_CONFIG_VALUE_0', 'Inherited identity');
+    vi.stubEnv('GIT_AUTHOR_NAME', 'Inherited author');
+    vi.stubEnv('VISUAL', 'inherited-editor');
+    vi.stubEnv('GIT_SSH_COMMAND', 'inherited-ssh');
+    vi.stubEnv('JANET_GIT_TEST_MARKER', 'ordinary-environment');
+    try {
+      expect(await manager.stage(repository, ['working.txt'])).toEqual({ ok: true });
+      expect(await manager.commit(repository, 'guarded environment')).toEqual({ ok: true });
+      // Git supplies the repository's resolved author identity to its hook.
+      expect(fs.readFileSync(path.join(repository, 'guard-env.txt'), 'utf8').replace(/\r\n/g, '\n'))
+        .toBe('unset\nJaneT Test\nunset\nunset\nordinary-environment\n');
+      await expect(manager.log(repository, 1)).resolves.toMatchObject([
+        { message: 'guarded environment', author_name: 'JaneT Test', author_email: 'janet@example.invalid' },
+      ]);
+      const details = await manager.details(repository);
+      expect(details).toMatchObject({
+        branches: [{ name: 'main', current: true, isRemote: false }],
+        worktrees: [{ branch: 'main' }],
+      });
+      // Native realpath also expands Windows 8.3 aliases used by the temp directory.
+      expect(details?.worktrees.map((tree) => fs.realpathSync.native(tree.path))).toEqual([fs.realpathSync.native(repository)]);
+      await expect(manager.status(repository)).resolves.toMatchObject({
+        ok: true, value: { current: 'main', files: [{ path: 'guard-env.txt', staged: false }] },
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('fetches, pulls, and pushes against the tracked remote', async () => {
     const root = temporaryDirectory('janet-git-remote-');
     const remote = path.join(root, 'origin.git');
