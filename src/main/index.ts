@@ -4,7 +4,9 @@ import * as path from 'path';
 import packageMetadata from '../../package.json';
 import { TerminalManager } from './terminal';
 import { AgentActivityBridge } from './agentActivityBridge';
+import { claudeSettings, claudeSettingsPath } from './claudeActivity';
 import * as fs from 'node:fs';
+import { execFile } from 'node:child_process';
 import { isAllowedExternalUrl } from './externalUrls';
 import { FileSystemManager } from './filesystem';
 import { GitManager } from './git';
@@ -44,6 +46,8 @@ let terminalManager: TerminalManager;
 let fsManager: FileSystemManager;
 let gitManager: GitManager;
 let settingsManager: SettingsManager;
+/** Stable app-data copy of the bundled agent helper; undefined when it could not be installed. */
+let agentHelperPath: string | undefined;
 let workspaceLifecycle: WorkspaceLifecycleController;
 let workspaceShutdownInProgress = false;
 let quittingAfterWorkspaceStop = false;
@@ -254,8 +258,9 @@ function deliverCommandNotification(value: unknown): boolean {
       if (!notificationProtocolRegistered) throw new Error('Could not register notification activation');
     }
     const seconds = Math.round(payload.durationMs / 1000);
-    const title = payload.codexEvent === 'needs-input' ? 'Codex needs input'
-      : payload.codexEvent === 'turn-complete' ? 'Codex turn finished'
+    const agent = payload.agent === 'claude' ? 'Claude' : 'Codex';
+    const title = payload.codexEvent === 'needs-input' ? `${agent} needs input`
+      : payload.codexEvent === 'turn-complete' ? `${agent} turn finished`
         : payload.outcome === 'failure' ? 'Command failed' : payload.outcome === 'success' ? 'Command finished' : 'Command completed';
     const body = `${payload.tabLabel} · ${payload.paneLabel}${payload.codexEvent ? '' : ` (${seconds}s)`}`;
     const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -469,7 +474,14 @@ electron.app.whenReady().then(() => {
       if (fs.existsSync(destination) && fs.lstatSync(destination).isSymbolicLink()) throw new Error('Unexpected helper link');
       fs.writeFileSync(destination, contents, { mode: 0o600 });
     }
+    const claudeSettingsFile = claudeSettingsPath(destination);
+    const claudeSettingsContents = claudeSettings(destination);
+    if (!fs.existsSync(claudeSettingsFile) || fs.readFileSync(claudeSettingsFile, 'utf8') !== claudeSettingsContents) {
+      if (fs.existsSync(claudeSettingsFile) && fs.lstatSync(claudeSettingsFile).isSymbolicLink()) throw new Error('Unexpected settings link');
+      fs.writeFileSync(claudeSettingsFile, claudeSettingsContents, { mode: 0o600 });
+    }
     agentHelper = destination;
+    agentHelperPath = destination;
   } catch { console.warn('Automatic agent setup unavailable; terminals remain usable.'); }
   terminalManager = new TerminalManager({ capacity: terminalCapacity, agentHelper });
   fsManager = new FileSystemManager();
@@ -606,7 +618,8 @@ function registerIpcHandlers() {
   });
 
   handle('terminal:create', async (event, { id, cwd, shell, startupCommands }) => {
-    const activityEnv = await agentActivityBridge.environment(id).catch(() => {
+    // Without an activity URL the shell init adds no agent launch wrappers.
+    const activityEnv = !settingsManager.get().agentIntegrations ? {} : await agentActivityBridge.environment(id).catch(() => {
       console.warn('Agent activity bridge unavailable; shell terminal remains usable.');
       return {};
     });
@@ -778,6 +791,24 @@ function registerIpcHandlers() {
   });
 
   handle('notifications:command-completed', (_event, payload: unknown) => deliverCommandNotification(payload));
+  // Turns agent integrations off for new terminals and removes every persistent JaneT entry from
+  // agent configuration. Runs the helper as Node through Electron, so Node need not be on PATH.
+  handle('agents:removeIntegrations', async () => {
+    settingsManager.set({ agentIntegrations: false });
+    if (!agentHelperPath) return { ok: false, message: 'The agent helper is unavailable. See the Agent activity guide to remove entries manually.' };
+    const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
+    delete env.JANET_ACTIVITY_URL;
+    // E2E only: point the helper's default agent homes at a disposable folder. Electron's own
+    // environment must stay intact, because it resolves app paths from it at startup.
+    const e2eAgentHome = process.env.NODE_ENV === 'test' ? process.env.JANET_E2E_AGENT_HOME : undefined;
+    if (e2eAgentHome) Object.assign(env, { HOME: e2eAgentHome, USERPROFILE: e2eAgentHome, LOCALAPPDATA: path.join(e2eAgentHome, 'AppData', 'Local') });
+    return new Promise<{ ok: boolean; message: string }>((resolve) => {
+      execFile(process.execPath, [agentHelperPath!, '--uninstall'], { env, timeout: 20_000, windowsHide: true, maxBuffer: 64 * 1024 }, (error, stdout) => {
+        const message = String(stdout).trim().slice(0, 2000);
+        resolve({ ok: !error, message: message || 'Could not remove agent integrations. See the Agent activity guide to remove entries manually.' });
+      });
+    });
+  });
   handle('notifications:status', () => notificationDeliveryError ?? (electron.Notification.isSupported() ? null : 'Desktop notifications are unavailable on this system.'));
   handle('app:isWindowFocused', () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()));
 

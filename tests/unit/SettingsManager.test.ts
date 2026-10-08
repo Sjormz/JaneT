@@ -179,6 +179,9 @@ describe('SettingsManager', () => {
     expect(settings.workspaceTabs).toEqual([]);
     expect(settings.notificationsEnabled).toBe(false);
     expect(settings.notificationThresholdSeconds).toBe(10);
+    expect(settings.agentIntegrations).toBe(true);
+    expect(manager.set({ agentIntegrations: false }).agentIntegrations).toBe(false);
+    expect(() => manager.set({ agentIntegrations: 'no' as unknown as boolean })).toThrow();
     const mac = process.platform === 'darwin';
     expect(settings.keybindings).toMatchObject({
       'previous-command': mac ? 'Meta+ArrowUp' : 'Ctrl+Shift+ArrowUp',

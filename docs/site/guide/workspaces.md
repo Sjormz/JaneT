@@ -77,7 +77,7 @@ If a project for that worktree already exists, JaneT selects it instead. Removin
 
 ## Start and close terminals
 
-When creating a project, **Add terminals** is optional. If enabled, choose 1–16 initial terminals and select **Terminal**, **Codex**, **Hermes**, **Claude**, or **Custom**. The same launcher and startup command apply to every initial terminal. For **Custom**, JaneT runs the command in each terminal; do not put passwords or tokens in it.
+When creating a project, **Add terminals** is optional. If enabled, choose 1–16 initial terminals and select **Terminal**, **Codex**, **Hermes**, **Claude**, or **Custom**. The same launcher and startup command apply to every initial terminal. For **Custom**, JaneT runs the command in each terminal; do not put passwords or tokens in it. **Claude** terminals report their status in JaneT; see [Agent activity](./agent-activity.md#claude-code).
 
 A project without terminals shows **Start terminals** in place of its terminal layout. To add terminals to a project that already has some, select **Add terminals** (the **+** button) on a pane, or press **Add terminals to current project** (`` Ctrl+Shift+` ``). See [Terminals and panes](/guide/terminals).
 

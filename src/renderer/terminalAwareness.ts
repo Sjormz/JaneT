@@ -55,7 +55,11 @@ export interface AgentStatus {
   unseenCount?: number;
 }
 
-const PROVIDER_LABELS: Record<string, string> = { hermes: 'Hermes', codex: 'Codex', shell: 'Shell' };
+const PROVIDER_LABELS: Record<string, string> = { hermes: 'Hermes', codex: 'Codex', claude: 'Claude', shell: 'Shell' };
+
+export function agentProviderLabel(provider: string): string {
+  return PROVIDER_LABELS[provider] ?? provider.charAt(0).toUpperCase() + provider.slice(1);
+}
 const STATUS_PRIORITY: Record<AgentStatusKind, number> = {
   'needs-input': 6,
   running: 5,
@@ -68,8 +72,7 @@ const STATUS_PRIORITY: Record<AgentStatusKind, number> = {
 };
 
 export function agentStatus(awareness: AgentAwareness): AgentStatus {
-  const provider = PROVIDER_LABELS[awareness.provider]
-    ?? awareness.provider.charAt(0).toUpperCase() + awareness.provider.slice(1);
+  const provider = agentProviderLabel(awareness.provider);
   if (awareness.completionTracking === false) return { kind: 'unavailable', label: `${provider} · Activity tracking incomplete` };
   if (awareness.phase === 'connecting') return { kind: 'unavailable', label: `${provider} · Awaiting activity` };
   if (awareness.phase === 'needs-input') return { kind: 'needs-input', label: `${provider} · Needs input` };
@@ -114,7 +117,7 @@ export function applyAgentEvent(
 ): AgentAwareness | undefined {
   if (event.event === 'integration.status') {
     if (event.completionTracking) {
-      if (current?.provider === event.provider && current.sessionId !== 'janet-codex-setup') return { ...current, completionTracking: true };
+      if (current?.provider === event.provider && current.sessionId !== `janet-${event.provider}-setup`) return { ...current, completionTracking: true };
       return { provider: event.provider, sessionId: event.sessionId, phase: 'connecting', phaseChangedAt: occurredAt, completionTracking: true };
     }
     return { ...(current?.provider === event.provider ? current : {

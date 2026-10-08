@@ -9,8 +9,8 @@ export class AgentActivityBridge {
   private server?: Server;
   private opening?: Promise<number>;
   private terminals = new Map<string, string>();
-  private active = new Map<string, { provider: string; sessionId: string; turnId?: string }>();
-  private completionTracking = new Map<string, boolean>();
+  private active = new Map<string, { provider: string; sessionId: string; turnId?: string; ended?: boolean }>();
+  private completionTracking = new Map<string, { provider: string; available: boolean }>();
   constructor(private readonly receive: (id: string, event: AgentLifecycleEvent) => void) {}
 
   async environment(id: string): Promise<Record<string, string>> {
@@ -20,6 +20,10 @@ export class AgentActivityBridge {
     this.terminals.set(id, token);
     const port = await (this.opening ??= this.open());
     return { JANET_ACTIVITY_URL: `http://127.0.0.1:${port}/${token}` };
+  }
+  private forward(id: string, event: AgentLifecycleEvent): void {
+    const tracking = this.completionTracking.get(id);
+    this.receive(id, tracking?.provider === event.provider ? { ...event, completionTracking: tracking.available } : event);
   }
   remove(id: string): void { this.terminals.delete(id); this.active.delete(id); this.completionTracking.delete(id); }
   close(): void { this.terminals.clear(); this.active.clear(); this.completionTracking.clear(); this.server?.closeAllConnections(); this.server?.close(); this.server = undefined; this.opening = undefined; }
@@ -38,14 +42,16 @@ export class AgentActivityBridge {
           try {
             const payload = JSON.parse(body);
             const { provider, ...data } = payload;
-            if (provider === 'codex' && data.event === 'integration.status') {
+            if ((provider === 'codex' || provider === 'claude') && data.event === 'integration.status') {
               if (Object.keys(data).length !== 2 || typeof data.available !== 'boolean' || req.url !== `/${this.terminals.get(id)}`) { res.writeHead(400).end(); return; }
-              this.completionTracking.set(id, data.available);
-              this.receive(id, { version: 1, provider, event: 'integration.status', sessionId: this.active.get(id)?.sessionId ?? 'janet-codex-setup', completionTracking: data.available });
+              this.completionTracking.set(id, { provider, available: data.available });
+              const current = this.active.get(id);
+              this.receive(id, { version: 1, provider, event: 'integration.status',
+                sessionId: current && current.provider === provider ? current.sessionId : setupSessionId(provider), completionTracking: data.available });
               res.writeHead(204).end(); return;
             }
             const event = provider === undefined ? codexActivity(payload)
-              : ['codex', 'hermes'].includes(provider) ? validateAgentEvent(provider, data) : undefined;
+              : ['codex', 'hermes', 'claude'].includes(provider) ? validateAgentEvent(provider, data) : undefined;
             if (!event || req.url !== `/${this.terminals.get(id)}`) { res.writeHead(400).end(); return; }
             const current = this.active.get(id);
             const sameSession = current?.provider === event.provider && current.sessionId === event.sessionId;
@@ -57,11 +63,15 @@ export class AgentActivityBridge {
             } else if (!sameSession || (event.turnId && current?.turnId !== event.turnId)) {
               activityDiagnostic('bridge.stale', event, { sameSession, sameTurn: current?.turnId === event.turnId });
               res.writeHead(204).end(); return;
+            } else if (event.provider === 'claude' && current?.ended && event.event.startsWith('attention.')) {
+              // Another Stop hook can continue a Claude turn after its first Stop; reopen it.
+              this.active.set(id, { ...current, ended: false });
+              this.forward(id, { version: 1, provider: event.provider, event: 'turn.start', sessionId: event.sessionId, turnId: event.turnId });
             }
             if (event.event === 'session.end') this.active.delete(id);
+            if (event.event === 'turn.end' && current) this.active.set(id, { ...this.active.get(id)!, ended: true });
             activityDiagnostic('bridge.accepted', event);
-            this.receive(id, event.provider === 'codex' && this.completionTracking.has(id)
-              ? { ...event, completionTracking: this.completionTracking.get(id) } : event);
+            this.forward(id, event);
             res.writeHead(204).end();
           } catch { res.writeHead(400).end(); }
         });
@@ -74,6 +84,9 @@ export class AgentActivityBridge {
     });
   }
 }
+
+/** Placeholder session for setup health reported before the agent's first hook. */
+export function setupSessionId(provider: string): string { return `janet-${provider}-setup`; }
 
 export function codexActivity(value: unknown): AgentLifecycleEvent | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -94,22 +107,3 @@ export function codexActivity(value: unknown): AgentLifecycleEvent | null {
   };
 }
 
-// Hooks receive sensitive inputs; only the allowlisted event identifiers leave this process.
-export const CODEX_ACTIVITY_SCRIPT = String.raw`const http = require('node:http');
-const endpoint = process.env.JANET_ACTIVITY_URL;
-let finished = false;
-function finish() { if (!finished) { finished = true; process.stdout.write('{}'); } }
-function send(input) {
-  try {
-    if (!/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{64}$/.test(endpoint || '')) return finish();
-    const p = JSON.parse(input);
-    if (p.agent_id) return finish();
-    const event = p.type || p.hook_event_name;
-    const body = JSON.stringify({event, sessionId: p['thread-id'] || p.session_id, turnId: p['turn-id'] || p.turn_id});
-    const req = http.request(endpoint, {method:'POST', headers:{'content-type':'application/json'}}, res => {res.resume(); res.on('end', finish);});
-    req.setTimeout(800, () => req.destroy()); req.on('error', finish); req.end(body);
-  } catch { finish(); }
-}
-if (process.argv[2]) send(process.argv[2]);
-else { let input=''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => { input+=chunk; if(input.length>1048576) process.exit(0); }); process.stdin.on('end',()=>send(input)); }
-`;

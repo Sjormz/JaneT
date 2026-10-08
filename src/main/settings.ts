@@ -100,6 +100,8 @@ export interface AppSettings {
   transparency: TransparencyPreference;
   notificationsEnabled: boolean;
   notificationThresholdSeconds: number;
+  /** Launch wrappers that report Claude Code, Codex and Hermes activity in new terminals. */
+  agentIntegrations: boolean;
   keybindings: Record<string, string>;
   snippets: Snippet[];
   commandHistory: CommandHistoryEntry[];
@@ -161,6 +163,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   transparency: 'system',
   notificationsEnabled: false,
   notificationThresholdSeconds: 10,
+  agentIntegrations: true,
   keybindings: withKeybindingsSchema(PLATFORM_DEFAULT_KEYBINDINGS),
   snippets: [],
   commandHistory: [],
@@ -317,6 +320,7 @@ export class SettingsManager {
       notificationThresholdSeconds: isValidNotificationThreshold(storedSettings.notificationThresholdSeconds)
         ? storedSettings.notificationThresholdSeconds
         : 10,
+      agentIntegrations: typeof storedSettings.agentIntegrations === 'boolean' ? storedSettings.agentIntegrations : true,
       // Hand-edited or older files are held to the same rules as runtime updates.
       theme: isValidTheme(storedSettings.theme) ? storedSettings.theme : DEFAULT_SETTINGS.theme,
       fontSize: isValidFontSize(storedSettings.fontSize) ? storedSettings.fontSize : DEFAULT_SETTINGS.fontSize,
@@ -738,7 +742,7 @@ function parseSettingsUpdate(value: unknown): Partial<AppSettings> | undefined {
     if (prototype !== Object.prototype && prototype !== null) return undefined;
     const allowedKeys = new Set<keyof AppSettings>([
       'mainDirectory', 'mainDirectorySetupSkipped', 'theme', 'fontSize', 'fontFamily', 'sidebarSide', 'transparency', 'keybindings', 'snippets',
-      'commandHistory', 'notificationsEnabled', 'notificationThresholdSeconds',
+      'commandHistory', 'notificationsEnabled', 'notificationThresholdSeconds', 'agentIntegrations',
       'workspaceTabs', 'gitWorktreeBaseDir',
       'gitWorktreeNameTemplate', 'session',
     ]);
@@ -765,6 +769,7 @@ function isValidSettingsUpdate(updates: Partial<AppSettings>): boolean {
     && (updates.sidebarSide === undefined || isValidSidebarSide(updates.sidebarSide))
     && (updates.transparency === undefined || TRANSPARENCY_PREFERENCES.includes(updates.transparency))
     && (updates.notificationsEnabled === undefined || typeof updates.notificationsEnabled === 'boolean')
+    && (updates.agentIntegrations === undefined || typeof updates.agentIntegrations === 'boolean')
     && (updates.notificationThresholdSeconds === undefined || isValidNotificationThreshold(updates.notificationThresholdSeconds))
     && (updates.keybindings === undefined
       || (isBoundedStringRecord(updates.keybindings, MAX_KEYBINDINGS, 256, 256)

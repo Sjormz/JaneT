@@ -3,7 +3,7 @@ import { test, expect, _electron as electron, type ElectronApplication } from '@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { installCodexActivity } from '../../src/main/codexActivitySetup';
+import { codexLaunch } from '../../src/main/codexSession';
 import { parse } from 'smol-toml';
 
 const root = path.resolve(__dirname, '../..');
@@ -83,8 +83,10 @@ test('records focus decisions and project busy/unread activity without command o
     const codexHome = path.join(userData, 'codex-home'); fs.mkdirSync(codexHome);
     const forwarded = path.join(userData, 'forwarded.json');
     fs.writeFileSync(path.join(codexHome, 'config.toml'), 'notify=' + JSON.stringify(['node', harness, '--notify', forwarded]));
-    installCodexActivity(codexHome, helper);
-    const notify = parse(fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8')).notify as string[];
+    // The session notify forwarder a JaneT `codex` launch passes with `-c`; the Codex home is not changed.
+    const launch = codexLaunch([], helper, codexHome);
+    if (launch.decision === 'skip') throw new Error('Codex launch was not configured');
+    const notify = parse(launch.config.find(value => value.startsWith('notify='))!).notify as string[];
     fs.writeFileSync(path.join(userData, 'harness.json'), JSON.stringify({ helper, notify, codexHome }));
     const sendHook = (hook: string) => fs.writeFileSync(control, JSON.stringify(hook === 'agent-turn-complete'
       ? { type: hook, 'thread-id': 'codex-test', 'turn-id': 'turn' }

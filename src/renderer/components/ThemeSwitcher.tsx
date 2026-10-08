@@ -16,6 +16,9 @@ interface ThemeSwitcherProps {
   onTransparencyChange: (preference: TransparencyPreference) => void;
   notificationsEnabled: boolean;
   onNotificationsEnabledChange: (enabled: boolean) => void;
+  agentIntegrations?: boolean;
+  /** Resolves to a message describing what changed. */
+  onAgentIntegrationsChange?: (enabled: boolean) => Promise<string>;
   /** Shown as the first Advanced row when provided. */
   onOpenShortcuts?: () => void;
 }
@@ -38,9 +41,22 @@ export default function ThemeSwitcher({
   onTransparencyChange,
   notificationsEnabled,
   onNotificationsEnabledChange,
+  agentIntegrations,
+  onAgentIntegrationsChange,
   onOpenShortcuts,
 }: ThemeSwitcherProps) {
   const [diagnosticsFeedback, setDiagnosticsFeedback] = React.useState('');
+  const [agentFeedback, setAgentFeedback] = React.useState('');
+  const [agentBusy, setAgentBusy] = React.useState(false);
+
+  const changeAgentIntegrations = async (enabled: boolean) => {
+    if (!onAgentIntegrationsChange) return;
+    setAgentBusy(true);
+    setAgentFeedback(enabled ? '' : 'Removing JaneT entries from agent configuration…');
+    try { setAgentFeedback(await onAgentIntegrationsChange(enabled)); }
+    catch { setAgentFeedback('Could not update agent activity. See the Agent activity guide to remove entries manually.'); }
+    finally { setAgentBusy(false); }
+  };
 
   const copyDiagnostics = async () => {
     try {
@@ -173,6 +189,32 @@ export default function ThemeSwitcher({
           }}>Check notification delivery</button>
         </div>
       </section>
+
+      {onAgentIntegrationsChange && (
+        <section className="settings-group agent-settings" aria-labelledby="settings-agents">
+          <h3 className="settings-group-title" id="settings-agents">Agents</h3>
+          <div className="settings-inset">
+            <label className="settings-row notification-toggle">
+              <span className="settings-row-text">
+                <span>Show agent activity</span>
+                <small className="workspace-form-help" id="agent-integrations-help">
+                  For Claude Code, Codex and Hermes in new terminals. Turning this off removes JaneT’s saved hooks.
+                </small>
+              </span>
+              <input
+                type="checkbox"
+                className="switch"
+                aria-label="Show agent activity"
+                aria-describedby="agent-integrations-help"
+                checked={agentIntegrations !== false}
+                disabled={agentBusy}
+                onChange={(event) => { void changeAgentIntegrations(event.currentTarget.checked); }}
+              />
+            </label>
+            {agentFeedback && <p className="settings-row settings-feedback" role="status" aria-live="polite">{agentFeedback}</p>}
+          </div>
+        </section>
+      )}
 
       <section className="settings-group" aria-labelledby="settings-advanced">
         <h3 className="settings-group-title" id="settings-advanced">Advanced</h3>

@@ -1,91 +1,71 @@
 import { describe, it, expect } from 'vitest';
 import { parse } from 'smol-toml';
-import { connectCodexNotify, forwardedNotify } from '../../src/main/codexNotify';
+import { decodeNotify, disconnectCodexNotify, encodeNotify, forwardedNotify, withoutJanetNotify } from '../../src/main/codexNotify';
 
 const helper = 'C:/JaneT/agent-cli.cjs';
-describe('Codex notification forwarding configuration', () => {
-  it('edits only the intended arrays, including inline/dotted profiles and misleading quoted text', () => {
-    const source = [
+const wrap = (original: string[]) => ['node', helper, '--codex-notify-forward', JSON.stringify(original)];
+
+describe('Codex notification forwarding', () => {
+  it('restores only the intended arrays, including inline/dotted profiles and misleading quoted text', () => {
+    const lines = (notify: (value: string[]) => string[]) => [
       '# notify = ["wrong"]',
       'description = """',
       'notify = ["wrong"]',
       '"""',
-      '"\\u006eotify" = [',
-      ' "existing", # array comment',
-      ' "quote\\\" and ] # and \\\\ path",',
-      '] # keep this comment',
-      'profiles.inline = { notify = ["second"], model = "keep" }',
-      'profiles.dotted.notify = ["third"]',
+      `"\\u006eotify" = ${JSON.stringify(notify(['existing', 'quote" and ] # and \\ path']))} # keep this comment`,
+      `profiles.inline = { notify = ${JSON.stringify(notify(['second']))}, model = "keep" }`,
+      `profiles.dotted.notify = ${JSON.stringify(notify(['third']))}`,
       '[profiles."name.with.dot"]',
-      'notify = ["fourth"]',
+      `notify = ${JSON.stringify(notify(['fourth']))}`,
       '[unrelated]',
-      'notify = ["existing", "quote\\\" and ] # and \\\\ path"]',
+      `notify = ${JSON.stringify(wrap(['not a Codex notify table']))}`,
       'date = 2026-09-05',
       '',
     ].join('\r\n');
-    const before = parse(source) as any;
-    const text = connectCodexNotify(source, helper, true);
-    const after = parse(text) as any;
-    expect(JSON.parse(after.notify[3])).toEqual(before.notify);
-    for (const key of ['inline', 'dotted', 'name.with.dot']) expect(JSON.parse(after.profiles[key].notify[3])).toEqual(before.profiles[key].notify);
-    expect(after.description).toBe(before.description);
-    expect(after.unrelated).toEqual(before.unrelated);
-    expect(text).toContain('] # keep this comment\r\n');
-    expect(text).toContain('[unrelated]\r\n' + source.split('[unrelated]\r\n')[1]);
-    expect(connectCodexNotify(text, helper, true)).toBe(text);
+    const restored = disconnectCodexNotify(lines(wrap));
+    expect(parse(restored)).toEqual(parse(lines(value => value)));
+    expect(restored).toContain(' # keep this comment\r\n');
+    expect(restored).toContain(`[unrelated]\r\nnotify = ${JSON.stringify(wrap(['not a Codex notify table']))}\r\ndate = 2026-09-05`);
+    expect(disconnectCodexNotify(restored)).toBe(restored);
   });
 
-  it('migrates older JaneT callbacks without duplicate forwarding', () => {
+  it('unwraps every older JaneT callback form, including session forwarders', () => {
     expect(forwardedNotify(['node', 'C:/old/agent-cli.cjs', '--codex-notify'])).toEqual([]);
-    const existing = ['node', 'C:/old/agent-cli.cjs', '--codex-notify-forward', '["original","arg"]'];
-    const next = parse(connectCodexNotify('notify = ' + JSON.stringify(existing), helper, true)).notify as string[];
-    expect(next).toEqual(['node', helper, '--codex-notify-forward', '["original","arg"]']);
+    expect(withoutJanetNotify(wrap(wrap(['original', 'arg'])))).toEqual(['original', 'arg']);
+    const session = ['node', 'C:/x/agent-cli.cjs', '--codex-notify-forward-b64', encodeNotify(['user', 'a b', 'quote"'])];
+    expect(withoutJanetNotify(session)).toEqual(['user', 'a b', 'quote"']);
+    expect(encodeNotify(['quote"', "'"])).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(decodeNotify(encodeNotify(['a', 'b']))).toEqual(['a', 'b']);
+    expect(() => decodeNotify('not base64!')).toThrow(/Invalid/);
   });
 
-  it('repairs a large alternating computer-use and JaneT wrapper chain once', () => {
+  it('repairs a large alternating computer-use and JaneT wrapper chain to the user handler', () => {
     const computer = 'C:/Users/test/.codex/plugins/computer-use/codex-computer-use.exe';
     const leaf = ['C:/tools/user-notifier.exe', '--quiet', 'keep this'];
-    // Put the user's handler at the leaf of the computer-use chain.
     let nested: string[] = [computer, 'turn-ended', '--previous-notify', JSON.stringify(leaf)];
     let i = 0;
     while (JSON.stringify(nested).length < 110000) {
-      nested = i % 2 === 0
-        ? ['node', 'C:/old/agent-cli.cjs', '--codex-notify-forward', JSON.stringify(nested)]
-        : [computer, 'turn-ended', '--previous-notify', JSON.stringify(nested)];
+      nested = i % 2 === 0 ? wrap(nested) : [computer, 'turn-ended', '--previous-notify', JSON.stringify(nested)];
       i++;
     }
     if (i % 2 === 1) nested = [computer, 'turn-ended', '--previous-notify', JSON.stringify(nested)];
     expect(JSON.stringify(nested).length).toBeGreaterThan(65536);
-
-    const source = 'notify = ' + JSON.stringify(nested);
-    const repairedText = connectCodexNotify(source, helper, true);
-    const repaired = parse(repairedText).notify as string[];
-    expect(repaired.slice(0, 3)).toEqual([computer, 'turn-ended', '--previous-notify']);
-    const callback = JSON.parse(repaired[3]);
-    expect(callback).toEqual(['node', helper, '--codex-notify-forward', JSON.stringify(leaf)]);
-    expect(connectCodexNotify(repairedText, helper, true)).toBe(repairedText);
-    expect(forwardedNotify([computer, 'turn-ended'])).toEqual([computer, 'turn-ended', '--previous-notify', '[]']);
-
-    const duplicateBase = [computer, 'turn-ended', '--previous-notify', JSON.stringify([
-      'node', 'C:/old/agent-cli.cjs', '--codex-notify-forward', JSON.stringify([computer, 'turn-ended']),
-    ])];
-    const collapsed = parse(connectCodexNotify('notify = ' + JSON.stringify(duplicateBase), helper, true)).notify as string[];
-    expect(collapsed.slice(0, 3)).toEqual([computer, 'turn-ended', '--previous-notify']);
-    expect(JSON.parse(collapsed[3])).toEqual(['node', helper, '--codex-notify-forward', '[]']);
+    expect(withoutJanetNotify(nested)).toEqual([computer, 'turn-ended', '--previous-notify', JSON.stringify(leaf)]);
+    expect(withoutJanetNotify([computer, 'turn-ended', '--previous-notify', JSON.stringify(wrap([computer, 'turn-ended']))])).toEqual([computer, 'turn-ended']);
   });
 
   it.each([`'''literal [ ] # "notify"'''`, `"""basic \\\" [ ] # text"""`, `'''four quotes''''`, `"""five quotes"""""`])('preserves multiline string boundaries: %s', literal => {
-    const source = `notes = ${literal}\nnotify = ['original']\n`;
-    const result = parse(connectCodexNotify(source, helper, true));
+    const source = `notes = ${literal}\nnotify = ${JSON.stringify(wrap(['original']))}\n`;
+    const result = parse(disconnectCodexNotify(source));
     expect(result.notes).toEqual(parse(source).notes);
-    expect(JSON.parse((result.notify as string[])[3])).toEqual(['original']);
+    expect(result.notify).toEqual(['original']);
   });
 
-  it('respects an empty notifier, leaves inheriting profiles alone, and rejects invalid commands', () => {
-    expect(JSON.parse((parse(connectCodexNotify('notify=[]', helper, true)).notify as string[])[3])).toEqual([]);
-    expect(connectCodexNotify('# profile inherits root\nmodel="keep"', helper, false)).toBe('# profile inherits root\nmodel="keep"');
-    expect(() => connectCodexNotify('notify="not an argv"', helper, true)).toThrow(/Invalid/);
-    expect(() => connectCodexNotify('notify=[""]', helper, true)).toThrow(/Invalid/);
-    expect(() => connectCodexNotify('notify=' + JSON.stringify(['other', 'x'.repeat(65536)]), helper, true)).toThrow(/Invalid/);
+  it('removes JaneT-only notify lines, falls back to an empty array inline, and rejects invalid commands', () => {
+    expect(disconnectCodexNotify(`model = "m"\nnotify = ${JSON.stringify(wrap([]))}\n`)).toBe('model = "m"\n');
+    expect(parse(disconnectCodexNotify(`profiles.p = { notify = ${JSON.stringify(wrap([]))} }`))).toEqual({ profiles: { p: { notify: [] } } });
+    expect(disconnectCodexNotify('notify = ["mine"]\n')).toBe('notify = ["mine"]\n');
+    expect(() => disconnectCodexNotify('notify="not an argv"')).toThrow(/Invalid/);
+    expect(() => disconnectCodexNotify('notify=[""]')).toThrow(/Invalid/);
   });
 });

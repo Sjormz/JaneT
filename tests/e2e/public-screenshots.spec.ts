@@ -389,15 +389,21 @@ test('recaptures the shipped public screenshot set from the real app', async () 
       await page.keyboard.press('Control+L');
     }
 
+    // The settings popover is capped to the window height; show every group without scrolling.
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1440, 960));
+    await expect.poll(() => page.evaluate(() => innerHeight)).toBe(960);
     await page.getByRole('button', { name: 'Open settings' }).click();
     const settings = page.getByRole('dialog', { name: 'Settings' });
     await expect(settings).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Copy diagnostics' })).toBeInViewport({ ratio: 1 });
     await capture('settings-overview.png', settings);
     const notificationSettings = page.locator('.notification-settings');
     await expect(notificationSettings.getByRole('checkbox')).toBeChecked();
     await expect(notificationSettings).toContainText('Commands must run at least 10 seconds.');
     await capture('notification-settings.png', notificationSettings, 8);
     await page.getByRole('button', { name: 'Hide settings' }).click();
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1440, 800));
+    await expect.poll(() => page.evaluate(() => innerHeight)).toBe(800);
 
     await page.getByRole('button', { name: 'New workspace' }).click();
     const workspaceCreation = page.getByRole('dialog', { name: 'Create workspace' });

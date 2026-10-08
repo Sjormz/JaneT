@@ -29,6 +29,26 @@ function renderThemeSwitcher(overrides?: Partial<React.ComponentProps<typeof The
 }
 
 describe('ThemeSwitcher', () => {
+  it('turns agent activity off and reports what was removed', async () => {
+    let finish: (message: string) => void = () => {};
+    const onAgentIntegrationsChange = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+    renderThemeSwitcher({ agentIntegrations: true, onAgentIntegrationsChange });
+    const toggle = screen.getByRole('checkbox', { name: 'Show agent activity' });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    expect(onAgentIntegrationsChange).toHaveBeenCalledWith(false);
+    expect(toggle).toBeDisabled();
+    expect(screen.getByText(/Removing JaneT entries/)).toHaveAttribute('role', 'status');
+    finish('Agent activity is off for new terminals. Codex: nothing to remove.');
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+    expect(screen.getByText(/Codex: nothing to remove/)).toBeInTheDocument();
+  });
+
+  it('hides the agent section when the app does not provide it', () => {
+    renderThemeSwitcher();
+    expect(screen.queryByRole('checkbox', { name: 'Show agent activity' })).not.toBeInTheDocument();
+  });
+
   it('renders with current theme selected', () => {
     renderThemeSwitcher({ currentTheme: 'dracula' });
 

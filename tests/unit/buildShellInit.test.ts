@@ -120,9 +120,10 @@ describe('buildShellInit', () => {
       expect(init).toBeTruthy();
     });
 
-    it('does not wrap Codex when activity setup is unavailable', () => {
+    it('does not wrap Codex or Claude when activity setup is unavailable', () => {
       const init = buildShellInit('powershell.exe');
       expect(init).not.toContain('function global:codex');
+      expect(init).not.toContain('function global:claude');
     });
 
     it('returns a non-empty init for pwsh.exe (PowerShell 7+)', () => {
@@ -485,11 +486,12 @@ describe('buildShellInit', () => {
       expect(init).not.toContain('hermes() {');
     });
 
-    it.each(['bash', 'zsh', 'fish', 'powershell.exe'])('leaves Codex unwrapped in %s', (shell) => {
-      expect(buildShellInit(shell)).not.toContain('function codex');
+    it.each(['bash', 'zsh', 'fish', 'powershell.exe'])('wraps Codex with session-only setup in %s only when activity is available', (shell) => {
+      expect(buildShellInit(shell)).not.toContain('--setup-codex');
+      expect(buildShellInit(shell)).not.toMatch(/function (global:)?codex/);
       const init = buildShellInit(shell, '/tmp/agent-helper.cjs');
-      expect(init).not.toContain('--setup-codex');
-      expect(init).not.toContain('function codex');
+      expect(init).toContain('--setup-codex');
+      expect(init).toMatch(/function (global:)?codex/);
       expect(init).toContain('--setup-hermes');
       expect(init).not.toContain('TERM');
     });

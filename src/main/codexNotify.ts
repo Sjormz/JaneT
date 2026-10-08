@@ -7,6 +7,16 @@ export function notifyCommand(value: unknown): string[] {
   return value;
 }
 
+/** Base64url keeps the forwarded argv free of quotes, which Windows PowerShell 5.1 mangles for native commands. */
+export function encodeNotify(command: string[]): string {
+  return Buffer.from(JSON.stringify(notifyCommand(command)), 'utf8').toString('base64url');
+}
+
+export function decodeNotify(value: unknown): unknown {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]*$/.test(value) || value.length > 90000) throw new Error('Invalid Codex notification command.');
+  return JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+}
+
 function setupNotifyCommand(value: unknown): string[] {
   // Setup may need to repair a previously bloated config; runtime forwarding keeps
   // the tighter notifyCommand limit when it eventually starts the saved handler.
@@ -42,6 +52,10 @@ export function forwardedNotify(value: unknown, helper?: string, setup = false):
     seen.add(key);
     if (janetWrapper(command, helper)) {
       command = read(JSON.parse(command[3]));
+      continue;
+    }
+    if (janetNotify(command, helper)) {
+      command = read(decodeNotify(command[3]));
       continue;
     }
     if (computerUseWrapper(command)) {
@@ -90,8 +104,27 @@ function arraySpans(source: string): Array<[number, number]> {
   return spans;
 }
 
-/** Change only notify arrays. Reparse and compare the whole document before accepting an edit. */
-export function connectCodexNotify(source: string, helper: string, addRoot: boolean): string {
+/**
+ * The user's own notifier with every JaneT forwarder removed. A computer-use callback whose
+ * only previous notifier was JaneT returns to the form Codex computer-use writes itself.
+ */
+export function withoutJanetNotify(value: unknown): string[] {
+  const command = forwardedNotify(value, undefined, true);
+  if (computerUseWrapper(command) && command[3] === '[]') return command.slice(0, 2);
+  return command;
+}
+
+export function janetNotify(command: string[], helper?: string): boolean {
+  return janetWrapper(command, helper) || (/^(?:.*[\\/])?node(?:\.exe)?$/i.test(command[0] ?? '')
+    && /[\\/]agent-cli\.cjs$/i.test(command[1] ?? '') && command.length === 4 && command[2] === '--codex-notify-forward-b64');
+}
+
+/**
+ * Removes JaneT forwarders from root and profile notify arrays (persistent installs before
+ * session-only setup). Only notify arrays change; the whole document is reparsed and compared.
+ * A notify that only ever held JaneT is deleted when it sits on its own line.
+ */
+export function disconnectCodexNotify(source: string): string {
   const original = parse(source);
   const targets: string[][] = Object.hasOwn(original, 'notify') ? [['notify']] : [];
   if (original.profiles && typeof original.profiles === 'object') {
@@ -99,22 +132,33 @@ export function connectCodexNotify(source: string, helper: string, addRoot: bool
       if (profile && typeof profile === 'object' && Object.hasOwn(profile, 'notify')) targets.push(['profiles', name, 'notify']);
     }
   }
-  const wrap = (previous: unknown) => {
-    const normalized = forwardedNotify(previous, helper, true);
-    return computerUseWrapper(normalized) ? normalized : ['node', helper.replace(/\\/g, '/'), '--codex-notify-forward', JSON.stringify(normalized)];
-  };
   for (const keys of targets) {
     const expected = parse(source);
     let table = expected;
     for (const key of keys.slice(0, -1)) table = table[key] as TomlTableWithoutBigInt;
     const previous = table.notify;
-    const next = wrap(previous);
+    const next = withoutJanetNotify(previous);
     if (isDeepStrictEqual(previous, next)) continue;
-    table.notify = next;
     let replacement: string | undefined;
     for (const [start, end] of arraySpans(source)) {
       try {
         if (!isDeepStrictEqual(parse('value = ' + source.slice(start, end)).value, previous)) continue;
+        if (next.length === 0) {
+          // Delete `notify = [...]` when it is the whole line; otherwise fall back to an empty array.
+          const lineStart = source.lastIndexOf('\n', start - 1) + 1;
+          const lineEnd = source.indexOf('\n', end);
+          const after = lineEnd < 0 ? source.length : lineEnd + 1;
+          if (/^[ \t]*(?:notify|"notify"|'notify')[ \t]*=[ \t]*$/.test(source.slice(lineStart, start)) && /^[ \t]*(?:#[^\n]*)?\r?\n?$/.test(source.slice(end, after))) {
+            // Reparse rather than clone: TOML dates are class instances that a clone would not preserve.
+            const removed = parse(source);
+            let parent = removed;
+            for (const key of keys.slice(0, -1)) parent = parent[key] as TomlTableWithoutBigInt;
+            delete parent.notify;
+            const candidate = source.slice(0, lineStart) + source.slice(after);
+            if (isDeepStrictEqual(parse(candidate), removed)) { replacement = candidate; break; }
+          }
+        }
+        table.notify = next;
         const candidate = source.slice(0, start) + JSON.stringify(next) + source.slice(end);
         if (isDeepStrictEqual(parse(candidate), expected)) { replacement = candidate; break; }
       } catch { /* Not the target array; never rewrite unrelated configuration. */ }
@@ -122,6 +166,5 @@ export function connectCodexNotify(source: string, helper: string, addRoot: bool
     if (replacement === undefined) throw new Error('Cannot safely update Codex notification configuration.');
     source = replacement;
   }
-  if (addRoot && !Object.hasOwn(original, 'notify')) source = `notify = ${JSON.stringify(wrap([]))}\n` + source;
   return source;
 }

@@ -57,6 +57,7 @@ import { snippetTextForPaste, type Snippet } from '../shared/snippets';
 import { MAX_COMMAND_HISTORY_ENTRIES, type CommandHistoryEntry } from '../shared/commandHistory';
 import {
   acknowledgeAgentAwareness,
+  agentProviderLabel,
   aggregateAgentStatus,
   applyAgentEvent,
   terminalStatus,
@@ -171,6 +172,7 @@ interface InitialAppState {
   snippets: Snippet[];
   commandHistory: CommandHistoryEntry[];
   notificationsEnabled: boolean;
+  agentIntegrations: boolean;
 }
 
 function createInitialAppState(settings: any): InitialAppState {
@@ -230,6 +232,7 @@ function createInitialAppState(settings: any): InitialAppState {
     snippets: Array.isArray(s.snippets) ? s.snippets : [],
     commandHistory: Array.isArray(s.commandHistory) ? s.commandHistory : [],
     notificationsEnabled: s.notificationsEnabled === true,
+    agentIntegrations: s.agentIntegrations !== false,
   };
 }
 
@@ -412,6 +415,7 @@ function AppInner({ initialSettings, persistSettings }: {
   }>());
   const [runningCommandHistoryIds, setRunningCommandHistoryIds] = useState<Set<string>>(new Set());
   const [notificationsEnabled, setNotificationsEnabled] = useState(initialState.notificationsEnabled);
+  const [agentIntegrations, setAgentIntegrations] = useState(initialState.agentIntegrations);
   const settingsLoadedRef = useRef(true);
 
   const clearPendingCommandHistoryRuns = useCallback((terminalIds: ReadonlySet<string>) => {
@@ -527,6 +531,17 @@ function AppInner({ initialSettings, persistSettings }: {
     void persistSettings({ notificationsEnabled: enabled });
   }, []);
 
+  /** Turning integrations off also removes persistent JaneT entries from agent configuration. */
+  const changeAgentIntegrations = useCallback(async (enabled: boolean): Promise<string> => {
+    setAgentIntegrations(enabled);
+    if (enabled) {
+      await persistSettings({ agentIntegrations: true });
+      return 'Agent activity is on for new terminals.';
+    }
+    const result = await window.janet.removeAgentIntegrations();
+    return result.ok ? `Agent activity is off for new terminals. ${result.message}` : result.message;
+  }, []);
+
   // Persist keybindings when they change
   const handleKeybindingsChange = useCallback((newBindings: Record<KeybindingAction, string>) => {
     void persistSettings({ keybindings: newBindings });
@@ -611,7 +626,8 @@ function AppInner({ initialSettings, persistSettings }: {
       if (event.event === 'turn.start' && event.turnId && (!run || run.turnId !== event.turnId || run.sessionId !== event.sessionId)) {
         agentRunsRef.current.set(termId, { sessionId: event.sessionId, turnId: event.turnId, started: performance.now() });
       }
-      if (event.provider === 'codex' && event.event === 'attention.request' && run?.sessionId === event.sessionId
+      const notifyingAgent = event.provider === 'codex' || event.provider === 'claude' ? event.provider : undefined;
+      if (notifyingAgent && event.event === 'attention.request' && run?.sessionId === event.sessionId
         && run.turnId === event.turnId && !run.needsInput) {
         run.needsInput = true;
         const timer = setTimeout(() => {
@@ -621,8 +637,8 @@ function AppInner({ initialSettings, persistSettings }: {
           const leaf = currentOwner && findLeaf(currentOwner.root, termId);
           if (!currentOwner || !leaf) return;
           void window.janet.notifyCommandCompleted({
-            target: { tabId: currentOwner.id, termId }, codexEvent: 'needs-input', durationMs: 0, outcome: 'unknown',
-            tabLabel: currentOwner.title.slice(0, 256) || 'Project', paneLabel: `Codex · ${displayPaneTitle(leaf)}`.slice(0, 256),
+            target: { tabId: currentOwner.id, termId }, codexEvent: 'needs-input', agent: notifyingAgent, durationMs: 0, outcome: 'unknown',
+            tabLabel: currentOwner.title.slice(0, 256) || 'Project', paneLabel: `${agentProviderLabel(notifyingAgent)} · ${displayPaneTitle(leaf)}`.slice(0, 256),
             context: { kind: 'local' },
           }).catch(() => {});
         }, 500);
@@ -634,8 +650,8 @@ function AppInner({ initialSettings, persistSettings }: {
         void window.janet.notifyCommandCompleted({
           target: { tabId: owner.id, termId }, durationMs: Math.max(0, Math.round(performance.now() - run.started)),
           outcome: event.outcome === 'failed' ? 'failure' : event.outcome === 'succeeded' ? 'success' : 'unknown',
-          ...(event.provider === 'codex' ? { codexEvent: 'turn-complete' as const } : {}),
-          tabLabel: owner.title.slice(0, 256) || 'Project', paneLabel: `${event.provider} · ${displayPaneTitle(leaf)}`.slice(0, 256),
+          ...(notifyingAgent ? { codexEvent: 'turn-complete' as const, agent: notifyingAgent } : {}),
+          tabLabel: owner.title.slice(0, 256) || 'Project', paneLabel: `${agentProviderLabel(event.provider)} · ${displayPaneTitle(leaf)}`.slice(0, 256),
           context: { kind: 'local' },
         }).catch(() => {});
       }
@@ -2289,6 +2305,8 @@ function AppInner({ initialSettings, persistSettings }: {
               onTransparencyChange={persistTransparency}
               notificationsEnabled={notificationsEnabled}
               onNotificationsEnabledChange={persistNotificationsEnabled}
+              agentIntegrations={agentIntegrations}
+              onAgentIntegrationsChange={changeAgentIntegrations}
               onOpenShortcuts={() => { setSettingsOpen(false); setShortcutsVisible(true); }}
             />
           </div>
