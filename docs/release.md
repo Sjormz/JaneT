@@ -303,8 +303,8 @@ retrying. Workflow preflight checks are not an atomic lock against manual/API
 tag or release changes outside Actions; repository-level tag protection and
 immutable releases are the appropriate additional controls for that race.
 
-This remains alpha-stage desktop distribution, not notarized macOS production
-distribution. Signing-policy changes require a separate decision.
+macOS releases require Developer ID signing and Apple notarization, as described
+above. Signing-policy changes require a separate decision.
 
 - [Codex repository skills and implicit invocation](https://learn.chatgpt.com/docs/build-skills)
 - [GitHub CLI head-SHA-bound merging](https://cli.github.com/manual/gh_pr_merge)
