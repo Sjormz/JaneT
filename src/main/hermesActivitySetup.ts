@@ -114,6 +114,69 @@ export function installHermesActivity(helperPath: string, args: string[], env: N
   return { message: 'JaneT activity hooks added. Review Hermes’s first-use hook prompts to enable status updates.' };
 }
 
+const JANET_HERMES_COMMAND = /^node "(?:[^"\\]|\\.)*[\\/]agent-cli\.cjs" --hermes-hook$/;
+
+/** Every Hermes config.yaml JaneT may have changed: the default and HERMES_HOME roots and all their profiles. */
+export function hermesConfigFiles(env: NodeJS.ProcessEnv): string[] {
+  const native = process.platform === 'win32'
+    ? path.join(env.LOCALAPPDATA?.trim() || path.join(os.homedir(), 'AppData', 'Local'), 'hermes')
+    : path.join(os.homedir(), '.hermes');
+  const supplied = env.HERMES_HOME?.trim();
+  const roots = new Set([native]);
+  if (supplied && path.isAbsolute(supplied)) roots.add(path.basename(path.dirname(supplied)) === 'profiles' ? path.dirname(path.dirname(supplied)) : supplied);
+  const files: string[] = [];
+  for (const root of roots) {
+    files.push(path.join(root, 'config.yaml'));
+    let profiles: string[] = [];
+    try { profiles = fs.readdirSync(path.join(root, 'profiles')).filter(name => /^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)); } catch { /* No profiles. */ }
+    files.push(...profiles.slice(0, 256).map(name => path.join(root, 'profiles', name, 'config.yaml')));
+  }
+  return files.filter(file => fs.existsSync(file));
+}
+
+/** Removes only JaneT's hook entries, preserving other hooks, comments and values. Returns changed files. */
+export function removeHermesActivity(env: NodeJS.ProcessEnv): string[] {
+  const changed: string[] = [];
+  for (const file of hermesConfigFiles(env)) {
+    rejectLinkedAncestors(file);
+    const original = readSmall(file);
+    const config = parseDocument(original, { version: '1.1', keepSourceTokens: true });
+    if (config.errors.length || !isMap(config.contents)) throw new Error('Hermes configuration must be a valid YAML mapping.');
+    const hooks = config.get('hooks', true);
+    if (!isMap(hooks)) continue;
+    let removed = false;
+    for (const pair of [...hooks.items]) {
+      const entries = pair.value;
+      if (!isSeq(entries) || entries.anchor) continue;
+      const kept = entries.items.filter(entry => !(isMap(entry) && !entry.anchor && JANET_HERMES_COMMAND.test(String(entry.get('command')))));
+      if (kept.length === entries.items.length) continue;
+      removed = true;
+      if (kept.length) entries.items = kept;
+      else hooks.delete(pair.key);
+    }
+    if (!removed) continue;
+    if (hooks.items.length === 0) config.delete('hooks');
+    const content = config.toString({ lineWidth: 0 });
+    const suffix = randomUUID();
+    const temporary = file + `.janet-${suffix}.tmp`;
+    const lock = file + '.janet-activity.lock';
+    const descriptor = fs.openSync(lock, 'wx');
+    try {
+      if (readSmall(file) !== original) throw new Error('Hermes configuration changed during cleanup; try again.');
+      fs.copyFileSync(file, file + `.janet-backup-${suffix}`, fs.constants.COPYFILE_EXCL);
+      fs.writeFileSync(temporary, content, { flag: 'wx', mode: fs.statSync(file).mode });
+      if (readSmall(file) !== original) throw new Error('Hermes configuration changed during cleanup; try again.');
+      fs.renameSync(temporary, file);
+      changed.push(file);
+    } finally {
+      if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+      fs.closeSync(descriptor);
+      fs.unlinkSync(lock);
+    }
+  }
+  return changed;
+}
+
 /** Reduces Hermes shell-hook payloads to identifiers/status only; never forwards prompts or commands. */
 export function mapHermesActivity(payload: unknown): AgentLifecycleEvent | null {
   if (!record(payload) || !identifier(payload.session_id) || !record(payload.extra)) return null;

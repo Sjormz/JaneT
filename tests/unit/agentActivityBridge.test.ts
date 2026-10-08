@@ -1,6 +1,8 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { AgentActivityBridge, codexActivity, CODEX_ACTIVITY_SCRIPT } from '../../src/main/agentActivityBridge';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { AgentActivityBridge, codexActivity } from '../../src/main/agentActivityBridge';
+import { buildSync } from 'esbuild';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -60,9 +62,10 @@ describe('Codex activity', () => {
     try {
       const env = await bridge.environment('one');
       await bridge.environment('two');
-      const script = join(directory, 'hook.cjs'); writeFileSync(script, CODEX_ACTIVITY_SCRIPT);
+      const script = join(directory, 'agent-cli.cjs');
+      buildSync({ entryPoints: ['src/main/agent-cli.ts'], bundle: true, platform: 'node', outfile: script });
       await new Promise<void>((resolve, reject) => {
-        const child = spawn(process.execPath, [script], { env: { ...process.env, ...env }, windowsHide: true });
+        const child = spawn(process.execPath, [script, '--codex-hook'], { env: { ...process.env, ...env }, windowsHide: true });
         child.on('error', reject); child.on('close', code => code === 0 ? resolve() : reject(new Error(String(code))));
         child.stdin.end(JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', turn_id: 't', prompt: 'must not forward' }));
       });

@@ -1,24 +1,15 @@
 import * as fs from 'node:fs';
-import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { connectCodexNotify } from './codexNotify';
+import { disconnectCodexNotify } from './codexNotify';
 
 const LIMIT = 1024 * 1024;
-const EVENTS = ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'Interrupt'];
 
-function isStaleJanetFirstInstallHook(hook: { command?: unknown; statusMessage?: unknown; timeout?: unknown }): boolean {
-  if (hook.statusMessage !== 'JaneT activity' || hook.timeout !== 2 || typeof hook.command !== 'string') return false;
-  const match = /^node '([^']+)' --codex-hook$/.exec(hook.command);
-  if (!match) return false;
-  const root = path.resolve(tmpdir());
-  const script = path.resolve(root, match[1]);
-  const relative = path.relative(root, script);
-  const parts = relative.split(path.sep);
-  if (path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`) ||
-    parts.length !== 3 || !/^janet-first-install-[0-9a-f]{32}$/i.test(parts[0]) ||
-    parts[1] !== 'agent-activity' || parts[2] !== 'agent-cli.cjs') return false;
-  return !fs.existsSync(script);
+/** Hooks JaneT's persistent installer wrote (any JaneT profile or install path). */
+export function isJanetCodexHook(hook: { command?: unknown; statusMessage?: unknown }): boolean {
+  return hook.statusMessage === 'JaneT activity' && typeof hook.command === 'string'
+    // Path quoting: PowerShell doubles an apostrophe, POSIX shells close and escape it.
+    && /^node '(?:[^']|''|'\\'')*[\\/]agent-cli\.cjs' --codex-hook$/.test(hook.command);
 }
 
 function rejectLinks(target: string): void {
@@ -29,7 +20,7 @@ function rejectLinks(target: string): void {
   }
 }
 
-function read(target: string): string | undefined {
+export function read(target: string): string | undefined {
   rejectLinks(target);
   let descriptor: number;
   try { descriptor = fs.openSync(target, 'r'); }
@@ -49,13 +40,74 @@ function read(target: string): string | undefined {
   } finally { fs.closeSync(descriptor); }
 }
 
-/** Automatic setup is additive; Codex itself still owns hook trust and feature policy. */
-export function installCodexActivity(directory: string, helperPath: string): { message?: string } {
-  if (!path.isAbsolute(directory) || !path.isAbsolute(helperPath) || /[\x00-\x1f\x7f]/.test(directory + helperPath)) {
-    throw new Error('Codex setup requires absolute, valid paths.');
+const SHARING_VIOLATIONS = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+/**
+ * Replaces `target` with `temp` while `target` still holds `expected`. On Windows a concurrent
+ * launch's unlocked read briefly blocks the replace (EPERM/EACCES/EBUSY), so retry until the
+ * deadline, rechecking for external edits before every attempt. Returns false after such an edit.
+ */
+function replaceIfUnchanged(temp: string, target: string, expected: string | undefined, deadline: number): boolean {
+  for (;;) {
+    if (read(target) !== expected) return false;
+    try { fs.renameSync(temp, target); return true; }
+    catch (error) {
+      if (process.platform !== 'win32' || !SHARING_VIOLATIONS.has((error as NodeJS.ErrnoException).code ?? '') || Date.now() >= deadline) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
   }
+}
+
+function profileFiles(directory: string): string[] {
+  const names = fs.readdirSync(directory).filter(name => name.endsWith('.config.toml') && name !== 'config.toml');
+  if (names.length > 256) throw new Error('Too many Codex profiles to inspect safely.');
+  return names.map(name => path.join(directory, name));
+}
+
+/** hooks.json text without JaneT entries, or undefined when there is nothing to remove. */
+function withoutJanetHooks(text: string): string | undefined {
+  const data = JSON.parse(text);
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid Codex hooks configuration.');
+  const hooks = data.hooks;
+  if (hooks === undefined) return undefined;
+  if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks)) throw new Error('Invalid Codex hooks configuration.');
+  let changed = false;
+  for (const [name, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups) || groups.some(group => !group || typeof group !== 'object' || !Array.isArray(group.hooks)
+      || group.hooks.some((hook: unknown) => !hook || typeof hook !== 'object' || Array.isArray(hook)))) throw new Error('Invalid Codex hooks configuration.');
+    const kept = (groups as { hooks: Record<string, unknown>[] }[]).flatMap(group => {
+      const retained = group.hooks.filter(hook => !isJanetCodexHook(hook));
+      if (retained.length === group.hooks.length) return [group];
+      changed = true;
+      return retained.length ? [{ ...group, hooks: retained }] : [];
+    });
+    // Drop an event only when removing JaneT emptied it; a user's own empty list stays.
+    if (kept.length === 0 && groups.length > 0) delete hooks[name];
+    else hooks[name] = kept;
+  }
+  return changed ? JSON.stringify(data, null, 2) + '\n' : undefined;
+}
+
+function codexCleanupNeeded(directory: string): boolean {
+  const hooks = read(path.join(directory, 'hooks.json'));
+  if (hooks !== undefined && withoutJanetHooks(hooks) !== undefined) return true;
+  return [path.join(directory, 'config.toml'), ...profileFiles(directory)].some(target => {
+    const source = read(target);
+    return source !== undefined && disconnectCodexNotify(source) !== source;
+  });
+}
+
+/**
+ * Removes what JaneT's former persistent installer added to a Codex home: its hooks.json entries and
+ * notify forwarders (root, inline profiles and `<name>.config.toml` profiles). Existing user hooks,
+ * notifiers and Codex-owned trust records stay. Nothing is created; reads only when nothing matches.
+ */
+export function removeCodexActivity(directory: string): { changed: string[]; message?: string } {
+  if (!path.isAbsolute(directory) || /[\x00-\x1f\x7f]/.test(directory)) throw new Error('Codex cleanup requires an absolute, valid path.');
   rejectLinks(directory);
-  fs.mkdirSync(directory, { recursive: true });
+  if (!fs.existsSync(directory)) return { changed: [] };
+  // Cheap read-only check first: ordinary launches must not take a lock or write anything.
+  if (!codexCleanupNeeded(directory)) return { changed: [] };
   const lockPath = path.join(directory, '.janet-activity.lock');
   let lock: number;
   const deadline = Date.now() + 5000;
@@ -69,7 +121,7 @@ export function installCodexActivity(directory: string, helperPath: string): { m
       // allowed.
       if (code !== 'EEXIST' && code !== 'EPERM') throw error;
       if (code === 'EPERM' && Date.now() >= deadline) throw error;
-      if (Date.now() >= deadline) return { message: 'JaneT activity setup is already running or its lock remains from an interrupted setup. Codex will open unchanged.' };
+      if (Date.now() >= deadline) return { changed: [], message: 'Another JaneT cleanup is running, or its lock remains from an interrupted one. Old Codex entries were left in place.' };
       // This runs in the standalone setup helper, never the Electron UI process.
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
     }
@@ -78,56 +130,16 @@ export function installCodexActivity(directory: string, helperPath: string): { m
   try {
     const configPath = path.join(directory, 'config.toml');
     const hooksPath = path.join(directory, 'hooks.json');
-    const config = read(configPath);
-    const originalHooks = read(hooksPath);
-    const nextConfig = connectCodexNotify(config ?? '', helperPath, true);
-    const profiles = fs.readdirSync(directory).filter(name => name.endsWith('.config.toml'));
-    if (profiles.length > 256) throw new Error('Too many Codex profiles to inspect safely.');
     const changes: { target: string; original: string | undefined; next: string }[] = [];
-    for (const name of profiles) {
-      const target = path.join(directory, name);
+    for (const target of [configPath, ...profileFiles(directory)]) {
       const original = read(target);
-      const next = connectCodexNotify(original ?? '', helperPath, false);
+      if (original === undefined) continue;
+      const next = disconnectCodexNotify(original);
       if (next !== original) changes.push({ target, original, next });
     }
-    const data = originalHooks === undefined ? {} : JSON.parse(originalHooks);
-    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid Codex hooks configuration.');
-    const hooks = data.hooks ?? {};
-    if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks)) throw new Error('Invalid Codex hooks configuration.');
-    for (const groups of Object.values(hooks)) {
-      if (!Array.isArray(groups) || groups.some(group => !group || typeof group !== 'object' ||
-        !Array.isArray(group.hooks) || group.hooks.some((hook: unknown) => !hook || typeof hook !== 'object' || Array.isArray(hook)))) {
-        throw new Error('Invalid Codex hooks configuration.');
-      }
-    }
-    let changedHooks = false;
-    for (const [name, groups] of Object.entries(hooks) as [string, { hooks: { command?: unknown; statusMessage?: unknown; timeout?: unknown }[] }[]][]) {
-      hooks[name] = groups.filter(group => {
-        const retained = group.hooks.filter(hook => !isStaleJanetFirstInstallHook(hook));
-        if (retained.length !== group.hooks.length) {
-          group.hooks = retained;
-          changedHooks = true;
-          return retained.length > 0;
-        }
-        return true;
-      });
-    }
-    const script = helperPath.replace(/\\/g, '/');
-    const command = process.platform === 'win32'
-      ? `node '${script.replace(/'/g, "''")}' --codex-hook`
-      : `node '${script.replace(/'/g, "'\\''")}' --codex-hook`;
-    for (const name of EVENTS) {
-      if (hooks[name] !== undefined && !Array.isArray(hooks[name])) throw new Error(`Invalid ${name} hooks.`);
-      const groups = hooks[name] ?? [];
-      if (!groups.some((group: { hooks?: { command?: string }[]; matcher?: string }) =>
-        group && !group.matcher && Array.isArray(group.hooks) && group.hooks.some(hook => hook?.command === command))) {
-        hooks[name] = [...groups, { hooks: [{ type: 'command', command, timeout: 2, statusMessage: 'JaneT activity' }] }];
-        changedHooks = true;
-      }
-    }
-    data.hooks = hooks;
-    if (changedHooks) changes.push({ target: hooksPath, original: originalHooks, next: JSON.stringify(data, null, 2) + '\n' });
-    if (nextConfig !== config) changes.push({ target: configPath, original: config, next: nextConfig });
+    const originalHooks = read(hooksPath);
+    const nextHooks = originalHooks === undefined ? undefined : withoutJanetHooks(originalHooks);
+    if (nextHooks !== undefined) changes.push({ target: hooksPath, original: originalHooks, next: nextHooks });
     if (changes.some(change => Buffer.byteLength(change.next, 'utf8') > LIMIT)) throw new Error('Updated Codex configuration is too large.');
     const suffix = `.janet-backup-${Date.now()}-${randomUUID()}`;
     const committed: typeof changes = [];
@@ -139,8 +151,7 @@ export function installCodexActivity(directory: string, helperPath: string): { m
         fs.writeFileSync(temp, change.next, { flag: 'wx', mode: 0o600 });
         temporary.push(temp);
         // The lock serializes JaneT launches; recheck external editor changes before each replace.
-        if (read(change.target) !== change.original) throw new Error('Codex configuration changed during setup; retry on the next launch.');
-        fs.renameSync(temp, change.target);
+        if (!replaceIfUnchanged(temp, change.target, change.original, Date.now() + 2000)) throw new Error('Codex configuration changed during setup; retry on the next launch.');
         committed.push(change);
       }
     } catch (error) {
@@ -152,12 +163,12 @@ export function installCodexActivity(directory: string, helperPath: string): { m
           const temp = change.target + '.janet-tmp-' + randomUUID();
           fs.writeFileSync(temp, change.original, { flag: 'wx', mode: 0o600 });
           temporary.push(temp);
-          if (read(change.target) === change.next) fs.renameSync(temp, change.target);
+          replaceIfUnchanged(temp, change.target, change.next, Date.now() + 2000);
         }
       }
       throw error;
     }
-    return {};
+    return { changed: committed.map(change => change.target) };
   } finally {
     try {
       for (const temp of temporary) { try { fs.unlinkSync(temp); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; } }

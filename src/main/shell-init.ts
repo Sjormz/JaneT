@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { claudeSettingsPath } from './claudeActivity';
 
 /** Complete private zero-width OSC emitted after prompt hooks complete. */
 export const STARTUP_READY_MARKER = '\x1b]777;janet-ready\x1b\\';
@@ -11,10 +12,11 @@ export const STARTUP_READY_MARKER = '\x1b]777;janet-ready\x1b\\';
  *   percent-encoded and HOST set to this machine's hostname) before every
  *   prompt, so JaneT can keep its cwd-aware UI in sync (see
  *   src/renderer/osc7.ts for the decoder's validation rules); and
- * - prepares Hermes activity hooks.
+ * - prepares agent activity launch wrappers: session-only settings for
+ *   Claude Code and Codex, and persistent observer hooks for Hermes.
  *
- * The Hermes wrapper is installed only when `hermes` currently resolves to
- * an external command, so a user's alias or function is never replaced.
+ * Each wrapper is installed only when the agent currently resolves to an
+ * external command, so a user's alias or function is never replaced.
  *
  * Returns the empty string for shells we don't know how to instrument
  * (or `cmd.exe`, which has no scripting facility that can run on each
@@ -135,7 +137,39 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       `  }`,
       `}`,
     ].join('\n')).join('\n');
-    return agents + '\n' + ps + '\n$null = $true';
+    const claude = agentHelper ? [
+      `$__jt_cli = Get-Command claude -ErrorAction SilentlyContinue`,
+      `$__jt_node = @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue)[0]`,
+      `if ($__jt_cli -and $__jt_cli.CommandType -in @('Application', 'ExternalScript') -and $__jt_node) {`,
+      `  $global:__jt_claude_path = $__jt_cli.Source`,
+      `  $global:__jt_claude_node = $__jt_node.Source`,
+      `  function global:claude {`,
+      `    & $global:__jt_claude_node '${helper}' --setup-claude @args`,
+      // Assign arrays directly: an if-expression unrolls one argument into a string that splats per character.
+      `    $__jt_claude_args = @($args)`,
+      `    if ($LASTEXITCODE -eq 0) { $__jt_claude_args = @('--settings', '${claudeSettingsPath(agentHelper).replace(/['‘’]/g, quote => quote + quote)}') + $args }`,
+      `    $global:__jt_state.UseNativeExitCode = $true`,
+      `    if ($MyInvocation.ExpectingInput) { $input | & $global:__jt_claude_path @__jt_claude_args } else { & $global:__jt_claude_path @__jt_claude_args }`,
+      `  }`,
+      `}`,
+    ].join('\n') : '';
+    const codex = agentHelper ? [
+      `$__jt_cli = Get-Command codex -ErrorAction SilentlyContinue`,
+      `$__jt_node = @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue)[0]`,
+      `if ($__jt_cli -and $__jt_cli.CommandType -in @('Application', 'ExternalScript') -and $__jt_node) {`,
+      `  $global:__jt_codex_path = $__jt_cli.Source`,
+      `  $global:__jt_codex_node = $__jt_node.Source`,
+      `  function global:codex {`,
+      // One session `-c` value per output line; the values contain no double quotes.
+      `    $__jt_codex_config = @(& $global:__jt_codex_node '${helper}' --setup-codex @args)`,
+      `    $__jt_codex_args = @($args)`,
+      `    if ($LASTEXITCODE -eq 0) { $__jt_codex_args = @($__jt_codex_config | Where-Object { $_ } | ForEach-Object { '-c'; $_ }) + $args }`,
+      `    $global:__jt_state.UseNativeExitCode = $true`,
+      `    if ($MyInvocation.ExpectingInput) { $input | & $global:__jt_codex_path @__jt_codex_args } else { & $global:__jt_codex_path @__jt_codex_args }`,
+      `  }`,
+      `}`,
+    ].join('\n') : '';
+    return agents + '\n' + claude + '\n' + codex + '\n' + ps + '\n$null = $true';
   }
 
   // Bash. The canonical PROMPT_COMMAND snippet â€” also used by VS Code.
@@ -201,6 +235,8 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "    command hermes \"$@\"",
       "  }",
       "fi",
+      ...claudeWrapper(agentHelper, 'bash'),
+      ...codexWrapper(agentHelper, 'bash'),
       "__jt_debug() {",
       "  local __jt_status=$?",
       "  (( __jt_debug_guard )) && return \"$__jt_status\"",
@@ -252,6 +288,8 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "    command 'hermes' \"$@\"",
       "  }",
       "fi",
+      ...claudeWrapper(agentHelper, 'zsh'),
+      ...codexWrapper(agentHelper, 'zsh'),
       "fi",
     ].join('\n');
   }
@@ -302,6 +340,8 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
       "    command hermes $argv",
       "  end",
       "end",
+      ...claudeWrapper(agentHelper, 'fish'),
+      ...codexWrapper(agentHelper, 'fish'),
       "end",
     ].join('\n');
   }
@@ -312,6 +352,80 @@ export function buildShellInit(shell: string, agentHelper?: string): string {
   // empty so cmd.exe gets no init.
   return '';
 }
+/** Adds session-only `--settings` hooks when the helper approves; otherwise runs Claude unchanged. */
+function claudeWrapper(helper: string | undefined, shell: 'bash' | 'zsh' | 'fish'): string[] {
+  if (!helper) return [];
+  const quote = (value: string) => shell === 'fish'
+    ? `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
+    : `'${value.replace(/'/g, "'\\''")}'`;
+  const settings = quote(claudeSettingsPath(helper));
+  if (shell === 'fish') return [
+    "if type -q claude; and test (type -t claude) = file",
+    "  function claude --description 'Claude Code with JaneT activity'",
+    `    if command -sq node; and command node ${quote(helper)} --setup-claude $argv`,
+    `      command claude --settings ${settings} $argv`,
+    "    else",
+    "      command claude $argv",
+    "    end",
+    "  end",
+    "end",
+  ];
+  return [
+    shell === 'bash'
+      ? "if [ \"$(type -t claude 2>/dev/null)\" = file ]; then"
+      : "if (( $+commands[claude] && ! $+aliases[claude] && ! $+galiases[claude] && ! $+functions[claude] )); then",
+    "  function claude {",
+    `    if command -v node >/dev/null 2>&1 && command node ${quote(helper)} --setup-claude "$@"; then`,
+    `      command 'claude' --settings ${settings} "$@"`,
+    "    else",
+    "      command 'claude' \"$@\"",
+    "    fi",
+    "  }",
+    "fi",
+  ];
+}
+
+/** Adds the helper's session-only `-c` values (one per output line); without output Codex runs unchanged. */
+function codexWrapper(helper: string | undefined, shell: 'bash' | 'zsh' | 'fish'): string[] {
+  if (!helper) return [];
+  if (shell === 'fish') return [
+    "if type -q codex; and test (type -t codex) = file",
+    "  function codex --description 'Codex with JaneT activity'",
+    "    set -l __jt_codex_args",
+    "    if command -sq node",
+    `      for __jt_line in (command node '${helper.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}' --setup-codex $argv)`,
+    "        test -n \"$__jt_line\"; and set -a __jt_codex_args -c $__jt_line",
+    "      end",
+    "    end",
+    "    command codex $__jt_codex_args $argv",
+    "  end",
+    "end",
+  ];
+  const quoted = `'${helper.replace(/'/g, "'\\''")}'`;
+  return shell === 'bash' ? [
+    "if [ \"$(type -t codex 2>/dev/null)\" = file ]; then",
+    "  function codex {",
+    "    local __jt_line; local -a __jt_codex_args=()",
+    "    if command -v node >/dev/null 2>&1; then",
+    `      while IFS= read -r __jt_line; do [ -n "$__jt_line" ] && __jt_codex_args+=(-c "$__jt_line"); done < <(command node ${quoted} --setup-codex "$@")`,
+    "    fi",
+    // Bash before 4.4 treats an empty array expansion as unset under `set -u`.
+    "    command 'codex' ${__jt_codex_args[@]+\"${__jt_codex_args[@]}\"} \"$@\"",
+    "  }",
+    "fi",
+  ] : [
+    "if (( $+commands[codex] && ! $+aliases[codex] && ! $+galiases[codex] && ! $+functions[codex] )); then",
+    "  function codex {",
+    "    local __jt_line; local -a __jt_codex_args",
+    "    if (( $+commands[node] )); then",
+    `      for __jt_line in "\${(@f)$(command node ${quoted} --setup-codex "$@")}"; do [[ -n $__jt_line ]] && __jt_codex_args+=(-c "$__jt_line"); done`,
+    "    fi",
+    "    command 'codex' \"${__jt_codex_args[@]}\" \"$@\"",
+    "  }",
+    "fi",
+  ];
+}
+
 function setupAgent(helper: string | undefined, agent: string, shell: string): string {
   if (!helper) return '';
   const quoted = shell === 'fish' ? helper.replace(/\\/g, '\\\\').replace(/'/g, "\\'") : helper.replace(/'/g, "'\\''");

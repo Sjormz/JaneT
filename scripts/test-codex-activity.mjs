@@ -16,10 +16,16 @@ const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-real-
 const home = path.join(root, 'home'), cwd = path.join(root, 'work');
 fs.mkdirSync(home); fs.mkdirSync(cwd);
 const configPath = path.join(home, 'config.toml');
-fs.writeFileSync(configPath, 'model = "test-model"\nmodel_provider = "local_test"\n[features]\nhooks = true\n[model_providers.local_test]\nname = "Local test"\nbase_url = "http://127.0.0.1:1/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[projects.' + JSON.stringify(fs.realpathSync(cwd)) + ']\ntrust_level = "trusted"\n');
 const cliPath = process.env.JANET_CODEX_TEST_BINARY || path.join(process.env.LOCALAPPDATA, 'Programs/OpenAI/Codex/bin/codex.exe');
 const helper = path.join(root, 'agent-cli.cjs');
 fs.copyFileSync(path.resolve('dist/main/agent-cli.cjs'), helper);
+// The user's own notifier and hook must keep working next to JaneT's session-only configuration.
+const userNotified = path.join(root, 'user-notified.json'), userHooked = path.join(root, 'user-hooked.txt');
+const userScript = path.join(root, 'user.cjs');
+fs.writeFileSync(userScript, `const fs = require('fs'); if (process.argv[2] === 'notify') fs.writeFileSync(${JSON.stringify(userNotified)}, process.argv[3]); else { fs.appendFileSync(${JSON.stringify(userHooked)}, 'x'); process.stdout.write('{}'); }`);
+const userHook = `node '${userScript.replace(/\\/g, '/')}' hook`;
+fs.writeFileSync(configPath, 'model = "test-model"\nmodel_provider = "local_test"\nnotify = ' + JSON.stringify(['node', userScript, 'notify']) + '\n[features]\nhooks = true\n[model_providers.local_test]\nname = "Local test"\nbase_url = "http://127.0.0.1:1/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[projects.' + JSON.stringify(fs.realpathSync(cwd)) + ']\ntrust_level = "trusted"\n[[hooks.UserPromptSubmit]]\nhooks = [{ type = "command", command = ' + JSON.stringify(userHook) + ', timeout = 5 }]\n');
+const originalConfig = fs.readFileSync(configPath, 'utf8');
 const require = createRequire(import.meta.url);
 const runtime = path.join(root, 'runtime.cjs');
 buildSync({ stdin: { contents: "export {AgentActivityBridge} from './src/main/agentActivityBridge'; export {applyAgentEvent,agentStatus} from './src/renderer/terminalAwareness';", resolveDir: process.cwd() }, bundle: true, platform: 'node', outfile: runtime });
@@ -63,12 +69,16 @@ try {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const env = { ...process.env, ...await bridge.environment('test'), CODEX_HOME: home, TERM: 'xterm-256color' };
   delete env.OPENAI_API_KEY; delete env.CODEX_API_KEY;
-  await new Promise((resolve, reject) => {
-    const setup = spawn(process.execPath, [helper, '--setup-codex'], { cwd, env, windowsHide: true, stdio: 'ignore' });
-    setup.on('error', reject); setup.on('exit', code => code === 0 ? resolve() : reject(Error(`Setup exited ${code}`)));
+  // Exactly what the shell wrapper does: one session `-c` value per line from the helper.
+  const config = await new Promise((resolve, reject) => {
+    const setup = spawn(process.execPath, [helper, '--setup-codex'], { cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    let output = '';
+    setup.stdout.on('data', chunk => output += chunk);
+    setup.on('error', reject); setup.on('exit', code => code === 0 ? resolve(output.split('\n').filter(Boolean)) : reject(Error(`Setup exited ${code}`)));
   });
-  assert.deepEqual(parse(fs.readFileSync(configPath, 'utf8')).projects, { [fs.realpathSync(cwd)]: { trust_level: 'trusted' } });
-  const args = ['--no-alt-screen', '--sandbox', 'read-only', '--dangerously-bypass-hook-trust', '-c', `model_providers.local_test.base_url="http://127.0.0.1:${server.address().port}/v1"`];
+  assert.equal(fs.readFileSync(configPath, 'utf8'), originalConfig, 'JaneT setup must not write the Codex home');
+  assert.ok(config.every(value => !value.includes('"')), 'Session values must survive Windows PowerShell 5.1 argument passing');
+  const args = ['--no-alt-screen', '--sandbox', 'read-only', '--dangerously-bypass-hook-trust', ...config.flatMap(value => ['-c', value]), '-c', `model_providers.local_test.base_url="http://127.0.0.1:${server.address().port}/v1"`];
   // Negative control: the same real CLI must fail when its completion callback is removed.
   if (process.env.JANET_CODEX_TEST_DISABLE_NOTIFY === '1') args.push('-c', 'notify=[]');
   cli = pty.spawn(cliPath, args, { cwd, env, cols: 120, rows: 40 });
@@ -86,6 +96,11 @@ try {
     // Let the TUI consume its finished event before typing the next prompt.
     await delay(300);
   }
+  await until(() => fs.existsSync(userNotified), 'user notifier forwarded');
+  assert.equal(JSON.parse(fs.readFileSync(userNotified, 'utf8')).type, 'agent-turn-complete');
+  assert.equal(fs.readFileSync(userHooked, 'utf8'), 'xx', "The user's own UserPromptSubmit hook must still run each turn");
+  // smol-toml tables have null prototypes; compare their data only.
+  assert.deepEqual(JSON.parse(JSON.stringify(parse(fs.readFileSync(configPath, 'utf8')).projects)), { [fs.realpathSync(cwd)]: { trust_level: 'trusted' } });
   console.log(JSON.stringify({ result: 'PASS', cli: cliPath, completed, requests, phases, diagnostics: process.env.JANET_ACTIVITY_DIAGNOSTICS }));
 } finally {
   cli?.kill(); bridge.close(); server.closeAllConnections(); server.close();

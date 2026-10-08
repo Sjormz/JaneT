@@ -1,13 +1,13 @@
 ---
 title: Settings
-description: Change JaneT's appearance, transparency, project tools position, notifications, and keyboard shortcuts.
+description: Change JaneT's appearance, transparency, project tools position, notifications, agent activity, and keyboard shortcuts.
 ---
 
 # Settings
 
-Select the gear-shaped **Settings** button in the title bar. Settings is grouped into **Appearance**, **Layout**, **Notifications**, and **Advanced**. JaneT saves changes as you make them.
+Select the gear-shaped **Settings** button in the title bar. Settings is grouped into **Appearance**, **Layout**, **Notifications**, **Agents**, and **Advanced**. JaneT saves changes as you make them.
 
-![JaneT Settings panel with theme, transparency, text size, position, notifications, diagnostics, and shortcuts](/screenshots/settings-overview.png)
+![JaneT Settings panel with theme, transparency, text size, position, notifications, agent activity, diagnostics, and shortcuts](/screenshots/settings-overview.png)
 
 *The Settings panel groups appearance and behavior controls. Shown with Transparency set to Reduced; the default is System.*
 
@@ -34,13 +34,17 @@ Panels, menus, and selections animate briefly to show what changed. For example,
 
 ## Get background notifications
 
-Notifications are off by default. Enable **Notify when long commands finish** to receive desktop alerts while JaneT is unfocused. Tracked commands must run for at least 10 seconds. Select a notification to return to its terminal. JaneT's notification integration and your operating system's notification settings both affect delivery.
+Notifications are off by default. Enable **Notify when long commands finish** to receive desktop alerts while JaneT is unfocused. Tracked commands must run for at least 10 seconds. The same switch also covers Claude Code and Codex alerts when an agent needs input or finishes a turn; those have no minimum duration. Select a notification to return to its terminal. JaneT's notification integration and your operating system's notification settings both affect delivery.
 
 ![Settings switch for long-command notifications beside the delivery check](/screenshots/notification-settings.png)
 
 *The switch enables alerts for long-running commands.*
 
 Select **Check notification delivery** to check whether desktop notifications are available and whether JaneT has observed a delivery failure. A supported result does not override operating-system notification permissions or Do Not Disturb settings.
+
+## Agent activity
+
+**Show agent activity** is on by default. It lets new terminals report Claude Code, Codex and Hermes status; see [Agent activity](/guide/agent-activity). Turning it off stops this for new terminals and removes the hooks JaneT saved in agent configuration, with a `.janet-backup-*` copy of each changed file. JaneT lists what it removed below the switch.
 
 ## Change keyboard shortcuts
 

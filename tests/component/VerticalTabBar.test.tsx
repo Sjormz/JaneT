@@ -79,7 +79,7 @@ describe('VerticalTabBar', () => {
     expect(screen.queryByRole('combobox')).toBeNull();
     fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Child' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
-    await waitFor(() => expect(launch).toHaveBeenCalledWith(expect.objectContaining({ name: 'Child', createProject: true, terminalCount: 0 }), expect.objectContaining({ id: 'parent', kind })));
+    await waitFor(() => expect(launch).toHaveBeenCalledWith(expect.objectContaining({ name: 'Child', terminalCount: 0 }), expect.objectContaining({ id: 'parent', kind })));
     expect(screen.queryByRole('button', { name: /Add project to/ })).not.toBeInTheDocument();
   });
   it('creates a project without terminals by default', () => {
@@ -148,7 +148,7 @@ describe('VerticalTabBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More terminals' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Hermes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
-    expect(launch).toHaveBeenCalledWith(expect.objectContaining({ name: 'Child', createProject: true, terminalCount: 2,
+    expect(launch).toHaveBeenCalledWith(expect.objectContaining({ name: 'Child', terminalCount: 2,
       root: expect.objectContaining({ children: [
         expect.objectContaining({ terminalType: 'local', startupCommands: ['hermes --tui'] }),
         expect.objectContaining({ terminalType: 'local', startupCommands: ['hermes --tui'] }),

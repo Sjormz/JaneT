@@ -11,7 +11,11 @@ JaneT does not create starter workspaces or projects automatically. To create te
 
 ## A notification did not appear
 
-Open **Settings** and check **Notify when long commands finish**. Notifications are off by default, JaneT must be unfocused, and tracked commands must run at least 10 seconds. Codex turn and approval alerts are currently unavailable; see [Agent activity](/guide/agent-activity). Select **Check notification delivery** in Settings. If notifications are supported, check your operating system's app notification permissions and Do Not Disturb settings. Commands in unsupported shells may not report reliable command completion; see [Terminals and panes](/guide/terminals#navigate-completed-commands).
+Open **Settings** and check **Notify when long commands finish**. Notifications are off by default, JaneT must be unfocused, and tracked commands must run at least 10 seconds. Claude Code and Codex alerts need **Show agent activity** on and, for Codex, its hooks trusted in Codex's **Hooks need review** prompt; see [Agent activity](/guide/agent-activity).
+
+## An agent pane stays at Awaiting activity
+
+The agent started, but its hooks have not reported yet. For Codex, run `/hooks` in Codex and trust the hooks labeled *JaneT activity*. For Claude Code, check that `disableAllHooks` is not set and that you did not pass your own `--settings`. Both need Node.js on `PATH`. Close and reopen the terminal after changing **Show agent activity**. Select **Check notification delivery** in Settings. If notifications are supported, check your operating system's app notification permissions and Do Not Disturb settings. Commands in unsupported shells may not report reliable command completion; see [Terminals and panes](/guide/terminals#navigate-completed-commands).
 
 ## JaneT says it could not load workspace settings
 

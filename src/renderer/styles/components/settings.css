@@ -73,6 +73,7 @@
   .settings-row.stacked { flex-direction: column; align-items: stretch; gap: var(--space-2); }
   .settings-row.stacked .segmented { align-self: flex-start; }
   .settings-row-text small { color: var(--text-tertiary); font-size: var(--text-sm); line-height: 1.35; }
+  .settings-feedback { margin: 0; color: var(--text-secondary); font-size: var(--text-sm); line-height: 1.35; white-space: pre-line; }
   .settings-row-value { min-width: 36px; color: var(--text-tertiary); font-size: var(--text-sm); font-variant-numeric: tabular-nums; text-align: right; }
   button.settings-row {
     width: 100%;

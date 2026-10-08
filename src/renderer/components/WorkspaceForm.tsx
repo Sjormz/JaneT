@@ -39,7 +39,6 @@ export default function WorkspaceForm({ terminalsOnly = false, group, submitting
     onSubmit({
       id: genId('workspace'), name: name.trim() || 'Terminals', type: 'local', root,
       terminalCount: withTerminals ? count : 0,
-      createProject: !terminalsOnly,
       splitDirection: root.type === 'split' ? root.direction : 'vertical',
     }, group);
   };

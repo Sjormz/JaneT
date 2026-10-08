@@ -214,6 +214,7 @@ const api = {
   notifyCommandCompleted: (payload: CommandNotificationPayload): Promise<boolean> =>
     ipcRenderer.invoke('notifications:command-completed', payload),
   getNotificationStatus: (): Promise<string | null> => ipcRenderer.invoke('notifications:status'),
+  removeAgentIntegrations: (): Promise<{ ok: boolean; message: string }> => ipcRenderer.invoke('agents:removeIntegrations'),
   onNotificationTarget: (callback: (target: { tabId: string; termId: string }) => void) => {
     const listener = (_event: unknown, target: { tabId: string; termId: string }) => callback(target);
     ipcRenderer.on('notifications:target', listener);

@@ -41,7 +41,6 @@ export interface TabInfo {
 }
 
 export interface WorkspaceTabPreset {
-  createProject?: boolean;
   id: string;
   name: string;
   type: 'local';

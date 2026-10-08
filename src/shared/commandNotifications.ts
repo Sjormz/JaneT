@@ -1,6 +1,8 @@
 export interface CommandNotificationPayload {
   target?: { tabId: string; termId: string };
   codexEvent?: 'needs-input' | 'turn-complete';
+  /** Agent that produced codexEvent; absent means Codex for older callers. */
+  agent?: 'codex' | 'claude';
   durationMs: number;
   outcome: 'success' | 'failure' | 'unknown';
   tabLabel: string;
@@ -30,13 +32,14 @@ const boundedLabel = (value: unknown, maximum: number) => typeof value === 'stri
 
 export function parseCommandNotificationPayload(value: unknown): CommandNotificationPayload | null {
   try {
-    const payload = ownDataValues(value, PAYLOAD_KEYS) ?? ownDataValues(value, [...PAYLOAD_KEYS, 'target'])
-      ?? ownDataValues(value, [...PAYLOAD_KEYS, 'codexEvent'])
-      ?? ownDataValues(value, [...PAYLOAD_KEYS, 'target', 'codexEvent']);
+    const optional = value && typeof value === 'object'
+      ? (['target', 'codexEvent', 'agent'] as const).filter((key) => Object.hasOwn(value, key)) : [];
+    const payload = ownDataValues(value, [...PAYLOAD_KEYS, ...optional]);
     if (!payload
       || !Number.isSafeInteger(payload.durationMs) || Number(payload.durationMs) < 0
       || !['success', 'failure', 'unknown'].includes(payload.outcome as string)
       || (payload.codexEvent !== undefined && !['needs-input', 'turn-complete'].includes(payload.codexEvent as string))
+      || (payload.agent !== undefined && (payload.codexEvent === undefined || !['codex', 'claude'].includes(payload.agent as string)))
       || !boundedLabel(payload.tabLabel, 256) || !boundedLabel(payload.paneLabel, 256)) return null;
 
     const contextKeys = ownDataValues(payload.context, LOCAL_CONTEXT_KEYS);
@@ -53,6 +56,7 @@ export function parseCommandNotificationPayload(value: unknown): CommandNotifica
     return {
       ...(target ? { target } : {}),
       ...(payload.codexEvent ? { codexEvent: payload.codexEvent as CommandNotificationPayload['codexEvent'] } : {}),
+      ...(payload.agent ? { agent: payload.agent as CommandNotificationPayload['agent'] } : {}),
       durationMs: payload.durationMs as number,
       outcome: payload.outcome as CommandNotificationPayload['outcome'],
       tabLabel: payload.tabLabel as string,
