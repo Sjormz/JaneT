@@ -125,7 +125,7 @@ function writeReleaseManifestFixture(
 }
 
 describe('development tooling', () => {
-  it('aligns dependency-installing workflows, Dependabot and local npm requirements', async () => {
+  it('aligns workflow runtimes, Dependabot and local package manager requirements', async () => {
     const { parse } = await import('yaml');
     const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
     const lock = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package-lock.json'), 'utf8'));
@@ -135,10 +135,17 @@ describe('development tooling', () => {
     expect(fs.readFileSync(path.join(projectRoot, '.npmrc'), 'utf8')).toMatch(/^engine-strict=true$/m);
 
     const workflowDir = path.join(projectRoot, '.github/workflows');
+    const nodeVersion = fs.readFileSync(path.join(projectRoot, '.nvmrc'), 'utf8').trim();
     for (const file of fs.readdirSync(workflowDir).filter(file => /\.ya?ml$/.test(file))) {
       const workflow = parse(fs.readFileSync(path.join(workflowDir, file), 'utf8'));
       for (const [jobName, job] of Object.entries(workflow.jobs) as Array<[string, any]>) {
         const steps = job.steps ?? [];
+        for (const step of steps.filter((step: any) => step.uses?.startsWith('actions/setup-node@'))) {
+          const selected = step.with['node-version'];
+          const resolved = selected === '${{ env.NODE_VERSION }}'
+            ? (job.env?.NODE_VERSION ?? workflow.env?.NODE_VERSION) : selected;
+          expect(resolved, `${file}: ${jobName} must match .nvmrc`).toBe(nodeVersion);
+        }
         const installIndex = steps.findIndex((step: any) => /\bnpm ci\b/.test(step.run ?? ''));
         if (installIndex < 0) continue;
         const pinIndex = steps.findIndex((step: any) => step.run?.includes('npm install --global'));
@@ -1022,6 +1029,6 @@ module.exports = {
   it('declares supported Node engines and the pinned development runtime', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
     expect(packageJson.engines).toEqual({ node: '^22.22.2 || ^24.15.0 || >=26.0.0', npm: '11.17.0' });
-    expect(fs.readFileSync(path.join(projectRoot, '.nvmrc'), 'utf8').trim()).toBe('22.22.2');
+    expect(fs.readFileSync(path.join(projectRoot, '.nvmrc'), 'utf8').trim()).toBe('24.19.0');
   });
 });

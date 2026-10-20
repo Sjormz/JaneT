@@ -11,7 +11,7 @@ Thanks for helping improve JaneT.
 
 ## Local setup
 
-Use Node.js 22.22.2 or newer within a supported line: 22.22.2+, 24.15.0+, or 26+. The upgraded jsdom dependency sets these floors; CI selects the latest Node 22 release.
+Use Node.js **24.19.0**, pinned in `.nvmrc` and every GitHub workflow to match the current development machine. With nvm installed, run `nvm install 24.19.0` and `nvm use 24.19.0`, then check `node --version`. The package still supports Node 22.22.2+, 24.15.0+, or 26+; these jsdom compatibility floors are separate from the exact development and CI baseline.
 
 Use npm **11.17.0**, pinned in `package.json` to match the current development machine. Dependabot reads `packageManager`, every dependency-installing workflow installs that version explicitly, and `.npmrc` rejects other npm versions before they can change the lockfile. Node's bundled npm can differ even when the Node version is supported. Update the repository pin deliberately when upgrading the development machine's npm; GitHub does not follow machine updates automatically.
 
@@ -24,7 +24,7 @@ npm run dev
 
 On Windows, use `npm.cmd` if PowerShell blocks the npm script shim. If changing the global npm installation is unsuitable, run `npx --yes npm@11.17.0 ci` and `npx --yes npm@11.17.0 run dev` instead. Use the same prefix for other npm commands.
 
-When updating the npm pin, update both `packageManager` and `engines.npm` together, regenerate the lockfile with that version, and verify a clean `npm ci`. Do not hand-edit dependency entries or replace CI's `npm ci` with `npm install` to hide an inconsistent lockfile. Existing Dependabot PRs generated with another npm version need their lockfiles regenerated after this pin lands.
+When updating Node, update `.nvmrc` and every workflow's Node selection together. The tooling test checks their alignment. When updating the npm pin, update both `packageManager` and `engines.npm` together, regenerate the lockfile with that version, and verify a clean `npm ci`. Do not hand-edit dependency entries or replace CI's `npm ci` with `npm install` to hide an inconsistent lockfile. Existing Dependabot PRs generated with another npm version need their lockfiles regenerated after this pin lands.
 
 Renderer edits hot-reload. Main/preload edits rebuild, but do not restart Electron automatically: close the dev window and rerun `npm run dev` when your terminals and editors are safe to close. The launcher prints the checkout and renderer URL, and refuses to reuse an already-running server. Set `JANET_DEV_SERVER_URL` to another local port if needed.
 
