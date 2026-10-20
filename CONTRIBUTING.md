@@ -13,16 +13,16 @@ Thanks for helping improve JaneT.
 
 Use Node.js 22.22.2 or newer within a supported line: 22.22.2+, 24.15.0+, or 26+. The upgraded jsdom dependency sets these floors; CI selects the latest Node 22 release.
 
-Use npm **10.9.9**, pinned in `package.json`. Dependabot reads `packageManager`, every dependency-installing workflow installs that version explicitly, and `.npmrc` rejects other npm versions before they can change the lockfile. Node's bundled npm can differ even when the Node version is supported.
+Use npm **11.17.0**, pinned in `package.json` to match the current development machine. Dependabot reads `packageManager`, every dependency-installing workflow installs that version explicitly, and `.npmrc` rejects other npm versions before they can change the lockfile. Node's bundled npm can differ even when the Node version is supported. Update the repository pin deliberately when upgrading the development machine's npm; GitHub does not follow machine updates automatically.
 
 ```bash
-npm install --global npm@10.9.9
+npm install --global npm@11.17.0
 npm --version
 npm ci
 npm run dev
 ```
 
-On Windows, use `npm.cmd` if PowerShell blocks the npm script shim. If changing the global npm installation is unsuitable, run `npx --yes npm@10.9.9 ci` and `npx --yes npm@10.9.9 run dev` instead. Use the same prefix for other npm commands.
+On Windows, use `npm.cmd` if PowerShell blocks the npm script shim. If changing the global npm installation is unsuitable, run `npx --yes npm@11.17.0 ci` and `npx --yes npm@11.17.0 run dev` instead. Use the same prefix for other npm commands.
 
 When updating the npm pin, update both `packageManager` and `engines.npm` together, regenerate the lockfile with that version, and verify a clean `npm ci`. Do not hand-edit dependency entries or replace CI's `npm ci` with `npm install` to hide an inconsistent lockfile. Existing Dependabot PRs generated with another npm version need their lockfiles regenerated after this pin lands.
 

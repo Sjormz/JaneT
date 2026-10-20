@@ -1021,7 +1021,7 @@ module.exports = {
 
   it('declares supported Node engines and the pinned development runtime', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
-    expect(packageJson.engines).toEqual({ node: '^22.22.2 || ^24.15.0 || >=26.0.0', npm: '10.9.9' });
+    expect(packageJson.engines).toEqual({ node: '^22.22.2 || ^24.15.0 || >=26.0.0', npm: '11.17.0' });
     expect(fs.readFileSync(path.join(projectRoot, '.nvmrc'), 'utf8').trim()).toBe('22.22.2');
   });
 });
