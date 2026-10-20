@@ -33,7 +33,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '24.19.0'
 
       - name: Check handoff is installed in the trusted base
         working-directory: trusted

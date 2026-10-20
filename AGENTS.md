@@ -20,7 +20,7 @@ publishing. Never bypass required reviews or rewrite published tags/assets.
 
 ## Before opening or updating a PR
 
-- Use the CI Node major (currently 22), and record `node --version`. A pass on another supported major is useful evidence, not CI parity.
+- Use the CI Node version (currently 24.19.0), and record `node --version`. A pass on another supported version is useful evidence, not CI parity.
 - Use the lockfile. If dependencies changed or the checkout is fresh, run `npm ci`; do not silently update dependencies while debugging.
 - Run `npm run typecheck`, the **entire** `npm test` suite, and `npm run build`. Focused tests are for iteration, not a replacement for these checks.
 - For documentation-only changes with no runtime, configuration, dependency, or test changes, check the documentation and diff instead; state why runtime tests were not rerun.
