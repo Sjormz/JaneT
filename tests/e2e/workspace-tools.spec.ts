@@ -108,6 +108,8 @@ for (const side of ['left', 'right']) {
       const collapse = page.getByRole('button', { name: 'Collapse project tools' });
       await expect(page.getByRole('button', { name: 'Branches 33', exact: true })).toBeVisible();
       await expect(page.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true');
+      // The launch choreography translates the tools rail; compare boxes only after it ends.
+      await expect(page.locator('html')).not.toHaveClass(/is-launching/);
 
       for (const [width, height] of [[1200, 760], [800, 600]]) {
         await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(...size), [width, height] as [number, number]);
