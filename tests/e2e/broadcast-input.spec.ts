@@ -39,6 +39,9 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
 
     const terminals = page.locator('.terminal-container');
     await expect(terminals).toHaveCount(1);
+    // A rendered pane does not mean the app has registered its shortcuts yet: a split pressed right after first
+    // paint can be dropped (seen on warm Windows starts). Wait for the pane's shell, as other shortcut specs do.
+    await expect(terminals.locator('.xterm-helper-textarea[data-shell-ready="true"]')).toHaveCount(1, { timeout: 15_000 });
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Backslash' : 'Control+Shift+Digit5');
     await expect(terminals).toHaveCount(2);
     await expect(terminals.locator('.xterm-helper-textarea[data-shell-ready="true"]'))

@@ -40,6 +40,31 @@ describe('SnippetPicker', () => {
     expect(onPaste.mock.calls[0][0].content).not.toMatch(/\n$/);
   });
 
+  it('focuses the name field when the editor opens, unless focus already moved inside the picker', () => {
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => frames.push(callback));
+    const flushFrames = () => { for (const callback of frames.splice(0)) callback(0); };
+    try {
+      render(<SnippetPicker visible onClose={vi.fn()} snippets={snippets} onSave={vi.fn()} onPaste={vi.fn()} />);
+      flushFrames();
+
+      fireEvent.click(screen.getByRole('button', { name: 'New snippet' }));
+      flushFrames();
+      expect(screen.getByRole('textbox', { name: 'Snippet name' })).toHaveFocus();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      flushFrames();
+      fireEvent.click(screen.getByRole('button', { name: 'New snippet' }));
+      // A fast click into Content lands before the deferred initial focus runs; it must not be pulled back.
+      const content = screen.getByRole('textbox', { name: 'Snippet content' });
+      content.focus();
+      flushFrames();
+      expect(content).toHaveFocus();
+    } finally {
+      raf.mockRestore();
+    }
+  });
+
   it('creates a snippet and rejects a duplicate name without changing saved snippets', () => {
     const onSave = vi.fn();
     render(<SnippetPicker visible onClose={vi.fn()} snippets={snippets} onSave={onSave} onPaste={vi.fn()} />);
