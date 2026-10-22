@@ -49,3 +49,19 @@ jobs:
       - uses: github/codeql-action/analyze@v4
         with:
           category: '/language:javascript-typescript'
+
+  # Scans the workflows themselves (untrusted input in run steps, excessive permissions, unpinned actions).
+  # A separate job keeps the required "Analyze JavaScript/TypeScript" check name unchanged.
+  analyze-actions:
+    name: Analyze GitHub Actions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: actions
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: '/language:actions'

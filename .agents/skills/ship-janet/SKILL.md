@@ -128,7 +128,10 @@ Do not update unrelated dependencies.
   Require uploaded/nonempty assets; download to a disposable directory and
   verify manifest versions, file sizes and SHA-512 using the existing exported
   `verifyReleaseManifest` helper, placing each platform's files in a separate
-  directory (the helper rejects other platforms' files). Do not run a packaged
+  directory (the helper rejects other platforms' files). Run
+  `gh attestation verify <file> --repo Sjormz/JaneT` on at least one installer
+  per platform; it must name `.github/workflows/release.yml` as the builder.
+  Do not run a packaged
   executable downloaded from an unverified release. Confirm the latest-release endpoint points to
   this version, or report a newer concurrent release instead of regressing it.
 - Report version/bump rationale, PR, merged SHA, tag, exact workflow run,
