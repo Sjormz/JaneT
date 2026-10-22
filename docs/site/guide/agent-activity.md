@@ -17,11 +17,13 @@ Agent lifecycle status is bounded metadata, not an authenticated security signal
 
 | Indicator | Meaning |
 | --- | --- |
-| Green | Shell or agent ready; **new** means a result you have not viewed. |
-| Yellow | Foreground command or agent turn running. Project rows may show a busy terminal count. |
+| Green dot | Shell or agent ready; **new** means a result you have not viewed. |
+| Dot in the theme's accent colour | Foreground command or agent turn running. Project rows may show a busy terminal count. |
 | Amber diamond | The agent requested attention, such as an approval. Review the request in the agent itself. |
-| Red | Unseen failure. |
-| Muted | No integration, or the process ended or disconnected. |
+| Red ring | Unseen failed or interrupted turn, or the terminal's process exited. |
+| Muted dot | No integration, or activity tracking is unavailable or incomplete. |
+
+Each indicator also has a tooltip that names its state, such as **Claude · Turn failed**.
 
 Visiting a project acknowledges its unseen results. Activity is live terminal state, so a restarted terminal must establish its own status again.
 

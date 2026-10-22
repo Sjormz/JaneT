@@ -191,6 +191,8 @@ const themes: Record<ThemeName, ThemeDefinition> = {
       'glass-bg-light': 'rgba(238, 232, 213, 0.7)',
       'glass-border': 'rgba(0, 0, 0, 0.08)',
       'glass-border-active': 'rgba(38, 139, 210, 0.4)',
+      // Its deep red needs light text; the default on-danger is dark.
+      'on-danger': '#ffffff',
     },
     xterm: {
       background: '#fdf6e3',
@@ -240,6 +242,8 @@ const themes: Record<ThemeName, ThemeDefinition> = {
       'glass-bg-light': 'rgba(40, 40, 40, 0.6)',
       'glass-border': 'rgba(255, 255, 255, 0.06)',
       'glass-border-active': 'rgba(215, 153, 33, 0.4)',
+      // Its deep red needs light text; the default on-danger is dark.
+      'on-danger': '#ffffff',
     },
     xterm: {
       background: '#1b1b1b',

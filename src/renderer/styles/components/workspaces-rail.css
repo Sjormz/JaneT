@@ -268,9 +268,10 @@
   .activity-dot.finished { background: var(--status-ok); }
   .activity-dot.running { background: var(--accent-solid); }
   .activity-dot.needs-input { background: var(--status-warn); border-radius: 2px; transform: rotate(45deg); }
+  /* A ring, so a failure differs from a finished dot by shape as well as by hue (red and green alone are not enough). */
   .activity-dot.failed,
   .activity-dot.exited,
-  .activity-dot.interrupted { background: var(--status-err); }
+  .activity-dot.interrupted { background: transparent; box-shadow: inset 0 0 0 1.5px var(--status-err); }
   .activity-count {
     padding: 1px 6px;
     border-radius: 999px;

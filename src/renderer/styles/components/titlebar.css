@@ -115,7 +115,7 @@
     cursor: pointer;
   }
   .titlebar-control-btn:hover { background: var(--fill-hover); color: var(--text-primary); }
-  .titlebar-control-btn.close:hover { background: var(--red); color: #fff; }
+  .titlebar-control-btn.close:hover { background: var(--red); color: var(--on-danger); }
 
   @media (max-width: 1000px) {
     .titlebar { grid-template-columns: auto minmax(180px, 1fr) auto; gap: var(--space-3); }

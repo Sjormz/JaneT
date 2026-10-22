@@ -16,6 +16,8 @@
     --text-disabled: var(--text-tertiary);
     --text-accent: #7aa2f7;
     --on-accent: #0b0d12;
+    /* Text on a status-err fill. Dark by default: the dark themes' reds are too light for white text (<4.5:1). */
+    --on-danger: #0b0d12;
     --border-color: #2a2b42;
     --border-active: #7aa2f7;
     --red: #f7768e;

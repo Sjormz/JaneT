@@ -145,9 +145,9 @@
   .confirmation-dialog-button.confirm:hover:not(:disabled),
   .git-dialog-btn.confirm:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-solid) 88%, var(--text-primary)); }
   .confirmation-dialog-button.confirm.danger,
-  .git-dialog-btn.confirm.danger { background: var(--status-err); color: #fff; }
+  .git-dialog-btn.confirm.danger { background: var(--status-err); color: var(--on-danger); }
   .confirmation-dialog-button.confirm.danger:hover:not(:disabled),
-  .git-dialog-btn.confirm.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--status-err) 86%, #000); }
+  .git-dialog-btn.confirm.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--status-err) 88%, var(--text-primary)); }
   .confirmation-dialog-button:disabled,
   .git-dialog-btn:disabled { background: var(--fill-hover); color: var(--text-disabled); cursor: default; }
 
