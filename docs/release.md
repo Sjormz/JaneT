@@ -184,7 +184,7 @@ That updates `package.json` and `package-lock.json` without creating the tag yet
 
 ### 3. Verify locally
 
-Use CI's Node major (currently 22), record the exact version and OS, and run
+Use CI's Node version (currently 24.19.0), record the exact version and OS, and run
 `npm ci` for a fresh checkout or changed dependencies/lockfile. Set
 `JANET_TEST_PYTHON` to a verified Python executable. Test fixtures use isolated
 profiles; do not use the installed app profile. Clear inherited
