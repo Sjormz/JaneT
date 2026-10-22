@@ -312,6 +312,11 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     const page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1200, 760));
+    // Measure only the settled layout: the resize lands asynchronously (xvfb), and the launch
+    // choreography translates the rails until html.is-launching is removed.
+    await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
+      .toEqual({ width: 1200, height: 760 });
+    await expect(page.locator('html')).not.toHaveClass(/is-launching/);
 
     const appBody = page.locator('.app-body');
     const tabsPanel = page.locator('.vtab-bar');
