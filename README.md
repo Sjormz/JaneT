@@ -55,8 +55,8 @@ npm ci
 npm run dev
 ```
 
-Contributor setup and validation instructions are in [CONTRIBUTING.md](CONTRIBUTING.md). Report bugs and request features through the [GitHub issue templates](https://github.com/Sjormz/JaneT/issues/new/choose). Report security issues through GitHub's private security advisory flow.
+Contributor setup and validation instructions are in [CONTRIBUTING.md](CONTRIBUTING.md). Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md). Report bugs and request features through the [GitHub issue templates](https://github.com/Sjormz/JaneT/issues/new/choose). Report security issues through GitHub's private security advisory flow.
 
 ## License
 
-MIT
+JaneT is released under the [MIT License](LICENSE).
