@@ -25,11 +25,15 @@ When a `v*` tag is pushed, `.github/workflows/release.yml`:
 5. Verifies the exact installer/update-metadata set and starts a real PTY with
    each runner's packaged Electron runtime.
 6. Verifies the Apple Silicon macOS build uses a Developer ID signature and passes Gatekeeper/notarization checks.
-7. Serializes publication, refuses an already-public version or a version older
+7. Records signed build provenance for every installer and update-metadata file
+   (`actions/attest-build-provenance`) before handing the files to publication.
+8. Serializes publication, refuses an already-public version or a version older
    than a published stable release, and rechecks the tag's source SHA.
-8. Uploads installers and update metadata. The release action stages a new
-   release as a draft until uploads finish; only an unpublished draft may have
-   its assets replaced on retry.
+9. Publishes with GitHub's own CLI (`gh release`), not a third-party action. A
+   new release is created as a draft; only an unpublished draft may have its
+   assets replaced on retry. The draft is made public, and marked latest, only
+   after its assets exactly match the built files: same names, same sizes, all
+   fully uploaded.
 
 After the small prepare job validates the tag, version and source SHA, full
 verification and the three platform package jobs run in parallel. Publication
@@ -261,6 +265,15 @@ then use the existing `verifyReleaseManifest(platform, version, directory)`
 export to verify manifest versions, sizes and SHA-512 values. This is not the
 packaged-runtime CLI, which also needs unpacked app directories.
 
+Check build provenance on at least one downloaded installer per platform:
+
+```bash
+gh attestation verify JaneT-Setup-X.Y.Z-win-x64.exe --repo Sjormz/JaneT
+```
+
+It must report that the file was built by `.github/workflows/release.yml` in this
+repository. Anyone can run the same command to check a JaneT download.
+
 Confirm the tag still resolves to the expected SHA and the release is public,
 non-draft and non-prerelease. Confirm GitHub's latest-release endpoint identifies
 this version, or explain a newer concurrent release. Report the PR, merged SHA,
@@ -313,6 +326,7 @@ above. Signing-policy changes require a separate decision.
 
 - [Codex repository skills and implicit invocation](https://learn.chatgpt.com/docs/build-skills)
 - [GitHub CLI head-SHA-bound merging](https://cli.github.com/manual/gh_pr_merge)
-- [Release action upload/finalization behavior](https://github.com/softprops/action-gh-release)
+- [GitHub CLI release commands](https://cli.github.com/manual/gh_release)
+- [Artifact attestations and `gh attestation verify`](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds)
 - [GitHub token workflow-trigger restrictions](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)
 - [Native concurrency queue semantics](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)

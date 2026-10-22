@@ -132,6 +132,10 @@ jobs:
     name: Package (${{ matrix.os }})
     needs: [prepare]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -231,6 +235,21 @@ jobs:
       - name: Verify packaged release and native terminal runtime
         run: node scripts/verify-release-artifacts.mjs ${{ matrix.platform }}
 
+      # Signed build provenance: `gh attestation verify <file> --repo Sjormz/JaneT` proves a download was built by
+      # this workflow from the verified source commit.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/*.dmg
+            release/*.zip
+            release/*.zip.blockmap
+            release/*.AppImage
+            release/*.deb
+            release/latest*.yml
+
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -306,25 +325,54 @@ jobs:
           pattern: installer-*
           merge-multiple: false
 
-      - name: Upload assets to GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: ${{ env.RELEASE_TAG }}
-          generate_release_notes: true
-          # The action stages new releases as drafts until uploads finish.
-          # Only an unpublished failed draft may have its assets replaced.
-          overwrite_files: true
-          fail_on_unmatched_files: true
-          files: |
-            release-artifacts/*/JaneT-Setup-*.exe
-            release-artifacts/*/JaneT-Setup-*.exe.blockmap
-            release-artifacts/*/JaneT-Portable-*.exe
-            release-artifacts/*/JaneT-*-mac-*.dmg
-            release-artifacts/*/JaneT-*-mac-*.zip
-            release-artifacts/*/JaneT-*-mac-*.zip.blockmap
-            release-artifacts/*/JaneT-*-linux-*.AppImage
-            release-artifacts/*/JaneT-*-linux-*.deb
-            release-artifacts/*/latest*.yml
+      # GitHub's own CLI, not a third-party action. A new release is staged as a draft; only an unpublished draft may
+      # have its assets replaced. The draft is made public only after its assets match the built files exactly.
+      - name: Publish verified GitHub release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ROOT: release-artifacts
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const assert = require('node:assert/strict');
+          const { execFileSync } = require('node:child_process');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const gh = (...args) => execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+          const repo = process.env.GITHUB_REPOSITORY;
+          const tag = process.env.RELEASE_TAG;
+          const root = process.env.ARTIFACT_ROOT;
+          const patterns = [
+            /^JaneT-Setup-.+\.exe$/, /^JaneT-Setup-.+\.exe\.blockmap$/, /^JaneT-Portable-.+\.exe$/,
+            /^JaneT-.+-mac-.+\.dmg$/, /^JaneT-.+-mac-.+\.zip$/, /^JaneT-.+-mac-.+\.zip\.blockmap$/,
+            /^JaneT-.+-linux-.+\.AppImage$/, /^JaneT-.+-linux-.+\.deb$/, /^latest.*\.yml$/,
+          ];
+          const files = new Map();
+          for (const directory of fs.readdirSync(root)) {
+            for (const name of fs.readdirSync(path.join(root, directory))) {
+              if (!patterns.some((pattern) => pattern.test(name))) continue;
+              assert(!files.has(name), `Two build artifacts are named ${name}`);
+              const file = path.join(root, directory, name);
+              files.set(name, { file, size: fs.statSync(file).size });
+            }
+          }
+          for (const pattern of patterns) {
+            assert([...files.keys()].some((name) => pattern.test(name)), `No built file matches ${pattern}`);
+          }
+
+          const releases = JSON.parse(gh('api', '--paginate', '--slurp', `repos/${repo}/releases?per_page=100`)).flat();
+          const existing = releases.find((release) => release.tag_name === tag);
+          assert(!existing || existing.draft, 'Already published; never overwrite a release');
+          if (!existing) gh('release', 'create', tag, '--repo', repo, '--draft', '--verify-tag', '--title', tag, '--generate-notes');
+          gh('release', 'upload', tag, '--repo', repo, '--clobber', ...[...files.values()].map(({ file }) => file));
+
+          const draft = JSON.parse(gh('release', 'view', tag, '--repo', repo, '--json', 'isDraft,assets'));
+          assert(draft.isDraft, 'Release left draft state before its assets were verified');
+          assert.deepEqual(draft.assets.map((asset) => asset.name).sort(), [...files.keys()].sort(),
+            'Draft assets differ from the built files');
+          for (const asset of draft.assets) {
+            assert.equal(asset.state, 'uploaded', `${asset.name} did not finish uploading`);
+            assert.equal(asset.size, files.get(asset.name).size, `${asset.name} size differs from the built file`);
+          }
+          gh('release', 'edit', tag, '--repo', repo, '--draft=false', '--latest');
+          console.log(`Published ${tag} with ${files.size} verified assets`);
+          NODE

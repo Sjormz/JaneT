@@ -826,7 +826,7 @@ module.exports = {
     const workflow = load(fs.readFileSync(path.join(projectRoot, '.github/workflows/release.yml'), 'utf8'));
     const steps = workflow.jobs.publish.steps;
     const guard = steps.find((step: any) => step.name === 'Refuse published versions and updater downgrades');
-    expect(steps.indexOf(guard)).toBeLessThan(steps.findIndex((step: any) => step.uses?.startsWith('softprops/')));
+    expect(steps.indexOf(guard)).toBeLessThan(steps.findIndex((step: any) => step.name === 'Publish verified GitHub release'));
     expect(guard.env.SOURCE_SHA).toBe('${{ needs.prepare.outputs.source-sha }}');
     const program = guard.run.match(/<<'NODE'\n([\s\S]*?)\nNODE/)[1];
     const publication = (releases: object[], sha = 'verified-sha', failApi = false, tag = 'v1.2.3'): WorkflowGuardCase => ({ requireBody: `
@@ -856,6 +856,98 @@ module.exports = {
       { label: 'tag moved after verification', guard: publication([], 'moved-sha'), fails: /tag moved/ },
       { label: 'GitHub API unavailable', guard: publication([], 'verified-sha', true), fails: /API unavailable/ },
     ]);
+  });
+
+  it('publishes with GitHub CLI only after the draft holds exactly the built assets', () => {
+    const require = createRequire(import.meta.url);
+    const builderRequire = createRequire(require.resolve('electron-builder/package.json'));
+    const appBuilderRequire = createRequire(builderRequire.resolve('app-builder-lib/package.json'));
+    const { load } = appBuilderRequire('js-yaml');
+    const workflow = load(fs.readFileSync(path.join(projectRoot, '.github/workflows/release.yml'), 'utf8'));
+    expect(JSON.stringify(workflow)).not.toMatch(/softprops|action-gh-release/);
+    const step = workflow.jobs.publish.steps.find((candidate: any) => candidate.name === 'Publish verified GitHub release');
+    expect(step.env).toMatchObject({ GH_TOKEN: '${{ github.token }}', ARTIFACT_ROOT: 'release-artifacts' });
+    const program = step.run.match(/<<'NODE'\n([\s\S]*?)\nNODE/)[1];
+
+    const files = ['JaneT-Setup-1.2.3-win-x64.exe', 'JaneT-Setup-1.2.3-win-x64.exe.blockmap', 'JaneT-Portable-1.2.3-win-x64.exe',
+      'latest.yml', 'JaneT-1.2.3-mac-arm64.dmg', 'JaneT-1.2.3-mac-arm64.zip', 'JaneT-1.2.3-mac-arm64.zip.blockmap',
+      'latest-mac.yml', 'JaneT-1.2.3-linux-x64.AppImage', 'JaneT-1.2.3-linux-x64.deb', 'latest-linux.yml'];
+    const fixture = (omit: string[] = []) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-publish-'));
+      files.filter((name) => !omit.includes(name)).forEach((name, index) => {
+        const platform = name.includes('mac') ? 'mac' : name.includes('linux') ? 'linux' : 'win';
+        fs.mkdirSync(path.join(root, `installer-${platform}`), { recursive: true });
+        fs.writeFileSync(path.join(root, `installer-${platform}`, name), 'x'.repeat(index + 1));
+      });
+      fs.writeFileSync(path.join(root, 'installer-win', 'builder-debug.yml'), 'ignored');
+      return root;
+    };
+    const calls: string[][][] = [];
+    const publication = (root: string, options: { releases?: object[]; draft?: boolean; assets?: (built: Array<{ name: string; size: number }>) => object[] } = {}): WorkflowGuardCase => {
+      const callLog: string[][] = [];
+      calls.push(callLog);
+      (globalThis as any).__publishCalls = calls;
+      return { requireBody: `
+        if (id !== 'node:child_process') return nativeRequire(id);
+        const fs = nativeRequire('node:fs');
+        const log = globalThis.__publishCalls[${calls.length - 1}];
+        let uploaded = [];
+        return { execFileSync(command, args) {
+          if (command !== 'gh') throw new Error('Expected GitHub CLI');
+          log.push(args);
+          if (args[0] === 'api') return JSON.stringify([${JSON.stringify(options.releases ?? [])}]);
+          if (args[0] === 'release' && args[1] === 'upload') {
+            uploaded = args.slice(args.indexOf('--clobber') + 1).map(file => ({ name: file.split(/[\\\\/]/).pop(), size: fs.statSync(file).size }));
+          }
+          if (args[0] === 'release' && args[1] === 'view') {
+            const assets = (${options.assets ? options.assets.toString() : 'null'} ?? ((built) => built.map(a => ({ ...a, state: 'uploaded' }))))(uploaded);
+            return JSON.stringify({ isDraft: ${JSON.stringify(options.draft ?? true)}, assets });
+          }
+          return '';
+        } };
+      `, env: { RELEASE_TAG: 'v1.2.3', GITHUB_REPOSITORY: 'owner/repo', ARTIFACT_ROOT: root } };
+    };
+
+    const root = fixture();
+    expectGuardOutcomes(program, [
+      { label: 'new release', guard: publication(root) },
+      { label: 'retry over an unpublished draft', guard: publication(root, { releases: [{ tag_name: 'v1.2.3', draft: true }] }) },
+      { label: 'same tag already published', guard: publication(root, { releases: [{ tag_name: 'v1.2.3', draft: false }] }), fails: /Already published/ },
+      { label: 'a platform produced no installer', guard: publication(fixture(['JaneT-1.2.3-linux-x64.deb'])), fails: /No built file matches/ },
+      { label: 'draft is missing an asset', guard: publication(root, { assets: (built) => built.slice(1).map((asset) => ({ ...asset, state: 'uploaded' })) }), fails: /Draft assets differ/ },
+      { label: 'draft has a stale extra asset', guard: publication(root, { assets: (built) => [...built, { name: 'old.zip', size: 1 }].map((asset) => ({ ...asset, state: 'uploaded' })) }), fails: /Draft assets differ/ },
+      { label: 'asset size differs', guard: publication(root, { assets: (built) => built.map((asset) => ({ ...asset, size: asset.size + 1, state: 'uploaded' })) }), fails: /size differs/ },
+      { label: 'asset upload incomplete', guard: publication(root, { assets: (built) => built.map((asset) => ({ ...asset, state: 'starter' })) }), fails: /did not finish uploading/ },
+      { label: 'release published by someone else mid-run', guard: publication(root, { draft: false }), fails: /left draft state/ },
+    ]);
+
+    const verbs = (log: string[][]) => log.filter((args) => args[0] === 'release').map((args) => args[1]);
+    expect(verbs(calls[0])).toEqual(['create', 'upload', 'view', 'edit']);
+    expect(calls[0].find((args) => args[1] === 'create')).toEqual(
+      ['release', 'create', 'v1.2.3', '--repo', 'owner/repo', '--draft', '--verify-tag', '--title', 'v1.2.3', '--generate-notes']);
+    const upload = calls[0].find((args) => args[1] === 'upload')!;
+    expect(upload.slice(0, 6)).toEqual(['release', 'upload', 'v1.2.3', '--repo', 'owner/repo', '--clobber']);
+    expect(upload.slice(6).map((file) => path.basename(file)).sort()).toEqual([...files].sort());
+    expect(calls[0].at(-1)).toEqual(['release', 'edit', 'v1.2.3', '--repo', 'owner/repo', '--draft=false', '--latest']);
+    expect(verbs(calls[1])).toEqual(['upload', 'view', 'edit']);
+    for (const failed of calls.slice(2)) expect(verbs(failed)).not.toContain('edit');
+  });
+
+  it('attests build provenance for every published installer before handing artifacts on', () => {
+    const require = createRequire(import.meta.url);
+    const builderRequire = createRequire(require.resolve('electron-builder/package.json'));
+    const appBuilderRequire = createRequire(builderRequire.resolve('app-builder-lib/package.json'));
+    const { load } = appBuilderRequire('js-yaml');
+    const workflow = load(fs.readFileSync(path.join(projectRoot, '.github/workflows/release.yml'), 'utf8'));
+    const pkg = workflow.jobs.package;
+    expect(pkg.permissions).toEqual({ contents: 'read', 'id-token': 'write', attestations: 'write' });
+    const names = pkg.steps.map((step: any) => step.name);
+    const attest = pkg.steps.find((step: any) => step.name === 'Attest build provenance');
+    expect(attest.uses).toMatch(/^actions\/attest-build-provenance@/);
+    expect(names.indexOf('Verify packaged release and native terminal runtime')).toBeLessThan(names.indexOf('Attest build provenance'));
+    expect(names.indexOf('Attest build provenance')).toBeLessThan(names.indexOf('Upload installer artifacts'));
+    const upload = pkg.steps.find((step: any) => step.name === 'Upload installer artifacts');
+    expect(attest.with['subject-path']).toBe(upload.with.path);
   });
 
   it('explains the first-installation failure without executing newly merged code', () => {
