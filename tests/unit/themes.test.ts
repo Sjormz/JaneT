@@ -99,6 +99,22 @@ describe('themes', () => {
     } finally { root.style.cssText = originalStyle; }
   });
 
+  it('keeps danger-button text legible on the error fill and its hover in every theme', () => {
+    const defaultOnDanger = globalCss.match(/--on-danger:\s*(#[0-9a-f]{6})/i)![1];
+    expect(globalCss).toMatch(/\.confirm\.danger\s*\{[^}]*color:\s*var\(--on-danger\)/);
+    expect(globalCss).toMatch(/\.confirm\.danger:hover:not\(:disabled\)\s*\{[^}]*color-mix\(in srgb, var\(--status-err\) 88%, var\(--text-primary\)\)/);
+    const mix = (top: string, alpha: number, bottom: string) => '#' + [1, 3, 5].map((index) => Math.round(
+      parseInt(top.slice(index, index + 2), 16) * alpha + parseInt(bottom.slice(index, index + 2), 16) * (1 - alpha),
+    ).toString(16).padStart(2, '0')).join('');
+    for (const name of themeNames) {
+      const { css } = getTheme(name);
+      const onDanger = css['on-danger'] ?? defaultOnDanger;
+      const hover = mix(css.red, 0.88, css['text-primary']);
+      expect(contrastRatio(onDanger, css.red), `${name} on-danger on red`).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(onDanger, hover), `${name} on-danger on hover ${hover}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   it('keeps secondary sidebar text legible on the chrome glass in every theme', () => {
     const sidebarSurfaceTokens = [...globalCss.matchAll(/([^{}]+)\{([^{}]*)\}/gs)]
       .filter(([, selectors]) => selectors.split(',').some((selector) => selector.trim() === '.sidebar'))
