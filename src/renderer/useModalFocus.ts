@@ -51,8 +51,14 @@ export function useModalFocus({
       return modals.length === 0 || modals[modals.length - 1] === container;
     };
 
+    // Initial focus waits a frame for the surface to render. If focus moves to another element inside the modal
+    // during that frame (a fast click or Tab), the user has chosen; pulling it back would send typing to the
+    // wrong field.
+    const focusAtSchedule = document.activeElement;
     const focusInitial = () => {
       if (!isTopmostModal()) return;
+      const active = document.activeElement;
+      if (active !== focusAtSchedule && active instanceof HTMLElement && active !== container && container.contains(active)) return;
       const preferred = initialFocusSelector
         ? container.querySelector<HTMLElement>(initialFocusSelector)
         : null;
