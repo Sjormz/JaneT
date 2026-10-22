@@ -85,10 +85,12 @@ Do not update unrelated dependencies.
 - Query live required checks and reviews. Inspect checks on the **current PR
   head SHA**, not earlier green runs. New pushes invalidate earlier evidence.
   Do not rename required checks or alter protection to unblock shipping.
-- Wait for CI and required independent review. Auto-merge may be disabled;
-  do not enable it or use `--admin`. If human approval is missing, report the
-  PR link and the required action; do not claim the release shipped.
-- Once approved and green, re-read the head SHA and merge using
+- Wait for CI, and for independent review if the live ruleset requires it
+  (with a single maintainer it currently does not; see `docs/release.md`).
+  Auto-merge may be disabled; do not enable it or use `--admin`. If a
+  required approval is missing, report the PR link and the required action;
+  do not claim the release shipped.
+- Once green (and approved, when required), re-read the head SHA and merge using
   `gh pr merge <number> --squash --match-head-commit <verified-head-sha>`.
   Verify the PR actually merged and obtain `mergeCommit.oid`.
 
@@ -136,7 +138,8 @@ Do not update unrelated dependencies.
 ## Stop conditions
 
 Stop with the smallest actionable question for unknown scope, missing access,
-human review, conflicting tags, unresolved failing checks or signing/policy
-decisions. Current macOS artifacts are ad-hoc signed and not notarized: do not
-describe them as Developer-ID-trusted production builds or silently change
+a required human review, conflicting tags, unresolved failing checks or
+signing/policy decisions. macOS release artifacts are Developer ID-signed and
+notarized by the Release workflow; local `dist:mac:test` builds are not, so do
+not describe those as trusted production builds or silently change
 that policy. See `docs/release.md` for recovery and the platform contract.

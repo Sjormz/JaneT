@@ -93,12 +93,15 @@ It should require these status checks before merge:
 
 It should also keep these pull request rules enabled:
 
-- one approving review
-- CODEOWNERS review
-- stale review dismissal after new pushes
-- last-pusher approval requirement
+- changes reach `main` only through a pull request (no direct or force pushes)
 - review thread resolution
 - squash-only merging
+
+JaneT has a single maintainer, who is also the only code owner. GitHub does not
+let a PR's author approve their own PR, so the ruleset requires **no approving
+review**: a PR merges once the required checks pass on its current head. If a
+second maintainer joins, restore one approving review, CODEOWNERS review,
+stale-review dismissal and last-pusher approval.
 
 The platform jobs run desktop smoke tests but retain their `Durable workspace`
 display names because those names are required-check contexts. Change workflow
@@ -208,9 +211,10 @@ investigation. Record command results, counts, skips and untested platforms.
 Stage only the reviewed scope, including both version files. Commit, push the
 scoped branch and create/update a PR with version rationale and test evidence.
 Add the `release` label when this PR is intended to publish.
-Read live required checks and reviews; inspect the current PR head SHA. Wait
-for required independent approval and passing checks. Auto-merge is not assumed
-available. A missing human approval is a blocker, not permission to bypass.
+Read live required checks and any required reviews; inspect the current PR head
+SHA. Wait for passing checks, and for approval if the ruleset requires one.
+Auto-merge is not assumed available. A failing check or a missing required
+approval is a blocker, not permission to bypass.
 
 Merge with `gh pr merge <number> --squash --match-head-commit <verified-head-sha>`.
 Read back the merged PR and its `mergeCommit.oid`; do not assume a successful
@@ -293,7 +297,8 @@ The skill cannot supply a human approval, signing credentials or missing GitHub
 permissions. Tag rules and GitHub immutable-release settings are additional
 repository controls, not changed by installing the skill. The workflow's
 ancestry check proves the source is on main; it does not prove a particular PR
-review happened. The operator/skill must enforce the review and exact-SHA gates.
+review happened. The operator/skill must enforce the exact-SHA gate, and any
+review the ruleset requires.
 
 Release concurrency uses GitHub's native `queue: max` (up to 100 waiting jobs or
 runs); publication order follows readiness, not semantic version order. The
