@@ -1,7 +1,7 @@
 import type { ElectronApplication } from '@playwright/test';
 import { execFile, type ChildProcess } from 'node:child_process';
 
-function waitForExit(child: ChildProcess, timeout: number): Promise<boolean> {
+export function waitForExit(child: ChildProcess, timeout: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
   return new Promise(resolve => {
     const finish = (exited: boolean) => {

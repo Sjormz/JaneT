@@ -105,3 +105,15 @@ then intercepted by the terminal. Three repetitions in normal preceding-test
 order did not reproduce it. The fixture now waits for the dialog's entrance
 animation to finish before the real pointer click; the exact original sequence
 remains unproven, so this is a readiness guard rather than a claimed root cause.
+
+Hosted repair commit `603bfa9` passed Linux, and Windows passed native packaging
+and the packaged PTY check. macOS reported two flaky cases: the dev launcher
+remained at "Restoring your workspace" after five seconds, and the TUI-copy case
+timed out in `firstWindow()` before any clipboard operation. Their retries
+passed; the job correctly failed. No macOS startup root cause is claimed.
+CI now retains opt-in startup stages (entry/lock, ready, window/load/show and
+settings IPC) by process ID. The dev test keeps Electron/Vite logs in its
+disposable profile, attaches them, and observes launcher exit before profile
+removal. Its POSIX launcher owns a separate process group for bounded fallback
+cleanup; Windows stops only the test-owned process tree. These changes preserve
+evidence and fix cleanup; they do not by themselves prove the startup issue fixed.

@@ -49,6 +49,7 @@ npm run test:e2e
 ```
 
 CI retains unit and Electron JUnit reports under `test-results/`, alongside failure traces. An Electron test that only passes on retry fails CI; the retry remains available for diagnosis. Inspect the first failure and fix its cause before rerunning the job.
+`electron-events.jsonl` records opt-in startup stages by process ID, including window creation/load/show and settings IPC. Dev-launcher Electron/Vite logs come from its disposable test profile and are attached before cleanup. Use these to distinguish an absent first window from a later UI assertion failure.
 
 If you change Electron main-process code, preload code, or release behavior, make sure the build still succeeds after your changes.
 
