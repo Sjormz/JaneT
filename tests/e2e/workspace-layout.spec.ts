@@ -210,7 +210,8 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
     });
     const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(800, 600));
+    await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(true);
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(800, 600));
     await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
       .toEqual({ width: 800, height: 600 });
     await expect(page.locator('.terminal-container').first()).toBeVisible();
@@ -311,7 +312,9 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     });
     const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1200, 760));
+    // Resize the shown client area, not macOS window chrome or its pending first show.
+    await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(true);
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1200, 760));
     // Measure only the settled layout: the resize lands asynchronously (xvfb), and the launch
     // choreography translates the rails until html.is-launching is removed.
     await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
@@ -417,7 +420,7 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     await expect(tabsPanel.getByRole('button', { name: 'SSH connections' })).toHaveCount(0);
     await expect(page.locator('#vtab-ssh-connections')).toHaveCount(0);
 
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(800, 600));
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(800, 600));
     await expect.poll(() => page.evaluate(() => innerWidth)).toBeLessThanOrEqual(800);
     const compactTabs = page.getByRole('button', { name: 'Show workspace list' });
     await expect(compactTabs).toBeVisible();

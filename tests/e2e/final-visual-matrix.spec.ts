@@ -251,7 +251,9 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
     app.windows().forEach(capturePageErrors);
     const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1280, 800));
+    // Resize the shown client area, not macOS window chrome or its pending first show.
+    await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(true);
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1280, 800));
     await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
       .toEqual({ width: 1280, height: 800 });
     await expect(page.locator('.vtab-item')).toHaveCount(4);
@@ -313,7 +315,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
     for (const theme of themes) {
       await switchTheme(page, theme);
       for (const viewport of viewports) {
-        await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]?.setSize(
+        await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]?.setContentSize(
           size.width,
           size.height,
         ), viewport);
