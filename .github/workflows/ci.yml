@@ -1,13 +1,19 @@
 name: CI
 
 on:
+  workflow_dispatch:
+    inputs:
+      full_desktop_e2e:
+        description: 'Run the full Electron suite on macOS and Windows (Linux always runs it)'
+        type: boolean
+        default: true
   pull_request:
     branches: [main]
   push:
     branches: [main]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'manual' || 'automatic' }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -128,11 +134,20 @@ jobs:
           cp test-results/e2e/results.xml test-results/macos-native-repetitions.xml
 
       - name: Run desktop workflow smoke tests
+        if: github.event_name != 'workflow_dispatch' || !inputs.full_desktop_e2e
         env:
           DEBUG: pw:browser
           JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
           JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
         run: npx playwright test --config playwright.config.ts tests/e2e/dev-instance.spec.ts tests/e2e/close-shutdown.spec.ts tests/e2e/pane-maximize.spec.ts tests/e2e/terminal-copy.spec.ts tests/e2e/terminal-graphics.spec.ts tests/e2e/optional-workspace-setup.spec.ts tests/e2e/editor.spec.ts tests/e2e/settings-recovery.spec.ts tests/e2e/local-terminal-recovery.spec.ts
+
+      - name: Run full desktop Electron e2e tests
+        if: github.event_name == 'workflow_dispatch' && inputs.full_desktop_e2e
+        env:
+          DEBUG: pw:browser
+          JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
+          JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
+        run: npx playwright test --config playwright.config.ts --retries=0
 
       - name: Build and verify native Windows package
         if: runner.os == 'Windows'

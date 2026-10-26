@@ -18,13 +18,13 @@ For "let's ship this", "get this out to prod", or a JaneT release request, read
 Preparation, review, dry-run, or skill-authoring requests do not authorize
 publishing. Never bypass required reviews or rewrite published tags/assets.
 
-## Before opening or updating a PR
+## Verification and PR delivery
 
-- Use the CI Node version (currently 24.19.0), and record `node --version`. A pass on another supported version is useful evidence, not CI parity.
-- Use the lockfile. If dependencies changed or the checkout is fresh, run `npm ci`; do not silently update dependencies while debugging.
-- Run `npm run typecheck`, the **entire** `npm test` suite, and `npm run build`. Focused tests are for iteration, not a replacement for these checks.
+- Prefer GitHub-hosted verification. Push the candidate branch and open/update its PR, or dispatch `ci.yml` for that branch as documented in `CONTRIBUTING.md`. Do not run the full unit/build/desktop suites locally by default; use local checks for focused iteration or machine-specific diagnosis when needed or requested.
+- Full verification must pass on the current PR head before merge: `npm run typecheck`, the **entire** `npm test` suite, `npm run build`, and the platform selections in `ci.yml`. Focused or selected tests do not replace those gates. Opening a PR with checks pending is allowed; report that state explicitly.
+- For local checks, use the CI Node version (currently 24.19.0), record `node --version`, and use the lockfile. If dependencies changed or the checkout is fresh, run `npm ci`; do not silently update dependencies while debugging. A pass on another supported version is useful evidence, not CI parity.
 - For documentation-only changes with no runtime, configuration, dependency, or test changes, check the documentation and diff instead; state why runtime tests were not rerun.
-- After building, run the desktop smoke command from `ci.yml` on the available desktop OS, plus affected E2E specs not included in that command. Shared app, terminal, persistence, or lifecycle changes need the full `npx playwright test --config playwright.config.ts` run. Linux CI runs it under `xvfb-run --auto-servernum`.
+- CI runs the desktop smoke selection on macOS/Windows and the full Electron suite on Linux under `xvfb-run --auto-servernum`. For shared app, terminal, persistence or lifecycle changes, dispatch with `full_desktop_e2e=true` to run the full Electron suite on macOS/Windows too. Include affected specs not selected by normal CI, and report opt-in/platform skips and any untested coverage.
 - Set `JANET_TEST_PYTHON` to a verified Python executable for Hermes tests. On Windows use `npm.cmd`/`npx.cmd` if PowerShell blocks their script shims. If sandbox restrictions prevent a build or native test, use the authorized escalation path and report any checks still blocked.
 - State the exact commands, OS/runtime, pass/fail/skip counts, and untested platforms. Do not describe a selected test run as full verification.
 - When authorized to push, inspect checks on the **current PR head SHA**. PR creation, local success, and an earlier green commit do not prove the new head is green. Report pending or failed checks explicitly.
