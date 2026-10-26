@@ -53,6 +53,8 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
     await recipients.nth(1).check();
     const dialog = page.getByRole('alertdialog', { name: 'Start broadcast input?' });
     await expect(dialog).toContainText('2 selected panes');
+    await expect.poll(() => dialog.evaluate(element => element.getAnimations({ subtree: true })
+      .some(animation => animation.playState === 'running'))).toBe(false);
     await dialog.getByRole('button', { name: 'Start broadcast input' }).click();
 
     const status = page.getByRole('status', { name: /broadcast input active/i });

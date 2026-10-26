@@ -19,6 +19,7 @@ Use npm **11.17.0**, pinned in `package.json` to match the current development m
 npm install --global npm@11.17.0
 npm --version
 npm ci
+npx --no install-electron
 npm run dev
 ```
 
@@ -29,6 +30,10 @@ When updating Node, update `.nvmrc` and every workflow's Node selection together
 Renderer edits hot-reload. Main/preload edits rebuild, but do not restart Electron automatically: close the dev window and rerun `npm run dev` when your terminals and editors are safe to close. The launcher prints the checkout and renderer URL, and refuses to reuse an already-running server. Set `JANET_DEV_SERVER_URL` to another local port if needed.
 
 The Hermes integration test needs Python 3. If it is not on PATH, set `JANET_TEST_PYTHON` to the Python executable (an absolute path is supported). CI provisions Python explicitly. PowerShell tests use the system module path rather than inheriting another application's PSReadLine.
+
+Install the Electron binary explicitly after `npm ci`, before running tests. Current Electron packages otherwise download it on first use, which can turn a unit test into a network operation. CI and release verification install it before starting test workers.
+
+Dependabot opens `node-pty`, Electron and electron-builder updates separately from routine dependency groups. Review their native runtime and package compatibility individually. Keep `node-pty` pinned to an exact version and validate its upstream fixes and packaged terminal before accepting an update.
 
 To check the actual installed `hermes --tui` copy gesture on Windows, build JaneT, set `JANET_TEST_HERMES=1` in the test process environment, and run `npx playwright test tests/e2e/hermes-copy.spec.ts --repeat-each=3`. Hermes must already be installed and on PATH. This opt-in check uses temporary JaneT/Hermes profiles, no conversation prompts, and tests Shift-drag then Ctrl+Shift+C after a resize redraw. On macOS the native gesture is Option-drag. The regular terminal-copy suite also covers redraw retention without requiring Hermes.
 
@@ -42,6 +47,8 @@ npm test
 npm run build
 npm run test:e2e
 ```
+
+CI retains unit and Electron JUnit reports under `test-results/`, alongside failure traces. An Electron test that only passes on retry fails CI; the retry remains available for diagnosis. Inspect the first failure and fix its cause before rerunning the job.
 
 If you change Electron main-process code, preload code, or release behavior, make sure the build still succeeds after your changes.
 

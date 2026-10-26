@@ -237,10 +237,9 @@ describe('release tooling', () => {
   });
 
   it('keeps the documented node-pty lock and Windows fixes aligned with release tooling', () => {
-    const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
     const releaseGuide = fs.readFileSync(path.join(projectRoot, 'docs', 'release.md'), 'utf8');
 
-    expect(releaseGuide).toContain(`locks \`node-pty\` ${packageJson.dependencies['node-pty']}`);
+    expect(releaseGuide).toContain('pins `node-pty` in `package.json` and `package-lock.json`');
     expect(releaseGuide).toContain('Windows handle fix #922');
     expect(releaseGuide).toContain('worker deadlock fix #943');
     expect(releaseGuide).toContain('PR #885');
@@ -542,6 +541,9 @@ describe('release tooling', () => {
   });
 
   it('verifies the node-pty Windows worker path and ConPTY payload', async () => {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+    const pinnedVersion = packageJson.dependencies['node-pty'];
+    expect(pinnedVersion).toMatch(/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/);
     const {
       APP_ASAR_WORKER_REWRITE,
       patchNodePtyWindowsWorkerSource,
@@ -563,7 +565,7 @@ describe('release tooling', () => {
       path.join(installedNodePtyRoot, 'src', 'win', 'conpty.cc'),
       'utf8',
     );
-    expect(installedNodePtyPackage.version).toBe('1.2.0-beta.15');
+    expect(installedNodePtyPackage.version).toBe(pinnedVersion);
     expect(installedConptySource).toContain('static std::mutex g_ptyHandlesMutex;');
     expect(installedConptySource).toContain('std::atomic<int> ptyCounter{0};');
     expect(installedConptySource).not.toContain('assert(remove_pty_baton');
@@ -578,7 +580,7 @@ describe('release tooling', () => {
       fs.mkdirSync(libRoot, { recursive: true });
       const prebuildRoot = path.join(nodePtyRoot, 'prebuilds', 'win32-x64');
       fs.mkdirSync(prebuildRoot, { recursive: true });
-      fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: '1.2.0-beta.15' }));
+      fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: pinnedVersion }));
       fs.writeFileSync(path.join(prebuildRoot, 'conpty.node'), 'native');
       fs.mkdirSync(path.join(prebuildRoot, 'conpty'));
       for (const file of ['conpty.dll', 'OpenConsole.exe']) fs.writeFileSync(path.join(prebuildRoot, 'conpty', file), file);
@@ -587,8 +589,8 @@ describe('release tooling', () => {
         .toThrow(/cannot resolve app\.asar\.unpacked/);
       fs.writeFileSync(path.join(libRoot, 'windowsConoutConnection.js'), installedWorker);
       fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: '1.1.0' }));
-      expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).toThrow(/ConPTY fixes #922\/#943/);
-      fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: '1.2.0-beta.15' }));
+      expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).toThrow(/does not match project pin/);
+      fs.writeFileSync(path.join(nodePtyRoot, 'package.json'), JSON.stringify({ version: pinnedVersion }));
 
       fs.rmSync(path.join(prebuildRoot, 'conpty.node'));
       expect(() => validateWindowsPtyRuntime({ nodePtyRoot })).toThrow(/native module/);
@@ -617,7 +619,6 @@ describe('release tooling', () => {
       fs.rmSync(fixtureRoot, { recursive: true, force: true });
     }
 
-    const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
     expect(packageJson.scripts.postinstall).toContain('patch-node-pty-windows-worker.mjs');
     expect(packageJson.build.afterPack).toBe('scripts/package-windows-conpty.cjs');
   }, 30_000);

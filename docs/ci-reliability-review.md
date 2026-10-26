@@ -65,3 +65,43 @@ The full Windows desktop selection from ci.yml then passed all 26 tests with ret
 
 Run 34470136665 passed both desktop jobs but exposed an intermittent Linux component failure in `disambiguates duplicate pane labels without exposing terminal IDs`: its live-region text stayed empty. This label-formatting fixture sent attention immediately after mount, unlike the neighboring announcement test that first establishes an agent session. It now sends `session.start` and waits for the restored tab's Ready state before requesting attention. The exact label and terminal-ID privacy checks remain. This addresses the fixture's initialization gap; the log alone does not prove the precise React scheduling sequence behind the missed announcement.
 Validation for the announcement fixture: all 129 tests in SplitPane.test.tsx passed, the exact case passed three isolated runs, and the full unit suite passed 1,268 tests with eight skips. App code, build inputs, and E2E code are unchanged from the preceding verified runs.
+
+## Dependency and fixture follow-up — 2026-10-26
+
+PR #196 (`208dc698`) failed the same two release-tooling assertions on all three
+platforms after updating `node-pty` to beta.18. Tests and the Windows package
+verifier independently required beta.15, and the release guide repeated that
+version. The project manifest is now the version source for installed and
+packaged modules. Tests retain the upstream ConPTY source checks, worker rewrite,
+DLL payload checks and wrong-version rejection; packaged verification still
+requires a real terminal round trip. Native runtime/build-tool updates remain
+enabled in Dependabot but are excluded from the routine dependency groups.
+
+A clean `npm ci` also leaves current Electron packages to download their binary
+on first use. CI and release verification now install it explicitly before test
+workers start, keeping network installation out of unit-test timeouts. Unit and
+Electron JUnit reports are retained alongside failure traces. Playwright retries
+remain diagnostic, but a flaky result fails CI.
+
+The inline Start terminals component case now finishes settings/effect setup,
+asserts that its keyboard event was handled, and drives its deferred focus frame
+explicitly. Holding that frame reproduced the missing-focus assertion; the
+original hosted timing sequence remains unproven on this Windows machine.
+
+Full Windows E2E also exposed a visual-matrix race, reproduced once in three
+focused repetitions with retries disabled. Its visible failure decoration could
+belong to a previous command. Measurement then sampled a temporary busy badge on
+the selected tab, rather than the fixture's resting state. Each invocation now
+has a unique command comment; the test waits for its saved exit code and zero
+busy terminals before measuring. The 7:1 contrast, visible failure decoration
+and geometry assertions remain unchanged. Per-state reports attach before
+assertions so a failure preserves the measurements that explain it.
+
+A subsequent full run recorded `would-show` where the native notification test
+expected `focused`. The test now observes the real main-window focus state after
+each focus/blur request before relying on it. Three focused repetitions passed.
+That run also recorded a broadcast-confirmation click whose target was moving,
+then intercepted by the terminal. Three repetitions in normal preceding-test
+order did not reproduce it. The fixture now waits for the dialog's entrance
+animation to finish before the real pointer click; the exact original sequence
+remains unproven, so this is a readiness guard rather than a claimed root cause.
