@@ -8,19 +8,26 @@ import { firstWindow, forceClose } from '../e2e/electronLifecycle';
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }));
 afterEach(() => { vi.useRealTimers(); vi.resetAllMocks(); });
 
-it('drives main readiness without losing the first-window deadline', async () => {
+it('probes readiness synchronously without losing the first-window deadline', async () => {
   const page = {};
   let publishWindow!: (page: unknown) => void;
   const window = new Promise(resolve => { publishWindow = resolve; });
-  const whenReady = vi.fn(async () => { publishWindow(page); });
+  const whenReady = vi.fn(async () => {});
+  const isReady = vi.fn(() => false);
   const app = {
     firstWindow: vi.fn(() => window),
-    evaluate: vi.fn(async (callback: (electron: any) => unknown) => callback({ app: { whenReady } })),
+    evaluate: vi.fn(async (callback: (electron: any) => unknown) => {
+      const result = callback({ app: { whenReady, isReady } });
+      expect(result).not.toBeInstanceOf(Promise);
+      publishWindow(page);
+      return result;
+    }),
   } as unknown as ElectronApplication;
   const result = firstWindow(app, { timeout: 1234 });
   try {
     await Promise.resolve();
-    expect(whenReady).toHaveBeenCalledOnce();
+    expect(isReady).toHaveBeenCalledOnce();
+    expect(whenReady).not.toHaveBeenCalled();
     await expect(result).resolves.toBe(page);
     expect(app.firstWindow).toHaveBeenCalledWith({ timeout: 1234 });
   } finally {

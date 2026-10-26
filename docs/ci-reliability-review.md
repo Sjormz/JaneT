@@ -129,3 +129,21 @@ deadline still wins if that request stalls, and a regression test covers both
 window success and timeout with an unresponsive request. This addresses the
 observed idle startup sequence; Electron's underlying macOS cause remains a
 hypothesis until platform validation confirms the behavior.
+
+## Remaining startup failure on PR #203
+
+The first #203 head (`1ad590b`) changed only two undici lockfile entries. Linux
+passed, but macOS again timed out in the modifier-selection TUI test and passed
+on retry. Its trace contains only a successful Electron launch followed by an
+unfinished first-window wait and the asynchronous readiness evaluation. PID
+11995 held the instance lock, then took 29,830 ms from entry to readiness. No
+clipboard assertion ran. This disproves the earlier handshake as a complete fix.
+
+The shared helper now evaluates the synchronous `app.isReady()` query rather
+than awaiting `app.whenReady()` through the inspector. The window event remains
+the success condition, with its original deadline; a false readiness query does
+not count as a ready window. The unit check rejects promise-returning readiness
+callbacks and retains stalled-request success/timeout coverage. This tests the
+protocol boundary, not Electron's underlying macOS implementation. macOS CI now
+repeats the actual failing TUI case 25 times with retries disabled, then runs the
+normal desktop smoke selection. A single failed repetition fails the job.

@@ -119,6 +119,14 @@ jobs:
       - name: Build app
         run: npm run build
 
+      - name: Repeat macOS native startup and TUI copy without retries
+        if: runner.os == 'macOS'
+        env:
+          JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
+        run: |
+          npx playwright test --config playwright.config.ts tests/e2e/terminal-copy.spec.ts --grep "retains a modifier TUI selection" --repeat-each=25 --retries=0
+          cp test-results/e2e/results.xml test-results/macos-native-repetitions.xml
+
       - name: Run desktop workflow smoke tests
         env:
           DEBUG: pw:browser
