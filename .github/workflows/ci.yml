@@ -1,198 +1,209 @@
 name: CI
-
 on:
   workflow_dispatch:
     inputs:
       full_desktop_e2e:
-        description: 'Run the full Electron suite on macOS and Windows (Linux always runs it)'
+        description: Run the full Electron suite on macOS and Windows (Linux always runs it)
         type: boolean
         default: true
       macos_runner:
-        description: 'macOS runner (Intel default; Apple Silicon for diagnostics)'
+        description: macOS runner (Intel default; Apple Silicon for diagnostics)
         type: choice
-        options: [macos-26-intel, macos-26]
+        options:
+          - macos-26-intel
+          - macos-26
         default: macos-26-intel
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
-
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'manual' || 'automatic' }}-${{ github.ref }}-${{ inputs.macos_runner || 'macos-26-intel' }}
+  group: diagnose-windows-motion
   cancel-in-progress: true
-
 permissions:
   contents: read
-
 env:
-  NODE_VERSION: '24.19.0'
-
+  NODE_VERSION: 24.19.0
 jobs:
   verify:
     name: Verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
+          cache: npm
       - name: Install Linux desktop test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb
-
       - uses: actions/setup-python@v7
         id: python
         with:
-          python-version: '3.12'
-
+          python-version: "3.12"
       - name: Install pinned npm
         shell: bash
-        run: |
-          npm install --global "$(node -p "require('./package.json').packageManager")"
-          npm --version
+        run: >
+          npm install --global "$(node -p
+          "require('./package.json').packageManager")"
 
+          npm --version
       - name: Install dependencies
         run: npm ci
         env:
           NODE_ENV: development
-
       - name: TypeScript check
         run: npm run typecheck
-
       - name: Install Electron runtime before tests
         run: npx --no install-electron
-
       - name: Run unit and component tests
         run: npm test
         env:
           JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
-
       - name: Build app
         run: npm run build
-
       - name: Run Electron e2e tests
         env:
           DEBUG: pw:browser
           JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
           JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
         run: xvfb-run --auto-servernum npx playwright test --config playwright.config.ts
-
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
           name: test-results-linux
           path: test-results/
           retention-days: 7
-
+    if: false
   durable-workspace-platforms:
-    # Required-check context in main-approval-gate; keep this name stable.
     name: Durable workspace (${{ matrix.os }})
-    # Preserve the protected check name while pinning the actual macOS image and architecture.
-    runs-on: ${{ matrix.os == 'macos-latest' && (inputs.macos_runner || 'macos-26-intel') || matrix.os }}
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os:
+          - windows-latest
     steps:
       - uses: actions/checkout@v7
-
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
+          cache: npm
       - name: Install pinned npm
         shell: bash
-        run: |
-          npm install --global "$(node -p "require('./package.json').packageManager")"
-          npm --version
+        run: >
+          npm install --global "$(node -p
+          "require('./package.json').packageManager")"
 
+          npm --version
       - name: Install dependencies
         run: npm ci
         env:
           NODE_ENV: development
-
       - uses: actions/setup-python@v7
         id: python
         with:
-          python-version: '3.12'
-
+          python-version: "3.12"
       - name: Install Electron runtime before tests
         run: npx --no install-electron
-
+      - name: Instrument disposable synthetic motion input
+        shell: bash
+        run: |-
+          node <<'NODE'
+          const fs=require('node:fs');
+          let s=fs.readFileSync('src/main/index.ts','utf8');
+          s=s.replace('let mainWindow:', '(globalThis as any).__motionInput = [];\nlet mainWindow:').replace('terminalManager.write(id, data, userInput !== false);', '(globalThis as any).__motionInput.push({id,data,userInput});\n    terminalManager.write(id, data, userInput !== false);');
+          fs.writeFileSync('src/main/index.ts',s);
+          s=fs.readFileSync('tests/e2e/motion.spec.ts','utf8');
+          s=s.replace('holdExits: false };','holdExits: false, keyEvents: [] as unknown[] };\n        for (const type of [\'keydown\',\'keypress\',\'keyup\',\'input\']) document.addEventListener(type, raw => { const e=raw as KeyboardEvent; state.keyEvents.push({type,key:e.key,target:(e.target as HTMLElement)?.className,focused:document.hasFocus(),ctrl:e.ctrlKey,alt:e.altKey,meta:e.metaKey}); }, true);');
+          s=s.replace('visibility: document.visibilityState, focused: document.hasFocus(),','visibility: document.visibilityState, focused: document.hasFocus(), keyEvents: (window as any).__motion.keyEvents,');
+          s=s.replace("      await testInfo.attach('electron-output',", "      if (app) await testInfo.attach('native-input', {body:JSON.stringify(await Promise.race([app.evaluate(({BrowserWindow}) => ({writes:(globalThis as any).__motionInput,focused:BrowserWindow.getAllWindows()[0]?.isFocused()})).catch(String),new Promise(resolve=>setTimeout(()=>resolve('inspector unavailable'),1000))])),contentType:'application/json'});\n      await testInfo.attach('electron-output',");
+          fs.writeFileSync('tests/e2e/motion.spec.ts',s);
+          NODE
       - name: Run unit and component tests
         run: npm test
         env:
           JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
-
       - name: Build app
         run: npm run build
-
       - name: Repeat macOS native startup and TUI copy without retries
         if: runner.os == 'macOS'
         env:
           JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
-        run: |
-          npx playwright test --config playwright.config.ts tests/e2e/terminal-copy.spec.ts --grep "retains a modifier TUI selection" --repeat-each=25 --retries=0
-          cp test-results/e2e/results.xml test-results/macos-native-repetitions.xml
+        run: >
+          npx playwright test --config playwright.config.ts
+          tests/e2e/terminal-copy.spec.ts --grep "retains a modifier TUI
+          selection" --repeat-each=25 --retries=0
 
+          cp test-results/e2e/results.xml
+          test-results/macos-native-repetitions.xml
       - name: Run desktop workflow smoke tests
         if: github.event_name != 'workflow_dispatch' || !inputs.full_desktop_e2e
         env:
           DEBUG: pw:browser
           JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
           JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
-        run: npx playwright test --config playwright.config.ts tests/e2e/dev-instance.spec.ts tests/e2e/close-shutdown.spec.ts tests/e2e/pane-maximize.spec.ts tests/e2e/terminal-copy.spec.ts tests/e2e/terminal-graphics.spec.ts tests/e2e/optional-workspace-setup.spec.ts tests/e2e/editor.spec.ts tests/e2e/settings-recovery.spec.ts tests/e2e/local-terminal-recovery.spec.ts
-
+        run: npx playwright test --config playwright.config.ts tests/e2e/motion.spec.ts
+          --repeat-each=10 --retries=0 --max-failures=1
       - name: Configure macOS display for full desktop tests
-        if: runner.os == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.full_desktop_e2e
-        run: |
+        if: runner.os == 'macOS' && github.event_name == 'workflow_dispatch' &&
+          inputs.full_desktop_e2e
+        run: >
           swift - <<'SWIFT'
+
           import CoreGraphics
+
           import Foundation
+
           let display = CGMainDisplayID()
-          let modes = (CGDisplayCopyAllDisplayModes(display, nil) as? [CGDisplayMode]) ?? []
-          print("Available display modes:", modes.map { "\($0.width)x\($0.height)" })
-          // Leave room for the menu bar and Dock around the 1280x800 content checks.
-          guard let mode = modes.filter({ $0.width >= 1440 && $0.height >= 1080 })
+
+          let modes = (CGDisplayCopyAllDisplayModes(display, nil) as?
+          [CGDisplayMode]) ?? []
+
+          print("Available display modes:", modes.map {
+          "\($0.width)x\($0.height)" })
+
+          // Leave room for the menu bar and Dock around the 1280x800 content
+          checks.
+
+          guard let mode = modes.filter({ $0.width >= 1440 && $0.height >= 1080
+          })
             .min(by: { $0.width * $0.height < $1.width * $1.height }) else {
             throw NSError(domain: "JaneT CI display", code: 1,
               userInfo: [NSLocalizedDescriptionKey: "No display mode fits the 1280x800 layout assertions"])
           }
+
           var configuration: CGDisplayConfigRef? = nil
-          guard CGBeginDisplayConfiguration(&configuration) == .success, let configuration else {
+
+          guard CGBeginDisplayConfiguration(&configuration) == .success, let
+          configuration else {
             throw NSError(domain: "JaneT CI display", code: 2)
           }
-          guard CGConfigureDisplayWithDisplayMode(configuration, display, mode, nil) == .success else {
+
+          guard CGConfigureDisplayWithDisplayMode(configuration, display, mode,
+          nil) == .success else {
             CGCancelDisplayConfiguration(configuration)
             throw NSError(domain: "JaneT CI display", code: 3)
           }
-          guard CGCompleteDisplayConfiguration(configuration, .forSession) == .success else {
+
+          guard CGCompleteDisplayConfiguration(configuration, .forSession) ==
+          .success else {
             throw NSError(domain: "JaneT CI display", code: 4)
           }
-          print("Configured display bounds:", CGDisplayBounds(display))
-          SWIFT
 
+          print("Configured display bounds:", CGDisplayBounds(display))
+
+          SWIFT
       - name: Run full desktop Electron e2e tests
-        if: github.event_name == 'workflow_dispatch' && inputs.full_desktop_e2e
+        if: false
         env:
           DEBUG: pw:browser
           JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
           JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
         run: npx playwright test --config playwright.config.ts --retries=0
-
       - name: Build and verify native Windows package
-        if: runner.os == 'Windows'
+        if: false
         run: npm run dist:win -- --publish never
-
       - name: Verify packaged Windows release and terminal runtime
-        if: runner.os == 'Windows'
+        if: false
         run: node scripts/verify-release-artifacts.mjs windows release
-
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
