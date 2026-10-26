@@ -27,7 +27,7 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
   const first = `broadcast_${Date.now()}_first`;
   const second = `broadcast_${Date.now()}_second`;
   const appendCommand = (line: string) => (
-    `node -e "require('fs').writeFileSync('${outputPrefix}'+process.pid+'.txt','${line}\\n')"`
+    `node -e "require('fs').appendFileSync('${outputPrefix}'+process.ppid+'.txt','${line}\\n')"`
   );
   let app: ElectronApplication | undefined;
 
@@ -82,7 +82,7 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
     await page.keyboard.type(appendCommand(second), { delay: 5 });
     await page.keyboard.press('Enter');
     await expect.poll(receivedLines, { timeout: 15_000 })
-      .toEqual([`${first}\n`, `${first}\n`, `${second}\n`].sort());
+      .toEqual([`${first}\n`, `${first}\n${second}\n`].sort());
   } finally {
     await forceClose(app);
     fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
