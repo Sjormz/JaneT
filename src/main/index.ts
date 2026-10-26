@@ -40,6 +40,9 @@ import {
 import { NativeTerminalCapacity } from './terminalCapacity';
 import { parseCommandNotificationPayload, type CommandNotificationPayload } from '../shared/commandNotifications';
 
+// Initialize Node's lazy timing global before the renderer protocol first uses Electron's fetch.
+void globalThis.performance;
+
 let mainWindow: electron.BrowserWindow | null = null;
 let initializeUpdaterForWindow: ((window: electron.BrowserWindow) => void) | null = null;
 let terminalManager: TerminalManager;
