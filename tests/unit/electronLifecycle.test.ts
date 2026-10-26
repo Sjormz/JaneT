@@ -66,6 +66,25 @@ it('waits for app document navigation within the original window budget', async 
   await expect(result).resolves.toBe(page);
 });
 
+it('keeps probing native readiness until the window arrives and stops afterward', async () => {
+  vi.useFakeTimers();
+  const page = { on: vi.fn(), waitForURL: vi.fn().mockResolvedValue(undefined) };
+  let publishWindow!: (page: unknown) => void;
+  const window = new Promise(resolve => { publishWindow = resolve; });
+  const app = {
+    firstWindow: vi.fn(() => window),
+    evaluate: vi.fn().mockResolvedValueOnce(false).mockImplementationOnce(async () => {
+      publishWindow(page);
+      return true;
+    }),
+  } as unknown as ElectronApplication;
+  const result = firstWindow(app, { timeout: 1000 });
+  await vi.advanceTimersByTimeAsync(100);
+  await expect(result).resolves.toBe(page);
+  expect(app.evaluate).toHaveBeenCalledTimes(2);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it('kills only its child after a stalled debugger exit request and awaits process exit', async () => {
   vi.useFakeTimers();
   const child = Object.assign(new EventEmitter(), { pid: 12345, exitCode: null as number | null, signalCode: null, kill: vi.fn() });

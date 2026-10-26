@@ -68,7 +68,7 @@ function removeFixture(directory: string | undefined, prefix: string): void {
   if (path.dirname(resolved) !== fs.realpathSync(os.tmpdir()) || !path.basename(resolved).startsWith(prefix)) {
     throw new Error(`Refusing to remove non-fixture path: ${resolved}`);
   }
-  fs.rmSync(resolved, { recursive: true, force: true });
+  fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
 async function renderedEditorLines(editor: Locator): Promise<string[]> {

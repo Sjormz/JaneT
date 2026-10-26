@@ -31,8 +31,11 @@ test('starts the real dev launcher and cleans up its owned processes', async ({}
   let browser: Browser | undefined;
   let testFailure: unknown;
   try {
-    await expect.poll(() => output, { timeout: 25_000 }).toContain('Starting Electron');
-    await expect.poll(async () => fetch(`http://127.0.0.1:${debugPort}/json/version`).then((r) => r.ok).catch(() => false)).toBe(true);
+    // Spend the startup budget on the usable endpoint, rather than the earlier spawn message.
+    await expect.poll(async () => fetch(`http://127.0.0.1:${debugPort}/json/version`, {
+      signal: AbortSignal.timeout(1000),
+    }).then((r) => r.ok).catch(() => false), { timeout: 25_000 }).toBe(true);
+    expect(output).toContain('Starting Electron');
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`);
     const page = browser.contexts()[0].pages().find((page) => !page.url().startsWith('devtools:'))!;
     await expect(page).toHaveURL(url);

@@ -71,6 +71,7 @@ jobs:
 
       - name: Run Electron e2e tests
         env:
+          DEBUG: pw:browser
           JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
           JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
         run: xvfb-run --auto-servernum npx playwright test --config playwright.config.ts
