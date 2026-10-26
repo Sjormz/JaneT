@@ -20,11 +20,14 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
   test.setTimeout(60_000);
   const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-broadcast-e2e-'));
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(terminalSettings(userData)));
-  const outputPath = path.join(userData, 'broadcast-lines.txt').replace(/\\/g, '/');
+  const outputPrefix = path.join(userData, 'broadcast-result-').replace(/\\/g, '/');
+  const receivedLines = () => fs.readdirSync(userData)
+    .filter(name => /^broadcast-result-\d+\.txt$/.test(name))
+    .map(name => fs.readFileSync(path.join(userData, name), 'utf8')).sort();
   const first = `broadcast_${Date.now()}_first`;
   const second = `broadcast_${Date.now()}_second`;
   const appendCommand = (line: string) => (
-    `node -e "require('fs').appendFileSync('${outputPath}','${line}\\n')"`
+    `node -e "require('fs').writeFileSync('${outputPrefix}'+process.pid+'.txt','${line}\\n')"`
   );
   let app: ElectronApplication | undefined;
 
@@ -70,16 +73,16 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
     await terminals.nth(0).locator('.xterm-helper-textarea').focus();
     await page.keyboard.type(appendCommand(first), { delay: 5 });
     await page.keyboard.press('Enter');
-    await expect.poll(() => fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf8') : '', {
+    await expect.poll(receivedLines, {
       timeout: 15_000,
-    }).toBe(`${first}\n${first}\n`);
+    }).toEqual([`${first}\n`, `${first}\n`]);
 
     await page.keyboard.press('Escape');
     await expect(status).toBeHidden();
     await page.keyboard.type(appendCommand(second), { delay: 5 });
     await page.keyboard.press('Enter');
-    await expect.poll(() => fs.readFileSync(outputPath, 'utf8'), { timeout: 15_000 })
-      .toBe(`${first}\n${first}\n${second}\n`);
+    await expect.poll(receivedLines, { timeout: 15_000 })
+      .toEqual([`${first}\n`, `${first}\n`, `${second}\n`].sort());
   } finally {
     await forceClose(app);
     fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

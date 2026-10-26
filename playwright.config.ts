@@ -1,4 +1,13 @@
 import { defineConfig } from '@playwright/test';
+import { realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+
+if (process.platform === 'win32') {
+  // The runner's TEMP may use RUNNER~1 while shells report its long path.
+  const testTemp = realpathSync.native(tmpdir());
+  process.env.TEMP = testTemp;
+  process.env.TMP = testTemp;
+}
 
 export default defineConfig({
   testDir: './tests/e2e',
