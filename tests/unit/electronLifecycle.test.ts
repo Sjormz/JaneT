@@ -9,7 +9,7 @@ vi.mock('node:child_process', () => ({ execFile: vi.fn() }));
 afterEach(() => { vi.useRealTimers(); vi.resetAllMocks(); });
 
 it('probes readiness synchronously without losing the first-window deadline', async () => {
-  const page = {};
+  const page = { on: vi.fn(), waitForURL: vi.fn().mockResolvedValue(undefined) };
   let publishWindow!: (page: unknown) => void;
   const window = new Promise(resolve => { publishWindow = resolve; });
   const whenReady = vi.fn(async () => {});
@@ -30,6 +30,9 @@ it('probes readiness synchronously without losing the first-window deadline', as
     expect(whenReady).not.toHaveBeenCalled();
     await expect(result).resolves.toBe(page);
     expect(app.firstWindow).toHaveBeenCalledWith({ timeout: 1234 });
+    const [matchesUrl] = page.waitForURL.mock.calls[0];
+    expect(matchesUrl(new URL('about:blank'))).toBe(false);
+    expect(matchesUrl(new URL('janet://app/index.html'))).toBe(true);
   } finally {
     publishWindow(page);
     await result;
@@ -42,6 +45,25 @@ it('probes readiness synchronously without losing the first-window deadline', as
   vi.mocked(app.firstWindow).mockResolvedValueOnce(page as any);
   vi.mocked(app.evaluate).mockImplementationOnce(() => new Promise(() => {}));
   await expect(firstWindow(app)).resolves.toBe(page);
+});
+
+it('waits for app document navigation within the original window budget', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  let loaded!: () => void;
+  const navigation = new Promise<void>(resolve => { loaded = resolve; });
+  const page = { on: vi.fn(), waitForURL: vi.fn(() => navigation) };
+  const app = {
+    firstWindow: vi.fn(async () => { vi.setSystemTime(200); return page; }),
+    evaluate: vi.fn().mockResolvedValue(false),
+  } as unknown as ElectronApplication;
+  let returned = false;
+  const result = firstWindow(app, { timeout: 1000 }).then(value => { returned = true; return value; });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.waitForURL).toHaveBeenCalledWith(expect.any(Function), { waitUntil: 'domcontentloaded', timeout: 800 });
+  expect(returned).toBe(false);
+  loaded();
+  await expect(result).resolves.toBe(page);
 });
 
 it('kills only its child after a stalled debugger exit request and awaits process exit', async () => {

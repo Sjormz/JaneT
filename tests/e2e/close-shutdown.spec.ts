@@ -129,7 +129,7 @@ test('closing the window stops managed terminal work and exits without an active
     await expect.poll(() => canConnect(port), { timeout: 5_000 }).toBe(false);
   } finally {
     await forceClose(app);
-    fs.rmSync(userData, { recursive: true, force: true });
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -165,7 +165,7 @@ test('cancelling dirty-editor close keeps the same JaneT window open', async () 
     await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
   } finally {
     await forceClose(app);
-    fs.rmSync(userData, { recursive: true, force: true });
-    fs.rmSync(fixture.directory, { recursive: true, force: true });
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    fs.rmSync(fixture.directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

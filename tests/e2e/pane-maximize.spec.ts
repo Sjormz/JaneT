@@ -116,7 +116,7 @@ async function launchApp(settings: unknown, prefix: string, existingUserData?: s
   } catch (error) {
     await browser?.close().catch(() => {});
     await killProcessTree(electronProcess);
-    fs.rmSync(userData, { recursive: true, force: true });
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     throw error;
   }
 }

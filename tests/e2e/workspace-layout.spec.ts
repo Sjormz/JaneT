@@ -290,7 +290,7 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
     expect(violations).toEqual([]);
   } finally {
     await forceClose(app);
-    fs.rmSync(userData, { recursive: true, force: true });
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -489,7 +489,7 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
     await testInfo.attach('workspace-left-narrow', { path: narrowScreenshot, contentType: 'image/png' });
   } finally {
     await forceClose(app);
-    fs.rmSync(userData, { recursive: true, force: true });
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

@@ -91,7 +91,7 @@ test('restores a validated previous generation without overwriting corrupt setti
     });
   } finally {
     await forceClose(app);
-    fs.rmSync(userData, { recursive: true, force: true });
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -121,6 +121,6 @@ test('replaces corrupt settings with defaults only after confirmation', async ()
     });
   } finally {
     await forceClose(app);
-    fs.rmSync(userData, { recursive: true, force: true });
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

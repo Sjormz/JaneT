@@ -80,6 +80,6 @@ test('creates grouped live workspaces and restores them after closing without a 
     await expect(page.getByRole('alert')).toHaveCount(0);
   } finally {
     if (app) await app.close();
-    fs.rmSync(userData, { recursive: true, force: true });
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

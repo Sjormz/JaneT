@@ -60,6 +60,6 @@ test('keeps the empty picker compact and deletes a snippet with a mouse click', 
     await expect(page.getByText('No snippets yet')).toBeVisible();
   } finally {
     await forceClose(app);
-    fs.rmSync(userData, { recursive: true, force: true });
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

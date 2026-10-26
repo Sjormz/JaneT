@@ -2,12 +2,19 @@ import type { ElectronApplication } from '@playwright/test';
 import { execFile, type ChildProcess } from 'node:child_process';
 
 export async function firstWindow(app: ElectronApplication, options?: Parameters<ElectronApplication['firstWindow']>[0]) {
+  const timeout = options?.timeout ?? 30_000;
+  const started = Date.now();
   // Let the inspector request return while Electron's native readiness event is pending.
   const window = app.firstWindow(options);
-  return Promise.race([
+  const page = await Promise.race([
     window,
     app.evaluate(({ app }) => app.isReady()).then(() => window),
   ]);
+  page.on('pageerror', error => console.error('[Electron renderer error]', error.message));
+  const remaining = timeout === 0 ? 0 : timeout - (Date.now() - started);
+  if (timeout !== 0 && remaining <= 0) throw new Error('Electron first-window deadline expired before document navigation.');
+  await page.waitForURL(url => url.href !== 'about:blank', { waitUntil: 'domcontentloaded', timeout: remaining });
+  return page;
 }
 
 export function waitForExit(child: ChildProcess, timeout: number): Promise<boolean> {
