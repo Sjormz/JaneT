@@ -7,13 +7,18 @@ on:
         description: 'Run the full Electron suite on macOS and Windows (Linux always runs it)'
         type: boolean
         default: true
+      macos_runner:
+        description: 'macOS runner (Intel default; Apple Silicon for diagnostics)'
+        type: choice
+        options: [macos-26-intel, macos-26]
+        default: macos-26-intel
   pull_request:
     branches: [main]
   push:
     branches: [main]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'manual' || 'automatic' }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'manual' || 'automatic' }}-${{ github.ref }}-${{ inputs.macos_runner || 'macos-26-intel' }}
   cancel-in-progress: true
 
 permissions:
@@ -86,7 +91,8 @@ jobs:
   durable-workspace-platforms:
     # Required-check context in main-approval-gate; keep this name stable.
     name: Durable workspace (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    # Preserve the protected check name while pinning the actual macOS image and architecture.
+    runs-on: ${{ matrix.os == 'macos-latest' && (inputs.macos_runner || 'macos-26-intel') || matrix.os }}
     strategy:
       fail-fast: false
       matrix:

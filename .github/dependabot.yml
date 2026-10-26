@@ -14,7 +14,7 @@ updates:
         exclude-patterns: ['node-pty']
       development-dependencies:
         dependency-type: development
-        exclude-patterns: ['electron', 'electron-builder']
+        exclude-patterns: ['electron', 'electron-builder', '@playwright/test']
     commit-message:
       prefix: chore
       include: scope

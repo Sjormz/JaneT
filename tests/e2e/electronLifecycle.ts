@@ -4,26 +4,12 @@ import { execFile, type ChildProcess } from 'node:child_process';
 export async function firstWindow(app: ElectronApplication, options?: Parameters<ElectronApplication['firstWindow']>[0]) {
   const timeout = options?.timeout ?? 30_000;
   const started = Date.now();
-  // Synchronous inspector queries let native startup advance while waiting for its window.
-  // One query can arrive before readiness and leave macOS stalled until the next inspector request.
+  // Let the inspector request return while Electron's native readiness event is pending.
   const window = app.firstWindow(options);
-  let settled = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const readiness = new Promise<never>((_resolve, reject) => {
-    const probe = () => {
-      app.evaluate(({ app }) => app.isReady()).then(() => {
-        if (!settled) timer = setTimeout(probe, 100);
-      }, reject);
-    };
-    probe();
-  });
-  let page;
-  try {
-    page = await Promise.race([window, readiness]);
-  } finally {
-    settled = true;
-    clearTimeout(timer);
-  }
+  const page = await Promise.race([
+    window,
+    app.evaluate(({ app }) => app.isReady()).then(() => window),
+  ]);
   page.on('pageerror', error => console.error('[Electron renderer error]', error.message));
   const remaining = timeout === 0 ? 0 : timeout - (Date.now() - started);
   if (timeout !== 0 && remaining <= 0) throw new Error('Electron first-window deadline expired before document navigation.');

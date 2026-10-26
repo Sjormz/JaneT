@@ -33,7 +33,7 @@ The Hermes integration test needs Python 3. If it is not on PATH, set `JANET_TES
 
 Install the Electron binary explicitly after `npm ci`, before running tests. Current Electron packages otherwise download it on first use, which can turn a unit test into a network operation. CI and release verification install it before starting test workers.
 
-Dependabot opens `node-pty`, Electron and electron-builder updates separately from routine dependency groups. Review their native runtime and package compatibility individually. Keep `node-pty` pinned to an exact version and validate its upstream fixes and packaged terminal before accepting an update.
+Dependabot opens `node-pty`, Electron, electron-builder and Playwright updates separately from routine dependency groups. Review their native runtime, test-launcher and package compatibility individually. Keep `node-pty` pinned to an exact version and validate its upstream fixes and packaged terminal before accepting an update.
 
 The `node-gyp` override selects 13.1.0 for native rebuilds. Its Node requirement matches the project, and it replaces the older HTTP client that could crash while downloading Electron headers under backpressure. Keep the native Windows package/PTY check when changing this build-tool override.
 
@@ -48,7 +48,8 @@ To run verification on a pushed branch without opening a PR:
 1. Open [Actions → CI](https://github.com/Sjormz/JaneT/actions/workflows/ci.yml).
 2. Select **Run workflow**, then choose the branch in **Use workflow from**.
 3. Leave **Run the full Electron suite on macOS and Windows (Linux always runs it)** enabled for full desktop coverage. Disable it to use the normal CI desktop smoke selection.
-4. Select **Run workflow** and inspect the run's commit SHA, all jobs and test-result artifacts. A run for an older commit does not verify later pushes.
+4. Keep **macOS runner** set to `macos-26-intel` for the validated default, or select `macos-26` for Apple Silicon diagnostics.
+5. Select **Run workflow** and inspect the run's commit SHA, all jobs and test-result artifacts. A run for an older commit does not verify later pushes.
 
 From the CLI, replace `my-branch` with the pushed branch name:
 
@@ -56,6 +57,8 @@ From the CLI, replace `my-branch` with the pushed branch name:
 gh workflow run ci.yml --repo Sjormz/JaneT --ref my-branch -f full_desktop_e2e=true
 gh run list --repo Sjormz/JaneT --workflow ci.yml --branch my-branch --event workflow_dispatch --limit 5
 ```
+
+Default macOS verification uses the explicit Intel image. Hosted macOS 26 ARM runs reproduced native startup stalls before Electron's first window, while the same source passed 40 focused checks (10 per affected case) and the full suite on Intel. The underlying ARM startup cause remains unresolved; an Intel pass is not Apple Silicon verification. To investigate it, add `-f macos_runner=macos-26` to the dispatch command. The protected `Durable workspace (macos-latest)` check name stays unchanged; job setup logs identify the actual image and architecture.
 
 Manual runs use the same pinned runtimes, lockfile install, unit tests, build, macOS startup repetitions and Windows package/PTY verification as CI. Their concurrency group is separate, so triggering one does not cancel automatic PR or main verification. The workflow file must exist on the default branch, and the selected branch must contain the dispatch-enabled version. The **Run workflow** button appears once the default-branch version includes that trigger; the CLI can dispatch the updated branch before then. Update older branches from `main` before dispatching them. See [GitHub's manual workflow documentation](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
 
@@ -70,7 +73,7 @@ npm run test:e2e
 
 CI retains unit and Electron JUnit reports under `test-results/`, alongside failure traces. An Electron test that only passes on retry fails CI; the retry remains available for diagnosis. Inspect the first failure and fix its cause before rerunning the job.
 `electron-events.jsonl` records opt-in startup stages by process ID, including window creation/load/show and settings IPC. Dev-launcher Electron/Vite logs come from its disposable test profile and are attached before cleanup. Use these to distinguish an absent first window from a later UI assertion failure.
-Use `firstWindow` from `tests/e2e/electronLifecycle.ts` for native Electron tests. It polls synchronous readiness queries until the window arrives within the original deadline, allowing each inspector request to return while native startup is pending. Do not await `app.whenReady()` inside that startup evaluation. Use the same module's bounded cleanup when the debugger may be unresponsive. macOS CI repeats the TUI redraw/copy case 25 times without retries before running the normal desktop smoke selection; every repetition must pass.
+Use `firstWindow` from `tests/e2e/electronLifecycle.ts` for native Electron tests. It sends a synchronous readiness query alongside the existing window deadline, allowing the inspector request to return while native startup is pending. Do not await `app.whenReady()` inside that startup evaluation. Use the same module's bounded cleanup when the debugger may be unresponsive. macOS CI repeats the TUI redraw/copy case 25 times without retries before running the normal desktop smoke selection; every repetition must pass.
 
 If you change Electron main-process code, preload code, or release behavior, make sure the build still succeeds after your changes.
 

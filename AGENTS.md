@@ -31,6 +31,7 @@ publishing. Never bypass required reviews or rewrite published tags/assets.
 
 ## Native and asynchronous tests
 
+- Default macOS CI uses `macos-26-intel`. Manual runs can select `macos_runner=macos-26` for Apple Silicon diagnostics; report those results separately because Intel success does not establish ARM behavior.
 - A rendered pane does not prove its PTY exists. IPC delivery does not prove xterm parsed output. Wait for the observable state needed by the next action: terminal creation, parsed marker, saved settings, or process exit.
 - Preserve assertions about real behavior. Do not fix races with arbitrary sleeps, larger global timeouts, blind retries, skipped tests, or weaker assertions.
 - For an intermittent failure, repeat the focused case with retries disabled, then run its normal suite. A passing retry is evidence of a flake, not evidence of a fix. Windows success cannot establish macOS behavior.
