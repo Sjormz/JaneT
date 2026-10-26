@@ -45,7 +45,7 @@ To run verification on a pushed branch without opening a PR:
 
 1. Open [Actions → CI](https://github.com/Sjormz/JaneT/actions/workflows/ci.yml).
 2. Select **Run workflow**, then choose the branch in **Use workflow from**.
-3. Leave **Run the full Electron suite on macOS and Windows** enabled for full desktop coverage. Disable it to use the normal CI desktop smoke selection. Linux always runs the full Electron suite.
+3. Leave **Run the full Electron suite on macOS and Windows (Linux always runs it)** enabled for full desktop coverage. Disable it to use the normal CI desktop smoke selection.
 4. Select **Run workflow** and inspect the run's commit SHA, all jobs and test-result artifacts. A run for an older commit does not verify later pushes.
 
 From the CLI, replace `my-branch` with the pushed branch name:
@@ -55,7 +55,7 @@ gh workflow run ci.yml --repo Sjormz/JaneT --ref my-branch -f full_desktop_e2e=t
 gh run list --repo Sjormz/JaneT --workflow ci.yml --branch my-branch --event workflow_dispatch --limit 5
 ```
 
-Manual runs use the same pinned runtimes, lockfile install, unit tests, build, macOS startup repetitions and Windows package/PTY verification as CI. Their concurrency group is separate, so triggering one does not cancel automatic PR or main verification. The dispatch-enabled workflow must first be on the default branch, and the selected branch must contain that workflow version; update older branches from `main` before dispatching them. See [GitHub's manual workflow documentation](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
+Manual runs use the same pinned runtimes, lockfile install, unit tests, build, macOS startup repetitions and Windows package/PTY verification as CI. Their concurrency group is separate, so triggering one does not cancel automatic PR or main verification. The workflow file must exist on the default branch, and the selected branch must contain the dispatch-enabled version. The **Run workflow** button appears once the default-branch version includes that trigger; the CLI can dispatch the updated branch before then. Update older branches from `main` before dispatching them. See [GitHub's manual workflow documentation](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
 
 Only committed and pushed files are tested on GitHub. Local edits and installed-app/device behavior need local inspection. When local verification is appropriate, use:
 
