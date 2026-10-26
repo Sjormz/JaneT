@@ -2,11 +2,11 @@ import type { ElectronApplication } from '@playwright/test';
 import { execFile, type ChildProcess } from 'node:child_process';
 
 export async function firstWindow(app: ElectronApplication, options?: Parameters<ElectronApplication['firstWindow']>[0]) {
-  // Drive the main-process readiness handshake while the existing window deadline runs.
+  // Let the inspector request return while Electron's native readiness event is pending.
   const window = app.firstWindow(options);
   return Promise.race([
     window,
-    app.evaluate(async ({ app }) => { await app.whenReady(); }).then(() => window),
+    app.evaluate(({ app }) => app.isReady()).then(() => window),
   ]);
 }
 
