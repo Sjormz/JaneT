@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
@@ -31,7 +31,7 @@ test('shows the current JaneT version and checks for updates when clicked', asyn
         JANET_E2E_USER_DATA_DIR: userData,
       }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('.terminal-container').first()).toBeVisible();
 
@@ -84,7 +84,7 @@ test('copies exact privacy-safe diagnostics from the packaged runtime', async ()
         JANET_E2E_USER_DATA_DIR: userData,
       }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('.terminal-container').first()).toBeVisible();
 
@@ -135,7 +135,7 @@ test('keeps a packaged updater failure actionable with the fixed releases fallba
         JANET_E2E_USER_DATA_DIR: userData,
       }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('.terminal-container').first()).toBeVisible();
 

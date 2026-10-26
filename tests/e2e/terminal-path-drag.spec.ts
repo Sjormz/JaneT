@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import {
   test,
   expect,
@@ -151,7 +151,7 @@ test('pastes Explorer and Source Control paths into a real terminal', async ({},
         JANET_E2E_USER_DATA_DIR: userData,
       }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1200, 760));
 

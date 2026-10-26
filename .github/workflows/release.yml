@@ -108,6 +108,9 @@ jobs:
       - name: TypeScript check
         run: npm run typecheck
 
+      - name: Install Electron runtime before tests
+        run: npx --no install-electron
+
       - name: Run unit and component tests
         run: npm test
         env:
@@ -120,12 +123,13 @@ jobs:
         run: xvfb-run --auto-servernum npx playwright test --config playwright.config.ts
         env:
           JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
+          JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
 
       - uses: actions/upload-artifact@v7
-        if: failure()
+        if: ${{ !cancelled() }}
         with:
-          name: release-electron-failure-linux
-          path: test-results/e2e
+          name: release-test-results-linux
+          path: test-results/
           retention-days: 7
 
   package:

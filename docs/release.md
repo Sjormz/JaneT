@@ -66,10 +66,14 @@ packages.
 
 ### Windows ConPTY packaging
 
-JaneT currently locks `node-pty` 1.2.0-beta.15, which contains the upstream
+JaneT pins `node-pty` in `package.json` and `package-lock.json`. Upgrades must retain the upstream
 ConPTY fixes from [PR #885](https://github.com/microsoft/node-pty/pull/885),
 the [Windows handle fix #922](https://github.com/microsoft/node-pty/pull/922),
 and the [worker deadlock fix #943](https://github.com/microsoft/node-pty/pull/943).
+The installed-source regression checks those fixes, and the package verifier
+requires the packaged version to match the project pin. Before accepting an
+upgrade, run the full test suite and verify the packaged Windows PTY round trip;
+changing the version alone does not establish compatibility.
 The postinstall step keeps only JaneT's packaging-specific worker-path rewrite so
 a worker loaded from `app.asar` runs from `app.asar.unpacked`.
 

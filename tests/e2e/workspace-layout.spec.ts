@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
@@ -208,7 +208,7 @@ test('proves compact controls meet WCAG target size or center spacing at minimum
         JANET_E2E_USER_DATA_DIR: userData,
       }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(800, 600));
     await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
@@ -309,7 +309,7 @@ test('keeps workspace views in their dedicated regions at desktop and minimum si
         JANET_E2E_USER_DATA_DIR: userData,
       }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1200, 760));
     // Measure only the settled layout: the resize lands asynchronously (xvfb), and the launch
@@ -575,7 +575,7 @@ print("TUI_AWARENESS_OK")
         JANET_E2E_USER_DATA_DIR: userData,
       }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
 
     const firstTerminal = page.locator('.terminal-container').first();

@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import {
   test,
   expect,
@@ -107,7 +107,7 @@ test('project remains discoverable with zero terminals after close and restart',
     env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }) });
   try {
     app = await launch();
-    let page = await app.firstWindow();
+    let page = await firstWindow(app);
     await page.getByRole('button', { name: /^Close terminal —/ }).click();
     await page.getByRole('button', { name: 'Close pane', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Start terminals', exact: true })).toBeVisible();
@@ -117,7 +117,7 @@ test('project remains discoverable with zero terminals after close and restart',
     expect(fs.readFileSync(fixture.filePath, 'utf8')).toContain('answer = 41');
     await forceClose(app);
     app = await launch();
-    page = await app.firstWindow();
+    page = await firstWindow(app);
     await expect(page.getByRole('region', { name: 'Start terminals', exact: true })).toBeVisible();
     await expect(page.locator('.vtab-item').filter({ hasText: 'Editor fixture' })).toBeVisible();
     await expect(page.locator('[data-terminal-id]')).toHaveCount(0);
@@ -138,7 +138,7 @@ test('text-size slider resizes an open editor without reopening the file', async
   try {
     app = await electron.launch({ args: ['.'], cwd: root,
       env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }) });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.getByRole('button', { name: `Open file ${fixture.fileName}` }).click();
     const lines = page.locator('.monaco-editor-host .view-lines').first();
     await expect(lines).toHaveCSS('font-size', '14px');
@@ -183,7 +183,7 @@ test('edits a local file with Monaco under the packaged JaneT origin', async ({}
         JANET_E2E_USER_DATA_DIR: userData,
       }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     const runtimeErrors: string[] = [];
     page.on('console', (message) => {
       if (message.type() === 'error') runtimeErrors.push(message.text());

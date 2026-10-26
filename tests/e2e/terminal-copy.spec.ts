@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -95,7 +95,7 @@ test('copies selected xterm text with keyboard shortcuts and right-click', async
         JANET_E2E_USER_DATA_DIR: userData,
       }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     const position = await markerPosition(page);
 
@@ -144,7 +144,7 @@ test('copies from an alternate-screen TUI that owns all-motion mouse tracking', 
         JANET_TERMINAL_DIAGNOSTICS: '1',
       }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     const diagnosticEvents: unknown[] = [];
     page.on('console', async (message) => {
       if (!message.text().includes('[JaneT terminal diagnostics]')) return;
@@ -185,7 +185,7 @@ test('retains a modifier TUI selection through a redraw without turning copy int
   let app: ElectronApplication | undefined;
   try {
     app = await electron.launch({ args: ['.'], cwd: root, env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }) });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await markerPosition(page);
     const termId = await page.locator('.terminal-container').getAttribute('data-terminal-id');
     const output = (data: string) => app!.evaluate(({ BrowserWindow }, payload) => {
@@ -242,7 +242,7 @@ test('opens word-labelled OSC 8 links through the browser bridge in a mouse-trac
   let app: ElectronApplication | undefined;
   try {
     app = await electron.launch({ args: ['.'], cwd: root, env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }) });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await markerPosition(page);
     const termId = await page.locator('.terminal-container').getAttribute('data-terminal-id');
     await app.evaluate(({ BrowserWindow, shell }, id) => {
@@ -281,7 +281,7 @@ test('copies TUI OSC 52 selections, rejects unsolicited writes, and pastes brack
   let app: ElectronApplication | undefined;
   try {
     app = await electron.launch({ args: ['.'], cwd: root, env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }) });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await markerPosition(page);
     const container = page.locator('.terminal-container');
     const termId = await container.getAttribute('data-terminal-id');

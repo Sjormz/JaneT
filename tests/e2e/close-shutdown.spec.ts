@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as net from 'net';
@@ -96,7 +96,7 @@ test('closing the window stops managed terminal work and exits without an active
         JANET_E2E_USER_DATA_DIR: userData,
       }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('.terminal-container').first()).toBeVisible();
     await expect.poll(async () => page.locator('.xterm-rows').innerText(), { timeout: 10_000 }).not.toBe('');
@@ -147,7 +147,7 @@ test('cancelling dirty-editor close keeps the same JaneT window open', async () 
         JANET_E2E_USER_DATA_DIR: userData,
       }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     await page.getByRole('button', { name: `Open file ${fixture.fileName}` }).click();
     const editor = page.getByRole('textbox', { name: `Editing ${fixture.fileName}` });

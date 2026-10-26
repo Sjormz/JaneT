@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -43,7 +43,7 @@ test('records focus decisions and project busy/unread activity without command o
       args: ['.'], cwd: root,
       env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData, JANET_E2E_EVENTS_PATH: eventsPath }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     await app.evaluate(({ Notification }) => {
       Object.defineProperty(Notification, 'isSupported', { value: () => true });
@@ -55,6 +55,7 @@ test('records focus decisions and project busy/unread activity without command o
     await expect(terminal.locator('textarea[data-shell-ready="true"]')).toBeAttached();
 
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.focus());
+    await expect.poll(() => page.evaluate(() => window.janet.isWindowFocused())).toBe(true);
     await page.evaluate(({ id, text }) => window.janet.terminalWrite({ id, data: `${text}\r`, userInput: true }), { id: termId!, text: command });
     await expect(page.locator('.vtab-item').filter({ hasText: 'Work' }).locator('.activity-dot')).toHaveClass(/running/);
     await expect.poll(() => readDecisions(eventsPath).map((event) => event.decision), { timeout: 25_000 }).toContain('focused');
@@ -66,6 +67,7 @@ test('records focus decisions and project busy/unread activity without command o
       away.focus();
       main?.blur();
     });
+    await expect.poll(() => page.evaluate(() => window.janet.isWindowFocused())).toBe(false);
     await page.evaluate(({ id, text }) => window.janet.terminalWrite({ id, data: `${text}\r`, userInput: true }), { id: termId!, text: command });
     await expect.poll(() => readDecisions(eventsPath).map((event) => event.decision), { timeout: 15_000 }).toContain('would-show');
     await expect(page.locator('.vtab-item').filter({ hasText: 'Work' }).locator('.activity-count.finished')).toContainText('1 new');
@@ -74,6 +76,7 @@ test('records focus decisions and project busy/unread activity without command o
       const main = BrowserWindow.getAllWindows().find(window => window.webContents.getURL() !== 'about:blank');
       main?.focus();
     });
+    await expect.poll(() => page.evaluate(() => window.janet.isWindowFocused())).toBe(true);
     await expect(page.locator('.vtab-item').filter({ hasText: 'Work' }).locator('.activity-count.finished')).toHaveCount(0);
 
     // Exercise the real Codex hook helper inside a live PTY, without a model request.
@@ -103,6 +106,7 @@ test('records focus decisions and project busy/unread activity without command o
       BrowserWindow.getAllWindows().find(window => window.webContents.getURL() === 'about:blank')?.focus();
       main?.blur();
     });
+    await expect.poll(() => page.evaluate(() => window.janet.isWindowFocused())).toBe(false);
     sendHook('PermissionRequest');
     await expect(work.locator('.activity-dot')).toHaveClass(/needs-input/);
     await expect.poll(() => readDecisions(eventsPath).some(event => event.codexEvent === 'needs-input' && event.decision === 'would-show')).toBe(true);

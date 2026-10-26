@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -249,7 +249,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
     };
     app.on('window', capturePageErrors);
     app.windows().forEach(capturePageErrors);
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1280, 800));
     await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
@@ -345,9 +345,17 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
         });
         await expect(activeTerminals.nth(1).locator('.xterm-rows')).toContainText(marker);
         await expect(page.locator('.terminal-leaf').nth(1).locator('.leaf-awareness')).toHaveText('Shell · Ready');
+        const sampleFailure = `${failingCommand} #${markerSuffix}`;
         await page.evaluate(({ id, command }) => window.janet.terminalWrite({
           id, data: `${command}\r`, userInput: true,
-        }), { id: (await activeTerminals.nth(1).getAttribute('data-terminal-id'))!, command: failingCommand });
+        }), { id: (await activeTerminals.nth(1).getAttribute('data-terminal-id'))!, command: sampleFailure });
+        // A visible decoration can belong to an earlier failure. Wait for this
+        // invocation to finish before measuring the fixture's resting state.
+        await expect.poll(() => page.evaluate(async command => {
+          const settings = await window.janet.getSettings();
+          return settings.commandHistory?.find((entry: { command: string; exitCode?: number }) => entry.command === command)?.exitCode;
+        }, sampleFailure)).toBe(1);
+        await expect(tab(page, 'Active workspace').locator('.activity-count.running')).toHaveCount(0);
         await expect(activeTerminals.nth(1).locator('.terminal-command-failed:visible').first()).toBeVisible();
         await tab(page, 'Active workspace').focus();
         await page.keyboard.press('Tab');
@@ -355,6 +363,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
         await expect(tab(page, 'Active workspace')).toBeFocused();
 
         const report = await measureVisualState(page, `${theme}-${viewport.width}x${viewport.height}`);
+        await testInfo.attach(report.name, { body: JSON.stringify(report, null, 2), contentType: 'application/json' });
         const chrome = await page.evaluate(() => {
           const brand = document.querySelector('.titlebar-brand')!.getBoundingClientRect();
           const command = document.querySelector('.titlebar-palette-btn')!.getBoundingClientRect();

@@ -10,8 +10,11 @@ updates:
     groups:
       production-dependencies:
         dependency-type: production
+        # Native runtime updates need their own compatibility and packaging review.
+        exclude-patterns: ['node-pty']
       development-dependencies:
         dependency-type: development
+        exclude-patterns: ['electron', 'electron-builder']
     commit-message:
       prefix: chore
       include: scope
