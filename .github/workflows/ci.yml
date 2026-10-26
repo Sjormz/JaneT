@@ -141,6 +141,34 @@ jobs:
           JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
         run: npx playwright test --config playwright.config.ts tests/e2e/dev-instance.spec.ts tests/e2e/close-shutdown.spec.ts tests/e2e/pane-maximize.spec.ts tests/e2e/terminal-copy.spec.ts tests/e2e/terminal-graphics.spec.ts tests/e2e/optional-workspace-setup.spec.ts tests/e2e/editor.spec.ts tests/e2e/settings-recovery.spec.ts tests/e2e/local-terminal-recovery.spec.ts
 
+      - name: Configure macOS display for full desktop tests
+        if: runner.os == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.full_desktop_e2e
+        run: |
+          swift - <<'SWIFT'
+          import CoreGraphics
+          import Foundation
+          let display = CGMainDisplayID()
+          let modes = (CGDisplayCopyAllDisplayModes(display, nil) as? [CGDisplayMode]) ?? []
+          print("Available display modes:", modes.map { "\($0.width)x\($0.height)" })
+          guard let mode = modes.filter({ $0.width >= 1440 && $0.height >= 900 })
+            .min(by: { $0.width * $0.height < $1.width * $1.height }) else {
+            throw NSError(domain: "JaneT CI display", code: 1,
+              userInfo: [NSLocalizedDescriptionKey: "No display mode fits the 1280x800 layout assertions"])
+          }
+          var configuration: CGDisplayConfigRef? = nil
+          guard CGBeginDisplayConfiguration(&configuration) == .success, let configuration else {
+            throw NSError(domain: "JaneT CI display", code: 2)
+          }
+          guard CGConfigureDisplayWithDisplayMode(configuration, display, mode, nil) == .success else {
+            CGCancelDisplayConfiguration(configuration)
+            throw NSError(domain: "JaneT CI display", code: 3)
+          }
+          guard CGCompleteDisplayConfiguration(configuration, .forSession) == .success else {
+            throw NSError(domain: "JaneT CI display", code: 4)
+          }
+          print("Configured display bounds:", CGDisplayBounds(display))
+          SWIFT
+
       - name: Run full desktop Electron e2e tests
         if: github.event_name == 'workflow_dispatch' && inputs.full_desktop_e2e
         env:

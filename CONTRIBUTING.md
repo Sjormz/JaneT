@@ -35,6 +35,8 @@ Install the Electron binary explicitly after `npm ci`, before running tests. Cur
 
 Dependabot opens `node-pty`, Electron and electron-builder updates separately from routine dependency groups. Review their native runtime and package compatibility individually. Keep `node-pty` pinned to an exact version and validate its upstream fixes and packaged terminal before accepting an update.
 
+The `node-gyp` override selects 13.1.0 for native rebuilds. Its Node requirement matches the project, and it replaces the older HTTP client that could crash while downloading Electron headers under backpressure. Keep the native Windows package/PTY check when changing this build-tool override.
+
 To check the actual installed `hermes --tui` copy gesture on Windows, build JaneT, set `JANET_TEST_HERMES=1` in the test process environment, and run `npx playwright test tests/e2e/hermes-copy.spec.ts --repeat-each=3`. Hermes must already be installed and on PATH. This opt-in check uses temporary JaneT/Hermes profiles, no conversation prompts, and tests Shift-drag then Ctrl+Shift+C after a resize redraw. On macOS the native gesture is Option-drag. The regular terminal-copy suite also covers redraw retention without requiring Hermes.
 
 ## Validation
