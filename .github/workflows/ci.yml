@@ -150,7 +150,8 @@ jobs:
           let display = CGMainDisplayID()
           let modes = (CGDisplayCopyAllDisplayModes(display, nil) as? [CGDisplayMode]) ?? []
           print("Available display modes:", modes.map { "\($0.width)x\($0.height)" })
-          guard let mode = modes.filter({ $0.width >= 1440 && $0.height >= 900 })
+          // Leave room for the menu bar and Dock around the 1280x800 content checks.
+          guard let mode = modes.filter({ $0.width >= 1440 && $0.height >= 1080 })
             .min(by: { $0.width * $0.height < $1.width * $1.height }) else {
             throw NSError(domain: "JaneT CI display", code: 1,
               userInfo: [NSLocalizedDescriptionKey: "No display mode fits the 1280x800 layout assertions"])
