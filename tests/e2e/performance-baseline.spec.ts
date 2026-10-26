@@ -1,3 +1,4 @@
+import { firstWindow } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -21,7 +22,7 @@ test('records startup, loaded-terminal input and pane lifecycle memory baselines
   try {
     const started = performance.now();
     app = await electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await expect(page.locator('.xterm-rows')).toContainText('LOAD_', { timeout: 20_000 });
     const startupMs = performance.now() - started;
     await expect.poll(async () => Math.max(0, ...Array.from((await page.locator('.xterm-rows').innerText()).matchAll(/LOAD_(\d+)/g), (match) => Number(match[1])))).toBeGreaterThan(100);

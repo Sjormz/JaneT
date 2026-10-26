@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
@@ -167,7 +167,7 @@ for (const theme of themes.filter((name) => !themeFilter || themeFilter.includes
       let page!: Page;
       try {
         app = await electron.launch({ args: ['.'], cwd: root, env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData, HOME: home, ZDOTDIR: '' }) });
-        page = await app.firstWindow();
+        page = await firstWindow(app);
         await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim()))
           .toBe(getTheme(theme).css['bg-primary']);
         await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]?.setContentSize(size.width, size.height), viewport);

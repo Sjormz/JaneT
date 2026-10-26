@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -45,7 +45,7 @@ test('removes legacy remote panes while retaining local terminals and empty proj
   let app: ElectronApplication | undefined;
   try {
     app = await launch(userData);
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await expect(page.locator('.terminal-container')).toHaveCount(1);
     await expect(page.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true');
     await expect(page.getByText('Retained project', { exact: true })).toBeVisible();
@@ -77,7 +77,7 @@ test('restores a validated previous generation without overwriting corrupt setti
 
   try {
     app = await launch(userData);
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     const alert = page.getByRole('alert');
     await expect(alert).toContainText('could not load your workspace settings');
     expect(fs.readFileSync(settingsPath, 'utf8')).toBe(corruptBytes);
@@ -104,7 +104,7 @@ test('replaces corrupt settings with defaults only after confirmation', async ()
 
   try {
     app = await launch(userData);
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     const alert = page.getByRole('alert');
     await expect(alert).toContainText('could not load your workspace settings');
 

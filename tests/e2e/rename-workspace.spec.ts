@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -78,7 +78,7 @@ test('renames the focused pane and active tab without interrupting xterm input',
 
   try {
     app = await launch(userData);
-    let page = await app.firstWindow();
+    let page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     const terminals = page.locator('.terminal-container');
     await expect(terminals).toHaveCount(2);
@@ -150,7 +150,7 @@ test('renames the focused pane and active tab without interrupting xterm input',
     await forceClose(app);
     app = undefined;
     app = await launch(userData);
-    page = await app.firstWindow();
+    page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('.terminal-leaf .leaf-title-text')).toHaveText(['Left', 'Tests']);
     await expect(page.locator('.xterm-helper-textarea').nth(0))

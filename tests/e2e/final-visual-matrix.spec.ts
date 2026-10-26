@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -249,7 +249,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
     };
     app.on('window', capturePageErrors);
     app.windows().forEach(capturePageErrors);
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1280, 800));
     await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))

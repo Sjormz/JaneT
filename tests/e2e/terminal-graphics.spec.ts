@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -56,7 +56,7 @@ test('Kitty capability probes, chunked images and deletion traverse a real PTY',
       args: ['.'], cwd: path.resolve(__dirname, '../..'),
       env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await expect(page.locator('.xterm-rows')).toContainText('GRAPHICS_ENV=false', { timeout: 20_000 });
     await expect(page.locator('.xterm-rows')).toContainText('PROBE_OK');
     const redPixels = () => page.locator('canvas.xterm-image-layer-top').evaluateAll(canvases => {

@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 
 class WorkspaceTools {
@@ -45,7 +45,7 @@ test('keeps tools compact and follows the selected local pane', async ({}, testI
   let app;
   try {
     app = await electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     const tools = new WorkspaceTools(page);
     await expect(page.locator('.terminal-container')).toHaveCount(2);
     await tools.focusPane(0);
@@ -102,7 +102,7 @@ for (const side of ['left', 'right']) {
       delete env.ELECTRON_RUN_AS_NODE;
       delete env.ELECTRON_NO_ATTACH_CONSOLE;
       app = await electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env });
-      const page = await app.firstWindow();
+      const page = await firstWindow(app);
       const tools = new WorkspaceTools(page);
       const lastBranch = page.getByLabel('Remote branch origin/origin/branch-31', { exact: true });
       const collapse = page.getByRole('button', { name: 'Collapse project tools' });

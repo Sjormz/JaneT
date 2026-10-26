@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -35,7 +35,7 @@ test('turning off agent activity removes saved entries through the bundled helpe
       env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData, CODEX_HOME: codexHome, HERMES_HOME: hermesHome,
         JANET_E2E_AGENT_HOME: home }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     await page.getByRole('button', { name: 'Open settings' }).click();
     const toggle = page.getByRole('checkbox', { name: 'Show agent activity' });

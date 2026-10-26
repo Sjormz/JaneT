@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
@@ -257,7 +257,7 @@ test('recaptures the shipped public screenshot set from the real app', async () 
       cwd: root,
       env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }),
     });
-    let page = await app.firstWindow();
+    let page = await firstWindow(app);
     await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim()))
       .toBe('#0b0b0c');
     const onboarding = page.locator('.directory-onboarding');
@@ -285,7 +285,7 @@ test('recaptures the shipped public screenshot set from the real app', async () 
       cwd: root,
       env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }),
     });
-    page = await app.firstWindow();
+    page = await firstWindow(app);
     await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim()))
       .toBe('#0b0b0c');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());

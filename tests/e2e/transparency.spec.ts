@@ -2,7 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 import { getTheme } from '../../src/renderer/themes';
 
@@ -77,7 +77,7 @@ test('applies, persists and falls back through the Transparency setting', async 
   let app: ElectronApplication | undefined;
   try {
     app = await launch(userData);
-    let page = await app.firstWindow();
+    let page = await firstWindow(app);
     await expect(page.locator('.titlebar')).toBeVisible();
     const expected = await expectedSystemState(app);
 
@@ -120,7 +120,7 @@ test('applies, persists and falls back through the Transparency setting', async 
     await expect.poll(() => JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')).transparency).toBe('reduced');
     await forceClose(app);
     app = await launch(userData);
-    page = await app.firstWindow();
+    page = await firstWindow(app);
     await expect(page.locator('html')).toHaveAttribute('data-transparency', 'reduced');
     await expect(page.locator('html')).toHaveAttribute('data-window-material', 'none');
     await page.getByRole('button', { name: 'Open settings' }).click();

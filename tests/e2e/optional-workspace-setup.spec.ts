@@ -2,7 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 
 test('skips setup across restarts and enables workspace creation after choosing a folder', async ({}, testInfo) => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-optional-setup-'));
@@ -13,7 +13,7 @@ test('skips setup across restarts and enables workspace creation after choosing 
   const launch = () => electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env });
   let app = await launch();
   try {
-    let page = await app.firstWindow({ timeout: 10_000 });
+    let page = await firstWindow(app, { timeout: 10_000 });
     await page.locator('.directory-onboarding').screenshot({ path: testInfo.outputPath('optional-setup.png') });
     await page.getByRole('button', { name: 'Skip for now' }).click();
     await expect(page.getByRole('region', { name: 'Choose where to work' })).toBeVisible();
@@ -22,7 +22,7 @@ test('skips setup across restarts and enables workspace creation after choosing 
     expect(JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')).mainDirectory).toBeNull();
     await forceClose(app);
     app = await launch();
-    page = await app.firstWindow({ timeout: 10_000 });
+    page = await firstWindow(app, { timeout: 10_000 });
     await expect(page.getByRole('region', { name: 'Choose where to work' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Skip for now' })).toHaveCount(0);
     await page.getByRole('button', { name: 'New workspace' }).click();
@@ -61,7 +61,7 @@ test('chooses an existing workspace and restores only its immediate folders as p
     .filter((entry): entry is [string, string] => typeof entry[1] === 'string')) });
   let app = await launch();
   try {
-    let page = await app.firstWindow();
+    let page = await firstWindow(app);
     await page.getByRole('button', { name: 'Skip for now' }).click();
     await app.evaluate(({ dialog }, selected) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] });
@@ -87,7 +87,7 @@ test('chooses an existing workspace and restores only its immediate folders as p
     expect(fs.readFileSync(path.join(workspace, 'notes.txt'), 'utf8')).toBe('keep');
     expect(fs.statSync(path.join(workspace, 'Alpha', 'Nested')).isDirectory()).toBe(true);
     await forceClose(app);
-    app = await launch(); page = await app.firstWindow();
+    app = await launch(); page = await firstWindow(app);
     await expect(page.getByRole('region', { name: 'Existing workspace' }).locator('.project-entry')).toHaveCount(2);
   } finally {
     await forceClose(app);

@@ -117,3 +117,15 @@ disposable profile, attaches them, and observes launcher exit before profile
 removal. Its POSIX launcher owns a separate process group for bounded fallback
 cleanup; Windows stops only the test-owned process tree. These changes preserve
 evidence and fix cleanup; they do not by themselves prove the startup issue fixed.
+
+Commit `c8419c4` again passed Linux and Windows, including native packaging. Its
+macOS startup artifact identified a process that acquired its instance lock but
+waited 30,812 ms before `whenReady` ran. Readiness advanced when teardown sent a
+main-process debugger request, after the first-window deadline; no clipboard
+assertion had run. Playwright's Electron loader defers app readiness through its
+debugger protocol. All native first-window callers now send an explicit main
+readiness handshake alongside their existing window wait. The window's original
+deadline still wins if that request stalls, and a regression test covers both
+window success and timeout with an unresponsive request. This addresses the
+observed idle startup sequence; Electron's underlying macOS cause remains a
+hypothesis until platform validation confirms the behavior.

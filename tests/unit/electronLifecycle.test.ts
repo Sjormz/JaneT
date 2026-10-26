@@ -3,10 +3,39 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { execFile } from 'node:child_process';
 import type { ElectronApplication } from '@playwright/test';
-import { forceClose } from '../e2e/electronLifecycle';
+import { firstWindow, forceClose } from '../e2e/electronLifecycle';
 
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }));
 afterEach(() => { vi.useRealTimers(); vi.resetAllMocks(); });
+
+it('drives main readiness without losing the first-window deadline', async () => {
+  const page = {};
+  let publishWindow!: (page: unknown) => void;
+  const window = new Promise(resolve => { publishWindow = resolve; });
+  const whenReady = vi.fn(async () => { publishWindow(page); });
+  const app = {
+    firstWindow: vi.fn(() => window),
+    evaluate: vi.fn(async (callback: (electron: any) => unknown) => callback({ app: { whenReady } })),
+  } as unknown as ElectronApplication;
+  const result = firstWindow(app, { timeout: 1234 });
+  try {
+    await Promise.resolve();
+    expect(whenReady).toHaveBeenCalledOnce();
+    await expect(result).resolves.toBe(page);
+    expect(app.firstWindow).toHaveBeenCalledWith({ timeout: 1234 });
+  } finally {
+    publishWindow(page);
+    await result;
+  }
+
+  const timeout = new Error('first-window deadline');
+  vi.mocked(app.firstWindow).mockRejectedValueOnce(timeout);
+  vi.mocked(app.evaluate).mockImplementationOnce(() => new Promise(() => {}));
+  await expect(firstWindow(app)).rejects.toBe(timeout);
+  vi.mocked(app.firstWindow).mockResolvedValueOnce(page as any);
+  vi.mocked(app.evaluate).mockImplementationOnce(() => new Promise(() => {}));
+  await expect(firstWindow(app)).resolves.toBe(page);
+});
 
 it('kills only its child after a stalled debugger exit request and awaits process exit', async () => {
   vi.useFakeTimers();

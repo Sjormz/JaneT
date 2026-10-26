@@ -2,7 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 import { getTheme, themeNames, type ThemeName } from '../../src/renderer/themes';
 
@@ -121,7 +121,7 @@ for (const transparency of ['system', 'reduced'] as const) {
     let failure: unknown;
     try {
       app = await electron.launch({ args: ['.'], cwd: root, env });
-      const page = await app.firstWindow();
+      const page = await firstWindow(app);
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await expect(page.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true');
       await expect(page.locator('html')).toHaveAttribute('data-transparency', transparency === 'reduced' ? 'reduced' : /full|reduced/);

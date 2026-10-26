@@ -2,7 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication } from '@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 
 function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
   const env = { ...process.env, ...extra };
@@ -33,7 +33,7 @@ test('Explorer follows the shell into directories with URL-special names', async
       args: ['.'], cwd: path.resolve(__dirname, '../..'),
       env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     const terminal = page.locator('[data-terminal-id]').first();
     await expect(terminal).toBeVisible();
     await expect(terminal.locator('textarea[data-shell-ready="true"]')).toBeAttached();

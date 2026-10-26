@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createWorkspace, ensureProjectTerminalsOpen, restoreWorkspaceFixture } from './workspaces';
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 
 class FolderSessions {
   constructor(private page: Page, private app: ElectronApplication) {}
@@ -61,14 +61,14 @@ test('sets up a main directory and restores independent linked-folder sessions',
   let failure = false;
   try {
     app = await launch();
-    let page = await app.firstWindow();
+    let page = await firstWindow(app);
     let folders = new FolderSessions(page, app);
     await expect(page.getByRole('heading', { name: 'A home for your work' })).toBeVisible();
     await expect(page.locator('.terminal-container')).toHaveCount(0);
     const onboardingClosed = app.waitForEvent('close');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
     await onboardingClosed; app = undefined;
-    app = await launch(); page = await app.firstWindow(); folders = new FolderSessions(page, app);
+    app = await launch(); page = await firstWindow(app); folders = new FolderSessions(page, app);
     await expect(page.getByRole('heading', { name: 'A home for your work' })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('main-directory-onboarding.png') });
     await folders.choose(main, 'Choose main directory');
@@ -122,7 +122,7 @@ test('sets up a main directory and restores independent linked-folder sessions',
     const emptyClosed = app.waitForEvent('close');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
     await emptyClosed; app = undefined;
-    app = await launch(); page = await app.firstWindow(); folders = new FolderSessions(page, app);
+    app = await launch(); page = await firstWindow(app); folders = new FolderSessions(page, app);
     await expect(page.getByRole('heading', { name: 'Start terminals', exact: true })).toBeVisible();
     await expect(page.locator('.terminal-container')).toHaveCount(0);
     await createWorkspace(page, 'Experiment A', [{}, {}], 'Research');
@@ -169,7 +169,7 @@ test('sets up a main directory and restores independent linked-folder sessions',
     const closed = app.waitForEvent('close');
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
     await closed; app = undefined;
-    app = await launch(); page = await app.firstWindow(); folders = new FolderSessions(page, app);
+    app = await launch(); page = await firstWindow(app); folders = new FolderSessions(page, app);
     await expect(page.getByRole('heading', { name: 'A home for your work' })).toHaveCount(0);
     await page.locator('.vtab-name').getByText('Experiment A', { exact: true }).click();
     await expect(page.locator('.terminal-container')).toHaveCount(2);
@@ -269,7 +269,7 @@ test('opens Git worktrees from Source Control as Library projects without touchi
   try {
     electronApp = await electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env: Object.fromEntries(Object.entries(env)
       .filter((entry): entry is [string, string] => typeof entry[1] === 'string')) });
-    const page = await electronApp.firstWindow();
+    const page = await firstWindow(electronApp);
     const project = (name: string) => page.locator('.vtab-item').filter({ has: page.locator('.vtab-name', { hasText: name }) });
     await expect(project('Repo')).toHaveClass(/active/);
 
@@ -350,7 +350,7 @@ test('imports linked worktree folders as Library projects with label-only rename
   try {
     app = await electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env: Object.fromEntries(Object.entries(env)
       .filter((entry): entry is [string, string] => typeof entry[1] === 'string')) });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await app.evaluate(({ dialog }, selected) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] });
     }, workspace);

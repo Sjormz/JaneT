@@ -1,3 +1,4 @@
+import { firstWindow } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -16,7 +17,7 @@ test('Windows protocol activation launches JaneT and restores its existing windo
   let instance: ElectronApplication | undefined;
   try {
     instance = await electron.launch({ args, cwd: root, env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) });
-    const page = await instance.firstWindow();
+    const page = await firstWindow(instance);
     await expect(page.getByRole('heading', { name: 'Create your first workspace' })).toBeVisible();
     expect(await instance.evaluate(({ app }) => app.getPath('userData'))).toBe(profile);
     const registered = await instance.evaluate(({ app, BrowserWindow }, { scheme, args }) => {
