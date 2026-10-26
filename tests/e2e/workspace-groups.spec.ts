@@ -1,3 +1,4 @@
+import { firstWindow } from './electronLifecycle';
 import { test, expect, _electron as electron, type Page, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -27,7 +28,7 @@ test('creates grouped live workspaces and restores them after closing without a 
   let app: ElectronApplication | undefined;
   try {
     app = await launch();
-    let page = await app.firstWindow();
+    let page = await firstWindow(app);
     await page.locator('.workspace-group-name').getByText('Old workspace', { exact: true }).click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Remove workspace…' }).click();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Remove workspace', exact: true }).click();
@@ -67,7 +68,7 @@ test('creates grouped live workspaces and restores them after closing without a 
     const archive = saved.session.groups.find((group: { name: string }) => group.name === 'Archive');
     expect(saved.session.tabs.filter((tab: { groupId: string }) => tab.groupId === archive.id)).toHaveLength(1);
     app = await launch();
-    page = await app.firstWindow();
+    page = await firstWindow(app);
     await expect(page.getByRole('button', { name: /^Research/, expanded: false })).toBeVisible();
     await expect(page.locator('.vtab-item').filter({ hasText: 'Review' })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('.terminal-container')).toHaveCount(2);

@@ -2,7 +2,7 @@ import { test, expect, _electron as electron, type Page, type ElectronApplicatio
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 import { getTheme } from '../../src/renderer/themes';
 
@@ -86,7 +86,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       app = await electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env });
       app.process().stdout?.on('data', chunk => { output += chunk; });
       app.process().stderr?.on('data', chunk => { output += chunk; });
-      const page = await app.firstWindow();
+      const page = await firstWindow(app);
       observedPage = page;
       const errors: string[] = [];
       page.on('pageerror', error => errors.push(error.message));

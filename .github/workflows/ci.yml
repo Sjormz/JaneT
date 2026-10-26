@@ -52,6 +52,9 @@ jobs:
       - name: TypeScript check
         run: npm run typecheck
 
+      - name: Install Electron runtime before tests
+        run: npx --no install-electron
+
       - name: Run unit and component tests
         run: npm test
         env:
@@ -63,13 +66,14 @@ jobs:
       - name: Run Electron e2e tests
         env:
           JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
+          JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
         run: xvfb-run --auto-servernum npx playwright test --config playwright.config.ts
 
       - uses: actions/upload-artifact@v7
-        if: failure()
+        if: ${{ !cancelled() }}
         with:
-          name: electron-failure-linux
-          path: test-results/e2e
+          name: test-results-linux
+          path: test-results/
           retention-days: 7
 
   durable-workspace-platforms:
@@ -104,6 +108,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install Electron runtime before tests
+        run: npx --no install-electron
+
       - name: Run unit and component tests
         run: npm test
         env:
@@ -116,6 +123,7 @@ jobs:
         env:
           DEBUG: pw:browser
           JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
+          JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
         run: npx playwright test --config playwright.config.ts tests/e2e/dev-instance.spec.ts tests/e2e/close-shutdown.spec.ts tests/e2e/pane-maximize.spec.ts tests/e2e/terminal-copy.spec.ts tests/e2e/terminal-graphics.spec.ts tests/e2e/optional-workspace-setup.spec.ts tests/e2e/editor.spec.ts tests/e2e/settings-recovery.spec.ts tests/e2e/local-terminal-recovery.spec.ts
 
       - name: Build and verify native Windows package
@@ -127,8 +135,8 @@ jobs:
         run: node scripts/verify-release-artifacts.mjs windows release
 
       - uses: actions/upload-artifact@v7
-        if: failure()
+        if: ${{ !cancelled() }}
         with:
-          name: electron-failure-${{ matrix.os }}
-          path: test-results/e2e
+          name: test-results-${{ matrix.os }}
+          path: test-results/
           retention-days: 7

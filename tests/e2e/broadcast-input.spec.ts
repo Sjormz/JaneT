@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
@@ -34,7 +34,7 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
       cwd: root,
       env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
 
     const terminals = page.locator('.terminal-container');
@@ -53,6 +53,8 @@ test('broadcasts to selected real terminals until Escape cancels it', async () =
     await recipients.nth(1).check();
     const dialog = page.getByRole('alertdialog', { name: 'Start broadcast input?' });
     await expect(dialog).toContainText('2 selected panes');
+    await expect.poll(() => dialog.evaluate(element => element.getAnimations({ subtree: true })
+      .some(animation => animation.playState === 'running'))).toBe(false);
     await dialog.getByRole('button', { name: 'Start broadcast input' }).click();
 
     const status = page.getByRole('status', { name: /broadcast input active/i });

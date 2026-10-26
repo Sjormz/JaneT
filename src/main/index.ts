@@ -109,6 +109,8 @@ function recordE2eEvent(event: Record<string, unknown>, timestamp = true): void 
   } catch {}
 }
 
+recordE2eEvent({ type: 'startup', stage: 'entry', pid: process.pid, hasSingleInstanceLock });
+
 function openAllowedExternalUrl(url: string): boolean {
   if (!isAllowedExternalUrl(url)) return false;
   void electron.shell.openExternal(url).catch((error) => {
@@ -376,6 +378,16 @@ function createWindow() {
   });
 
   const window = mainWindow;
+  if (e2eEventsPath) {
+    const recordStartup = (stage: string) => recordE2eEvent({ type: 'startup', stage, pid: process.pid, windowId: window.id });
+    recordStartup('window-created');
+    window.webContents.once('dom-ready', () => recordStartup('dom-ready'));
+    window.webContents.once('did-finish-load', () => recordStartup('did-finish-load'));
+    window.webContents.once('render-process-gone', () => recordStartup('render-process-gone'));
+    window.webContents.once('unresponsive', () => recordStartup('unresponsive'));
+    window.once('ready-to-show', () => recordStartup('ready-to-show'));
+    window.once('show', () => recordStartup('show'));
+  }
   recordInitialWindowMaterial(window, initialMaterial, windowAppearance().theme);
   let shown = false;
   const showOnce = () => {
@@ -455,6 +467,7 @@ function createWindow() {
 }
 
 electron.app.whenReady().then(() => {
+  recordE2eEvent({ type: 'startup', stage: 'ready', pid: process.pid });
   if (!hasSingleInstanceLock) return;
   if (process.env.NODE_ENV !== 'development') {
     const rendererRoot = path.join(__dirname, '../renderer');
@@ -767,7 +780,10 @@ function registerIpcHandlers() {
 
   // === Settings IPC ===
   handle('settings:get', () => {
-    return settingsManager.get();
+    recordE2eEvent({ type: 'startup', stage: 'settings-request', pid: process.pid });
+    const settings = settingsManager.get();
+    recordE2eEvent({ type: 'startup', stage: 'settings-response', pid: process.pid });
+    return settings;
   });
 
   handle('settings:set', (event, updates) => {

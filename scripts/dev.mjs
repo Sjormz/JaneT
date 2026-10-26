@@ -10,6 +10,7 @@ import { buildElectron } from './build-electron.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
+const logRoot = process.env.JANET_E2E_USER_DATA_DIR || root;
 const distMain = path.join(root, 'dist/main');
 const DEFAULT_DEV_SERVER_URL = 'http://127.0.0.1:5173';
 
@@ -151,7 +152,7 @@ function killProcessTree(child, name) {
 
 function openElectronLog() {
   if (electronLog !== null) fs.closeSync(electronLog);
-  electronLog = fs.openSync(path.join(root, '.electron.log'), 'a');
+  electronLog = fs.openSync(path.join(logRoot, '.electron.log'), 'a');
   return electronLog;
 }
 
@@ -221,7 +222,7 @@ async function shutdown(code = 0) {
 }
 
 // All-in-one log file so we can read it from outside.
-const logPath = path.join(root, '.dev-run.log');
+const logPath = path.join(logRoot, '.dev-run.log');
 let logInitialized = false;
 function initializeLog() {
   if (logInitialized) return;
@@ -258,7 +259,7 @@ async function main() {
     throw new Error(`Port already serves JaneT at ${devServer.url}. Stop that dev server or choose JANET_DEV_SERVER_URL; refusing to attach to an unverified checkout.`);
   } else {
     log(`Starting Vite dev server at ${devServer.url}...`);
-    const viteLog = fs.openSync(path.join(root, '.vite.log'), 'w');
+    const viteLog = fs.openSync(path.join(logRoot, '.vite.log'), 'w');
     viteProcess = spawn(process.execPath, [
       devExecutables().vite, '--config', 'vite.config.ts', '--host', devServer.host, '--port', String(devServer.port),
     ], {

@@ -12,6 +12,9 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],
     include: ['tests/{unit,component}/**/*.test.{ts,tsx}'],
+    reporters: process.env.CI
+      ? ['default', ['junit', { outputFile: 'test-results/unit/results.xml' }]]
+      : ['default'],
     coverage: {
       reporter: ['text', 'lcov'],
       include: ['src/**/*.{ts,tsx}'],

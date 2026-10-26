@@ -2,7 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication } from '@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 
 test('copies a modifier drag selection from the installed Hermes TUI', async ({}, testInfo) => {
   test.skip(!process.env.JANET_TEST_HERMES, 'Requires an installed Hermes executable');
@@ -24,7 +24,7 @@ test('copies a modifier drag selection from the installed Hermes TUI', async ({}
   let app: ElectronApplication | undefined;
   try {
     app = await electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await expect(page.locator('.xterm-rows')).toContainText('Hermes', { timeout: 60_000 });
     const marker = 'Messenger of the Digital Gods';
     await expect(page.locator('.xterm-rows')).toContainText(marker);

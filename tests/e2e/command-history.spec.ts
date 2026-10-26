@@ -1,4 +1,4 @@
-import { forceClose } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -55,7 +55,7 @@ test('persists real command metadata and history selection pastes without execut
       args: ['.'], cwd: root,
       env: electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData }),
     });
-    const page = await app.firstWindow();
+    const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
     const terminal = page.locator('.terminal-container');
     await expect(terminal).toBeVisible({ timeout: 15_000 });

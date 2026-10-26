@@ -1695,11 +1695,28 @@ describe('split panes in the app', () => {
         root: { type: 'split', direction: 'vertical', sizes: [], children: [] } }],
       activeTabId: 'empty',
     } }));
-    render(<App />);
-    const region = await screen.findByRole('region', { name: 'Start terminals' });
-    fireEvent.keyDown(document, { key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true });
-    await waitFor(() => expect(within(region).getByRole('spinbutton')).toHaveFocus());
-    expect(screen.queryByRole('dialog', { name: 'Add terminals' })).not.toBeInTheDocument();
+    // Finish settings hydration and shortcut-registration effects before sending the key.
+    await act(async () => { render(<App />); });
+    const region = screen.getByRole('region', { name: 'Start terminals' });
+    const frames: FrameRequestCallback[] = [];
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
+      frames.push(callback);
+      return frames.length;
+    });
+    try {
+      const shortcut = new KeyboardEvent('keydown', {
+        key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true,
+      });
+      fireEvent(document, shortcut);
+      expect(shortcut.defaultPrevented).toBe(true);
+      expect(within(region).getByRole('spinbutton')).not.toHaveFocus();
+      // Focus is deferred to a frame; drive it instead of racing jsdom's wall clock.
+      act(() => frames.splice(0).forEach(callback => callback(performance.now())));
+      expect(within(region).getByRole('spinbutton')).toHaveFocus();
+      expect(screen.queryByRole('dialog', { name: 'Add terminals' })).not.toBeInTheDocument();
+    } finally {
+      requestFrame.mockRestore();
+    }
   });
 
   it('routes linking a Library folder independently of workspace creation', async () => {
