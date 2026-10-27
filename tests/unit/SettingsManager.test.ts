@@ -127,7 +127,15 @@ describe('SettingsManager', () => {
     expect(saved).not.toHaveProperty('sshProfiles');
     expect(saved).not.toHaveProperty('sshHostKeys');
     expect(saved.session.tabs).toEqual(settings.session.tabs);
-    expect(() => manager.set({ sshProfiles: [] })).toThrow();
+  });
+
+  it.each(['sshProfiles', 'sshHostKeys'])('rejects removed %s settings before mutation or I/O', async field => {
+    const { SettingsManager } = await import('../../src/main/settings');
+    const manager = new SettingsManager();
+    const before = manager.get();
+    expect(() => manager.set({ [field]: [] })).toThrow('Invalid settings update');
+    expect(manager.get()).toEqual(before);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
   });
 
   it('keeps main directory unset until chosen and persists linked folders', async () => {
@@ -622,7 +630,6 @@ describe('SettingsManager', () => {
   });
 
   it.each([
-    ['null SSH profiles', { sshProfiles: null }],
     ['object workspace tabs', { workspaceTabs: {} }],
     ['null keybindings', { keybindings: null }],
     ['undefined theme', { theme: undefined }],
@@ -696,12 +703,6 @@ describe('SettingsManager', () => {
         { id: 'second', name: ' deploy ', content: 'echo second' },
       ],
     }],
-    ['SSH profile ids', {
-      sshProfiles: [
-        { id: 'duplicate', host: 'first.example.com', port: 22, auth: 'password' },
-        { id: 'duplicate', host: 'second.example.com', port: 22, auth: 'password' },
-      ],
-    }],
     ['workspace preset ids', {
       workspaceTabs: [
         { id: 'duplicate', name: 'First', type: 'local', terminalCount: 1, splitDirection: 'vertical' },
@@ -729,7 +730,6 @@ describe('SettingsManager', () => {
   });
 
   it.each([
-    ['renderer-supplied SSH trust', { sshHostKeys: { 'attacker.example.com:22': 'SHA256:forged' } }],
     ['unknown session field', {
       session: {
         tabs: [], activeTabId: null, sidebarOpen: true, tabsOpen: true,
@@ -744,7 +744,7 @@ describe('SettingsManager', () => {
         activeTabId: 'tab', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
       },
     }],
-  ])('rejects renderer-owned trust and unknown session fields: %s', async (_label, update) => {
+  ])('rejects unknown session fields: %s', async (_label, update) => {
     const fsMock = await import('fs');
     const { SettingsManager } = await import('../../src/main/settings');
     const manager = new SettingsManager();
@@ -758,11 +758,6 @@ describe('SettingsManager', () => {
     ['too many snippets', {
       snippets: new Array(257).fill(null).map((_, index) => ({
         id: `snippet-${index}`, name: `Snippet ${index}`, content: 'echo ok',
-      })),
-    }],
-    ['too many SSH profiles', {
-      sshProfiles: new Array(257).fill(null).map((_, index) => ({
-        id: `profile-${index}`, host: `host-${index}.example.com`, port: 22, auth: 'password',
       })),
     }],
     ['too many workspace presets', {
@@ -782,11 +777,6 @@ describe('SettingsManager', () => {
         splitDirection: 'vertical', root: {
           type: 'leaf', terminalType: 'local', startupCommands: ['x'.repeat(4_097)],
         },
-      }],
-    }],
-    ['unknown SSH profile field', {
-      sshProfiles: [{
-        id: 'profile', host: 'example.com', port: 22, auth: 'password', extra: { callerOwned: true },
       }],
     }],
   ])('rejects bounded live settings before mutation or I/O: %s', async (_label, update) => {

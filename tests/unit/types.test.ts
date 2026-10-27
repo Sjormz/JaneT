@@ -142,14 +142,14 @@ describe('splitPane', () => {
     expect(result).toBe(leaf); // same reference
   });
 
-  it('creates independent new leaf ids on each split', () => {
+  it.each(['vertical', 'horizontal'] as const)('creates a distinct leaf on every %s split', direction => {
     const leaf = createLeaf();
-    const result = splitPane(leaf, leaf.id, 'vertical');
-    if (result.type === 'split') {
-      const originalId = result.children[0].id;
-      const newLeafId = result.children[1].id;
-      expect(originalId).not.toBe(newLeafId);
-    }
+    const first = splitPane(leaf, leaf.id, direction);
+    const result = splitPane(first, leaf.id, direction);
+    const ids = getAllLeafIds(result);
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    expect(findLeaf(result, leaf.id)).toBe(leaf);
   });
 });
 
@@ -220,6 +220,7 @@ describe('removePane', () => {
     const result = removePane(tree, leafB.id);
     expect(result).not.toBeNull();
     // The inner split should collapse, leaving just leafC as a direct child of outer
+    expect(result?.type).toBe('split');
     if (result && result.type === 'split') {
       expect(result.children.length).toBe(2);
       expect(result.children[0].id).toBe(leafA.id);

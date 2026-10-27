@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -45,7 +45,10 @@ const mocks = {
   spawnMock: vi.fn(),
 };
 
-async function loadTerminalManager() {
+type TerminalManager = import('../../src/main/terminal').TerminalManager;
+const managers: TerminalManager[] = [];
+
+async function makeTerminalManager(options?: ConstructorParameters<typeof import('../../src/main/terminal').TerminalManager>[0]) {
   vi.resetModules();
   vi.doMock('fs', async (original) => {
     const actual = await original<typeof import('fs')>();
@@ -59,8 +62,15 @@ async function loadTerminalManager() {
   vi.doMock('node-pty', () => ({
     spawn: mocks.spawnMock,
   }));
-  return import('../../src/main/terminal');
+  const { TerminalManager } = await import('../../src/main/terminal');
+  const manager = new TerminalManager(options);
+  managers.push(manager);
+  return manager;
 }
+
+afterEach(() => {
+  for (const manager of managers.splice(0)) manager.cleanup();
+});
 
 function processInfo(
   pid: number,
@@ -98,10 +108,9 @@ beforeEach(() => {
 
 describe('TerminalManager', () => {
   it('enforces local capacity and releases it when a terminal exits', async () => {
-    const { TerminalManager } = await loadTerminalManager();
     const { NativeTerminalCapacity } = await import('../../src/main/terminalCapacity');
     mocks.spawnMock.mockImplementation(() => new MockPty());
-    const manager = new TerminalManager({ capacity: new NativeTerminalCapacity(1) });
+    const manager = await makeTerminalManager({ capacity: new NativeTerminalCapacity(1) });
     try {
       manager.create('first', undefined, 'powershell.exe', () => {});
       expect(() => manager.create('second', undefined, 'powershell.exe', () => {})).toThrow(/terminal limit/i);
@@ -115,9 +124,8 @@ describe('TerminalManager', () => {
   });
 
   it('rejects a missing absolute Unix shell before node-pty reports a false start', async () => {
-    const { TerminalManager } = await loadTerminalManager();
     const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
     const missingShell = path.join(os.tmpdir(), `janet-missing-shell-${Date.now()}`);
 
     try {
@@ -132,9 +140,7 @@ describe('TerminalManager', () => {
   it('runs PowerShell startup commands at launch without writing them into the PTY', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
 
     manager.create(
       'term-startup-hidden',
@@ -165,9 +171,7 @@ describe('TerminalManager', () => {
     mocks.spawnMock.mockReturnValue(pty);
     const prefix = 'Write-Output ok # ';
     const command = prefix + "'".repeat(4_096 - prefix.length);
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
     manager.create(
       'term-startup-max',
       undefined,
@@ -183,9 +187,7 @@ describe('TerminalManager', () => {
 
   it('keeps launch-time startup commands isolated between local panes', async () => {
     mocks.spawnMock.mockImplementation(() => new MockPty());
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
     manager.create('term-startup-one', undefined, '/bin/zsh', () => {}, ['echo first']);
     manager.create('term-startup-two', undefined, '/bin/zsh', () => {}, ['echo second']);
 
@@ -200,9 +202,7 @@ describe('TerminalManager', () => {
 
   it('leaves the temporary ZDOTDIR before running Zsh startup commands', async () => {
     mocks.spawnMock.mockReturnValue(new MockPty());
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
     manager.create('term-startup-nested-zsh', undefined, '/bin/zsh', () => {}, ['echo once']);
 
     const env = mocks.spawnMock.mock.calls[0][2].env as NodeJS.ProcessEnv;
@@ -230,8 +230,7 @@ describe('TerminalManager', () => {
     vi.stubEnv('ZDOTDIR', '/home/user/.config/zsh');
     try {
       mocks.spawnMock.mockReturnValue(new MockPty());
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager();
+      const manager = await makeTerminalManager();
       manager.create('term-custom-zdotdir', undefined, '/bin/zsh', () => {});
 
       const env = mocks.spawnMock.mock.calls[0][2].env as NodeJS.ProcessEnv;
@@ -247,9 +246,7 @@ describe('TerminalManager', () => {
   it('runs integrated startup commands from shell init instead of PTY input', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
     const commands = ['hermes doctor', 'hermes --tui'];
 
     manager.create('term-startup', undefined, '/bin/zsh', () => {}, commands);
@@ -274,9 +271,7 @@ describe('TerminalManager', () => {
   it('skips startup and forwards input when a prompt hook needs an early answer', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
     manager.create('term-startup-input', undefined, '/bin/sh', () => {}, ['git pull']);
 
     manager.write('term-startup-input', 'echo after startup\r');
@@ -297,9 +292,7 @@ describe('TerminalManager', () => {
   it('forwards terminal protocol replies without cancelling pending startup', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
     manager.create('term-startup-cpr', undefined, '/bin/sh', () => {}, ['git pull']);
 
     manager.write('term-startup-cpr', '\x1b[1;1R', false);
@@ -316,8 +309,7 @@ describe('TerminalManager', () => {
   it('preserves pending startup after empty or failed user input', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
     manager.create('term-startup-failed-input', undefined, '/bin/sh', () => {}, ['git pull']);
 
     manager.write('term-startup-failed-input', '');
@@ -334,9 +326,7 @@ describe('TerminalManager', () => {
   it('does not append startup commands to a partially typed user line', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
     manager.create('term-startup-partial', undefined, '/bin/sh', () => {}, ['git pull']);
 
     manager.write('term-startup-partial', 'ls');
@@ -351,9 +341,7 @@ describe('TerminalManager', () => {
     try {
       const pty = new MockPty();
       mocks.spawnMock.mockReturnValue(pty);
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager();
+      const manager = await makeTerminalManager();
       manager.create('term-startup-fallback', undefined, '/bin/sh', () => {}, ['hermes --tui']);
 
       expect(pty.write).not.toHaveBeenCalled();
@@ -370,10 +358,8 @@ describe('TerminalManager', () => {
 
   it('clears the local startup ledger only when the pane is explicitly destroyed', async () => {
     const ptys = [new MockPty(), new MockPty()];
-    mocks.spawnMock.mockImplementation(() => ptys.shift()!);
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    mocks.spawnMock.mockReturnValueOnce(ptys[0]).mockReturnValueOnce(ptys[1]);
+    const manager = await makeTerminalManager();
 
     manager.create('term-startup-recreate', undefined, '/bin/zsh', () => {}, ['first']);
     const firstZdotdir = mocks.spawnMock.mock.calls[0][2].env.ZDOTDIR as string;
@@ -383,16 +369,15 @@ describe('TerminalManager', () => {
 
     expect(fs.readFileSync(path.join(firstZdotdir, '.zshrc'), 'utf8')).toContain("eval 'first'");
     expect(fs.readFileSync(path.join(secondZdotdir, '.zshrc'), 'utf8')).toContain("eval 'second'");
+    expect(ptys).toHaveLength(2);
     expect(ptys.every((pty) => pty.write.mock.calls.length === 0)).toBe(true);
     manager.cleanup();
   });
 
   it('does not replay startup commands when a PTY exits without explicit pane destruction', async () => {
     const ptys = [new MockPty(), new MockPty()];
-    mocks.spawnMock.mockImplementation(() => ptys.shift()!);
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    mocks.spawnMock.mockReturnValueOnce(ptys[0]).mockReturnValueOnce(ptys[1]);
+    const manager = await makeTerminalManager();
 
     const first = manager.create('term-startup-exit', undefined, '/bin/zsh', () => {}, ['first']);
     const firstZdotdir = mocks.spawnMock.mock.calls[0][2].env.ZDOTDIR as string;
@@ -402,6 +387,7 @@ describe('TerminalManager', () => {
 
     expect(fs.readFileSync(path.join(firstZdotdir, '.zshrc'), 'utf8')).toContain("eval 'first'");
     expect(fs.readFileSync(path.join(secondZdotdir, '.zshrc'), 'utf8')).not.toContain("eval 'second'");
+    expect(ptys).toHaveLength(2);
     expect(ptys.every((pty) => pty.write.mock.calls.length === 0)).toBe(true);
     manager.cleanup();
   });
@@ -413,9 +399,7 @@ describe('TerminalManager', () => {
       ptys.push(pty);
       return pty;
     });
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
 
     // Simulates React 18 StrictMode's mount -> cleanup -> mount, which
     // calls the IPC handler (and therefore create()) twice for the same
@@ -434,9 +418,7 @@ describe('TerminalManager', () => {
       ptys.push(pty);
       return pty;
     });
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
 
     const receivedA: string[] = [];
     const receivedB: string[] = [];
@@ -452,8 +434,7 @@ describe('TerminalManager', () => {
   it('pauses output above the high watermark and resumes after parsed output is acknowledged', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
     const received: Array<{ generation: number; sequence: number }> = [];
     manager.create('term-flow', undefined, undefined, (_data, output) => received.push(output));
 
@@ -470,8 +451,7 @@ describe('TerminalManager', () => {
   it('starts fresh flow control when an existing terminal reattaches', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
     const firstOutput: Array<{ generation: number; sequence: number }> = [];
     manager.create('term-reattach-flow', undefined, undefined, (_data, output) => firstOutput.push(output));
 
@@ -494,8 +474,7 @@ describe('TerminalManager', () => {
   it('does not pause output that could not be delivered to the renderer', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
     manager.create('term-undelivered-flow', undefined, undefined, () => false);
 
     pty.emit('x'.repeat(600_000));
@@ -506,8 +485,7 @@ describe('TerminalManager', () => {
   it('ignores output acknowledgements from a destroyed terminal generation', async () => {
     const firstPty = new MockPty();
     mocks.spawnMock.mockReturnValue(firstPty);
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager({ platform: 'win32' });
+    const manager = await makeTerminalManager({ platform: 'win32' });
     const firstOutput: Array<{ generation: number; sequence: number }> = [];
     manager.create('term-reused-flow', undefined, undefined, (_data, output) => firstOutput.push(output));
     firstPty.emit('x');
@@ -533,9 +511,7 @@ describe('TerminalManager', () => {
       ptys.push(pty);
       return pty;
     });
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager({
+    const manager = await makeTerminalManager({
       platform: 'win32',
       processInspector: processInspector([], [], [], []),
       terminateGraceMs: 0,
@@ -557,9 +533,7 @@ describe('TerminalManager', () => {
     const original = processInfo(firstPty.pid, 1, 'zsh', { startTime: '1' });
     const reused = processInfo(firstPty.pid, 1, 'zsh', { startTime: '2' });
     const killProcess = vi.fn();
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager({
+    const manager = await makeTerminalManager({
       platform: 'linux',
       processInspector: processInspector([original], [reused], [], []),
       terminateGraceMs: 0,
@@ -581,9 +555,7 @@ describe('TerminalManager', () => {
   it('expands a leading tilde in cwd before spawning the shell', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
 
     manager.create('term-home', '~', '/bin/zsh', () => {});
 
@@ -599,9 +571,7 @@ describe('TerminalManager', () => {
   it('starts zsh with a JaneT-owned zshrc so OSC 7 hooks survive on mac', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
 
     manager.create('term-zsh', undefined, '/bin/zsh', () => {});
 
@@ -638,8 +608,7 @@ describe('TerminalManager', () => {
     try {
       const pty = new MockPty();
       mocks.spawnMock.mockReturnValue(pty);
-      const { TerminalManager } = await loadTerminalManager();
-      new TerminalManager().create('term-clean-env', undefined, '/bin/zsh', () => {});
+      (await makeTerminalManager()).create('term-clean-env', undefined, '/bin/zsh', () => {});
 
       const env = mocks.spawnMock.mock.calls[0][2].env;
       expect(mocks.spawnMock.mock.calls[0][2].useConptyDll).toBe(process.platform === 'win32');
@@ -659,9 +628,7 @@ describe('TerminalManager', () => {
   it('starts bash with --rcfile so PROMPT_COMMAND lives in the interactive shell', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
 
     manager.create('term-bash', undefined, 'bash', () => {});
 
@@ -680,9 +647,7 @@ describe('TerminalManager', () => {
   it('ignores invalid and duplicate resize requests before calling node-pty', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
-
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
 
     manager.create('term-1', undefined, undefined, () => {});
     manager.resize('term-1', 0, 24);
@@ -704,8 +669,7 @@ describe('TerminalManager', () => {
   it('writes xterm binary input as a Buffer to preserve legacy mouse reports', async () => {
     const pty = new MockPty();
     mocks.spawnMock.mockReturnValue(pty);
-    const { TerminalManager } = await loadTerminalManager();
-    const manager = new TerminalManager();
+    const manager = await makeTerminalManager();
 
     manager.create('term-binary', undefined, undefined, () => {});
     manager.writeBinary('term-binary', '\xff\x00');
@@ -718,9 +682,7 @@ describe('TerminalManager', () => {
       const pty = new MockPty();
       mocks.spawnMock.mockReturnValue(pty);
       const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
+      const manager = await makeTerminalManager({
         processInspector: processInspector([shell], [shell], [], []),
         terminateGraceMs: 0,
         forceKillGraceMs: 0,
@@ -742,9 +704,7 @@ describe('TerminalManager', () => {
       const snapshot = [shell, runner, server];
       const inspector = processInspector(snapshot, snapshot, [], []);
       const killProcess = vi.fn();
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
+      const manager = await makeTerminalManager({
         processInspector: inspector,
         terminateGraceMs: 0,
         forceKillGraceMs: 0,
@@ -776,9 +736,7 @@ describe('TerminalManager', () => {
       const killProcess = vi.fn((pid: number) => {
         if (pid === 5001) throw new Error('already exited');
       });
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
+      const manager = await makeTerminalManager({
         processInspector: processInspector(snapshot, snapshot, [], []),
         terminateGraceMs: 0,
         forceKillGraceMs: 0,
@@ -801,9 +759,7 @@ describe('TerminalManager', () => {
       const attached = processInfo(5008, pty.pid, 'node', { startTime: '2' });
       const reparented = processInfo(5008, 1, 'node', { startTime: '2' });
       const killProcess = vi.fn();
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
+      const manager = await makeTerminalManager({
         processInspector: processInspector([shell, attached], [shell, reparented], [], []),
         terminateGraceMs: 0,
         forceKillGraceMs: 0,
@@ -824,9 +780,7 @@ describe('TerminalManager', () => {
       const original = processInfo(5008, pty.pid, 'node', { startTime: '2' });
       const reused = processInfo(5008, pty.pid, 'node', { startTime: '3' });
       const killProcess = vi.fn();
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
+      const manager = await makeTerminalManager({
         processInspector: processInspector([shell, original], [shell, reused], [], []),
         terminateGraceMs: 0,
         forceKillGraceMs: 0,
@@ -847,9 +801,7 @@ describe('TerminalManager', () => {
       const original = processInfo(5008, pty.pid, 'node', { startTime: '2' });
       const reused = processInfo(5008, pty.pid, 'node', { startTime: '3' });
       const killProcess = vi.fn();
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
+      const manager = await makeTerminalManager({
         processInspector: processInspector(
           [shell, original],
           [shell, original],
@@ -875,9 +827,7 @@ describe('TerminalManager', () => {
       const original = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
       const reused = processInfo(pty.pid, 1, 'zsh', { startTime: '2' });
       const killProcess = vi.fn();
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
+      const manager = await makeTerminalManager({
         platform: 'linux',
         processInspector: processInspector([original], [original], [reused], []),
         terminateGraceMs: 0,
@@ -902,9 +852,7 @@ describe('TerminalManager', () => {
       const shell = processInfo(pty.pid, 1, 'zsh', { startTime: '1' });
       const reparented = processInfo(5008, 1, 'node', { startTime: '2' });
       const killProcess = vi.fn();
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
+      const manager = await makeTerminalManager({
         processInspector: processInspector(
           [unidentifiedShell, unidentifiedAttached],
           [unidentifiedShell, unidentifiedReparented],
@@ -943,9 +891,7 @@ describe('TerminalManager', () => {
       const server = processInfo(5007, pty.pid, 'node', { startTime: '2' });
       const snapshot = [shell, server];
       const killProcess = vi.fn();
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
+      const manager = await makeTerminalManager({
         processInspector: processInspector(snapshot, snapshot, snapshot, snapshot),
         terminateGraceMs: 0,
         forceKillGraceMs: 0,
@@ -981,9 +927,7 @@ describe('TerminalManager', () => {
         [],
       );
       const killProcess = vi.fn();
-
-      const { TerminalManager } = await loadTerminalManager();
-      const manager = new TerminalManager({
+      const manager = await makeTerminalManager({
         processInspector: inspector,
         terminateGraceMs: 0,
         forceKillGraceMs: 0,

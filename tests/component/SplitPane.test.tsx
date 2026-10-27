@@ -425,7 +425,7 @@ async function requestWorkspaceClose(
 }
 
 describe('split panes in the app', () => {
-  it.each([true, false])('adds a batch without replacing existing terminals (grouped=%s)', async grouped => {
+  it('adds a batch without replacing existing terminals', async () => {
     window.janet.workspaceDirectory = vi.fn().mockResolvedValue('/home/test/project');
     window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({ session: {
       groups: [{ id: 'work', name: 'Work', directory: '/home/test' }],

@@ -61,13 +61,14 @@ describe('process snapshot parsing', () => {
     ]);
   });
 
-  it('parses either one or many PowerShell CIM rows and ignores malformed values', () => {
-    expect(parseWindowsProcessSnapshot(JSON.stringify([
-      { ProcessId: 10, ParentProcessId: 1, Name: 'pwsh.exe', CreationDate: '20260715110000.000000-420' },
-      { ProcessId: 'bad', ParentProcessId: 1, Name: 'ignored.exe' },
-    ]))).toEqual([
+  it.each([false, true])('parses PowerShell CIM rows (array=%s) and ignores malformed values', array => {
+    const valid = { ProcessId: 10, ParentProcessId: 1, Name: 'pwsh.exe', CreationDate: '20260715110000.000000-420' };
+    expect(parseWindowsProcessSnapshot(JSON.stringify(array ? [valid] : valid))).toEqual([
       { pid: 10, ppid: 1, name: 'pwsh.exe', startTime: '20260715110000.000000-420' },
     ]);
+    expect(parseWindowsProcessSnapshot(JSON.stringify([
+      { ProcessId: 'bad', ParentProcessId: 1, Name: 'ignored.exe' },
+    ]))).toEqual([]);
     expect(parseWindowsProcessSnapshot('{not json')).toEqual([]);
   });
 });
