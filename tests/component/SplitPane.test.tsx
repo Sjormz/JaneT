@@ -2685,9 +2685,9 @@ describe('split panes in the app', () => {
     await waitFor(() => {
       const updates = vi.mocked(window.janet.setSettings).mock.calls
         .map(([update]) => update.session).filter(Boolean);
-      expect(updates.at(-1)?.tabs[0]?.root).toMatchObject({
+      expect(updates.at(-1)).toMatchObject({ tabs: [expect.objectContaining({ root: {
         type: 'split', children: [expect.objectContaining({ type: 'leaf' }), expect.objectContaining({ type: 'leaf' })],
-      });
+      } })] });
     });
   });
 });

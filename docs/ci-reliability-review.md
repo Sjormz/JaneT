@@ -196,7 +196,8 @@ All these runs used hosted Node 24.19.0 and npm 11.17.0. Diagnostic runs changed
 only disposable workflow instrumentation and stated fixture behavior; they do
 not replace full verification of the eventual PR head. No app setting, screen,
 or public-guide procedure changed in these test repairs, so public screenshots
-do not need refreshing. The unresolved failures still block merging.
+did not need refreshing at that checkpoint. Those unresolved failures blocked
+merging then; the subsequent repairs and audit are recorded below.
 
 ### Repairs during the full-suite audit
 
@@ -222,3 +223,10 @@ The entire theme unit file passes all 15 cases. The Settings guide was updated
 and the complete One Dark public screenshot set was refreshed on hosted Windows;
 all nine changed images were visually reviewed and both published copies match.
 These focused checks do not replace final hosted verification of the audit head.
+
+The complete repair head `13b6f3c` then passed full hosted verification on Linux,
+Windows, Intel macOS and Apple Silicon, including Windows packaging/PTY checks.
+The [complete per-file test suite review](test-suite-review.md) records the
+subsequent assertion, fixture, readiness and coverage improvements across all
+123 test files, their retained platform/opt-in limits and the current-head
+verification gate. Final audit-head results are recorded in PR #204.
