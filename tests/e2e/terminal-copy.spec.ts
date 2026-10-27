@@ -67,10 +67,12 @@ async function dragMarker(page: Page, beforeMouseDown?: () => Promise<void>): Pr
   const box = await rows.nth(index).boundingBox();
   expect(box).not.toBeNull();
   const y = box!.y + box!.height / 2;
-  await page.mouse.move(box!.x + 1, y);
-  await beforeMouseDown?.();
   const modifier = process.platform === 'darwin' ? 'Alt' : 'Shift';
   await page.keyboard.down(modifier);
+  // Include positioning in the forced-selection gesture: an unmodified hover
+  // emits a TUI mouse report that can reach IPC after the input capture resets.
+  await page.mouse.move(box!.x + 1, y);
+  await beforeMouseDown?.();
   await page.mouse.down();
   await page.mouse.move(box!.x + box!.width - 2, y, { steps: 12 });
   await page.mouse.up();
