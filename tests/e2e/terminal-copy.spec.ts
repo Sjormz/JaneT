@@ -67,12 +67,10 @@ async function dragMarker(page: Page, beforeMouseDown?: () => Promise<void>): Pr
   const box = await rows.nth(index).boundingBox();
   expect(box).not.toBeNull();
   const y = box!.y + box!.height / 2;
-  const modifier = process.platform === 'darwin' ? 'Alt' : 'Shift';
-  await page.keyboard.down(modifier);
-  // Include positioning in the forced-selection gesture: an unmodified hover
-  // emits a TUI mouse report that can reach IPC after the input capture resets.
   await page.mouse.move(box!.x + 1, y);
   await beforeMouseDown?.();
+  const modifier = process.platform === 'darwin' ? 'Alt' : 'Shift';
+  await page.keyboard.down(modifier);
   await page.mouse.down();
   await page.mouse.move(box!.x + box!.width - 2, y, { steps: 12 });
   await page.mouse.up();
@@ -204,10 +202,16 @@ test('retains a modifier TUI selection through a redraw without turning copy int
     await output(`\x1b[?1049h\x1b[?1003h\x1b[?1006h${MARKER}\r\n`);
     await markerPosition(page);
     await page.locator('.terminal-container textarea').focus();
-    await dragMarker(page, () => app!.evaluate(() => {
-      (globalThis as any).__copyInput = [];
-      (globalThis as any).__copyBinary = [];
-    }));
+    await dragMarker(page, async () => {
+      // Positioning emits an unmodified hover report. Observe its IPC delivery
+      // before clearing setup input, so a late report cannot look like drag input.
+      await expect.poll(() => app!.evaluate(() => (globalThis as any).__copyInput
+        .some((data: string) => /^\x1b\[<35;\d+;\d+M$/.test(data)))).toBe(true);
+      await app!.evaluate(() => {
+        (globalThis as any).__copyInput = [];
+        (globalThis as any).__copyBinary = [];
+      });
+    });
     const forcedDragInput = await app.evaluate(() => ({
       input: (globalThis as any).__copyInput,
       binary: (globalThis as any).__copyBinary,
