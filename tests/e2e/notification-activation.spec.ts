@@ -1,9 +1,10 @@
-import { firstWindow } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 
 test('Windows protocol activation launches JaneT and restores its existing window', async () => {
   test.skip(process.platform !== 'win32', 'Windows notification activation');
@@ -15,12 +16,14 @@ test('Windows protocol activation launches JaneT and restores its existing windo
   const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: profile };
   delete env.ELECTRON_RUN_AS_NODE; delete env.ELECTRON_NO_ATTACH_CONSOLE;
   let instance: ElectronApplication | undefined;
+  let registered = false;
+  let failure: unknown;
   try {
     instance = await electron.launch({ args, cwd: root, env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) });
     const page = await firstWindow(instance);
     await expect(page.getByRole('heading', { name: 'Create your first workspace' })).toBeVisible();
     expect(await instance.evaluate(({ app }) => app.getPath('userData'))).toBe(profile);
-    const registered = await instance.evaluate(({ app, BrowserWindow }, { scheme, args }) => {
+    registered = await instance.evaluate(({ app, BrowserWindow }, { scheme, args }) => {
       (globalThis as any).notificationLaunchArgs = [];
       app.on('second-instance', (_event, argv) => { (globalThis as any).notificationLaunchArgs = argv; });
       BrowserWindow.getAllWindows()[0].minimize();
@@ -33,11 +36,20 @@ test('Windows protocol activation launches JaneT and restores its existing windo
     await expect.poll(() => instance!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(false);
     expect(await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
     await expect(page.getByRole('heading', { name: 'Create your first workspace' })).toBeVisible();
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
-    if (instance) {
-      await instance.evaluate(({ app }, { scheme, args }) => app.removeAsDefaultProtocolClient(scheme, process.execPath, args), { scheme, args });
-      await instance.close();
-    }
-    fs.rmSync(profile, { recursive: true, force: true });
+    try {
+      try { await forceClose(instance); }
+      finally {
+        // Electron writes this per-user key. The random test-owned scheme can
+        // be removed even if its debugger is unresponsive during shutdown.
+        if (registered) execFileSync('reg.exe', ['delete', `HKCU\\Software\\Classes\\${scheme}`, '/f'], {
+          windowsHide: true, timeout: 5000, stdio: 'pipe',
+        });
+      }
+      fs.rmSync(profile, { recursive: true, force: true });
+    } catch (error) { if (!failure) throw error; console.error('Protocol fixture cleanup failed:', error); }
   }
 });

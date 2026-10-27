@@ -75,6 +75,7 @@ function replayZshStartup(env: NodeJS.ProcessEnv): string {
   ].join('\n'));
   const result = spawnSync(bash!, ['--noprofile', '--norc', driver], { env, encoding: 'utf8', timeout: 20_000 });
   expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
   expect(result.stderr).toBe('');
   return result.stdout;
 }
@@ -82,6 +83,7 @@ function replayZshStartup(env: NodeJS.ProcessEnv): string {
 function runRealZsh(env: NodeJS.ProcessEnv): string {
   const result = spawnSync(zsh!, ['-i', '-l', '-c', 'true'], { env, encoding: 'utf8', timeout: 20_000 });
   expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
   return result.stdout;
 }
 
