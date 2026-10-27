@@ -769,6 +769,16 @@ module.exports = {
     const ci = readWorkflow('ci.yml');
     expect(ci.jobs.verify.name).toBe('Verify');
     expect(ci.jobs['durable-workspace-platforms'].name).toBe('Durable workspace (${{ matrix.os }})');
+    const ciSteps = ci.jobs['durable-workspace-platforms'].steps;
+    const packagedUi = ciSteps.find((step: any) => step.name === 'Verify packaged Windows UI');
+    expect(ciSteps.indexOf(packagedUi)).toBeGreaterThan(ciSteps.findIndex((step: any) => step.name === 'Verify packaged Windows release and terminal runtime'));
+    expect(packagedUi.if).toBe("runner.os == 'Windows'");
+    expect(packagedUi.env).toMatchObject({
+      JANET_PACKAGED_EXECUTABLE: '${{ github.workspace }}/release/win-unpacked/JaneT.exe',
+      PLAYWRIGHT_JUNIT_OUTPUT_FILE: '${{ github.workspace }}/test-results/packaged-ui.xml',
+    });
+    expect(packagedUi.run).toContain('tests/e2e/version-update.spec.ts');
+    expect(packagedUi.run).toContain('--grep "packaged runtime|packaged updater failure" --retries=0 --output=test-results/packaged-ui');
     const workflow = readWorkflow('release.yml');
     expect(workflow.jobs.prepare.name).toBe('Prepare release candidate');
     expect(workflow.jobs.verify.needs).toEqual(['prepare']);

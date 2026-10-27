@@ -62,6 +62,8 @@ Default macOS verification uses the explicit Intel image. Earlier hosted macOS 2
 
 Manual runs use the same pinned runtimes, lockfile install, unit tests, build, macOS startup repetitions and Windows package/PTY verification as CI. Their concurrency group is separate, so triggering one does not cancel automatic PR or main verification. The workflow file must exist on the default branch, and the selected branch must contain the dispatch-enabled version. The **Run workflow** button appears once the default-branch version includes that trigger; the CLI can dispatch the updated branch before then. Update older branches from `main` before dispatching them. See [GitHub's manual workflow documentation](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
 
+Windows CI also runs the two packaged diagnostics/updater UI cases against the freshly built `release/win-unpacked/JaneT.exe`, after native package/PTY verification. Their traces and `test-results/packaged-ui.xml` are kept separately so they do not overwrite the desktop suite's evidence. Other packaged platforms still need an explicit `JANET_PACKAGED_EXECUTABLE` run.
+
 Only committed and pushed files are tested on GitHub. Local edits and installed-app/device behavior need local inspection. When local verification is appropriate, use:
 
 ```bash

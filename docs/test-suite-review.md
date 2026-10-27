@@ -28,7 +28,7 @@ Final merge acceptance remains the current PR head: typecheck, the entire unit/c
 
 - Full macOS runs distinguish Intel `macos-26-intel` from Apple Silicon `macos-26`.
 - Installed Hermes copy requires `JANET_TEST_HERMES` and an installed executable. It remains an explicit external-integration opt-in.
-- Packaged UI diagnostics/updater cases require `JANET_PACKAGED_EXECUTABLE`; native Windows package/PTY verification is a separate gate.
+- Packaged UI diagnostics/updater cases now run in Windows CI against its freshly built unpacked executable, with separate traces/JUnit evidence. Other packaged platforms require `JANET_PACKAGED_EXECUTABLE`; native Windows package/PTY verification remains a separate gate.
 - Public screenshot generation is a Windows asset-maintenance opt-in; design captures are an opt-in developer visual review tool. They are retained for their documented workflows.
 - Native protocol activation is Windows-only. POSIX shell and filesystem cases retain explicit platform/installed-shell conditions. Skips must be reported from the run, not treated as passes.
 - Negative-observation windows in no-submit/no-auto-retry tests and the historical delayed-startup fallback checks are retained where they test the absence of an action. They are not substitutes for positive readiness markers.
@@ -171,7 +171,7 @@ The table records every reviewed file. Definition counts are source declarations
 | [terminal-path-drag.spec.ts](../tests/e2e/terminal-path-drag.spec.ts) | 1 | Enable Windows with PowerShell-specific quoting/existence proof and parsed readiness. Retain real Explorer/Source Control clipboard/drop paths and no implicit Enter; share environment setup. |
 | [theme-contrast.spec.ts](../tests/e2e/theme-contrast.spec.ts) | 1 | Retain computed glass text across every theme and system/reduced transparency with modeled OS/material backdrops; complements selected-control visual matrix. |
 | [transparency.spec.ts](../tests/e2e/transparency.spec.ts) | 1 | Retain platform-derived material expectations, three preferences, native scheme and first-frame persisted state after restart. |
-| [version-update.spec.ts](../tests/e2e/version-update.spec.ts) | 3 | Retain current version action and packaged-runtime diagnostics/failure fallback opt-ins; source-mode success does not verify packaged mode. Share environment setup. |
+| [version-update.spec.ts](../tests/e2e/version-update.spec.ts) | 3 | Retain current version action; run packaged diagnostics/failure fallback in Windows CI after packaging, with separate output. Other packaged platforms remain opt-in. Share environment setup. |
 | [workspace-directories.spec.ts](../tests/e2e/workspace-directories.spec.ts) | 3 | Retain cross-restart folder ownership/import/promote/remove/recovery journey and separate real Git worktree cases. Filesystem side effects and saved sessions are asserted, not just rendered labels. |
 | [workspace-groups.spec.ts](../tests/e2e/workspace-groups.spec.ts) | 1 | Retain real grouped workspace creation, collapsed group persistence and independent terminal restoration with no save action; use shared shutdown. |
 | [workspace-layout.spec.ts](../tests/e2e/workspace-layout.spec.ts) | 3 | Wait for parsed shell readiness before the Python harness. Retain measured native compact targets, desktop/narrow region ownership, keyboard menus and real Hermes lifecycle; share environment setup. |

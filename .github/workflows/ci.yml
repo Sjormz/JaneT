@@ -193,6 +193,13 @@ jobs:
         if: runner.os == 'Windows'
         run: node scripts/verify-release-artifacts.mjs windows release
 
+      - name: Verify packaged Windows UI
+        if: runner.os == 'Windows'
+        env:
+          JANET_PACKAGED_EXECUTABLE: ${{ github.workspace }}/release/win-unpacked/JaneT.exe
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: ${{ github.workspace }}/test-results/packaged-ui.xml
+        run: npx playwright test --config playwright.config.ts tests/e2e/version-update.spec.ts --grep "packaged runtime|packaged updater failure" --retries=0 --output=test-results/packaged-ui
+
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
