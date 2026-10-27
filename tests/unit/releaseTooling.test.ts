@@ -912,7 +912,7 @@ module.exports = {
         { label: 'asset upload incomplete', guard: publication(root, { assets: (built) => built.map((asset) => ({ ...asset, state: 'starter' })) }), fails: /did not finish uploading/ },
         { label: 'release published by someone else mid-run', guard: publication(root, { draft: false }), fails: /left draft state/ },
       ]);
-  
+
       const verbs = (log: string[][]) => log.filter((args) => args[0] === 'release').map((args) => args[1]);
       expect(verbs(calls[0])).toEqual(['create', 'upload', 'view', 'edit']);
       expect(calls[0].find((args) => args[1] === 'create')).toEqual(
