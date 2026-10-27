@@ -147,3 +147,53 @@ callbacks and retains stalled-request success/timeout coverage. This tests the
 protocol boundary, not Electron's underlying macOS implementation. macOS CI now
 repeats the actual failing TUI case 25 times with retries disabled, then runs the
 normal desktop smoke selection. A single failed repetition fails the job.
+
+## PR #204 full desktop investigation — 2026-10-27
+
+At `e50ae3569b3619923d7a61426d6709789cd0839b`, automatic checks passed,
+but [full desktop run 40373576789](https://github.com/Sjormz/JaneT/actions/runs/40373576789)
+failed. Windows had 53 passes, nine skips and two motion/input failures:
+PowerShell received `ode` where the test typed `node`. Intel macOS had
+17 passes, nine skips and 38 timeouts, beginning before workspace setup's
+Electron launch completed. Later processes recorded entry without readiness.
+These are not evidence of 38 independent UI regressions. The underlying
+startup stall remains unresolved; the earlier Intel qualification also used
+a different first-window helper and does not verify this exact head.
+
+Hosted diagnostics established additional, separate problems:
+
+- [Run 40487544104](https://github.com/Sjormz/JaneT/actions/runs/40487544104)
+  reproduced a TUI-copy test race in one of 25 macOS repetitions. Moving to
+  the selection's start emits a valid SGR hover report (`CSI <35;1;6M`).
+  The main-process capture could be cleared before that renderer IPC arrived.
+  The test now observes delivery before resetting capture, and waits for a
+  distinct rendered marker after enabling synthetic TUI modes. Its no-input
+  assertions for the subsequent modifier drag remain unchanged.
+- [Run 40489039188](https://github.com/Sjormz/JaneT/actions/runs/40489039188)
+  captured four macOS crash reports with `pty.node`'s
+  `Napi::ThreadSafeFunction::CallJS` throwing during `node::Environment::RunCleanup`.
+  Immediate `app.exit()` bypasses normal application shutdown. A controlled
+  [graceful-shutdown comparison](https://github.com/Sjormz/JaneT/actions/runs/40490190988)
+  passed 20 motion cases with clean native-exit assertions. The shared cleanup
+  helper now requests `app.quit()` while retaining the original bounded,
+  test-owned kill fallback. This does not prove the startup stall is fixed.
+- That diagnostic also passed 50 Windows motion cases without retries and
+  passed macOS startup in the full suite. Neither original intermittent
+  failure reproduced. Instrumentation captured DOM keyboard/focus events and
+  main-process PTY writes; a passing repetition is not a fix for character loss.
+- The macOS visual matrix measured a Gruvbox finished badge at 6.4318:1
+  (`#ebdbb2` on `#504945`) at 800x600, below its existing 7:1 assertion.
+  This remains an actionable contrast failure; the threshold was not lowered.
+- Windows visual cases reproduced profile-removal `EPERM` after a preceding
+  click timeout. The finally block hid that original timeout. It now preserves
+  the original failure and reports cleanup separately. Graceful shutdown alone
+  did not eliminate the deletion failure. A signed Microsoft Handle probe in
+  [run 40490823591](https://github.com/Sjormz/JaneT/actions/runs/40490823591)
+  found no matching handles at its observation time, so no particular process
+  or antivirus is established as the lock owner.
+
+All these runs used hosted Node 24.19.0 and npm 11.17.0. Diagnostic runs changed
+only disposable workflow instrumentation and stated fixture behavior; they do
+not replace full verification of the eventual PR head. No app setting, screen,
+or public-guide procedure changed in these test repairs, so public screenshots
+do not need refreshing. The unresolved failures still block merging.

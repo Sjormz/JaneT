@@ -66,6 +66,24 @@ it('waits for app document navigation within the original window budget', async 
   await expect(result).resolves.toBe(page);
 });
 
+it('requests normal shutdown with exit observation installed before the request', async () => {
+  const child = Object.assign(new EventEmitter(), { exitCode: null as number | null, signalCode: null, kill: vi.fn() });
+  const quit = vi.fn(() => {
+    expect(child.listenerCount('exit')).toBe(1);
+    child.exitCode = 0;
+    child.emit('exit', 0);
+  });
+  const immediateExit = vi.fn(() => { throw new Error('Native PTY cleanup was bypassed'); });
+  const app = { process: () => child, evaluate: async (callback: (electron: any) => unknown) => (
+    callback({ app: { quit, exit: immediateExit } })
+  ) } as unknown as ElectronApplication;
+  await forceClose(app);
+  expect(quit).toHaveBeenCalledOnce();
+  expect(immediateExit).not.toHaveBeenCalled();
+  expect(child.kill).not.toHaveBeenCalled();
+  expect(child.listenerCount('exit')).toBe(0);
+});
+
 it('kills only its child after a stalled debugger exit request and awaits process exit', async () => {
   vi.useFakeTimers();
   const child = Object.assign(new EventEmitter(), { pid: 12345, exitCode: null as number | null, signalCode: null, kill: vi.fn() });

@@ -189,6 +189,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
   const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-final-visual-e2e-'));
   const pageErrors: string[] = [];
   let app: ElectronApplication | undefined;
+  let failure: unknown;
 
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
@@ -461,8 +462,16 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
       (await observedPage.pageErrors({ filter: 'all' })).map((error) => error.message)
     )))).flat();
     expect([...pageErrors, ...storedPageErrors]).toEqual([]);
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
-    await forceClose(app);
-    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    try {
+      await forceClose(app);
+      fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (error) {
+      if (failure === undefined) throw error;
+      console.error('Visual fixture cleanup also failed:', error);
+    }
   }
 });

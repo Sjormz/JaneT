@@ -37,7 +37,9 @@ export async function forceClose(app: ElectronApplication | undefined): Promise<
   const child = app.process();
   if (child.exitCode !== null || child.signalCode !== null) return;
   const exited = waitForExit(child, 5000);
-  void app.evaluate(({ app: electronApp }) => electronApp.exit(0)).catch(() => {});
+  // Drain the application's PTYs before Node tears down their native callbacks.
+  // A stalled renderer/debugger still reaches the same bounded kill fallback.
+  void app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => {});
   if (await exited) return;
   const killed = waitForExit(child, 5000);
   if (process.platform === 'win32') {

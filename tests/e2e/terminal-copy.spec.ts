@@ -159,11 +159,12 @@ test('copies from an alternate-screen TUI that owns all-motion mouse tracking', 
       BrowserWindow.getAllWindows()[0]?.webContents.send('terminal:onData', {
         source: 'local',
         id,
-        data: '\u001b[?1049h\u001b[?1000h\u001b[?1003h\u001b[?1006hJANET_TERMINAL_COPY_MARKER\r\n',
+        data: '\u001b[?1049h\u001b[?1000h\u001b[?1003h\u001b[?1006hJANET_TERMINAL_COPY_MARKER\r\nTUI_MOUSE_READY',
         generation: 999,
         sequence: 999,
       });
     }, termId);
+    await expect(page.locator('.xterm-rows')).toContainText('TUI_MOUSE_READY');
     await markerPosition(page);
 
     await app.evaluate(({ clipboard }) => clipboard.clear());
@@ -199,7 +200,8 @@ test('retains a modifier TUI selection through a redraw without turning copy int
       ipcMain.handle('terminal:write', (_event, { data }) => { (globalThis as any).__copyInput.push(data); });
       ipcMain.handle('terminal:writeBinary', (_event, { data }) => { (globalThis as any).__copyBinary.push(data); });
     });
-    await output(`\x1b[?1049h\x1b[?1003h\x1b[?1006h${MARKER}\r\n`);
+    await output(`\x1b[?1049h\x1b[?1003h\x1b[?1006h${MARKER}\r\nTUI_MOUSE_READY`);
+    await expect(page.locator('.xterm-rows')).toContainText('TUI_MOUSE_READY');
     await markerPosition(page);
     await page.locator('.terminal-container textarea').focus();
     await dragMarker(page, async () => {
