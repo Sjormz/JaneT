@@ -18,6 +18,8 @@ Select the gear-shaped **Settings** button in the title bar. Settings is grouped
 - **Transparency**: choose how much the title bar, sidebars, status bar, and floating panels show through. See [Transparency](#transparency).
 - **Project tools position**: place the workspace and project tools on the left or right.
 
+Selected rows use each theme's selection fill while keeping status counts and other primary text readable. Theme changes keep your current work open.
+
 ## Transparency
 
 JaneT's title bar, sidebars, and status bar are translucent glass, and the command palette, menus, and dialogs blur what is behind them. Terminals and the editor are always solid, so their text is never see-through.

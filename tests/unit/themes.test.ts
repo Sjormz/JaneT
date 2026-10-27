@@ -20,6 +20,11 @@ function contrastRatio(foreground: string, background: string) {
 }
 
 describe('themes', () => {
+  it.each(themeNames)('keeps primary text at seven-to-one on selected controls in %s', (name) => {
+    const { css } = getTheme(name);
+    expect(contrastRatio(css['text-primary'], css['bg-active'])).toBeGreaterThanOrEqual(7);
+  });
+
   it('has all expected themes', () => {
     expect(themeNames).toContain('tokyo-night');
     expect(themeNames).toContain('dracula');
