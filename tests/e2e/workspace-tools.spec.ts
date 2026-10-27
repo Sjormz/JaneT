@@ -42,6 +42,7 @@ test('keeps tools compact and follows the selected local pane', async ({}, testI
   }));
   const env: Record<string, string> = { ...process.env, NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: root };
   delete env.ELECTRON_RUN_AS_NODE;
+  delete env.ELECTRON_NO_ATTACH_CONSOLE;
   let app;
   try {
     app = await electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env });
@@ -75,7 +76,7 @@ test('keeps tools compact and follows the selected local pane', async ({}, testI
     await tools.navigateParents();
     await expect(page.getByRole('navigation', { name: 'Folder location' })).toHaveCount(0);
   } finally {
-    if (app) await app.close();
+    await forceClose(app);
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

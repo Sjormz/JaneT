@@ -7,6 +7,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { describe, expect, it, vi } from 'vitest';
+import { parse } from 'yaml';
 
 const projectRoot = path.resolve(import.meta.dirname, '../..');
 
@@ -126,7 +127,6 @@ function writeReleaseManifestFixture(
 
 describe('development tooling', () => {
   it('aligns workflow runtimes, Dependabot and local package manager requirements', async () => {
-    const { parse } = await import('yaml');
     const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
     const lock = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package-lock.json'), 'utf8'));
     expect(pkg.engines.npm).toMatch(/^\d+\.\d+\.\d+$/);
@@ -765,14 +765,20 @@ module.exports = {
   });
 
   it('keeps protected check names and builds a single verified release commit', () => {
-    const require = createRequire(import.meta.url);
-    const builderRequire = createRequire(require.resolve('electron-builder/package.json'));
-    const appBuilderRequire = createRequire(builderRequire.resolve('app-builder-lib/package.json'));
-    const { load } = appBuilderRequire('js-yaml');
-    const readWorkflow = (file: string) => load(fs.readFileSync(path.join(projectRoot, '.github/workflows', file), 'utf8'));
+    const readWorkflow = (file: string) => parse(fs.readFileSync(path.join(projectRoot, '.github/workflows', file), 'utf8'));
     const ci = readWorkflow('ci.yml');
     expect(ci.jobs.verify.name).toBe('Verify');
     expect(ci.jobs['durable-workspace-platforms'].name).toBe('Durable workspace (${{ matrix.os }})');
+    const ciSteps = ci.jobs['durable-workspace-platforms'].steps;
+    const packagedUi = ciSteps.find((step: any) => step.name === 'Verify packaged Windows UI');
+    expect(ciSteps.indexOf(packagedUi)).toBeGreaterThan(ciSteps.findIndex((step: any) => step.name === 'Verify packaged Windows release and terminal runtime'));
+    expect(packagedUi.if).toBe("runner.os == 'Windows'");
+    expect(packagedUi.env).toMatchObject({
+      JANET_PACKAGED_EXECUTABLE: '${{ github.workspace }}/release/win-unpacked/JaneT.exe',
+      PLAYWRIGHT_JUNIT_OUTPUT_FILE: '${{ github.workspace }}/test-results/packaged-ui.xml',
+    });
+    expect(packagedUi.run).toContain('tests/e2e/version-update.spec.ts');
+    expect(packagedUi.run).toContain('--grep "packaged runtime|packaged updater failure" --retries=0 --output=test-results/packaged-ui');
     const workflow = readWorkflow('release.yml');
     expect(workflow.jobs.prepare.name).toBe('Prepare release candidate');
     expect(workflow.jobs.verify.needs).toEqual(['prepare']);
@@ -820,11 +826,7 @@ module.exports = {
   });
 
   it('refuses public release rewrites, version downgrades and moved tags before uploading', () => {
-    const require = createRequire(import.meta.url);
-    const builderRequire = createRequire(require.resolve('electron-builder/package.json'));
-    const appBuilderRequire = createRequire(builderRequire.resolve('app-builder-lib/package.json'));
-    const { load } = appBuilderRequire('js-yaml');
-    const workflow = load(fs.readFileSync(path.join(projectRoot, '.github/workflows/release.yml'), 'utf8'));
+    const workflow = parse(fs.readFileSync(path.join(projectRoot, '.github/workflows/release.yml'), 'utf8'));
     const steps = workflow.jobs.publish.steps;
     const guard = steps.find((step: any) => step.name === 'Refuse published versions and updater downgrades');
     expect(steps.indexOf(guard)).toBeLessThan(steps.findIndex((step: any) => step.name === 'Publish verified GitHub release'));
@@ -860,11 +862,7 @@ module.exports = {
   });
 
   it('publishes with GitHub CLI only after the draft holds exactly the built assets', () => {
-    const require = createRequire(import.meta.url);
-    const builderRequire = createRequire(require.resolve('electron-builder/package.json'));
-    const appBuilderRequire = createRequire(builderRequire.resolve('app-builder-lib/package.json'));
-    const { load } = appBuilderRequire('js-yaml');
-    const workflow = load(fs.readFileSync(path.join(projectRoot, '.github/workflows/release.yml'), 'utf8'));
+    const workflow = parse(fs.readFileSync(path.join(projectRoot, '.github/workflows/release.yml'), 'utf8'));
     expect(JSON.stringify(workflow)).not.toMatch(/softprops|action-gh-release/);
     const step = workflow.jobs.publish.steps.find((candidate: any) => candidate.name === 'Publish verified GitHub release');
     expect(step.env).toMatchObject({ GH_TOKEN: '${{ github.token }}', ARTIFACT_ROOT: 'release-artifacts' });
@@ -873,8 +871,10 @@ module.exports = {
     const files = ['JaneT-Setup-1.2.3-win-x64.exe', 'JaneT-Setup-1.2.3-win-x64.exe.blockmap', 'JaneT-Portable-1.2.3-win-x64.exe',
       'latest.yml', 'JaneT-1.2.3-mac-arm64.dmg', 'JaneT-1.2.3-mac-arm64.zip', 'JaneT-1.2.3-mac-arm64.zip.blockmap',
       'latest-mac.yml', 'JaneT-1.2.3-linux-x64.AppImage', 'JaneT-1.2.3-linux-x64.deb', 'latest-linux.yml'];
+    const fixtureRoots: string[] = [];
     const fixture = (omit: string[] = []) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-publish-'));
+      fixtureRoots.push(root);
       files.filter((name) => !omit.includes(name)).forEach((name, index) => {
         const platform = name.includes('mac') ? 'mac' : name.includes('linux') ? 'linux' : 'win';
         fs.mkdirSync(path.join(root, `installer-${platform}`), { recursive: true });
@@ -909,37 +909,38 @@ module.exports = {
       `, env: { RELEASE_TAG: 'v1.2.3', GITHUB_REPOSITORY: 'owner/repo', ARTIFACT_ROOT: root } };
     };
 
-    const root = fixture();
-    expectGuardOutcomes(program, [
-      { label: 'new release', guard: publication(root) },
-      { label: 'retry over an unpublished draft', guard: publication(root, { releases: [{ tag_name: 'v1.2.3', draft: true }] }) },
-      { label: 'same tag already published', guard: publication(root, { releases: [{ tag_name: 'v1.2.3', draft: false }] }), fails: /Already published/ },
-      { label: 'a platform produced no installer', guard: publication(fixture(['JaneT-1.2.3-linux-x64.deb'])), fails: /No built file matches/ },
-      { label: 'draft is missing an asset', guard: publication(root, { assets: (built) => built.slice(1).map((asset) => ({ ...asset, state: 'uploaded' })) }), fails: /Draft assets differ/ },
-      { label: 'draft has a stale extra asset', guard: publication(root, { assets: (built) => [...built, { name: 'old.zip', size: 1 }].map((asset) => ({ ...asset, state: 'uploaded' })) }), fails: /Draft assets differ/ },
-      { label: 'asset size differs', guard: publication(root, { assets: (built) => built.map((asset) => ({ ...asset, size: asset.size + 1, state: 'uploaded' })) }), fails: /size differs/ },
-      { label: 'asset upload incomplete', guard: publication(root, { assets: (built) => built.map((asset) => ({ ...asset, state: 'starter' })) }), fails: /did not finish uploading/ },
-      { label: 'release published by someone else mid-run', guard: publication(root, { draft: false }), fails: /left draft state/ },
-    ]);
+    try {
+      const root = fixture();
+      expectGuardOutcomes(program, [
+        { label: 'new release', guard: publication(root) },
+        { label: 'retry over an unpublished draft', guard: publication(root, { releases: [{ tag_name: 'v1.2.3', draft: true }] }) },
+        { label: 'same tag already published', guard: publication(root, { releases: [{ tag_name: 'v1.2.3', draft: false }] }), fails: /Already published/ },
+        { label: 'a platform produced no installer', guard: publication(fixture(['JaneT-1.2.3-linux-x64.deb'])), fails: /No built file matches/ },
+        { label: 'draft is missing an asset', guard: publication(root, { assets: (built) => built.slice(1).map((asset) => ({ ...asset, state: 'uploaded' })) }), fails: /Draft assets differ/ },
+        { label: 'draft has a stale extra asset', guard: publication(root, { assets: (built) => [...built, { name: 'old.zip', size: 1 }].map((asset) => ({ ...asset, state: 'uploaded' })) }), fails: /Draft assets differ/ },
+        { label: 'asset size differs', guard: publication(root, { assets: (built) => built.map((asset) => ({ ...asset, size: asset.size + 1, state: 'uploaded' })) }), fails: /size differs/ },
+        { label: 'asset upload incomplete', guard: publication(root, { assets: (built) => built.map((asset) => ({ ...asset, state: 'starter' })) }), fails: /did not finish uploading/ },
+        { label: 'release published by someone else mid-run', guard: publication(root, { draft: false }), fails: /left draft state/ },
+      ]);
 
-    const verbs = (log: string[][]) => log.filter((args) => args[0] === 'release').map((args) => args[1]);
-    expect(verbs(calls[0])).toEqual(['create', 'upload', 'view', 'edit']);
-    expect(calls[0].find((args) => args[1] === 'create')).toEqual(
-      ['release', 'create', 'v1.2.3', '--repo', 'owner/repo', '--draft', '--verify-tag', '--title', 'v1.2.3', '--generate-notes']);
-    const upload = calls[0].find((args) => args[1] === 'upload')!;
-    expect(upload.slice(0, 6)).toEqual(['release', 'upload', 'v1.2.3', '--repo', 'owner/repo', '--clobber']);
-    expect(upload.slice(6).map((file) => path.basename(file)).sort()).toEqual([...files].sort());
-    expect(calls[0].at(-1)).toEqual(['release', 'edit', 'v1.2.3', '--repo', 'owner/repo', '--draft=false', '--latest']);
-    expect(verbs(calls[1])).toEqual(['upload', 'view', 'edit']);
-    for (const failed of calls.slice(2)) expect(verbs(failed)).not.toContain('edit');
+      const verbs = (log: string[][]) => log.filter((args) => args[0] === 'release').map((args) => args[1]);
+      expect(verbs(calls[0])).toEqual(['create', 'upload', 'view', 'edit']);
+      expect(calls[0].find((args) => args[1] === 'create')).toEqual(
+        ['release', 'create', 'v1.2.3', '--repo', 'owner/repo', '--draft', '--verify-tag', '--title', 'v1.2.3', '--generate-notes']);
+      const upload = calls[0].find((args) => args[1] === 'upload')!;
+      expect(upload.slice(0, 6)).toEqual(['release', 'upload', 'v1.2.3', '--repo', 'owner/repo', '--clobber']);
+      expect(upload.slice(6).map((file) => path.basename(file)).sort()).toEqual([...files].sort());
+      expect(calls[0].at(-1)).toEqual(['release', 'edit', 'v1.2.3', '--repo', 'owner/repo', '--draft=false', '--latest']);
+      expect(verbs(calls[1])).toEqual(['upload', 'view', 'edit']);
+      for (const failed of calls.slice(2)) expect(verbs(failed)).not.toContain('edit');
+    } finally {
+      delete (globalThis as any).__publishCalls;
+      for (const root of fixtureRoots) fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('attests build provenance for every published installer before handing artifacts on', () => {
-    const require = createRequire(import.meta.url);
-    const builderRequire = createRequire(require.resolve('electron-builder/package.json'));
-    const appBuilderRequire = createRequire(builderRequire.resolve('app-builder-lib/package.json'));
-    const { load } = appBuilderRequire('js-yaml');
-    const workflow = load(fs.readFileSync(path.join(projectRoot, '.github/workflows/release.yml'), 'utf8'));
+    const workflow = parse(fs.readFileSync(path.join(projectRoot, '.github/workflows/release.yml'), 'utf8'));
     const pkg = workflow.jobs.package;
     expect(pkg.permissions).toEqual({ contents: 'read', 'id-token': 'write', attestations: 'write' });
     const names = pkg.steps.map((step: any) => step.name);

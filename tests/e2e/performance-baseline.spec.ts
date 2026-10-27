@@ -1,4 +1,4 @@
-import { firstWindow } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -50,8 +50,7 @@ test('records startup, loaded-terminal input and pane lifecycle memory baselines
       contentType: 'application/json',
     });
   } finally {
-    if (app) await app.evaluate(({ app: application }) => application.exit(0)).catch(() => {});
-    if (app) await app.waitForEvent('close', { timeout: 5000 }).catch(() => {});
+    await forceClose(app);
     fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

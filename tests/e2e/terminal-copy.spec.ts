@@ -1,4 +1,4 @@
-import { firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -8,15 +8,6 @@ const root = path.resolve(__dirname, '../..');
 const USER_DATA_PREFIX = 'janet-terminal-copy-e2e-';
 const MARKER = 'JANET_TERMINAL_COPY_MARKER';
 const INPUT_SUFFIX = '_AFTER_PASTE';
-
-function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
-  const env = { ...process.env, ...extra };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-  );
-}
 
 function createUserData(keybindings: Record<string, string> = { 'close-tab': 'Ctrl+C' }): string {
   const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), USER_DATA_PREFIX));
@@ -159,11 +150,12 @@ test('copies from an alternate-screen TUI that owns all-motion mouse tracking', 
       BrowserWindow.getAllWindows()[0]?.webContents.send('terminal:onData', {
         source: 'local',
         id,
-        data: '\u001b[?1049h\u001b[?1000h\u001b[?1003h\u001b[?1006hJANET_TERMINAL_COPY_MARKER\r\n',
+        data: '\u001b[?1049h\u001b[?1000h\u001b[?1003h\u001b[?1006hJANET_TERMINAL_COPY_MARKER\r\nTUI_MOUSE_READY',
         generation: 999,
         sequence: 999,
       });
     }, termId);
+    await expect(page.locator('.xterm-rows')).toContainText('TUI_MOUSE_READY');
     await markerPosition(page);
 
     await app.evaluate(({ clipboard }) => clipboard.clear());
@@ -199,13 +191,20 @@ test('retains a modifier TUI selection through a redraw without turning copy int
       ipcMain.handle('terminal:write', (_event, { data }) => { (globalThis as any).__copyInput.push(data); });
       ipcMain.handle('terminal:writeBinary', (_event, { data }) => { (globalThis as any).__copyBinary.push(data); });
     });
-    await output(`\x1b[?1049h\x1b[?1003h\x1b[?1006h${MARKER}\r\n`);
+    await output(`\x1b[?1049h\x1b[?1003h\x1b[?1006h${MARKER}\r\nTUI_MOUSE_READY`);
+    await expect(page.locator('.xterm-rows')).toContainText('TUI_MOUSE_READY');
     await markerPosition(page);
     await page.locator('.terminal-container textarea').focus();
-    await dragMarker(page, () => app!.evaluate(() => {
-      (globalThis as any).__copyInput = [];
-      (globalThis as any).__copyBinary = [];
-    }));
+    await dragMarker(page, async () => {
+      // Positioning emits an unmodified hover report. Observe its IPC delivery
+      // before clearing setup input, so a late report cannot look like drag input.
+      await expect.poll(() => app!.evaluate(() => (globalThis as any).__copyInput
+        .some((data: string) => /^\x1b\[<35;\d+;\d+M$/.test(data)))).toBe(true);
+      await app!.evaluate(() => {
+        (globalThis as any).__copyInput = [];
+        (globalThis as any).__copyBinary = [];
+      });
+    });
     const forcedDragInput = await app.evaluate(() => ({
       input: (globalThis as any).__copyInput,
       binary: (globalThis as any).__copyBinary,

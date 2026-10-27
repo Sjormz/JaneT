@@ -275,6 +275,7 @@ describe('buildShellInit', () => {
       const sameLineCmdletFailure = promptSegment(output, 6);
       const cmdletFailure = promptSegment(output, 7);
       const success = promptSegment(output, 8);
+      expect(startup.indexOf(OSC_A)).toBeGreaterThanOrEqual(0);
       expect(startup.indexOf(OSC_A)).toBeLessThan(startup.indexOf('<PROMPT:True:'));
       expect(startup).not.toContain(OSC_C);
       expect(startup).not.toContain(']133;D;');
@@ -339,6 +340,7 @@ describe('buildShellInit', () => {
           ['tmux attach', 'exit 0'],
           { ...process.env, HOME: fixturePath },
         );
+        expect(output.indexOf(OSC_C)).toBeGreaterThanOrEqual(0);
         expect(output.indexOf(OSC_C)).toBeLessThan(output.indexOf('__JANET_FAKE_TMUX__'));
         expect(output.indexOf('__JANET_FAKE_TMUX__')).toBeLessThan(output.indexOf(oscD(1)));
       } finally {
@@ -520,6 +522,7 @@ describe('buildShellInit', () => {
         const failure = promptSegment(output, 2);
         const success = promptSegment(output, 3);
         expect(stripOsc133(startup)).not.toContain(']<PROMPT>');
+        expect(startup.indexOf(OSC_A)).toBeGreaterThanOrEqual(0);
         expect(startup.indexOf(OSC_A)).toBeLessThan(startup.indexOf('<PROMPT>'));
         expect(startup).toContain('<ONE:0>');
         expect(startup).toContain('<TWO:0>');

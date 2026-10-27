@@ -40,6 +40,9 @@ import {
 import { NativeTerminalCapacity } from './terminalCapacity';
 import { parseCommandNotificationPayload, type CommandNotificationPayload } from '../shared/commandNotifications';
 
+// Initialize Node's lazy timing global before the renderer protocol first uses Electron's fetch.
+void globalThis.performance;
+
 let mainWindow: electron.BrowserWindow | null = null;
 let initializeUpdaterForWindow: ((window: electron.BrowserWindow) => void) | null = null;
 let terminalManager: TerminalManager;
@@ -381,6 +384,9 @@ function createWindow() {
   if (e2eEventsPath) {
     const recordStartup = (stage: string) => recordE2eEvent({ type: 'startup', stage, pid: process.pid, windowId: window.id });
     recordStartup('window-created');
+    window.webContents.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
+      recordE2eEvent({ type: 'startup', stage: 'did-fail-load', pid: process.pid, windowId: window.id, code, description, isMainFrame });
+    });
     window.webContents.once('dom-ready', () => recordStartup('dom-ready'));
     window.webContents.once('did-finish-load', () => recordStartup('did-finish-load'));
     window.webContents.once('render-process-gone', () => recordStartup('render-process-gone'));

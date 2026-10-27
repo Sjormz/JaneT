@@ -1,127 +1,58 @@
 import { restoreWorkspaceFixture } from './workspaces';
-import { test, expect, chromium, Browser, Page } from '@playwright/test';
-import { execFileSync, spawn, ChildProcess } from 'child_process';
+import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { firstWindow, forceClose } from './electronLifecycle';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
-import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 
 const root = path.resolve(__dirname, '../..');
-const devServerUrl = process.env.JANET_DEV_SERVER_URL || 'http://127.0.0.1:5173';
-const electronExecutable = require('electron') as string;
+type PaneApplication = { application: ElectronApplication; page: Page; userData: string };
+const applications = new Set<ElectronApplication>();
+const directories = new Set<string>();
 
-function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      if (!address || typeof address === 'string') {
-        server.close(() => reject(new Error('Could not allocate local port')));
-        return;
-      }
-      server.close(() => resolve(address.port));
-    });
-  });
+function fixtureDirectory(prefix: string) {
+  const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), prefix));
+  directories.add(directory);
+  return directory;
 }
 
-function isAppUrl(url: string): boolean {
-  return url.includes('127.0.0.1:5173') || url.includes('localhost:5173') || url.endsWith('index.html');
-}
+test.afterEach(async ({}, testInfo) => {
+  const errors: unknown[] = [];
+  for (const application of applications) {
+    try { await forceClose(application); } catch (error) { errors.push(error); }
+  }
+  applications.clear();
+  if (!errors.length) {
+    for (const directory of directories) {
+      try { fs.rmSync(directory, { recursive: true, force: true }); } catch (error) { errors.push(error); }
+    }
+  }
+  directories.clear();
+  if (errors.length) {
+    const error = new AggregateError(errors, 'Pane fixture cleanup failed');
+    if (testInfo.status === testInfo.expectedStatus) throw error;
+    console.error(error);
+  }
+});
 
-function electronEnv(extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env = { ...process.env, ...extra };
+async function launchApp(settings: unknown, prefix: string, existingUserData?: string): Promise<PaneApplication> {
+  const userData = existingUserData ?? fixtureDirectory(prefix);
+  const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return env;
+  if (settings !== undefined) fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData, ...(settings as object) }));
+  const application = await electron.launch({ args: ['.'], cwd: root,
+    env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) });
+  applications.add(application);
+  application.process().stdout?.on('data', chunk => console.log('[electron]', String(chunk)));
+  application.process().stderr?.on('data', chunk => console.error('[electron]', String(chunk)));
+  const page = await firstWindow(application);
+  page.on('console', message => console.log('[renderer:' + message.type() + ']', message.text()));
+  return { application, page, userData };
 }
 
-function killProcessTree(child: ChildProcess | undefined): Promise<void> {
-  return new Promise((resolve) => {
-    if (!child?.pid || child.exitCode !== null || child.signalCode !== null) {
-      resolve();
-      return;
-    }
-    if (process.platform === 'win32') {
-      const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-      killer.once('exit', () => resolve());
-      killer.once('error', () => {
-        try { child.kill('SIGTERM'); } catch {}
-        resolve();
-      });
-      return;
-    }
-    try { child.kill('SIGTERM'); } catch {}
-    setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) {
-        try { child.kill('SIGKILL'); } catch {}
-      }
-      resolve();
-    }, 1000).unref();
-  });
-}
-
-async function connectCdp(port: number): Promise<Browser> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    try {
-      return await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  return chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-}
-
-async function launchApp(settings: unknown, prefix: string, existingUserData?: string): Promise<{ browser: Browser; electronProcess: ChildProcess; page: Page; userData: string }> {
-  const userData = existingUserData ?? fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), prefix));
-  const settingsPath = path.join(userData, 'settings.json');
-  const remoteDebuggingPort = await getFreePort();
-
-  if (settings !== undefined) fs.writeFileSync(settingsPath, JSON.stringify({ mainDirectory: userData, ...(settings as object) }, null, 2), 'utf-8');
-
-  // Spawn Electron directly so the tracked child is the app process itself.
-  // A shell-wrapped `npx electron` can exit or be killed while leaving its
-  // Electron grandchild alive with closed stdout/stderr pipes (EPIPE).
-  const electronProcess = spawn(electronExecutable, ['.', ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
-    cwd: root,
-    env: electronEnv({
-      NODE_ENV: 'test',
-      JANET_DEV_SERVER_URL: devServerUrl,
-      JANET_E2E_USER_DATA_DIR: userData,
-      JANET_E2E_REMOTE_DEBUGGING_PORT: String(remoteDebuggingPort),
-    }),
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: false,
-    windowsHide: true,
-  });
-  electronProcess.stdout?.on('data', (chunk) => console.log(`[electron] ${chunk}`));
-  electronProcess.stderr?.on('data', (chunk) => console.error(`[electron] ${chunk}`));
-
-  let browser: Browser | undefined;
-  try {
-    browser = await connectCdp(remoteDebuggingPort);
-    const context = browser.contexts()[0] ?? await browser.newContext();
-    let page = context.pages().find((candidate) => isAppUrl(candidate.url()));
-    if (!page) page = await context.waitForEvent('page', { timeout: 10_000 });
-    if (!isAppUrl(page.url())) {
-      await page.waitForURL((url) => isAppUrl(url.href), { timeout: 10_000 }).catch(() => {});
-    }
-    page.on('console', (message) => console.log(`[renderer:${message.type()}] ${message.text()}`));
-    await page.waitForLoadState('domcontentloaded');
-    return { browser, electronProcess, page, userData };
-  } catch (error) {
-    await browser?.close().catch(() => {});
-    await killProcessTree(electronProcess);
-    fs.rmSync(userData, { recursive: true, force: true });
-    throw error;
-  }
-}
-
-async function launchTwoPaneApp(extraTabs: unknown[] = []): Promise<{ browser: Browser; electronProcess: ChildProcess; page: Page; userData: string }> {
+async function launchTwoPaneApp(extraTabs: unknown[] = []): Promise<PaneApplication> {
   return launchApp({
     theme: 'tokyo-night',
     fontSize: 14,
@@ -149,159 +80,120 @@ async function launchTwoPaneApp(extraTabs: unknown[] = []): Promise<{ browser: B
   }, 'janet-e2e-pane-max-');
 }
 
-async function closeApp(browser: Browser, electronProcess: ChildProcess, userData?: string) {
-  try {
-    for (const context of browser.contexts()) {
-      for (const page of context.pages()) {
-        void page.evaluate(() => window.close()).catch(() => {});
-      }
-    }
-    void browser.close().catch(() => {});
-  } finally {
-    await killProcessTree(electronProcess);
-    if (userData) await fs.promises.rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-  }
+async function closeApp(app: PaneApplication) {
+  await forceClose(app.application);
+  applications.delete(app.application);
 }
 
-test('does not let stale CDP cleanup hide pane test failures', async () => {
-  const stalled = new Promise<never>(() => {});
-  const browser = {
-    contexts: () => [{ pages: () => [{ evaluate: () => stalled }] }],
-    close: () => stalled,
-  } as unknown as Browser;
-  const electronProcess = { pid: undefined } as unknown as ChildProcess;
-
-  await expect(Promise.race([
-    closeApp(browser, electronProcess),
-    new Promise<void>((_, reject) => {
-      setTimeout(() => reject(new Error('Stale CDP cleanup blocked')), 250);
-    }),
-  ])).resolves.toBeUndefined();
-});
-
 test('maximizes and restores a terminal pane in Electron', async () => {
-  const { browser, electronProcess, page, userData } = await launchTwoPaneApp();
-  try {
-    await expect(page.locator('.terminal-leaf')).toHaveCount(2);
-    await expect(page.getByRole('button', { name: 'Maximize pane' })).toHaveCount(2);
+  const app = await launchTwoPaneApp();
+  const { page } = app;
+  await expect(page.locator('.terminal-leaf')).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'Maximize pane' })).toHaveCount(2);
 
-    await page.getByRole('button', { name: 'Maximize pane' }).nth(1).click();
+  await page.getByRole('button', { name: 'Maximize pane' }).nth(1).click();
 
-    await expect(page.locator('.terminal-leaf')).toHaveCount(1);
-    await expect(page.getByRole('button', { name: 'Restore pane layout' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Maximize pane' })).toHaveCount(0);
+  await expect(page.locator('.terminal-leaf')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Restore pane layout' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Maximize pane' })).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Restore pane layout' }).click();
+  await page.getByRole('button', { name: 'Restore pane layout' }).click();
 
-    await expect(page.locator('.terminal-leaf')).toHaveCount(2);
-    await expect(page.getByRole('button', { name: 'Maximize pane' })).toHaveCount(2);
+  await expect(page.locator('.terminal-leaf')).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'Maximize pane' })).toHaveCount(2);
 
-    // Maximizing a pane also makes it the action target. After restoring the
-    // layout, pane shortcuts must still act on the pane the user just chose.
-    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+W' : 'Control+Shift+W');
-    const closePaneDialog = page.getByRole('alertdialog', { name: 'Close right?' });
-    await expect(closePaneDialog).toBeVisible();
-    await closePaneDialog.getByRole('button', { name: 'Close pane' }).click();
-    await expect(page.locator('.terminal-leaf')).toHaveCount(1);
-    await expect(page.locator('.leaf-title', { hasText: 'left' })).toBeVisible();
-  } finally {
-    await closeApp(browser, electronProcess, userData);
-  }
+  // Maximizing a pane also makes it the action target. After restoring the
+  // layout, pane shortcuts must still act on the pane the user just chose.
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+W' : 'Control+Shift+W');
+  const closePaneDialog = page.getByRole('alertdialog', { name: 'Close right?' });
+  await expect(closePaneDialog).toBeVisible();
+  await closePaneDialog.getByRole('button', { name: 'Close pane' }).click();
+  await expect(page.locator('.terminal-leaf')).toHaveCount(1);
+  await expect(page.locator('.leaf-title', { hasText: 'left' })).toBeVisible();
 });
 
 test('restores the selected maximized pane structurally in a second Electron process', async () => {
   let app: Awaited<ReturnType<typeof launchTwoPaneApp>> | undefined;
   let userData: string | undefined;
-  try {
-    app = await launchTwoPaneApp();
-    userData = app.userData;
-    const firstRightPane = app.page.locator('.terminal-leaf').filter({
-      has: app.page.locator('.leaf-title', { hasText: 'right' }),
-    });
-    await firstRightPane.getByRole('button', { name: 'Maximize pane' }).click();
-    await expect(app.page.locator('.terminal-leaf')).toHaveCount(1);
-    await expect(firstRightPane).toHaveAttribute('aria-current', 'true');
+  app = await launchTwoPaneApp();
+  userData = app.userData;
+  const firstRightPane = app.page.locator('.terminal-leaf').filter({
+    has: app.page.locator('.leaf-title', { hasText: 'right' }),
+  });
+  await firstRightPane.getByRole('button', { name: 'Maximize pane' }).click();
+  await expect(app.page.locator('.terminal-leaf')).toHaveCount(1);
+  await expect(firstRightPane).toHaveAttribute('aria-current', 'true');
 
-    const settingsPath = path.join(userData, 'settings.json');
-    await expect.poll(() => {
-      const saved = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-      const tab = saved.session.tabs[0];
-      return [tab.selectedPanePath, tab.maximizedPanePath];
-    }).toEqual([[1], [1]]);
+  const settingsPath = path.join(userData, 'settings.json');
+  await expect.poll(() => {
+    const saved = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    const tab = saved.session.tabs[0];
+    return [tab.selectedPanePath, tab.maximizedPanePath];
+  }).toEqual([[1], [1]]);
 
-    await closeApp(app.browser, app.electronProcess);
-    app = undefined;
-    app = await launchApp(undefined, 'janet-e2e-pane-restart-', userData);
+  await closeApp(app);
+  app = undefined;
+  app = await launchApp(undefined, 'janet-e2e-pane-restart-', userData);
 
-    const restoredPanes = app.page.locator('.terminal-leaf');
-    await expect(restoredPanes).toHaveCount(1);
-    await expect(app.page.locator('.leaf-title', { hasText: 'right' })).toBeVisible();
-    await expect(restoredPanes).toHaveAttribute('aria-current', 'true');
-    const freshTerminalId = await restoredPanes.locator('.terminal-container').getAttribute('data-terminal-id');
-    expect(freshTerminalId).toBeTruthy();
-    expect(fs.readFileSync(settingsPath, 'utf-8')).not.toContain(freshTerminalId as string);
+  const restoredPanes = app.page.locator('.terminal-leaf');
+  await expect(restoredPanes).toHaveCount(1);
+  await expect(app.page.locator('.leaf-title', { hasText: 'right' })).toBeVisible();
+  await expect(restoredPanes).toHaveAttribute('aria-current', 'true');
+  const freshTerminalId = await restoredPanes.locator('.terminal-container').getAttribute('data-terminal-id');
+  expect(freshTerminalId).toBeTruthy();
+  expect(fs.readFileSync(settingsPath, 'utf-8')).not.toContain(freshTerminalId as string);
 
-    await app.page.getByRole('button', { name: 'Restore pane layout' }).click();
-    await expect(restoredPanes).toHaveCount(2);
-    const restoredRightPane = restoredPanes.filter({
-      has: app.page.locator('.leaf-title', { hasText: 'right' }),
-    });
-    await expect(restoredRightPane).toHaveAttribute('aria-current', 'true');
-    await expect(app.page.locator('.terminal-leaf[aria-current="true"]')).toHaveCount(1);
-  } finally {
-    if (app) await closeApp(app.browser, app.electronProcess, userData);
-    else if (userData) fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-  }
+  await app.page.getByRole('button', { name: 'Restore pane layout' }).click();
+  await expect(restoredPanes).toHaveCount(2);
+  const restoredRightPane = restoredPanes.filter({
+    has: app.page.locator('.leaf-title', { hasText: 'right' }),
+  });
+  await expect(restoredRightPane).toHaveAttribute('aria-current', 'true');
+  await expect(app.page.locator('.terminal-leaf[aria-current="true"]')).toHaveCount(1);
 });
 
 test('focuses the first terminal after clicking a project', async () => {
-  const { browser, electronProcess, page, userData } = await launchTwoPaneApp([{
+  const app = await launchTwoPaneApp([{
     id: 'one-pane-tab', title: 'one pane', type: 'local', isProject: true, root: { type: 'leaf', title: 'single' },
   }]);
+  const { page } = app;
 
-  try {
-    await expect(page.locator('.terminal-container')).toHaveCount(2);
-    await page.locator('.vtab-item').filter({ hasText: 'one pane' }).click();
-    await expect(page.locator('.terminal-container')).toHaveCount(1);
-    await page.locator('.vtab-item').filter({ hasText: 'two panes' }).click();
-    await expect(page.locator('.terminal-container')).toHaveCount(2);
-    await expect.poll(() => page.evaluate(() => (
-      document.activeElement === document.querySelector('.terminal-container .xterm-helper-textarea')
-    ))).toBe(true);
-  } finally {
-    await closeApp(browser, electronProcess, userData);
-  }
+  await expect(page.locator('.terminal-container')).toHaveCount(2);
+  await page.locator('.vtab-item').filter({ hasText: 'one pane' }).click();
+  await expect(page.locator('.terminal-container')).toHaveCount(1);
+  await page.locator('.vtab-item').filter({ hasText: 'two panes' }).click();
+  await expect(page.locator('.terminal-container')).toHaveCount(2);
+  await expect.poll(() => page.evaluate(() => (
+    document.activeElement === document.querySelector('.terminal-container .xterm-helper-textarea')
+  ))).toBe(true);
 });
 
 test('focuses and persistently marks a newly split maximized pane', async () => {
-  const { browser, electronProcess, page, userData } = await launchTwoPaneApp();
+  const app = await launchTwoPaneApp();
+  const { page } = app;
 
-  try {
-    const panes = page.locator('.terminal-leaf');
-    await expect(panes).toHaveCount(2);
-    await page.getByRole('button', { name: 'Maximize pane' }).nth(1).click();
-    await expect(panes).toHaveCount(1);
-    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Backslash' : 'Control+Shift+Digit5');
-    await expect(panes).toHaveCount(3);
+  const panes = page.locator('.terminal-leaf');
+  await expect(panes).toHaveCount(2);
+  await page.getByRole('button', { name: 'Maximize pane' }).nth(1).click();
+  await expect(panes).toHaveCount(1);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Backslash' : 'Control+Shift+Digit5');
+  await expect(panes).toHaveCount(3);
 
-    const newPane = panes.nth(2);
-    await expect(newPane.locator('.xterm-helper-textarea')).toBeFocused();
-    await expect(newPane).toHaveAttribute('aria-current', 'true');
-    await expect(panes.nth(0)).not.toHaveAttribute('aria-current');
-    // The active pane is marked by an accent ring on its frame.
-    const activeShadow = await newPane.evaluate((element) => getComputedStyle(element).boxShadow);
-    const inactiveShadow = await panes.nth(0).evaluate((element) => getComputedStyle(element).boxShadow);
-    expect(activeShadow).not.toBe('none');
-    expect(activeShadow).not.toBe(inactiveShadow);
+  const newPane = panes.nth(2);
+  await expect(newPane.locator('.xterm-helper-textarea')).toBeFocused();
+  await expect(newPane).toHaveAttribute('aria-current', 'true');
+  await expect(panes.nth(0)).not.toHaveAttribute('aria-current');
+  // The active pane is marked by an accent ring on its frame.
+  const activeShadow = await newPane.evaluate((element) => getComputedStyle(element).boxShadow);
+  const inactiveShadow = await panes.nth(0).evaluate((element) => getComputedStyle(element).boxShadow);
+  expect(activeShadow).not.toBe('none');
+  expect(activeShadow).not.toBe(inactiveShadow);
 
-    const workspaceTool = page.locator('.workspace-tool-button').first();
-    await workspaceTool.focus();
-    await expect(workspaceTool).toBeFocused();
-    await expect(newPane).toHaveAttribute('aria-current', 'true');
-    expect(await newPane.evaluate((element) => getComputedStyle(element).boxShadow)).toBe(activeShadow);
-  } finally {
-    await closeApp(browser, electronProcess, userData);
-  }
+  const workspaceTool = page.locator('.workspace-tool-button').first();
+  await workspaceTool.focus();
+  await expect(workspaceTool).toBeFocused();
+  await expect(newPane).toHaveAttribute('aria-current', 'true');
+  expect(await newPane.evaluate((element) => getComputedStyle(element).boxShadow)).toBe(activeShadow);
 });
 
 test('moves the active pane by configured keyboard and command palette without replacing terminals', async () => {
@@ -334,49 +226,45 @@ test('moves the active pane by configured keyboard and command palette without r
     has: app.page.locator('.leaf-title', { hasText: title }),
   });
 
-  try {
-    await expect(app.page.locator('.terminal-leaf')).toHaveCount(2);
-    const initialIds = await app.page.locator('[data-terminal-id]').evaluateAll(
-      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')),
-    );
-    const initialFlex = {
-      left: await pane('left').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex),
-      right: await pane('right').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex),
-    };
-    await pane('left').locator('.xterm-helper-textarea').focus();
-    await pane('left').getByRole('button', { name: 'Maximize pane' }).click();
-    await expect(app.page.locator('.terminal-leaf')).toHaveCount(1);
+  await expect(app.page.locator('.terminal-leaf')).toHaveCount(2);
+  const initialIds = await app.page.locator('[data-terminal-id]').evaluateAll(
+    (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')),
+  );
+  const initialFlex = {
+    left: await pane('left').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex),
+    right: await pane('right').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex),
+  };
+  await pane('left').locator('.xterm-helper-textarea').focus();
+  await pane('left').getByRole('button', { name: 'Maximize pane' }).click();
+  await expect(app.page.locator('.terminal-leaf')).toHaveCount(1);
 
-    await app.page.keyboard.press('Alt+ArrowRight');
+  await app.page.keyboard.press('Alt+ArrowRight');
 
-    await expect(app.page.locator('.leaf-title-text')).toHaveText(['right', 'left']);
-    expect(await app.page.locator('[data-terminal-id]').evaluateAll(
-      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')),
-    )).toEqual([initialIds[1], initialIds[0]]);
-    await expect(pane('left')).toHaveAttribute('aria-current', 'true');
-    await expect(pane('left').locator('.xterm-helper-textarea')).toBeFocused();
-    expect(await pane('left').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex))
-      .toBe(initialFlex.left);
-    expect(await pane('right').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex))
-      .toBe(initialFlex.right);
+  await expect(app.page.locator('.leaf-title-text')).toHaveText(['right', 'left']);
+  expect(await app.page.locator('[data-terminal-id]').evaluateAll(
+    (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')),
+  )).toEqual([initialIds[1], initialIds[0]]);
+  await expect(pane('left')).toHaveAttribute('aria-current', 'true');
+  await expect(pane('left').locator('.xterm-helper-textarea')).toBeFocused();
+  expect(await pane('left').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex))
+    .toBe(initialFlex.left);
+  expect(await pane('right').locator('xpath=..').evaluate((element) => (element as HTMLElement).style.flex))
+    .toBe(initialFlex.right);
 
-    await app.page.getByRole('button', { name: /open command palette/i }).click();
-    await app.page.getByRole('combobox', { name: 'Search commands' }).fill('Move current pane left');
-    await app.page.getByRole('option', { name: 'Move current pane left' }).click();
+  await app.page.getByRole('button', { name: /open command palette/i }).click();
+  await app.page.getByRole('combobox', { name: 'Search commands' }).fill('Move current pane left');
+  await app.page.getByRole('option', { name: 'Move current pane left' }).click();
 
-    await expect(app.page.locator('.leaf-title-text')).toHaveText(['left', 'right']);
-    expect(await app.page.locator('[data-terminal-id]').evaluateAll(
-      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')),
-    )).toEqual(initialIds);
-    await expect(pane('left')).toHaveAttribute('aria-current', 'true');
-    await expect(pane('left').locator('.xterm-helper-textarea')).toBeFocused();
-  } finally {
-    await closeApp(app.browser, app.electronProcess, app.userData);
-  }
+  await expect(app.page.locator('.leaf-title-text')).toHaveText(['left', 'right']);
+  expect(await app.page.locator('[data-terminal-id]').evaluateAll(
+    (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')),
+  )).toEqual(initialIds);
+  await expect(pane('left')).toHaveAttribute('aria-current', 'true');
+  await expect(pane('left').locator('.xterm-helper-textarea')).toBeFocused();
 });
 
 test('runs ordered workspace startup commands once per fresh terminal', async () => {
-  const markerDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-e2e-startup-'));
+  const markerDir = fixtureDirectory('janet-e2e-startup-');
   const markerPath = path.join(markerDir, 'ordered.txt');
   const failurePath = path.join(markerDir, 'failure.txt');
   const encodedMarkerPath = Buffer.from(markerPath, 'utf-8').toString('base64');
@@ -387,424 +275,403 @@ test('runs ordered workspace startup commands once per fresh terminal', async ()
   let app: Awaited<ReturnType<typeof launchApp>> | undefined;
   let userData: string | undefined;
 
-  try {
-    app = await launchApp({
-      theme: 'tokyo-night',
-      fontSize: 14,
-      sidebarSide: 'left',
-      keybindings: {},
-      workspaceTabs: [
-        {
-          id: 'ordered-startup-preset',
-          name: 'Ordered startup',
-          type: 'local',
-          root: {
-            type: 'leaf',
-            title: 'automation',
-            terminalType: 'local',
-            cwd: markerDir,
-            startupCommands: [appendAfterDelay, appendAfterPrevious],
-          },
-          terminalCount: 1,
-          splitDirection: 'vertical',
+  app = await launchApp({
+    theme: 'tokyo-night',
+    fontSize: 14,
+    sidebarSide: 'left',
+    keybindings: {},
+    workspaceTabs: [
+      {
+        id: 'ordered-startup-preset',
+        name: 'Ordered startup',
+        type: 'local',
+        root: {
+          type: 'leaf',
+          title: 'automation',
+          terminalType: 'local',
+          cwd: markerDir,
+          startupCommands: [appendAfterDelay, appendAfterPrevious],
         },
-        {
-          id: 'failure-gate-preset',
-          name: 'Failure gate',
-          type: 'local',
-          root: {
-            type: 'leaf',
-            title: 'failure gate',
-            terminalType: 'local',
-            cwd: markerDir,
-            startupCommands: [failAfterRelativeMarker, mustNotRunAfterFailure],
-          },
-          terminalCount: 1,
-          splitDirection: 'vertical',
-        },
-      ],
-      session: {
-        tabs: [{
-          id: 'starter-tab',
-          title: 'Starter',
-          type: 'local',
-          root: { type: 'leaf', title: 'starter', terminalType: 'local', cwd: markerDir },
-        }],
-        activeTabId: 'starter-tab',
-        sidebarOpen: true,
-        tabsOpen: true,
-        sidebarSection: 'files',
+        terminalCount: 1,
+        splitDirection: 'vertical',
       },
-    }, 'janet-e2e-startup-app-');
-    userData = app.userData;
+      {
+        id: 'failure-gate-preset',
+        name: 'Failure gate',
+        type: 'local',
+        root: {
+          type: 'leaf',
+          title: 'failure gate',
+          terminalType: 'local',
+          cwd: markerDir,
+          startupCommands: [failAfterRelativeMarker, mustNotRunAfterFailure],
+        },
+        terminalCount: 1,
+        splitDirection: 'vertical',
+      },
+    ],
+    session: {
+      tabs: [{
+        id: 'starter-tab',
+        title: 'Starter',
+        type: 'local',
+        root: { type: 'leaf', title: 'starter', terminalType: 'local', cwd: markerDir },
+      }],
+      activeTabId: 'starter-tab',
+      sidebarOpen: true,
+      tabsOpen: true,
+      sidebarSection: 'files',
+    },
+  }, 'janet-e2e-startup-app-');
+  userData = app.userData;
 
-    await restoreWorkspaceFixture(app.page, 'Ordered startup', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
+  await restoreWorkspaceFixture(app.page, 'Ordered startup', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
 
-    await expect.poll(
-      () => fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf-8') : '',
-      { timeout: 10_000 },
-    ).toBe('AB');
+  await expect.poll(
+    () => fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf-8') : '',
+    { timeout: 10_000 },
+  ).toBe('AB');
 
-    // Switching tabs remounts the pane UI but reuses the same terminal id. It
-    // must not replay commands that may update dependencies or start services.
-    await app.page.locator('.vtab-item').filter({ hasText: 'Starter' }).click();
-    await app.page.locator('.vtab-item').filter({ hasText: 'Ordered startup' }).click();
-    // Observe beyond the former fallback window plus the delayed command so a
-    // hidden remount/replay path cannot pass by merely running late.
-    await app.page.waitForTimeout(1_750);
-    expect(fs.readFileSync(markerPath, 'utf-8')).toBe('AB');
+  // Switching tabs remounts the pane UI but reuses the same terminal id. It
+  // must not replay commands that may update dependencies or start services.
+  await app.page.locator('.vtab-item').filter({ hasText: 'Starter' }).click();
+  await app.page.locator('.vtab-item').filter({ hasText: 'Ordered startup' }).click();
+  // Observe beyond the former fallback window plus the delayed command so a
+  // hidden remount/replay path cannot pass by merely running late.
+  await app.page.waitForTimeout(1_750);
+  expect(fs.readFileSync(markerPath, 'utf-8')).toBe('AB');
 
-    // A full app restart creates fresh terminals, so startup automation should
-    // run again instead of leaving the restored pane idle.
-    await closeApp(app.browser, app.electronProcess);
-    app = undefined;
-    app = await launchApp(undefined, 'janet-e2e-startup-app-', userData);
-    await expect.poll(
-      () => fs.readFileSync(markerPath, 'utf-8'),
-      { timeout: 10_000 },
-    ).toBe('ABAB');
+  // A full app restart creates fresh terminals, so startup automation should
+  // run again instead of leaving the restored pane idle.
+  await closeApp(app);
+  app = undefined;
+  app = await launchApp(undefined, 'janet-e2e-startup-app-', userData);
+  await expect.poll(
+    () => fs.readFileSync(markerPath, 'utf-8'),
+    { timeout: 10_000 },
+  ).toBe('ABAB');
 
-    // Creating another workspace explicitly creates a new pane instance, so its startup
-    // sequence should run again from the beginning.
-    await restoreWorkspaceFixture(app.page, 'Ordered startup second', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
-    await expect.poll(
-      () => fs.readFileSync(markerPath, 'utf-8'),
-      { timeout: 10_000 },
-    ).toBe('ABABAB');
+  // Creating another workspace explicitly creates a new pane instance, so its startup
+  // sequence should run again from the beginning.
+  await restoreWorkspaceFixture(app.page, 'Ordered startup second', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
+  await expect.poll(
+    () => fs.readFileSync(markerPath, 'utf-8'),
+    { timeout: 10_000 },
+  ).toBe('ABABAB');
 
-    // The first row writes a relative marker and exits non-zero. Finding the
-    // marker in the saved cwd proves directory selection; never seeing `Y`
-    // proves the compound sequence stops before the second row.
-    await restoreWorkspaceFixture(app.page, 'Failure gate', [{ title: 'failure gate', cwd: markerDir, commands: [failAfterRelativeMarker, mustNotRunAfterFailure] }]);
-    await expect.poll(
-      () => fs.existsSync(failurePath) ? fs.readFileSync(failurePath, 'utf-8') : '',
-      { timeout: 10_000 },
-    ).toBe('X');
-    await app.page.waitForTimeout(750);
-    expect(fs.readFileSync(failurePath, 'utf-8')).toBe('X');
-  } finally {
-    if (app) await closeApp(app.browser, app.electronProcess, userData);
-    else if (userData) fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    fs.rmSync(markerDir, { recursive: true, force: true });
-  }
+  // The first row writes a relative marker and exits non-zero. Finding the
+  // marker in the saved cwd proves directory selection; never seeing `Y`
+  // proves the compound sequence stops before the second row.
+  await restoreWorkspaceFixture(app.page, 'Failure gate', [{ title: 'failure gate', cwd: markerDir, commands: [failAfterRelativeMarker, mustNotRunAfterFailure] }]);
+  await expect.poll(
+    () => fs.existsSync(failurePath) ? fs.readFileSync(failurePath, 'utf-8') : '',
+    { timeout: 10_000 },
+  ).toBe('X');
+  await app.page.waitForTimeout(750);
+  expect(fs.readFileSync(failurePath, 'utf-8')).toBe('X');
 });
 
 test('refreshes external branch and file changes without a manual reload', async () => {
-  const repoPath = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-e2e-heartbeat-repo-'));
+  const repoPath = fixtureDirectory('janet-e2e-heartbeat-repo-');
   let app: Awaited<ReturnType<typeof launchApp>> | undefined;
-  try {
-    execFileSync('git', ['init', '-b', 'main'], { cwd: repoPath });
-    execFileSync('git', ['config', 'user.email', 'janet-e2e@example.com'], { cwd: repoPath });
-    execFileSync('git', ['config', 'user.name', 'JaneT E2E'], { cwd: repoPath });
-    fs.writeFileSync(path.join(repoPath, 'base.txt'), 'base\n', 'utf-8');
-    execFileSync('git', ['add', 'base.txt'], { cwd: repoPath });
-    execFileSync('git', ['commit', '-m', 'base'], { cwd: repoPath });
-    execFileSync('git', ['branch', 'feature/heartbeat'], { cwd: repoPath });
+  execFileSync('git', ['init', '-b', 'main'], { cwd: repoPath });
+  execFileSync('git', ['config', 'user.email', 'janet-e2e@example.com'], { cwd: repoPath });
+  execFileSync('git', ['config', 'user.name', 'JaneT E2E'], { cwd: repoPath });
+  fs.writeFileSync(path.join(repoPath, 'base.txt'), 'base\n', 'utf-8');
+  execFileSync('git', ['add', 'base.txt'], { cwd: repoPath });
+  execFileSync('git', ['commit', '-m', 'base'], { cwd: repoPath });
+  execFileSync('git', ['branch', 'feature/heartbeat'], { cwd: repoPath });
 
-    app = await launchApp({
-      theme: 'tokyo-night',
-      fontSize: 14,
-      sidebarSide: 'left',
-      keybindings: {},
-      workspaceTabs: [],
-      session: {
-        tabs: [{
-          id: 'heartbeat-tab',
-          title: 'heartbeat repo',
-          type: 'local',
-          cwd: repoPath,
-          root: { type: 'leaf', title: 'repo', terminalType: 'local', cwd: repoPath },
-        }],
-        activeTabId: 'heartbeat-tab',
-        sidebarOpen: true,
-        tabsOpen: true,
-        sidebarSection: 'files',
-      },
-    }, 'janet-e2e-heartbeat-app-');
+  app = await launchApp({
+    theme: 'tokyo-night',
+    fontSize: 14,
+    sidebarSide: 'left',
+    keybindings: {},
+    workspaceTabs: [],
+    session: {
+      tabs: [{
+        id: 'heartbeat-tab',
+        title: 'heartbeat repo',
+        type: 'local',
+        cwd: repoPath,
+        root: { type: 'leaf', title: 'repo', terminalType: 'local', cwd: repoPath },
+      }],
+      activeTabId: 'heartbeat-tab',
+      sidebarOpen: true,
+      tabsOpen: true,
+      sidebarSection: 'files',
+    },
+  }, 'janet-e2e-heartbeat-app-');
 
-    await app.page.bringToFront();
-    await expect(app.page.locator('.status-git')).toContainText('main', { timeout: 10_000 });
-    await expect(app.page.locator('.explorer-tree')).toContainText('base.txt', { timeout: 10_000 });
+  await app.page.bringToFront();
+  await expect(app.page.locator('.status-git')).toContainText('main', { timeout: 10_000 });
+  await expect(app.page.locator('.explorer-tree')).toContainText('base.txt', { timeout: 10_000 });
 
-    fs.writeFileSync(path.join(repoPath, 'external.txt'), 'created outside JaneT\n', 'utf-8');
-    execFileSync('git', ['switch', 'feature/heartbeat'], { cwd: repoPath });
+  fs.writeFileSync(path.join(repoPath, 'external.txt'), 'created outside JaneT\n', 'utf-8');
+  execFileSync('git', ['switch', 'feature/heartbeat'], { cwd: repoPath });
 
-    await expect(app.page.locator('.status-git')).toContainText('feature/heartbeat', { timeout: 8_000 });
-    await expect(app.page.locator('.explorer-tree')).toContainText('external.txt', { timeout: 8_000 });
+  await expect(app.page.locator('.status-git')).toContainText('feature/heartbeat', { timeout: 8_000 });
+  await expect(app.page.locator('.explorer-tree')).toContainText('external.txt', { timeout: 8_000 });
 
-    await app.page.getByRole('tab', { name: 'Source Control' }).click();
-    await expect(app.page.locator('.git-repo-path')).toContainText('feature/heartbeat', { timeout: 8_000 });
-    await expect(app.page.getByRole('button', { name: 'Current branch feature/heartbeat' })).toBeVisible({ timeout: 8_000 });
-  } finally {
-    if (app) await closeApp(app.browser, app.electronProcess, app.userData);
-    fs.rmSync(repoPath, { recursive: true, force: true });
-  }
+  await app.page.getByRole('tab', { name: 'Source Control' }).click();
+  await expect(app.page.locator('.git-repo-path')).toContainText('feature/heartbeat', { timeout: 8_000 });
+  await expect(app.page.getByRole('button', { name: 'Current branch feature/heartbeat' })).toBeVisible({ timeout: 8_000 });
 });
 
 test('focuses the exact worktree MRU across tabs and a maximized layout without creating terminals', async () => {
   test.setTimeout(60_000);
-  const repoPath = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-e2e-worktree-focus-repo-'));
+  const repoPath = fixtureDirectory('janet-e2e-worktree-focus-repo-');
   const nestedPath = path.join(repoPath, 'nested');
   const olderCwd = path.join(repoPath, 'older');
   const targetCwd = path.join(repoPath, 'target');
   let app: Awaited<ReturnType<typeof launchApp>> | undefined;
-  try {
-    const git = (args: string[]) => execFileSync('git', args, { cwd: repoPath, windowsHide: true });
-    git(['init', '-b', 'main']);
-    git(['config', 'user.email', 'janet-e2e@example.invalid']);
-    git(['config', 'user.name', 'JaneT E2E']);
-    fs.writeFileSync(path.join(repoPath, 'base.txt'), 'base\n', 'utf-8');
-    git(['add', 'base.txt']);
-    git(['commit', '-m', 'base']);
-    git(['branch', 'feature/nested']);
-    git(['worktree', 'add', nestedPath, 'feature/nested']);
-    fs.mkdirSync(olderCwd);
-    fs.mkdirSync(targetCwd);
+  const git = (args: string[]) => execFileSync('git', args, { cwd: repoPath, windowsHide: true });
+  git(['init', '-b', 'main']);
+  git(['config', 'user.email', 'janet-e2e@example.invalid']);
+  git(['config', 'user.name', 'JaneT E2E']);
+  fs.writeFileSync(path.join(repoPath, 'base.txt'), 'base\n', 'utf-8');
+  git(['add', 'base.txt']);
+  git(['commit', '-m', 'base']);
+  git(['branch', 'feature/nested']);
+  git(['worktree', 'add', nestedPath, 'feature/nested']);
+  fs.mkdirSync(olderCwd);
+  fs.mkdirSync(targetCwd);
 
-    app = await launchApp({
-      theme: 'tokyo-night',
-      fontSize: 14,
-      sidebarSide: 'left',
-      keybindings: {},
-      workspaceTabs: [],
-      session: {
-        tabs: [
-          {
-            id: 'parent-tab',
-            title: 'parent terminals',
-            type: 'local',
-            isProject: true,
-            cwd: repoPath,
-            root: {
-              type: 'split',
-              direction: 'vertical',
-              sizes: [1, 1],
-              children: [
-                { type: 'leaf', title: 'parent older', terminalType: 'local', cwd: olderCwd },
-                { type: 'leaf', title: 'parent target', terminalType: 'local', cwd: targetCwd },
-              ],
-            },
+  app = await launchApp({
+    theme: 'tokyo-night',
+    fontSize: 14,
+    sidebarSide: 'left',
+    keybindings: {},
+    workspaceTabs: [],
+    session: {
+      tabs: [
+        {
+          id: 'parent-tab',
+          title: 'parent terminals',
+          type: 'local',
+          isProject: true,
+          cwd: repoPath,
+          root: {
+            type: 'split',
+            direction: 'vertical',
+            sizes: [1, 1],
+            children: [
+              { type: 'leaf', title: 'parent older', terminalType: 'local', cwd: olderCwd },
+              { type: 'leaf', title: 'parent target', terminalType: 'local', cwd: targetCwd },
+            ],
           },
-          {
-            id: 'nested-tab',
-            title: 'nested terminal',
-            type: 'local',
-            isProject: true,
-            cwd: nestedPath,
-            root: { type: 'leaf', title: 'nested owner', terminalType: 'local', cwd: nestedPath },
-          },
-        ],
-        activeTabId: 'parent-tab',
-        sidebarOpen: true,
-        tabsOpen: true,
-        sidebarSection: 'git',
-      },
-    }, 'janet-e2e-worktree-focus-app-');
+        },
+        {
+          id: 'nested-tab',
+          title: 'nested terminal',
+          type: 'local',
+          isProject: true,
+          cwd: nestedPath,
+          root: { type: 'leaf', title: 'nested owner', terminalType: 'local', cwd: nestedPath },
+        },
+      ],
+      activeTabId: 'parent-tab',
+      sidebarOpen: true,
+      tabsOpen: true,
+      sidebarSection: 'git',
+    },
+  }, 'janet-e2e-worktree-focus-app-');
 
-    const page = app.page;
-    const parentPanes = page.locator('.terminal-leaf');
-    await expect(parentPanes).toHaveCount(2);
-    const parentIds = await page.locator('[data-terminal-id]').evaluateAll(
-      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')!),
-    );
-    expect(new Set(parentIds).size).toBe(2);
+  const page = app.page;
+  const parentPanes = page.locator('.terminal-leaf');
+  await expect(parentPanes).toHaveCount(2);
+  const parentIds = await page.locator('[data-terminal-id]').evaluateAll(
+    (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')!),
+  );
+  expect(new Set(parentIds).size).toBe(2);
 
-    const targetPane = parentPanes.filter({ has: page.locator('.leaf-title', { hasText: 'parent target' }) });
-    const olderPane = parentPanes.filter({ has: page.locator('.leaf-title', { hasText: 'parent older' }) });
-    const targetId = await targetPane.locator('[data-terminal-id]').getAttribute('data-terminal-id');
-    const olderId = await olderPane.locator('[data-terminal-id]').getAttribute('data-terminal-id');
-    expect(targetId).toBeTruthy();
-    expect(olderId).toBeTruthy();
-    await targetPane.locator('.xterm-helper-textarea').focus();
-    await expect(targetPane).toHaveAttribute('aria-current', 'true');
+  const targetPane = parentPanes.filter({ has: page.locator('.leaf-title', { hasText: 'parent target' }) });
+  const olderPane = parentPanes.filter({ has: page.locator('.leaf-title', { hasText: 'parent older' }) });
+  const targetId = await targetPane.locator('[data-terminal-id]').getAttribute('data-terminal-id');
+  const olderId = await olderPane.locator('[data-terminal-id]').getAttribute('data-terminal-id');
+  expect(targetId).toBeTruthy();
+  expect(olderId).toBeTruthy();
+  await targetPane.locator('.xterm-helper-textarea').focus();
+  await expect(targetPane).toHaveAttribute('aria-current', 'true');
 
-    await olderPane.getByRole('button', { name: /Maximize pane/ }).click();
-    await expect(parentPanes).toHaveCount(1);
-    await expect(page.locator(`[data-terminal-id="${olderId}"]`)).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Restore pane layout' })).toBeVisible();
+  await olderPane.getByRole('button', { name: /Maximize pane/ }).click();
+  await expect(parentPanes).toHaveCount(1);
+  await expect(page.locator(`[data-terminal-id="${olderId}"]`)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Restore pane layout' })).toBeVisible();
 
-    await page.locator('.vtab-item').filter({ hasText: 'nested terminal' }).click();
-    const nestedTerminal = page.locator('[data-terminal-id]');
-    await expect(nestedTerminal).toHaveCount(1);
-    const nestedId = await nestedTerminal.getAttribute('data-terminal-id');
-    expect(nestedId).toBeTruthy();
+  await page.locator('.vtab-item').filter({ hasText: 'nested terminal' }).click();
+  const nestedTerminal = page.locator('[data-terminal-id]');
+  await expect(nestedTerminal).toHaveCount(1);
+  const nestedId = await nestedTerminal.getAttribute('data-terminal-id');
+  expect(nestedId).toBeTruthy();
 
-    const sourceControl = page.locator('.git-tree');
-    const parentWorktree = sourceControl.getByRole('button', {
-      name: `Focus worktree ${path.basename(repoPath)} terminal`,
-    });
-    const nestedWorktree = sourceControl.getByRole('button', {
-      name: `Focus worktree ${path.basename(nestedPath)} terminal`,
-    });
-    await expect(parentWorktree).toContainText('main · 2 panes', { timeout: 10_000 });
-    await expect(nestedWorktree).toContainText('feature/nested · open');
-    await expect(nestedWorktree.locator('xpath=..')).toHaveAttribute('aria-current', 'location');
+  const sourceControl = page.locator('.git-tree');
+  const parentWorktree = sourceControl.getByRole('button', {
+    name: `Focus worktree ${path.basename(repoPath)} terminal`,
+  });
+  const nestedWorktree = sourceControl.getByRole('button', {
+    name: `Focus worktree ${path.basename(nestedPath)} terminal`,
+  });
+  await expect(parentWorktree).toContainText('main · 2 panes', { timeout: 10_000 });
+  await expect(nestedWorktree).toContainText('feature/nested · open');
+  await expect(nestedWorktree.locator('xpath=..')).toHaveAttribute('aria-current', 'location');
 
-    await parentWorktree.click();
+  await parentWorktree.click();
 
-    await expect(page.locator('.vtab-item.active')).toContainText('parent terminals');
-    await expect(parentPanes).toHaveCount(2);
-    await expect(page.getByRole('button', { name: 'Restore pane layout' })).toHaveCount(0);
-    const revealedTarget = page.locator(`[data-terminal-id="${targetId}"]`);
-    const revealedOlder = page.locator(`[data-terminal-id="${olderId}"]`);
-    await expect(revealedTarget.locator('.xterm-helper-textarea')).toBeFocused();
-    const targetOwner = revealedTarget.locator('xpath=ancestor::div[contains(concat(" ",normalize-space(@class)," ")," terminal-leaf ")][1]');
-    const olderOwner = revealedOlder.locator('xpath=ancestor::div[contains(concat(" ",normalize-space(@class)," ")," terminal-leaf ")][1]');
-    await expect(targetOwner).toHaveAttribute('aria-current', 'true');
-    await expect(olderOwner).not.toHaveAttribute('aria-current');
-    expect(new Set(await page.locator('[data-terminal-id]').evaluateAll(
-      (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')!),
-    ))).toEqual(new Set(parentIds));
+  await expect(page.locator('.vtab-item.active')).toContainText('parent terminals');
+  await expect(parentPanes).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'Restore pane layout' })).toHaveCount(0);
+  const revealedTarget = page.locator(`[data-terminal-id="${targetId}"]`);
+  const revealedOlder = page.locator(`[data-terminal-id="${olderId}"]`);
+  await expect(revealedTarget.locator('.xterm-helper-textarea')).toBeFocused();
+  const targetOwner = revealedTarget.locator('xpath=ancestor::div[contains(concat(" ",normalize-space(@class)," ")," terminal-leaf ")][1]');
+  const olderOwner = revealedOlder.locator('xpath=ancestor::div[contains(concat(" ",normalize-space(@class)," ")," terminal-leaf ")][1]');
+  await expect(targetOwner).toHaveAttribute('aria-current', 'true');
+  await expect(olderOwner).not.toHaveAttribute('aria-current');
+  expect(new Set(await page.locator('[data-terminal-id]').evaluateAll(
+    (terminals) => terminals.map((terminal) => terminal.getAttribute('data-terminal-id')!),
+  ))).toEqual(new Set(parentIds));
 
-    await page.locator('.vtab-item').filter({ hasText: 'nested terminal' }).click();
-    await expect(page.locator('[data-terminal-id]')).toHaveAttribute('data-terminal-id', nestedId as string);
-    await expect(page.locator('.vtab-item')).toHaveCount(2);
-  } finally {
-    if (app) await closeApp(app.browser, app.electronProcess, app.userData);
-    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-  }
+  await page.locator('.vtab-item').filter({ hasText: 'nested terminal' }).click();
+  await expect(page.locator('[data-terminal-id]')).toHaveAttribute('data-terminal-id', nestedId as string);
+  await expect(page.locator('.vtab-item')).toHaveCount(2);
 });
 
 test('stages and commits changes from Source Control', async ({}, testInfo) => {
-  const repoPath = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-e2e-source-control-'));
+  const repoPath = fixtureDirectory('janet-e2e-source-control-');
   let app: Awaited<ReturnType<typeof launchApp>> | undefined;
-  try {
-    // A long branch name exercises truncation at the default project-tools width.
-    execFileSync('git', ['init', '-b', 'feature/source-control-layout-regression'], { cwd: repoPath });
-    execFileSync('git', ['config', 'user.email', 'janet-e2e@example.com'], { cwd: repoPath });
-    execFileSync('git', ['config', 'user.name', 'JaneT E2E'], { cwd: repoPath });
-    fs.writeFileSync(path.join(repoPath, 'base.txt'), 'base\n', 'utf-8');
-    execFileSync('git', ['add', 'base.txt'], { cwd: repoPath });
-    execFileSync('git', ['commit', '-m', 'base'], { cwd: repoPath });
-    fs.writeFileSync(path.join(repoPath, 'base.txt'), 'discard me\n', 'utf-8');
-    fs.writeFileSync(path.join(repoPath, 'change.txt'), 'from JaneT\n', 'utf-8');
-    fs.writeFileSync(path.join(repoPath, 'delete-me.txt'), 'untracked\n', 'utf-8');
+  // A long branch name exercises truncation at the default project-tools width.
+  execFileSync('git', ['init', '-b', 'feature/source-control-layout-regression'], { cwd: repoPath });
+  execFileSync('git', ['config', 'user.email', 'janet-e2e@example.com'], { cwd: repoPath });
+  execFileSync('git', ['config', 'user.name', 'JaneT E2E'], { cwd: repoPath });
+  fs.writeFileSync(path.join(repoPath, 'base.txt'), 'base\n', 'utf-8');
+  execFileSync('git', ['add', 'base.txt'], { cwd: repoPath });
+  execFileSync('git', ['commit', '-m', 'base'], { cwd: repoPath });
+  fs.writeFileSync(path.join(repoPath, 'base.txt'), 'discard me\n', 'utf-8');
+  fs.writeFileSync(path.join(repoPath, 'change.txt'), 'from JaneT\n', 'utf-8');
+  fs.writeFileSync(path.join(repoPath, 'delete-me.txt'), 'untracked\n', 'utf-8');
 
-    app = await launchApp({
-      theme: 'tokyo-night',
-      fontSize: 14,
-      sidebarSide: 'left',
-      keybindings: {},
-      workspaceTabs: [],
-      session: {
-        tabs: [{
-          id: 'source-control-tab',
-          title: 'source control repo',
-          type: 'local',
-          cwd: repoPath,
-          root: { type: 'leaf', title: 'repo', terminalType: 'local', cwd: repoPath },
-        }],
-        activeTabId: 'source-control-tab',
-        sidebarOpen: true,
-        tabsOpen: true,
-        sidebarSection: 'git',
-      },
-    }, 'janet-e2e-source-control-app-');
+  app = await launchApp({
+    theme: 'tokyo-night',
+    fontSize: 14,
+    sidebarSide: 'left',
+    keybindings: {},
+    workspaceTabs: [],
+    session: {
+      tabs: [{
+        id: 'source-control-tab',
+        title: 'source control repo',
+        type: 'local',
+        cwd: repoPath,
+        root: { type: 'leaf', title: 'repo', terminalType: 'local', cwd: repoPath },
+      }],
+      activeTabId: 'source-control-tab',
+      sidebarOpen: true,
+      tabsOpen: true,
+      sidebarSection: 'git',
+    },
+  }, 'janet-e2e-source-control-app-');
 
-    await app.page.bringToFront();
-    // The first shell cwd report can replace Source Control while a hover is pending.
-    await expect(app.page.locator('textarea.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true');
-    const sourceControl = app.page.locator('.git-tree');
-    await expect(app.page.locator('.workspace-tools-following')).toHaveCount(0);
-    await expect(sourceControl.getByRole('button', { name: 'Add worktree with new branch' })).toBeVisible({ timeout: 10_000 });
-    await expect(sourceControl.locator('.git-worktree-item.current[aria-current="location"]')).toBeVisible();
-    const currentWorktree = sourceControl.getByRole('button', {
-      name: `Focus worktree ${path.basename(repoPath)} terminal`,
-    });
-    await expect(currentWorktree).toBeVisible();
-    const terminalCount = await app.page.locator('[data-terminal-id]').count();
-    await currentWorktree.click();
-    await expect(app.page.locator('[data-terminal-id]')).toHaveCount(terminalCount);
-    const worktrees = sourceControl.getByRole('button', { name: /Worktrees/ });
-    const repo = sourceControl.locator('.git-repo-path');
-    const changes = sourceControl.getByRole('button', { name: /Changes/ });
-    for (const item of [repo, changes]) {
-      const followsWorktrees = await worktrees.evaluate(
-        (node, other) => Boolean(node.compareDocumentPosition(other as Node) & Node.DOCUMENT_POSITION_FOLLOWING),
-        await item.elementHandle(),
-      );
-      expect(followsWorktrees).toBe(true);
-    }
-    const createBranch = sourceControl.getByRole('button', { name: 'Create branch', exact: true });
-    await expect(createBranch).toHaveClass(/git-section-action/);
-    await expect(createBranch.locator('xpath=ancestor::div[contains(@class,"git-section-header")]')).toContainText('Branches');
-    await expect(sourceControl.getByText('Create branch…')).toHaveCount(0);
-    await expect(repo.locator('.git-pill.dirty')).toBeVisible();
-    await expect.poll(() => sourceControl.evaluate((tree) => {
-      const panel = tree.getBoundingClientRect();
-      const branch = tree.querySelector('.git-repo-branch')!;
-      const badge = tree.querySelector('.git-pill.dirty')!.getBoundingClientRect();
-      const worktreeName = tree.querySelector('.git-worktree-item.current .branch-name')!;
-      const name = worktreeName.getBoundingClientRect();
-      return {
-        branchTruncated: branch.scrollWidth > branch.clientWidth,
-        badgeInside: badge.width > 0 && badge.left >= panel.left && badge.right <= panel.right,
-        worktreeNameInside: name.right <= panel.right,
-        // The branch note gives up space before the worktree name collapses.
-        worktreeNameReadable: name.width >= Math.min(worktreeName.scrollWidth, 120),
-      };
-    })).toEqual({ branchTruncated: true, badgeInside: true, worktreeNameInside: true, worktreeNameReadable: true });
-    await sourceControl.screenshot({ path: testInfo.outputPath('source-control.png') });
-
-    const refreshSourceControl = sourceControl.getByRole('button', { name: 'Refresh Source Control' });
-    await refreshSourceControl.hover();
-    await expect(app.page.getByRole('tooltip')).toContainText('Refresh Source Control');
-    await app.page.locator('.terminal-area').hover({ position: { x: 40, y: 40 } });
-    await expect(app.page.getByRole('tooltip')).toHaveCount(0);
-    await refreshSourceControl.hover();
-    await expect(app.page.getByRole('tooltip')).toContainText('Refresh Source Control');
-    await refreshSourceControl.click();
-    await app.page.locator('.terminal-area').hover({ position: { x: 40, y: 40 } });
-    await expect(app.page.getByRole('tooltip')).toHaveCount(0);
-
-    const baseChange = sourceControl.getByRole('button', { name: 'Open working-tree diff for base.txt' });
-    await expect(sourceControl.getByRole('button', { name: 'Stage base.txt' })).toBeVisible();
-    await app.page.evaluate(() => navigator.clipboard.writeText(''));
-    await baseChange.click({ button: 'right' });
-    const fileMenu = app.page.getByRole('menu', { name: 'Actions for base.txt' });
-    await expect(fileMenu.getByRole('menuitem', { name: 'Copy path' })).toBeVisible();
-    await expect(fileMenu.getByRole('menuitem', { name: 'Revert changes' })).toBeVisible();
-    await app.page.screenshot({ path: testInfo.outputPath('source-control-file-menu.png') });
-    await fileMenu.getByRole('menuitem', { name: 'Copy path' }).click();
-    await expect.poll(() => app!.page.evaluate(() => navigator.clipboard.readText())).toContain('base.txt');
-
-    await baseChange.click();
-    await expect(app.page.getByRole('tab', { name: 'base.txt (Working)' })).toBeVisible();
-    await expect(app.page.locator('.monaco-diff-editor')).toBeVisible({ timeout: 10_000 });
-
-    await expect(sourceControl.getByRole('button', { name: 'Revert changes in base.txt' })).toHaveCount(0);
-    await baseChange.click({ button: 'right' });
-    await fileMenu.getByRole('menuitem', { name: 'Revert changes' }).click();
-    await expect(app.page.getByRole('dialog', { name: 'Revert changes in base.txt?' })).toBeVisible();
-    await app.page.getByRole('button', { name: 'Revert', exact: true }).click();
-    await expect.poll(() => fs.readFileSync(path.join(repoPath, 'base.txt'), 'utf-8').trim()).toBe('base');
-    expect(fs.readFileSync(path.join(repoPath, 'change.txt'), 'utf-8').trim()).toBe('from JaneT');
-
-    const untrackedChange = sourceControl.getByRole('button', { name: 'Open working-tree diff for delete-me.txt' });
-    await untrackedChange.click({ button: 'right' });
-    await app.page.getByRole('menuitem', { name: 'Delete untracked item' }).click();
-    await expect(app.page.getByRole('dialog', { name: 'Delete delete-me.txt?' })).toBeVisible();
-    await app.page.getByRole('button', { name: 'Delete', exact: true }).click();
-    await expect.poll(() => fs.existsSync(path.join(repoPath, 'delete-me.txt'))).toBe(false);
-
-    await sourceControl.getByRole('button', { name: 'Stage change.txt' }).click();
-    await expect(sourceControl.getByRole('button', { name: 'Unstage change.txt' })).toBeVisible({ timeout: 8_000 });
-    const stagedSection = sourceControl.getByRole('button', { name: /Staged Changes/ }).locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " git-section ")][1]');
-    await expect(stagedSection.getByLabel('Commit message')).toBeVisible();
-    await stagedSection.screenshot({ path: testInfo.outputPath('source-control-staged.png') });
-    await sourceControl.getByRole('button', { name: 'Open staged diff for change.txt' }).click();
-    await expect(app.page.getByRole('tab', { name: 'change.txt (Staged)' })).toBeVisible();
-    await expect(app.page.locator('.monaco-diff-editor')).toBeVisible({ timeout: 10_000 });
-    await sourceControl.getByLabel('Commit message').fill('commit from Source Control');
-    await sourceControl.getByRole('button', { name: 'Commit staged changes' }).click();
-
-    await expect.poll(
-      () => execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: repoPath, encoding: 'utf8' }).trim(),
-      { timeout: 8_000 },
-    ).toBe('commit from Source Control');
-    expect(execFileSync('git', ['status', '--porcelain'], { cwd: repoPath, encoding: 'utf8' }).trim()).toBe('');
-  } finally {
-    if (app) await closeApp(app.browser, app.electronProcess, app.userData);
-    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await app.page.bringToFront();
+  // The first shell cwd report can replace Source Control while a hover is pending.
+  await expect(app.page.locator('textarea.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true');
+  const sourceControl = app.page.locator('.git-tree');
+  await expect(app.page.locator('.workspace-tools-following')).toHaveCount(0);
+  await expect(sourceControl.getByRole('button', { name: 'Add worktree with new branch' })).toBeVisible({ timeout: 10_000 });
+  await expect(sourceControl.locator('.git-worktree-item.current[aria-current="location"]')).toBeVisible();
+  const currentWorktree = sourceControl.getByRole('button', {
+    name: `Focus worktree ${path.basename(repoPath)} terminal`,
+  });
+  await expect(currentWorktree).toBeVisible();
+  const terminalCount = await app.page.locator('[data-terminal-id]').count();
+  await currentWorktree.click();
+  await expect(app.page.locator('[data-terminal-id]')).toHaveCount(terminalCount);
+  const worktrees = sourceControl.getByRole('button', { name: /Worktrees/ });
+  const repo = sourceControl.locator('.git-repo-path');
+  const changes = sourceControl.getByRole('button', { name: /Changes/ });
+  for (const item of [repo, changes]) {
+    const followsWorktrees = await worktrees.evaluate(
+      (node, other) => Boolean(node.compareDocumentPosition(other as Node) & Node.DOCUMENT_POSITION_FOLLOWING),
+      await item.elementHandle(),
+    );
+    expect(followsWorktrees).toBe(true);
   }
+  const createBranch = sourceControl.getByRole('button', { name: 'Create branch', exact: true });
+  await expect(createBranch).toHaveClass(/git-section-action/);
+  await expect(createBranch.locator('xpath=ancestor::div[contains(@class,"git-section-header")]')).toContainText('Branches');
+  await expect(sourceControl.getByText('Create branch…')).toHaveCount(0);
+  await expect(repo.locator('.git-pill.dirty')).toBeVisible();
+  await expect.poll(() => sourceControl.evaluate((tree) => {
+    const panel = tree.getBoundingClientRect();
+    const branch = tree.querySelector('.git-repo-branch')!;
+    const badge = tree.querySelector('.git-pill.dirty')!.getBoundingClientRect();
+    const worktreeName = tree.querySelector('.git-worktree-item.current .branch-name')!;
+    const name = worktreeName.getBoundingClientRect();
+    return {
+      branchTruncated: branch.scrollWidth > branch.clientWidth,
+      badgeInside: badge.width > 0 && badge.left >= panel.left && badge.right <= panel.right,
+      worktreeNameInside: name.right <= panel.right,
+      // The branch note gives up space before the worktree name collapses.
+      worktreeNameReadable: name.width >= Math.min(worktreeName.scrollWidth, 120),
+    };
+  })).toEqual({ branchTruncated: true, badgeInside: true, worktreeNameInside: true, worktreeNameReadable: true });
+  await sourceControl.screenshot({ path: testInfo.outputPath('source-control.png') });
+
+  const refreshSourceControl = sourceControl.getByRole('button', { name: 'Refresh Source Control' });
+  await refreshSourceControl.hover();
+  await expect(app.page.getByRole('tooltip')).toContainText('Refresh Source Control');
+  await app.page.locator('.terminal-area').hover({ position: { x: 40, y: 40 } });
+  await expect(app.page.getByRole('tooltip')).toHaveCount(0);
+  await refreshSourceControl.hover();
+  await expect(app.page.getByRole('tooltip')).toContainText('Refresh Source Control');
+  await refreshSourceControl.click();
+  await app.page.locator('.terminal-area').hover({ position: { x: 40, y: 40 } });
+  await expect(app.page.getByRole('tooltip')).toHaveCount(0);
+
+  const baseChange = sourceControl.getByRole('button', { name: 'Open working-tree diff for base.txt' });
+  await expect(sourceControl.getByRole('button', { name: 'Stage base.txt' })).toBeVisible();
+  await app.page.evaluate(() => navigator.clipboard.writeText(''));
+  await baseChange.click({ button: 'right' });
+  const fileMenu = app.page.getByRole('menu', { name: 'Actions for base.txt' });
+  await expect(fileMenu.getByRole('menuitem', { name: 'Copy path' })).toBeVisible();
+  await expect(fileMenu.getByRole('menuitem', { name: 'Revert changes' })).toBeVisible();
+  await app.page.screenshot({ path: testInfo.outputPath('source-control-file-menu.png') });
+  await fileMenu.getByRole('menuitem', { name: 'Copy path' }).click();
+  await expect.poll(() => app!.page.evaluate(() => navigator.clipboard.readText())).toContain('base.txt');
+
+  await baseChange.click();
+  await expect(app.page.getByRole('tab', { name: 'base.txt (Working)' })).toBeVisible();
+  await expect(app.page.locator('.monaco-diff-editor')).toBeVisible({ timeout: 10_000 });
+
+  await expect(sourceControl.getByRole('button', { name: 'Revert changes in base.txt' })).toHaveCount(0);
+  await baseChange.click({ button: 'right' });
+  await fileMenu.getByRole('menuitem', { name: 'Revert changes' }).click();
+  await expect(app.page.getByRole('dialog', { name: 'Revert changes in base.txt?' })).toBeVisible();
+  await app.page.getByRole('button', { name: 'Revert', exact: true }).click();
+  await expect.poll(() => fs.readFileSync(path.join(repoPath, 'base.txt'), 'utf-8').trim()).toBe('base');
+  expect(fs.readFileSync(path.join(repoPath, 'change.txt'), 'utf-8').trim()).toBe('from JaneT');
+
+  const untrackedChange = sourceControl.getByRole('button', { name: 'Open working-tree diff for delete-me.txt' });
+  await untrackedChange.click({ button: 'right' });
+  await app.page.getByRole('menuitem', { name: 'Delete untracked item' }).click();
+  await expect(app.page.getByRole('dialog', { name: 'Delete delete-me.txt?' })).toBeVisible();
+  await app.page.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect.poll(() => fs.existsSync(path.join(repoPath, 'delete-me.txt'))).toBe(false);
+
+  await sourceControl.getByRole('button', { name: 'Stage change.txt' }).click();
+  await expect(sourceControl.getByRole('button', { name: 'Unstage change.txt' })).toBeVisible({ timeout: 8_000 });
+  const stagedSection = sourceControl.getByRole('button', { name: /Staged Changes/ }).locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " git-section ")][1]');
+  await expect(stagedSection.getByLabel('Commit message')).toBeVisible();
+  await stagedSection.screenshot({ path: testInfo.outputPath('source-control-staged.png') });
+  await sourceControl.getByRole('button', { name: 'Open staged diff for change.txt' }).click();
+  await expect(app.page.getByRole('tab', { name: 'change.txt (Staged)' })).toBeVisible();
+  await expect(app.page.locator('.monaco-diff-editor')).toBeVisible({ timeout: 10_000 });
+  await sourceControl.getByLabel('Commit message').fill('commit from Source Control');
+  await sourceControl.getByRole('button', { name: 'Commit staged changes' }).click();
+
+  await expect.poll(
+    () => execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: repoPath, encoding: 'utf8' }).trim(),
+    { timeout: 8_000 },
+  ).toBe('commit from Source Control');
+  expect(execFileSync('git', ['status', '--porcelain'], { cwd: repoPath, encoding: 'utf8' }).trim()).toBe('');
 });

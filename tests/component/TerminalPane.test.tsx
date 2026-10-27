@@ -1,3 +1,4 @@
+import { createDataTransfer } from '../dataTransfer';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
@@ -263,27 +264,9 @@ beforeEach(() => {
 });
 
 function dataTransferWithPayload(payload: TerminalPathDragPayload): DataTransfer {
-  const values = new Map<string, string>();
-  const transfer = {
-    dropEffect: 'none',
-    effectAllowed: 'all',
-    get types() { return Array.from(values.keys()); },
-    setData: (type: string, value: string) => { values.set(type, value); },
-    getData: (type: string) => values.get(type) ?? '',
-  } as unknown as DataTransfer;
+  const transfer = createDataTransfer();
   beginTerminalPathDrag(transfer, payload);
   return transfer;
-}
-
-function dataTransferWithText(value: string): DataTransfer {
-  const values = new Map<string, string>([['text/plain', value]]);
-  return {
-    dropEffect: 'none',
-    effectAllowed: 'all',
-    get types() { return Array.from(values.keys()); },
-    setData: (type: string, data: string) => { values.set(type, data); },
-    getData: (type: string) => values.get(type) ?? '',
-  } as unknown as DataTransfer;
 }
 
 async function loadTerminalPane() {
@@ -1620,7 +1603,7 @@ describe('TerminalPane', () => {
 
     const terminal = MockTerminal.instances.at(-1)!;
     const container = document.querySelector('.terminal-container')!;
-    const plainText = dataTransferWithText('/repo/plain.txt');
+    const plainText = createDataTransfer({ 'text/plain': '/repo/plain.txt' });
     fireEvent.dragEnter(container, { dataTransfer: plainText });
     fireEvent.drop(container, { dataTransfer: plainText });
 
@@ -1628,7 +1611,7 @@ describe('TerminalPane', () => {
     expect(terminal.paste).not.toHaveBeenCalled();
     expect(terminalWrite).not.toHaveBeenCalled();
 
-    const malformed = dataTransferWithText('/repo/malformed.txt');
+    const malformed = createDataTransfer({ 'text/plain': '/repo/malformed.txt' });
     malformed.setData(TERMINAL_PATH_MIME, '{not json');
     fireEvent.dragEnter(container, { dataTransfer: malformed });
     fireEvent.drop(container, { dataTransfer: malformed });

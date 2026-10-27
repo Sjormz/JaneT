@@ -9,6 +9,9 @@ import { getTheme } from '../../src/renderer/themes';
 // MotionPresence timings: DURATION.base and exitDuration(DURATION.base) in src/renderer/components/motion.ts.
 const ENTER_MS = 240;
 const EXIT_MS = 156;
+// Exercise real PTY input during the exit animation with a ready raw reader;
+// shell command parsing and PSReadLine startup are covered by shell tests.
+const inputReader = `node -e "process.stdin.setRawMode(true);let typed='';process.stdin.on('data',data=>{typed+=data.toString();if(typed.includes('node'))console.log(['__MOTION','INPUT_READY__'].join('_'))});console.log(['__MOTION','READER_READY__'].join('_'))"`;
 
 type TerminalFit = { id: string | null; resizes: number; term?: string; settled: boolean };
 /** Each terminal's PTY resize count and whether its grid is fitted to its box and acknowledged by the PTY. */
@@ -39,9 +42,9 @@ class MotionWorkspace {
   constructor(private page: Page) {}
   async ready() {
     await expect(this.page.locator('.terminal-container')).toHaveCount(2);
-    for (const input of await this.page.locator('.xterm-helper-textarea').all()) {
-      await expect(input).toHaveAttribute('data-shell-ready', 'true');
-    }
+    // The startup reader owns the left PTY before the shell's first prompt.
+    await expect(this.page.locator('.xterm-rows').first()).toContainText('__MOTION_READER_READY__');
+    await expect(this.page.locator('.xterm-helper-textarea').nth(1)).toHaveAttribute('data-shell-ready', 'true');
   }
   async maximize() { await this.page.getByRole('button', { name: /Maximize pane — left/ }).click(); }
   async restore() { await this.page.keyboard.press('F6'); }
@@ -69,7 +72,8 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-motion-'));
     const settings = terminalSettings(userData);
     const root = { type: 'split', direction: 'vertical', sizes: [1, 1], children: [
-      { type: 'leaf', title: 'left', cwd: userData }, { type: 'leaf', title: 'right', cwd: userData },
+      { type: 'leaf', title: 'left', cwd: userData, startupCommands: [inputReader] },
+      { type: 'leaf', title: 'right', cwd: userData },
     ] };
     fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ ...settings,
       keybindings: { 'maximize-pane': 'F6' },
@@ -147,8 +151,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
         await expect(closingRename).toHaveAttribute('inert', '');
         await expect(closingRename).toHaveAttribute('aria-hidden', 'true');
       }
-      await page.keyboard.type('node -e "console.log([\'__MOTION\',\'INPUT_READY__\'].join(\'_\'))"');
-      await page.keyboard.press('Enter');
+      await page.keyboard.type('node');
       await expect(page.locator('.xterm-rows').first()).toContainText('__MOTION_INPUT_READY__');
       await page.evaluate(() => {
         (window as any).__motion.holdExits = false;

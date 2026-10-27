@@ -1,4 +1,4 @@
-import { firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -10,15 +10,6 @@ const agentHarness = path.join(root, 'tests/e2e/helpers/visual-agent.cjs');
 const neutralCwd = process.env.SystemRoot ?? root;
 const themes = themeNames;
 const viewports = [{ width: 1280, height: 800 }, { width: 800, height: 600 }] as const;
-
-function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
-  const env = { ...process.env, ...extra };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-  );
-}
 
 function tab(page: Page, title: string): Locator {
   return page.locator('.vtab-item').filter({ has: page.locator('.vtab-name', { hasText: title }) });
@@ -189,6 +180,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
   const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-final-visual-e2e-'));
   const pageErrors: string[] = [];
   let app: ElectronApplication | undefined;
+  let failure: unknown;
 
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ mainDirectory: userData,
     theme: 'tokyo-night',
@@ -251,7 +243,9 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
     app.windows().forEach(capturePageErrors);
     const page = await firstWindow(app);
     await page.waitForLoadState('domcontentloaded');
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1280, 800));
+    // Resize the shown client area, not macOS window chrome or its pending first show.
+    await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(true);
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1280, 800));
     await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
       .toEqual({ width: 1280, height: 800 });
     await expect(page.locator('.vtab-item')).toHaveCount(4);
@@ -313,7 +307,7 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
     for (const theme of themes) {
       await switchTheme(page, theme);
       for (const viewport of viewports) {
-        await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]?.setSize(
+        await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]?.setContentSize(
           size.width,
           size.height,
         ), viewport);
@@ -459,8 +453,16 @@ test('checks every built-in theme in the Electron visual matrix', async ({}, tes
       (await observedPage.pageErrors({ filter: 'all' })).map((error) => error.message)
     )))).flat();
     expect([...pageErrors, ...storedPageErrors]).toEqual([]);
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
-    await forceClose(app);
-    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    try {
+      await forceClose(app);
+      fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (error) {
+      if (failure === undefined) throw error;
+      console.error('Visual fixture cleanup also failed:', error);
+    }
   }
 });

@@ -1,4 +1,4 @@
-import { firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -8,13 +8,6 @@ import { parse } from 'smol-toml';
 
 const root = path.resolve(__dirname, '../..');
 const command = 'node -e "setTimeout(()=>{},10500)"';
-
-function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
-  const env = { ...process.env, ...extra };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
-}
 
 function readDecisions(eventsPath: string): Array<Record<string, unknown>> {
   if (!fs.existsSync(eventsPath)) return [];

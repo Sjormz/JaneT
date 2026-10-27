@@ -2,14 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication } from '@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { firstWindow, forceClose } from './electronLifecycle';
-
-function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
-  const env = { ...process.env, ...extra };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
-}
+import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
 
 // The real default shell encodes its cwd with this machine's hostname, and the
 // renderer accepts it only through the hostname supplied by the preload.

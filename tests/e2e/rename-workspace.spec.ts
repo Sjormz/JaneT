@@ -1,4 +1,4 @@
-import { firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -7,15 +7,6 @@ import * as path from 'path';
 const root = path.resolve(__dirname, '../..');
 const PANE_MARKER = '__JANET_PANE_RENAME_FOCUS__';
 const TAB_MARKER = '__JANET_TAB_RENAME_FOCUS__';
-
-function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
-  const env = { ...process.env, ...extra };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-  );
-}
 
 function createUserData(): string {
   const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-rename-e2e-'));
@@ -83,9 +74,9 @@ test('renames the focused pane and active tab without interrupting xterm input',
     const terminals = page.locator('.terminal-container');
     await expect(terminals).toHaveCount(2);
     await expect(page.getByRole('button', { name: 'Show workspace list' })).toBeVisible();
-    await expect.poll(async () => terminals.nth(1).locator('.xterm-rows').innerText(), { timeout: 15_000 }).not.toBe('');
     const terminalInputs = page.locator('.xterm-helper-textarea');
     await expect(terminalInputs).toHaveCount(2);
+    await expect(terminalInputs.nth(1)).toHaveAttribute('data-shell-ready', 'true');
     await expect(terminalInputs.nth(0)).toHaveAttribute('aria-label', 'Left — Local terminal pane');
     await expect(terminalInputs.nth(1)).toHaveAttribute('aria-label', 'Right — Local terminal pane');
 
@@ -108,7 +99,7 @@ test('renames the focused pane and active tab without interrupting xterm input',
     await expect(page.locator('.terminal-leaf').nth(1).locator('.leaf-title-text')).toHaveText('Tests');
     await expect(secondInput).toHaveAttribute('aria-label', 'Tests — Local terminal pane');
     await expect.poll(() => activeElementIs(page, '.xterm-helper-textarea', 1)).toBe(true);
-    await page.keyboard.type(`echo ${PANE_MARKER}`);
+    await page.keyboard.type(`node -e "console.log(['__JANET_PANE','RENAME_FOCUS__'].join('_'))"`);
     await page.keyboard.press('Enter');
     await expect.poll(async () => terminals.nth(1).locator('.xterm-rows').innerText(), { timeout: 15_000 })
       .toContain(PANE_MARKER);
@@ -127,7 +118,7 @@ test('renames the focused pane and active tab without interrupting xterm input',
     await page.keyboard.type('JaneT - fixes');
     await tabName.press('Enter');
     await expect.poll(() => activeElementIs(page, '.xterm-helper-textarea', 1)).toBe(true);
-    await page.keyboard.type(`echo ${TAB_MARKER}`);
+    await page.keyboard.type(`node -e "console.log(['__JANET_TAB','RENAME_FOCUS__'].join('_'))"`);
     await page.keyboard.press('Enter');
     await expect.poll(async () => terminals.nth(1).locator('.xterm-rows').innerText(), { timeout: 15_000 })
       .toContain(TAB_MARKER);

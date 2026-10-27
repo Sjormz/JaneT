@@ -5,11 +5,11 @@ import * as path from 'path';
 import { firstWindow, forceClose } from './electronLifecycle';
 
 test('skips setup across restarts and enables workspace creation after choosing a folder', async ({}, testInfo) => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'janet-optional-setup-'));
+  const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-optional-setup-'));
   const workspaceRoot = path.join(userData, 'workspaces');
   fs.mkdirSync(workspaceRoot);
   const env = Object.fromEntries(Object.entries({ ...process.env, NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: userData })
-    .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[0] !== 'ELECTRON_RUN_AS_NODE'));
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && !['ELECTRON_RUN_AS_NODE', 'ELECTRON_NO_ATTACH_CONSOLE'].includes(entry[0])));
   const launch = () => electron.launch({ args: ['.'], cwd: path.resolve(__dirname, '../..'), env });
   let app = await launch();
   try {
@@ -41,7 +41,7 @@ test('skips setup across restarts and enables workspace creation after choosing 
     expect(fs.statSync(path.join(workspaceRoot, 'First workspace')).isDirectory()).toBe(true);
   } finally {
     await forceClose(app);
-    fs.rmSync(userData, { recursive: true, force: true });
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -91,6 +91,6 @@ test('chooses an existing workspace and restores only its immediate folders as p
     await expect(page.getByRole('region', { name: 'Existing workspace' }).locator('.project-entry')).toHaveCount(2);
   } finally {
     await forceClose(app);
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

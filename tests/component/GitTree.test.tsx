@@ -1,3 +1,4 @@
+import { createDataTransfer } from '../dataTransfer';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import GitTree from '../../src/renderer/components/GitTree';
@@ -48,15 +49,7 @@ const destructiveDetails = {
   ],
 };
 
-function createDataTransfer() {
-  const data = new Map<string, string>();
-  const dataTransfer = {
-    effectAllowed: 'none',
-    setData: vi.fn((type: string, value: string) => data.set(type, value)),
-    getData: vi.fn((type: string) => data.get(type) ?? ''),
-  } as unknown as DataTransfer;
-  return { data, dataTransfer };
-}
+
 
 beforeEach(() => {
   gitDetails.mockReset();
@@ -964,14 +957,14 @@ describe('GitTree live refresh', () => {
     );
     const changedRow = screen.getByRole('button', { name: 'Stage src/mixed.ts' }).closest('.git-file-row')!;
     const row = changedRow.querySelector('.git-file-item')!;
-    const { data, dataTransfer } = createDataTransfer();
+    const dataTransfer = createDataTransfer();
 
     expect(row).toHaveAttribute('draggable', 'true');
     fireEvent.dragStart(row, { dataTransfer });
 
     expect(dataTransfer.effectAllowed).toBe('copy');
-    expect(data.get('text/plain')).toBe('/repo/src/mixed.ts');
-    expect(JSON.parse(data.get(TERMINAL_PATH_MIME)!)).toEqual({
+    expect(dataTransfer.getData('text/plain')).toBe('/repo/src/mixed.ts');
+    expect(JSON.parse(dataTransfer.getData(TERMINAL_PATH_MIME)!)).toEqual({
       version: 1,
       path: '/repo/src/mixed.ts',
       entryKind: 'file',
@@ -1013,17 +1006,17 @@ describe('GitTree live refresh', () => {
     fireEvent.click(viewToggle);
     const folder = screen.getByRole('button', { name: 'src' });
     const row = screen.getByText('app.ts').closest('.git-file-item')!;
-    const { data, dataTransfer } = createDataTransfer();
+    const dataTransfer = createDataTransfer();
 
     fireEvent.dragStart(row, { dataTransfer });
-    expect(JSON.parse(data.get(TERMINAL_PATH_MIME)!)).toEqual({
+    expect(JSON.parse(dataTransfer.getData(TERMINAL_PATH_MIME)!)).toEqual({
       version: 1,
       path: 'C:/repo/src/nested/app.ts',
       entryKind: 'file',
       origin: 'source-control',
       filesystem: { kind: 'local' },
     });
-    expect(data.get('text/plain')).toBe('C:/repo/src/nested/app.ts');
+    expect(dataTransfer.getData('text/plain')).toBe('C:/repo/src/nested/app.ts');
 
     expect(folder).not.toHaveAttribute('draggable');
     expect(screen.getByRole('button', { name: 'Show changes as a flat list' })).not.toHaveAttribute('draggable');
@@ -1132,19 +1125,19 @@ describe('GitTree status failures', () => {
   it('shows why the first status read failed and offers a retry instead of an empty panel', async () => {
     gitDetails.mockResolvedValue(details('main'));
     const invalidate = vi.spyOn(refreshCoordinator, 'invalidate');
-    render(<GitTree cwdReady repoPath="/repo" status={null} searching={false} statusError={reason} />);
+    await act(async () => { render(<GitTree cwdReady repoPath="/repo" status={null} searching={false} statusError={reason} />); });
 
     expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t read Git status');
     expect(screen.getByRole('alert')).toHaveTextContent(reason);
     expect(screen.queryByText('Working tree clean')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
     expect(invalidate).toHaveBeenCalledWith('manual');
     invalidate.mockRestore();
   });
 
   it('marks a kept snapshot as stale and never calls it clean', async () => {
     gitDetails.mockResolvedValue(details('main'));
-    render(<GitTree cwdReady repoPath="/repo" status={cleanStatus} searching={false} statusError={reason} />);
+    await act(async () => { render(<GitTree cwdReady repoPath="/repo" status={cleanStatus} searching={false} statusError={reason} />); });
 
     const alert = screen.getByRole('alert');
     expect(alert).toHaveTextContent('Showing the last known status');
@@ -1164,7 +1157,8 @@ describe('GitTree status failures', () => {
       modified: ['working.ts'],
       created: ['notes.txt'],
     };
-    const view = render(<GitTree cwdReady repoPath="/repo" status={status} searching={false} statusError={reason} />);
+    let view!: ReturnType<typeof render>;
+    await act(async () => { view = render(<GitTree cwdReady repoPath="/repo" status={status} searching={false} statusError={reason} />); });
 
     expect(screen.queryByRole('button', { name: 'Discard all unstaged changes' })).not.toBeInTheDocument();
     fireEvent.contextMenu(screen.getByRole('button', { name: 'Open working-tree diff for working.ts' }));

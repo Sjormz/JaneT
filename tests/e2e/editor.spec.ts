@@ -1,4 +1,4 @@
-import { firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
 import {
   test,
   expect,
@@ -14,15 +14,6 @@ import * as path from 'path';
 const root = path.resolve(__dirname, '../..');
 const FIXTURE_PREFIX = 'janet-editor-fixture-';
 const USER_DATA_PREFIX = 'janet-editor-user-data-';
-
-function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
-  const env = { ...process.env, ...extra };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-  );
-}
 
 function createFixture(): { directory: string; fileName: string; filePath: string } {
   const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), FIXTURE_PREFIX));
@@ -68,7 +59,7 @@ function removeFixture(directory: string | undefined, prefix: string): void {
   if (path.dirname(resolved) !== fs.realpathSync(os.tmpdir()) || !path.basename(resolved).startsWith(prefix)) {
     throw new Error(`Refusing to remove non-fixture path: ${resolved}`);
   }
-  fs.rmSync(resolved, { recursive: true, force: true });
+  fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
 async function renderedEditorLines(editor: Locator): Promise<string[]> {

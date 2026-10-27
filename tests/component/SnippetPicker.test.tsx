@@ -28,7 +28,7 @@ describe('SnippetPicker', () => {
     expect(screen.getByRole('status')).toHaveTextContent('No snippets match “missing”');
   });
 
-  it('filters snippets by name and pastes the selected snippet without adding a newline', () => {
+  it('filters snippets by name and selects the matching snippet once', () => {
     const onPaste = vi.fn();
     render(<SnippetPicker visible onClose={vi.fn()} snippets={snippets} onSave={vi.fn()} onPaste={onPaste} />);
 
@@ -36,8 +36,7 @@ describe('SnippetPicker', () => {
     fireEvent.change(search, { target: { value: 'logs' } });
     fireEvent.keyDown(search, { key: 'Enter' });
 
-    expect(onPaste).toHaveBeenCalledWith(snippets[1]);
-    expect(onPaste.mock.calls[0][0].content).not.toMatch(/\n$/);
+    expect(onPaste).toHaveBeenCalledExactlyOnceWith(snippets[1]);
   });
 
   it('focuses the name field when the editor opens, unless focus already moved inside the picker', () => {

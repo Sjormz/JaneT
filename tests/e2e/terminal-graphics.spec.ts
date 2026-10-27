@@ -79,6 +79,6 @@ test('Kitty capability probes, chunked images and deletion traverse a real PTY',
     await expect.poll(redPixels).toBe(0);
   } finally {
     await forceClose(app);
-    fs.rmSync(userData, { recursive: true, force: true });
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

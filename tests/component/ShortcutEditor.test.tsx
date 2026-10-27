@@ -16,15 +16,14 @@ function renderEditor(
 }
 
 describe('ShortcutEditor', () => {
-  it('closes from its visible action, Escape, and backdrop', () => {
+  it.each(['button', 'Escape', 'backdrop'])('closes once from %s', action => {
     const onClose = vi.fn();
     const { container } = renderEditor(vi.fn(), onClose);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close keyboard shortcuts' }));
-    fireEvent.keyDown(document, { key: 'Escape' });
-    fireEvent.pointerDown(container.ownerDocument.querySelector('.workspace-modal-overlay')!);
-
-    expect(onClose).toHaveBeenCalledTimes(3);
+    if (action === 'button') fireEvent.click(screen.getByRole('button', { name: 'Close keyboard shortcuts' }));
+    else if (action === 'Escape') fireEvent.keyDown(document, { key: 'Escape' });
+    else fireEvent.pointerDown(container.ownerDocument.querySelector('.workspace-modal-overlay')!);
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('lists configurable actions without assigning every action a default', async () => {

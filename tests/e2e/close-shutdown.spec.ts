@@ -1,4 +1,4 @@
-import { firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as net from 'net';
@@ -7,15 +7,6 @@ import * as os from 'os';
 import * as path from 'path';
 
 const root = path.resolve(__dirname, '../..');
-
-function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
-  const env = { ...process.env, ...extra };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-  );
-}
 
 async function runInTerminal(page: Page, command: string, marker: string): Promise<void> {
   const terminal = page.locator('.terminal-container').first();
@@ -129,12 +120,13 @@ test('closing the window stops managed terminal work and exits without an active
     await expect.poll(() => canConnect(port), { timeout: 5_000 }).toBe(false);
   } finally {
     await forceClose(app);
-    fs.rmSync(userData, { recursive: true, force: true });
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
 test('cancelling dirty-editor close keeps the same JaneT window open', async () => {
   let app: ElectronApplication | undefined;
+  let failure: unknown;
   const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'janet-close-e2e-'));
   const fixture = createEditorFixture(userData);
 
@@ -148,6 +140,7 @@ test('cancelling dirty-editor close keeps the same JaneT window open', async () 
       }),
     });
     const page = await firstWindow(app);
+    const windowId = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].id);
     await page.waitForLoadState('domcontentloaded');
     await page.getByRole('button', { name: `Open file ${fixture.fileName}` }).click();
     const editor = page.getByRole('textbox', { name: `Editing ${fixture.fileName}` });
@@ -163,9 +156,29 @@ test('cancelling dirty-editor close keeps the same JaneT window open', async () 
 
     await expect(editor).toBeAttached();
     await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].id)).toBe(windowId);
+    await expect(page.getByRole('tab', { name: `${fixture.fileName}, unsaved changes` })).toBeVisible();
+    expect(fs.readFileSync(path.join(fixture.directory, fixture.fileName), 'utf8')).toBe('export const clean = true;\n');
+
+    // The cancellation assertion deliberately leaves a dirty draft. Resolve its
+    // next close prompt explicitly instead of forcing a live editor to exit.
+    const closed = app.waitForEvent('close');
+    await page.evaluate(() => window.janet.windowClose());
+    await dialog.getByRole('button', { name: 'Discard changes and close' }).click();
+    await closed;
+    app = undefined;
+    expect(fs.readFileSync(path.join(fixture.directory, fixture.fileName), 'utf8')).toBe('export const clean = true;\n');
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
-    await forceClose(app);
-    fs.rmSync(userData, { recursive: true, force: true });
-    fs.rmSync(fixture.directory, { recursive: true, force: true });
+    try {
+      await forceClose(app);
+      fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      fs.rmSync(fixture.directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (error) {
+      if (failure === undefined) throw error;
+      console.error('Dirty-close fixture cleanup also failed:', error);
+    }
   }
 });

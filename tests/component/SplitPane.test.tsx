@@ -9,7 +9,7 @@ import type { SemanticCommandEvent, SemanticCommandStartedEvent } from '../../sr
 
 async function splitFromPalette(id = 'split-right') {
   await waitFor(() => expect(rendererMocks.paletteActions.find(action => action.id === id)).toBeDefined());
-  act(() => rendererMocks.paletteActions.find(action => action.id === id)!.handler());
+  await act(async () => { rendererMocks.paletteActions.find(action => action.id === id)!.handler(); });
 }
 const mountedTermIds: string[] = [];
 const readyTermIds: string[] = [];
@@ -425,7 +425,7 @@ async function requestWorkspaceClose(
 }
 
 describe('split panes in the app', () => {
-  it.each([true, false])('adds a batch without replacing existing terminals (grouped=%s)', async grouped => {
+  it('adds a batch without replacing existing terminals', async () => {
     window.janet.workspaceDirectory = vi.fn().mockResolvedValue('/home/test/project');
     window.janet.getSettings = vi.fn().mockResolvedValue(savedSettings({ session: {
       groups: [{ id: 'work', name: 'Work', directory: '/home/test' }],
@@ -1173,10 +1173,10 @@ describe('split panes in the app', () => {
       await screen.findByRole('button', { name: 'Add terminals' });
       (await screen.findByTestId(/terminal-/)).focus();
 
-      await waitFor(() => {
-        fireEvent.keyDown(document, { key: 'P', ctrlKey: true, shiftKey: true });
-        expect(screen.getByRole('dialog', { name: 'Snippets' })).toBeInTheDocument();
-      });
+      await waitFor(() => expect(rendererMocks.paletteActions.find(action => action.id === 'snippets-toggle'))
+        .toMatchObject({ shortcut: 'Ctrl+Shift+P' }));
+      fireEvent.keyDown(document, { key: 'P', ctrlKey: true, shiftKey: true });
+      expect(await screen.findByRole('dialog', { name: 'Snippets' })).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: 'New snippet' }));
       fireEvent.change(screen.getByRole('textbox', { name: 'Snippet name' }), { target: { value: 'Follow logs' } });
       fireEvent.change(screen.getByRole('textbox', { name: 'Snippet content' }), { target: { value: 'docker compose logs -f\n' } });
@@ -1231,7 +1231,7 @@ describe('split panes in the app', () => {
     rendererMocks.disposeCachedTerminal
       .mockReturnValueOnce(true)
       .mockReturnValue(false);
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     await waitFor(() => expect(readyTermIds).toHaveLength(1));
     const pendingCreate = deferred<void>();
@@ -1245,9 +1245,7 @@ describe('split panes in the app', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /close (?:pane|terminal)/i })[1]);
     await confirmPendingAction(/^close pane$/i);
     await waitFor(() => expect(screen.getAllByTestId(/terminal-/)).toHaveLength(1));
-    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
-
-    expect(window.janet.terminalDestroy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(window.janet.terminalDestroy).toHaveBeenCalledTimes(1));
     expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: pendingId });
 
     await act(async () => pendingCreate.resolve());
@@ -1389,8 +1387,7 @@ describe('split panes in the app', () => {
     await waitFor(() => {
       expect(screen.getAllByTestId(/terminal-/).map((terminal) => terminal.textContent)).toEqual([firstId]);
     });
-    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
-    expect(window.janet.terminalDestroy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(window.janet.terminalDestroy).toHaveBeenCalledTimes(1));
     expect(window.janet.terminalDestroy).toHaveBeenCalledWith({ id: secondId });
   });
 
@@ -1456,10 +1453,10 @@ describe('split panes in the app', () => {
     expect(window.janet.terminalCreate).not.toHaveBeenCalled();
     expect(window.janet.terminalDestroy).not.toHaveBeenCalled();
 
-    await act(() => new Promise((resolve) => setTimeout(resolve, 700)));
-    const settingsCalls = vi.mocked(window.janet.setSettings).mock.calls;
-    const savedRoot = (settingsCalls.at(-1)?.[0] as any).session?.tabs?.[0]?.root;
-    expect(savedRoot.children[1]).toMatchObject({ title: 'Tests', terminalType: 'local' });
+    await waitFor(() => {
+      const savedRoot = (vi.mocked(window.janet.setSettings).mock.calls.at(-1)?.[0] as any)?.session?.tabs?.[0]?.root;
+      expect(savedRoot?.children[1]).toMatchObject({ title: 'Tests', terminalType: 'local' });
+    });
   });
 
   it('renames the active project with Ctrl+Shift+I while its rail is collapsed', async () => {
@@ -2685,18 +2682,15 @@ describe('split panes in the app', () => {
     // Split right — adds a leaf to the active tab.
     await splitFromPalette();
 
-    // Wait past the 500ms debounce window for the save to flush.
-    await act(() => new Promise((resolve) => setTimeout(resolve, 700)));
-
-    const calls = (window.janet.setSettings as any).mock.calls as Array<[any]>;
-    const sessionCalls = calls.filter(([arg]) => arg && Object.prototype.hasOwnProperty.call(arg, 'session'));
-    expect(sessionCalls.length).toBeGreaterThan(0);
-    const lastSession = sessionCalls.at(-1)![0].session as any;
-    expect(Array.isArray(lastSession.tabs)).toBe(true);
-    expect(lastSession.tabs.length).toBeGreaterThan(0);
-    // The active tab was split — root should now be a split, not a leaf.
-    expect(lastSession.tabs[0].root.type).toBe('split');
-  }, 5000);
+    await waitFor(() => {
+      const updates = vi.mocked(window.janet.setSettings).mock.calls
+        .map(([update]) => update.session).filter(Boolean);
+      expect(updates.at(-1)).toMatchObject({ tabs: [{ root: {
+        type: 'split', direction: 'vertical', sizes: [0.5, 0.5],
+        children: [{ type: 'leaf', cwd: '/home/test' }, { type: 'leaf', title: 'terminal' }],
+      } }] });
+    });
+  });
 });
 
 describe('editor documents in the app', () => {

@@ -255,15 +255,21 @@ describe('bounded local text-file IO', () => {
 
     const queuedWrites = vi.spyOn(manager as any, 'withSerializedTextFileWrite');
     const first = manager.writeTextFile(writeRequest(opened.value, 'first'));
-    await renameStarted;
-    const second = manager.writeTextFile(writeRequest(opened.value, 'second'));
-    // Test the write queue, not Windows realpath's temporary file handle racing rename.
-    await vi.waitFor(() => expect(queuedWrites).toHaveBeenCalledTimes(2));
-    releaseRename();
+    let second: typeof first | undefined;
+    try {
+      await renameStarted;
+      second = manager.writeTextFile(writeRequest(opened.value, 'second'));
+      // Retain simultaneous callers while waiting for the second write to reach the queue.
+      await vi.waitFor(() => expect(queuedWrites).toHaveBeenCalledTimes(2));
+    } finally {
+      releaseRename();
+      await Promise.allSettled(second ? [first, second] : [first]);
+    }
+    expect(second).toBeDefined();
     const [firstResult, secondResult] = await Promise.all([first, second]);
 
     expect(firstResult).toEqual({ ok: true, value: expect.any(Object) });
-    expect(secondResult.ok ? undefined : secondResult.error.code).toBe('CONFLICT');
+    expect(secondResult!.ok ? undefined : secondResult!.error.code).toBe('CONFLICT');
     expect(rename).toHaveBeenCalledTimes(1);
     await expect(fs.promises.readFile(filePath, 'utf8')).resolves.toBe('first');
   });

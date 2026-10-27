@@ -1,13 +1,24 @@
 name: CI
 
 on:
+  workflow_dispatch:
+    inputs:
+      full_desktop_e2e:
+        description: 'Run the full Electron suite on macOS and Windows (Linux always runs it)'
+        type: boolean
+        default: true
+      macos_runner:
+        description: 'macOS runner (Intel default; Apple Silicon for diagnostics)'
+        type: choice
+        options: [macos-26-intel, macos-26]
+        default: macos-26-intel
   pull_request:
     branches: [main]
   push:
     branches: [main]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'manual' || 'automatic' }}-${{ github.ref }}-${{ inputs.macos_runner || 'macos-26-intel' }}
   cancel-in-progress: true
 
 permissions:
@@ -65,6 +76,7 @@ jobs:
 
       - name: Run Electron e2e tests
         env:
+          DEBUG: pw:browser
           JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
           JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
         run: xvfb-run --auto-servernum npx playwright test --config playwright.config.ts
@@ -79,7 +91,8 @@ jobs:
   durable-workspace-platforms:
     # Required-check context in main-approval-gate; keep this name stable.
     name: Durable workspace (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    # Preserve the protected check name while pinning the actual macOS image and architecture.
+    runs-on: ${{ matrix.os == 'macos-latest' && (inputs.macos_runner || 'macos-26-intel') || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -128,11 +141,49 @@ jobs:
           cp test-results/e2e/results.xml test-results/macos-native-repetitions.xml
 
       - name: Run desktop workflow smoke tests
+        if: github.event_name != 'workflow_dispatch' || !inputs.full_desktop_e2e
         env:
           DEBUG: pw:browser
           JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
           JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
         run: npx playwright test --config playwright.config.ts tests/e2e/dev-instance.spec.ts tests/e2e/close-shutdown.spec.ts tests/e2e/pane-maximize.spec.ts tests/e2e/terminal-copy.spec.ts tests/e2e/terminal-graphics.spec.ts tests/e2e/optional-workspace-setup.spec.ts tests/e2e/editor.spec.ts tests/e2e/settings-recovery.spec.ts tests/e2e/local-terminal-recovery.spec.ts
+
+      - name: Configure macOS display for full desktop tests
+        if: runner.os == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.full_desktop_e2e
+        run: |
+          swift - <<'SWIFT'
+          import CoreGraphics
+          import Foundation
+          let display = CGMainDisplayID()
+          let modes = (CGDisplayCopyAllDisplayModes(display, nil) as? [CGDisplayMode]) ?? []
+          print("Available display modes:", modes.map { "\($0.width)x\($0.height)" })
+          // Leave room for the menu bar and Dock around the 1280x800 content checks.
+          guard let mode = modes.filter({ $0.width >= 1440 && $0.height >= 1080 })
+            .min(by: { $0.width * $0.height < $1.width * $1.height }) else {
+            throw NSError(domain: "JaneT CI display", code: 1,
+              userInfo: [NSLocalizedDescriptionKey: "No display mode fits the 1280x800 layout assertions"])
+          }
+          var configuration: CGDisplayConfigRef? = nil
+          guard CGBeginDisplayConfiguration(&configuration) == .success, let configuration else {
+            throw NSError(domain: "JaneT CI display", code: 2)
+          }
+          guard CGConfigureDisplayWithDisplayMode(configuration, display, mode, nil) == .success else {
+            CGCancelDisplayConfiguration(configuration)
+            throw NSError(domain: "JaneT CI display", code: 3)
+          }
+          guard CGCompleteDisplayConfiguration(configuration, .forSession) == .success else {
+            throw NSError(domain: "JaneT CI display", code: 4)
+          }
+          print("Configured display bounds:", CGDisplayBounds(display))
+          SWIFT
+
+      - name: Run full desktop Electron e2e tests
+        if: github.event_name == 'workflow_dispatch' && inputs.full_desktop_e2e
+        env:
+          DEBUG: pw:browser
+          JANET_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
+          JANET_E2E_EVENTS_PATH: ${{ github.workspace }}/test-results/electron-events.jsonl
+        run: npx playwright test --config playwright.config.ts --retries=0
 
       - name: Build and verify native Windows package
         if: runner.os == 'Windows'
@@ -141,6 +192,13 @@ jobs:
       - name: Verify packaged Windows release and terminal runtime
         if: runner.os == 'Windows'
         run: node scripts/verify-release-artifacts.mjs windows release
+
+      - name: Verify packaged Windows UI
+        if: runner.os == 'Windows'
+        env:
+          JANET_PACKAGED_EXECUTABLE: ${{ github.workspace }}/release/win-unpacked/JaneT.exe
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: ${{ github.workspace }}/test-results/packaged-ui.xml
+        run: npx playwright test --config playwright.config.ts tests/e2e/version-update.spec.ts --grep "packaged runtime|packaged updater failure" --retries=0 --output=test-results/packaged-ui
 
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}

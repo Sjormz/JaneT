@@ -33,13 +33,38 @@ The Hermes integration test needs Python 3. If it is not on PATH, set `JANET_TES
 
 Install the Electron binary explicitly after `npm ci`, before running tests. Current Electron packages otherwise download it on first use, which can turn a unit test into a network operation. CI and release verification install it before starting test workers.
 
-Dependabot opens `node-pty`, Electron and electron-builder updates separately from routine dependency groups. Review their native runtime and package compatibility individually. Keep `node-pty` pinned to an exact version and validate its upstream fixes and packaged terminal before accepting an update.
+Dependabot opens `node-pty`, Electron, electron-builder and Playwright updates separately from routine dependency groups. Review their native runtime, test-launcher and package compatibility individually. Keep `node-pty` pinned to an exact version and validate its upstream fixes and packaged terminal before accepting an update.
+
+The `node-gyp` override selects 13.1.0 for native rebuilds. Its Node requirement matches the project, and it replaces the older HTTP client that could crash while downloading Electron headers under backpressure. Keep the native Windows package/PTY check when changing this build-tool override.
 
 To check the actual installed `hermes --tui` copy gesture on Windows, build JaneT, set `JANET_TEST_HERMES=1` in the test process environment, and run `npx playwright test tests/e2e/hermes-copy.spec.ts --repeat-each=3`. Hermes must already be installed and on PATH. This opt-in check uses temporary JaneT/Hermes profiles, no conversation prompts, and tests Shift-drag then Ctrl+Shift+C after a resize redraw. On macOS the native gesture is Option-drag. The regular terminal-copy suite also covers redraw retention without requiring Hermes.
 
 ## Validation
 
-Before opening a pull request, run:
+Prefer GitHub-hosted verification for pull requests. Push the candidate branch and open or update its PR to run CI. Do not run the full unit/build/desktop suites on your local machine by default. Local checks remain useful for focused iteration or machine-specific diagnosis. Full CI must pass on the current PR head before merge.
+
+To run verification on a pushed branch without opening a PR:
+
+1. Open [Actions → CI](https://github.com/Sjormz/JaneT/actions/workflows/ci.yml).
+2. Select **Run workflow**, then choose the branch in **Use workflow from**.
+3. Leave **Run the full Electron suite on macOS and Windows (Linux always runs it)** enabled for full desktop coverage. Disable it to use the normal CI desktop smoke selection.
+4. Keep **macOS runner** set to `macos-26-intel` for the validated default, or select `macos-26` for Apple Silicon diagnostics.
+5. Select **Run workflow** and inspect the run's commit SHA, all jobs and test-result artifacts. A run for an older commit does not verify later pushes.
+
+From the CLI, replace `my-branch` with the pushed branch name:
+
+```bash
+gh workflow run ci.yml --repo Sjormz/JaneT --ref my-branch -f full_desktop_e2e=true
+gh run list --repo Sjormz/JaneT --workflow ci.yml --branch my-branch --event workflow_dispatch --limit 5
+```
+
+Default macOS verification uses the explicit Intel image. Earlier hosted macOS 26 ARM runs reproduced native startup stalls before Electron's first window. Repair head `13b6f3c` subsequently passed the complete suite and 25 TUI repetitions on both Intel and ARM; the test-audit candidate also passed 20 motion repetitions and 30 pane/path cases on each architecture without retries. These passes do not establish the underlying cause of the older startup stalls. An Intel pass is not Apple Silicon verification: add `-f macos_runner=macos-26` to dispatch that architecture separately. The protected `Durable workspace (macos-latest)` check name stays unchanged; job setup logs identify the actual image and architecture. See the [test suite review](docs/test-suite-review.md) for coverage and verification evidence.
+
+Manual runs use the same pinned runtimes, lockfile install, unit tests, build, macOS startup repetitions and Windows package/PTY verification as CI. Their concurrency group is separate, so triggering one does not cancel automatic PR or main verification. The workflow file must exist on the default branch, and the selected branch must contain the dispatch-enabled version. The **Run workflow** button appears once the default-branch version includes that trigger; the CLI can dispatch the updated branch before then. Update older branches from `main` before dispatching them. See [GitHub's manual workflow documentation](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
+
+Windows CI also runs the two packaged diagnostics/updater UI cases against the freshly built `release/win-unpacked/JaneT.exe`, after native package/PTY verification. Their traces and `test-results/packaged-ui.xml` are kept separately so they do not overwrite the desktop suite's evidence. Other packaged platforms still need an explicit `JANET_PACKAGED_EXECUTABLE` run.
+
+Only committed and pushed files are tested on GitHub. Local edits and installed-app/device behavior need local inspection. When local verification is appropriate, use:
 
 ```bash
 npm run typecheck

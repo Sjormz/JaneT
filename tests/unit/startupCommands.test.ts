@@ -40,16 +40,11 @@ describe('startup command sanitization', () => {
       .toEqual([]);
   });
 
-  it('fails the whole sequence closed for raw terminal control characters', () => {
-    expect(sanitizeStartupCommands([
-      'safe command',
-      'tab\tcommand',
-      'escape\u001bcommand',
-      'interrupt\u0003command',
-      'delete\u007fcommand',
-      'c1\u0085command',
-    ])).toEqual([]);
-  });
+  it.each(['\t', '\n', '\r', '\0', '\u001b', '\u0003', '\u007f', '\u0085'])(
+    'rejects control %j without accepting the commands before or after it', control => {
+      expect(sanitizeStartupCommands(['safe command', `bad${control}command`, 'later command'])).toEqual([]);
+    },
+  );
 
   it('fails the whole sequence closed for non-string rows or too many commands', () => {
     expect(sanitizeStartupCommands(['safe command', 42, 'later command'])).toEqual([]);

@@ -49,11 +49,12 @@ describe('CommandHistoryPicker', () => {
     expect(within(screen.getByRole('listbox')).queryAllByRole('option')).toHaveLength(0);
   });
 
-  it('does not show context or outcome filter dropdowns', () => {
+  it('offers command search as its only combobox', () => {
     render(<CommandHistoryPicker visible entries={entries} onClose={() => {}} onSelect={() => {}} />);
 
-    expect(screen.queryByLabelText('Context')).toBeNull();
-    expect(screen.queryByLabelText('Outcome')).toBeNull();
+    expect(screen.getAllByRole('combobox')).toEqual([
+      screen.getByRole('combobox', { name: 'Search command history' }),
+    ]);
   });
 
   it('searches command text', () => {

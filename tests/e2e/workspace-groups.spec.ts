@@ -1,4 +1,4 @@
-import { firstWindow } from './electronLifecycle';
+import { firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type Page, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -79,7 +79,7 @@ test('creates grouped live workspaces and restores them after closing without a 
     await expect(page.getByRole('button', { name: /Save workspace|Save current workspace/ })).toHaveCount(0);
     await expect(page.getByRole('alert')).toHaveCount(0);
   } finally {
-    if (app) await app.close();
-    fs.rmSync(userData, { recursive: true, force: true });
+    await forceClose(app);
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
