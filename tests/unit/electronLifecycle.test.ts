@@ -102,3 +102,40 @@ it('kills only its child after a stalled debugger exit request and awaits proces
   expect(child.listenerCount('exit')).toBe(0);
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it('does not release the profile while inherited Electron streams remain open after process exit', async () => {
+  vi.useFakeTimers();
+  const stdout = { closed: false };
+  const child = Object.assign(new EventEmitter(), { exitCode: null as number | null, signalCode: null, stdout, stderr: null });
+  const app = { process: () => child, evaluate: async () => {
+    child.exitCode = 0;
+    child.emit('exit', 0);
+  } } as unknown as ElectronApplication;
+  let finished = false;
+  const close = forceClose(app).then(() => { finished = true; });
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(finished).toBe(false);
+  } finally {
+    stdout.closed = true;
+    child.emit('close', 0, null);
+    await close;
+  }
+  expect(finished).toBe(true);
+  expect(child.listenerCount('close')).toBe(0);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('bounds stream cleanup after an already-exited process without targeting that PID again', async () => {
+  vi.useFakeTimers();
+  const child = Object.assign(new EventEmitter(), { pid: 12345, exitCode: 0, signalCode: null,
+    stdout: { closed: false }, stderr: null, kill: vi.fn() });
+  const app = { process: () => child, evaluate: vi.fn() } as unknown as ElectronApplication;
+  const result = expect(forceClose(app)).rejects.toThrow('streams did not close');
+  await vi.advanceTimersByTimeAsync(5000);
+  await result;
+  expect(app.evaluate).not.toHaveBeenCalled();
+  expect(child.kill).not.toHaveBeenCalled();
+  expect(child.listenerCount('close')).toBe(0);
+  expect(vi.getTimerCount()).toBe(0);
+});

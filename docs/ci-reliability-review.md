@@ -197,3 +197,28 @@ only disposable workflow instrumentation and stated fixture behavior; they do
 not replace full verification of the eventual PR head. No app setting, screen,
 or public-guide procedure changed in these test repairs, so public screenshots
 do not need refreshing. The unresolved failures still block merging.
+
+### Repairs during the full-suite audit
+
+The dirty-editor cancellation case passed its UI assertions but left its draft
+dirty during teardown. A subsequent quit opened another close prompt and fell
+back to forced termination. The test now verifies the same window and unsaved
+tab remain, verifies the disk file is unchanged, then explicitly discards the
+test draft and awaits normal shutdown. It passed 20 Windows repetitions without
+retries in [run 40497261883](https://github.com/Sjormz/JaneT/actions/runs/40497261883).
+
+A separate cleanup regression showed the shared helper resolving after the
+parent's `exit` while inherited streams remained open. It now also waits for
+Node's `close` boundary before profiles can be removed, with a bounded wait and
+without retargeting an already-exited PID. Both that regression and the bounded
+stream-timeout case pass in the six-test lifecycle unit file. Three older E2E
+cleanup paths now use this same helper instead of unbounded `app.close()` or
+immediate native exit.
+
+The selected-control contrast gap reproduced in a focused unit case for Tokyo
+Night, Solarized Light, and Gruvbox. Their selection fills now keep primary text
+above the existing 7:1 matrix requirement; the threshold remains unchanged.
+The entire theme unit file passes all 15 cases. The Settings guide was updated
+and the complete One Dark public screenshot set was refreshed on hosted Windows;
+all nine changed images were visually reviewed and both published copies match.
+These focused checks do not replace final hosted verification of the audit head.
