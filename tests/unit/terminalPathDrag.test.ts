@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { createDataTransfer } from '../dataTransfer';
+import { describe, expect, it } from 'vitest';
 import {
   beginTerminalPathDrag,
   canDropTerminalPath,
@@ -12,16 +13,7 @@ import {
   type TerminalPathDragPayload,
 } from '../../src/renderer/terminalPathDrag';
 
-function dataTransferStub() {
-  const values = new Map<string, string>();
-  return {
-    get types() { return Array.from(values.keys()); },
-    effectAllowed: 'uninitialized',
-    dropEffect: 'none',
-    setData: vi.fn((type: string, value: string) => values.set(type, value)),
-    getData: vi.fn((type: string) => values.get(type) ?? ''),
-  } as unknown as DataTransfer;
-}
+
 
 const localFile: TerminalPathDragPayload = {
   version: 1,
@@ -33,7 +25,7 @@ const localFile: TerminalPathDragPayload = {
 
 describe('terminal path drag payloads', () => {
   it('writes a typed payload plus a plain-text interoperability fallback', () => {
-    const dataTransfer = dataTransferStub();
+    const dataTransfer = createDataTransfer();
 
     expect(beginTerminalPathDrag(dataTransfer, localFile)).toBe(true);
     expect(getActiveTerminalPathDrag()).toEqual(localFile);
@@ -51,7 +43,7 @@ describe('terminal path drag payloads', () => {
     '/tmp/file\rnext-command',
     '/tmp/file\0suffix',
   ])('rejects an unsafe path without exposing a JaneT drag type: %j', (path) => {
-    const dataTransfer = dataTransferStub();
+    const dataTransfer = createDataTransfer();
 
     expect(beginTerminalPathDrag(dataTransfer, { ...localFile, path })).toBe(false);
     expect(hasTerminalPathDrag(dataTransfer)).toBe(false);
@@ -80,18 +72,18 @@ describe('terminal path drag payloads', () => {
   });
 
   it('rejects malformed JSON and unsupported payload versions', () => {
-    const invalidJson = dataTransferStub();
+    const invalidJson = createDataTransfer();
     invalidJson.setData(TERMINAL_PATH_MIME, '{not-json');
     expect(readTerminalPathDragData(invalidJson)).toBeNull();
 
-    const unsupported = dataTransferStub();
+    const unsupported = createDataTransfer();
     unsupported.setData(TERMINAL_PATH_MIME, JSON.stringify({ ...localFile, version: 2 }));
     expect(readTerminalPathDragData(unsupported)).toBeNull();
   });
 
   it('accepts local paths and rejects legacy remote payloads', () => {
     expect(canDropTerminalPath(localFile, { kind: 'local' })).toBe(true);
-    const transfer = dataTransferStub();
+    const transfer = createDataTransfer();
     transfer.setData(TERMINAL_PATH_MIME, JSON.stringify({ ...localFile, filesystem: { kind: 'ssh', sessionId: 'old' } }));
     expect(readTerminalPathDragData(transfer)).toBeNull();
   });

@@ -42,9 +42,9 @@ class MotionWorkspace {
   constructor(private page: Page) {}
   async ready() {
     await expect(this.page.locator('.terminal-container')).toHaveCount(2);
-    for (const input of await this.page.locator('.xterm-helper-textarea').all()) {
-      await expect(input).toHaveAttribute('data-shell-ready', 'true');
-    }
+    // The startup reader owns the left PTY before the shell's first prompt.
+    await expect(this.page.locator('.xterm-rows').first()).toContainText('__MOTION_READER_READY__');
+    await expect(this.page.locator('.xterm-helper-textarea').nth(1)).toHaveAttribute('data-shell-ready', 'true');
   }
   async maximize() { await this.page.getByRole('button', { name: /Maximize pane — left/ }).click(); }
   async restore() { await this.page.keyboard.press('F6'); }
@@ -97,7 +97,6 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       await page.emulateMedia({ reducedMotion });
       const workspace = new MotionWorkspace(page);
       await workspace.ready();
-      await expect(page.locator('.xterm-rows').first()).toContainText('__MOTION_READER_READY__');
       await page.evaluate(() => {
         const state = (window as any).__motion = { transitions: 0, ready: 0, finished: 0, durations: [] as unknown[], holdExits: false };
         const start = document.startViewTransition.bind(document);

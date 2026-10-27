@@ -1,3 +1,4 @@
+import { createDataTransfer } from '../dataTransfer';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import FileExplorer from '../../src/renderer/components/FileExplorer';
@@ -38,33 +39,7 @@ function directory(name: string) {
   };
 }
 
-function dragDataTransfer(): DataTransfer {
-  const values = new Map<string, string>();
-  const types: string[] = [];
-  return {
-    effectAllowed: 'none',
-    dropEffect: 'none',
-    types,
-    files: [] as unknown as FileList,
-    items: [] as unknown as DataTransferItemList,
-    setData: vi.fn((type: string, value: string) => {
-      values.set(type, value);
-      if (!types.includes(type)) types.push(type);
-    }),
-    getData: vi.fn((type: string) => values.get(type) ?? ''),
-    clearData: vi.fn((type?: string) => {
-      if (type) {
-        values.delete(type);
-        const index = types.indexOf(type);
-        if (index >= 0) types.splice(index, 1);
-      } else {
-        values.clear();
-        types.splice(0);
-      }
-    }),
-    setDragImage: vi.fn(),
-  } as unknown as DataTransfer;
-}
+
 
 beforeEach(() => {
   fsListDir.mockReset();
@@ -198,7 +173,7 @@ describe('FileExplorer live refresh', () => {
     const fileItem = (await screen.findByText('README.md')).closest('.explorer-item')!;
     const folder = screen.getByRole('button', { name: 'Open folder src' });
 
-    const fileTransfer = dragDataTransfer();
+    const fileTransfer = createDataTransfer();
     fireEvent.dragStart(fileItem, { dataTransfer: fileTransfer });
     expect(fileTransfer.effectAllowed).toBe('copy');
     expect(fileTransfer.types).toContain(TERMINAL_PATH_MIME);
@@ -212,7 +187,7 @@ describe('FileExplorer live refresh', () => {
     });
     fireEvent.dragEnd(fileItem, { dataTransfer: fileTransfer });
 
-    const folderTransfer = dragDataTransfer();
+    const folderTransfer = createDataTransfer();
     fireEvent.dragStart(folder, { dataTransfer: folderTransfer });
     expect(folderTransfer.getData('text/plain')).toBe('/repo/src');
     expect(readTerminalPathDragData(folderTransfer)).toEqual({
@@ -248,7 +223,7 @@ describe('FileExplorer live refresh', () => {
 
     const view = render(<FileExplorer source={localSource('/repo')} />);
     const fileItem = (await screen.findByText('unsafe.txt')).closest('.explorer-item')!;
-    const transfer = dragDataTransfer();
+    const transfer = createDataTransfer();
 
     expect(fireEvent.dragStart(fileItem, { dataTransfer: transfer })).toBe(false);
     expect(transfer.setData).not.toHaveBeenCalled();
