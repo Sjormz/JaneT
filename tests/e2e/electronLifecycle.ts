@@ -1,6 +1,15 @@
 import type { ElectronApplication } from '@playwright/test';
 import { execFile, type ChildProcess } from 'node:child_process';
 
+/** Native launches must not inherit Electron's Node/console overrides. */
+export function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
+  const env = { ...process.env, ...extra };
+  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.ELECTRON_NO_ATTACH_CONSOLE;
+  return Object.fromEntries(Object.entries(env)
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+}
+
 export async function firstWindow(app: ElectronApplication, options?: Parameters<ElectronApplication['firstWindow']>[0]) {
   const timeout = options?.timeout ?? 30_000;
   const started = Date.now();

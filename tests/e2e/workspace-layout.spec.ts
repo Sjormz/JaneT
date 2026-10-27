@@ -1,4 +1,4 @@
-import { firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
@@ -7,15 +7,6 @@ import * as os from 'os';
 import * as path from 'path';
 
 const root = path.resolve(__dirname, '../..');
-
-function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
-  const env = { ...process.env, ...extra };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-  );
-}
 
 async function panelBoxes(page: Page) {
   const tabs = await page.locator('.vtab-bar').boundingBox();
@@ -583,9 +574,7 @@ print("TUI_AWARENESS_OK")
 
     const firstTerminal = page.locator('.terminal-container').first();
     await expect(firstTerminal).toBeVisible();
-    await expect.poll(async () => firstTerminal.locator('.xterm-rows').innerText(), {
-      timeout: 10_000,
-    }).not.toBe('');
+    await expect(firstTerminal.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true');
 
     await firstTerminal.click();
     const python = process.env.JANET_TEST_PYTHON ?? 'python';

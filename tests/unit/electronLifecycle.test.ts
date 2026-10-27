@@ -3,10 +3,21 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { execFile } from 'node:child_process';
 import type { ElectronApplication } from '@playwright/test';
-import { firstWindow, forceClose } from '../e2e/electronLifecycle';
+import { electronEnv, firstWindow, forceClose } from '../e2e/electronLifecycle';
 
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }));
 afterEach(() => { vi.useRealTimers(); vi.resetAllMocks(); });
+
+it('keeps native launch overrides isolated and removes inherited Electron switches', () => {
+  const inherited = { ...process.env };
+  const env = electronEnv({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: '/disposable/profile',
+    ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ATTACH_CONSOLE: '1', JANET_UNSET_TEST_VARIABLE: undefined });
+  expect(env).toMatchObject({ NODE_ENV: 'test', JANET_E2E_USER_DATA_DIR: '/disposable/profile' });
+  for (const key of ['ELECTRON_RUN_AS_NODE', 'ELECTRON_NO_ATTACH_CONSOLE', 'JANET_UNSET_TEST_VARIABLE']) {
+    expect(env).not.toHaveProperty(key);
+  }
+  expect(process.env).toEqual(inherited);
+});
 
 it('probes readiness synchronously without losing the first-window deadline', async () => {
   const page = { on: vi.fn(), waitForURL: vi.fn().mockResolvedValue(undefined) };

@@ -1,4 +1,4 @@
-import { firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -8,15 +8,6 @@ const root = path.resolve(__dirname, '../..');
 const USER_DATA_PREFIX = 'janet-terminal-copy-e2e-';
 const MARKER = 'JANET_TERMINAL_COPY_MARKER';
 const INPUT_SUFFIX = '_AFTER_PASTE';
-
-function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
-  const env = { ...process.env, ...extra };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-  );
-}
 
 function createUserData(keybindings: Record<string, string> = { 'close-tab': 'Ctrl+C' }): string {
   const userData = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), USER_DATA_PREFIX));

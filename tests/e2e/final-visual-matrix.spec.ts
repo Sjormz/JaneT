@@ -1,4 +1,4 @@
-import { firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -10,15 +10,6 @@ const agentHarness = path.join(root, 'tests/e2e/helpers/visual-agent.cjs');
 const neutralCwd = process.env.SystemRoot ?? root;
 const themes = themeNames;
 const viewports = [{ width: 1280, height: 800 }, { width: 800, height: 600 }] as const;
-
-function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
-  const env = { ...process.env, ...extra };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-  );
-}
 
 function tab(page: Page, title: string): Locator {
   return page.locator('.vtab-item').filter({ has: page.locator('.vtab-name', { hasText: title }) });

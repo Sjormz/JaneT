@@ -1,4 +1,4 @@
-import { firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
 import {
   test,
   expect,
@@ -16,15 +16,6 @@ import * as path from 'path';
 const root = path.resolve(__dirname, '../..');
 const REPO_PREFIX = 'janet-path-drag-repo-';
 const USER_DATA_PREFIX = 'janet-path-drag-user-data-';
-
-function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
-  const env = { ...process.env, ...extra };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-  );
-}
 
 function createRepositoryFixture(): { repoPath: string; fileName: string; filePath: string } {
   const repoPath = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), REPO_PREFIX));

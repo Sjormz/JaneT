@@ -1,4 +1,4 @@
-import { firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
@@ -72,13 +72,6 @@ async function snapshotStyles(page: Page) {
     const classes = [...new Set(Array.from(document.querySelectorAll('[class]'), (element) => element.getAttribute('class')!.trim()))];
     return { styles, elements, classes };
   });
-}
-
-function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
-  const env = { ...process.env, ...extra };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
 }
 
 function createFixture(base: string): string {
@@ -207,7 +200,7 @@ for (const theme of themes.filter((name) => !themeFilter || themeFilter.includes
         });
         await step('maximize', async () => {
           await page.getByRole('button', { name: /Maximize pane — Workspace/ }).click();
-          await page.waitForFunction(() => document.querySelectorAll('.terminal-leaf').length >= 1);
+          await expect(page.locator('.terminal-leaf')).toHaveCount(1);
           await shot('06-pane-maximized', page);
           await page.getByRole('button', { name: /Restore pane — Workspace|Restore/ }).first().click();
         });
@@ -318,7 +311,7 @@ for (const theme of themes.filter((name) => !themeFilter || themeFilter.includes
         await forceClose(app);
         fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
-      if (failures.length) console.warn(`Design capture gaps (${suffix}):\n  ${failures.join('\n  ')}`);
+      expect(failures, `Design capture gaps (${suffix})`).toEqual([]);
     });
   }
 }

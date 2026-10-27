@@ -1,4 +1,4 @@
-import { firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
@@ -35,15 +35,6 @@ const screenshotTransparency = 'reduced';
 
 test.skip(process.platform !== 'win32', 'Public screenshots are captured from the Windows desktop app.');
 test.skip(process.env.JANET_UPDATE_PUBLIC_SCREENSHOTS !== '1', 'Set JANET_UPDATE_PUBLIC_SCREENSHOTS=1 to replace the shipped PNGs.');
-
-function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {
-  const env = { ...process.env, ...extra };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-  );
-}
 
 function runGit(args: string[]): void {
   execFileSync('git', args, { cwd: fixturePath, stdio: 'ignore' });
