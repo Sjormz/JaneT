@@ -1,4 +1,4 @@
-import { restoreWorkspaceFixture } from './workspaces';
+import { workspaceFixture } from './workspaces';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { firstWindow, forceClose } from './electronLifecycle';
 import { execFileSync } from 'child_process';
@@ -83,6 +83,15 @@ async function launchTwoPaneApp(extraTabs: unknown[] = []): Promise<PaneApplicat
 async function closeApp(app: PaneApplication) {
   await forceClose(app.application);
   applications.delete(app.application);
+}
+
+async function restoreWorkspaceFixture(app: PaneApplication, name: string, terminals: Parameters<typeof workspaceFixture>[2]) {
+  // Seed only after native shutdown has flushed autosaves and stopped PTYs.
+  await closeApp(app);
+  const settings = JSON.parse(fs.readFileSync(path.join(app.userData, 'settings.json'), 'utf8'));
+  const restored = await launchApp(workspaceFixture(settings, name, terminals), 'janet-e2e-fixture-', app.userData);
+  await expect(restored.page.locator('.vtab-name').getByText(name, { exact: true })).toBeVisible();
+  return restored;
 }
 
 test('maximizes and restores a terminal pane in Electron', async () => {
@@ -263,6 +272,20 @@ test('moves the active pane by configured keyboard and command palette without r
   await expect(pane('left').locator('.xterm-helper-textarea')).toBeFocused();
 });
 
+test('restores a workspace fixture only after the previous app has exited', async () => {
+  let app = await launchTwoPaneApp();
+  await expect(app.page.locator('.terminal-leaf')).toHaveCount(2);
+  const previousProcess = app.application.process();
+  let settingsAtExit = '';
+  previousProcess.once('exit', () => { settingsAtExit = fs.readFileSync(path.join(app.userData, 'settings.json'), 'utf8'); });
+  app = await restoreWorkspaceFixture(app, 'Seeded workspace', [{ cwd: app.userData }]);
+  expect(previousProcess.exitCode !== null || previousProcess.signalCode !== null).toBe(true);
+  const previousSession = JSON.parse(settingsAtExit).session;
+  expect(previousSession.tabs.find((tab: any) => tab.id === previousSession.activeTabId)?.title).toBe('two panes');
+  const { session } = await app.page.evaluate(() => window.janet.getSettings());
+  expect(session.tabs.find((tab: any) => tab.id === session.activeTabId)?.title).toBe('Seeded workspace');
+});
+
 test('runs ordered workspace startup commands once per fresh terminal', async () => {
   const markerDir = fixtureDirectory('janet-e2e-startup-');
   const markerPath = path.join(markerDir, 'ordered.txt');
@@ -275,7 +298,7 @@ test('runs ordered workspace startup commands once per fresh terminal', async ()
   let app: Awaited<ReturnType<typeof launchApp>> | undefined;
   let userData: string | undefined;
 
-  app = await launchApp({
+  app = await launchApp(workspaceFixture({
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'left',
@@ -322,10 +345,8 @@ test('runs ordered workspace startup commands once per fresh terminal', async ()
       tabsOpen: true,
       sidebarSection: 'files',
     },
-  }, 'janet-e2e-startup-app-');
+  }, 'Ordered startup', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]), 'janet-e2e-startup-app-');
   userData = app.userData;
-
-  await restoreWorkspaceFixture(app.page, 'Ordered startup', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
 
   await expect.poll(
     () => fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf-8') : '',
@@ -353,7 +374,7 @@ test('runs ordered workspace startup commands once per fresh terminal', async ()
 
   // Creating another workspace explicitly creates a new pane instance, so its startup
   // sequence should run again from the beginning.
-  await restoreWorkspaceFixture(app.page, 'Ordered startup second', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
+  app = await restoreWorkspaceFixture(app, 'Ordered startup second', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
   await expect.poll(
     () => fs.readFileSync(markerPath, 'utf-8'),
     { timeout: 10_000 },
@@ -362,7 +383,7 @@ test('runs ordered workspace startup commands once per fresh terminal', async ()
   // The first row writes a relative marker and exits non-zero. Finding the
   // marker in the saved cwd proves directory selection; never seeing `Y`
   // proves the compound sequence stops before the second row.
-  await restoreWorkspaceFixture(app.page, 'Failure gate', [{ title: 'failure gate', cwd: markerDir, commands: [failAfterRelativeMarker, mustNotRunAfterFailure] }]);
+  app = await restoreWorkspaceFixture(app, 'Failure gate', [{ title: 'failure gate', cwd: markerDir, commands: [failAfterRelativeMarker, mustNotRunAfterFailure] }]);
   await expect.poll(
     () => fs.existsSync(failurePath) ? fs.readFileSync(failurePath, 'utf-8') : '',
     { timeout: 10_000 },
