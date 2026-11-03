@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { createWorkspaceRoot } from '../../src/renderer/types';
-import { serializePaneTree } from '../../src/renderer/sessionRestore';
+import { normalizeSession, serializePaneTree } from '../../src/renderer/sessionRestore';
 
 export function terminalSettings(directory: string) {
   return { mainDirectory: directory, session: {
@@ -40,8 +40,8 @@ export async function createWorkspace(page: Page, name: string, terminals: Array
   await page.getByRole('button', { name: 'Create project', exact: true }).click();
 }
 
-// Seed per-pane commands and unavailable paths directly; creation uses shared local setup.
-export async function restoreWorkspaceFixture(page: Page, name: string, terminals: Array<{
+// Build per-pane commands and unavailable paths for a stopped test app.
+export function workspaceFixture(settings: any, name: string, terminals: Array<{
   title?: string; cwd?: string; commands?: string[];
 }>, groupName?: string) {
   const root = serializePaneTree(createWorkspaceRoot(terminals.map((terminal) => ({
@@ -50,22 +50,10 @@ export async function restoreWorkspaceFixture(page: Page, name: string, terminal
     cwd: terminal.cwd,
     startupCommands: terminal.commands,
   }))), {}, { includeStartupCommands: true });
-  // Clock control cannot stop native timers registered before installation.
-  // Discard that renderer before seeding, then freeze the new one's autosave.
-  await page.clock.pauseAt(new Date());
-  try {
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    const { session } = await page.evaluate(() => window.janet.getSettings());
-    const groups = session?.groups?.length ? session.groups : [{ id: 'fixture-group', name: groupName ?? 'Test work' }];
-    await page.evaluate(async ({ session, groups, root, name }) => {
-      await window.janet.setSettings({ session: { ...session, groups,
-        tabs: [...(session?.tabs ?? []).filter((tab: any) => tab.id !== 'fixture-restored'), { id: 'fixture-restored', title: name, groupId: groups[0].id, type: 'local', isProject: true, root }],
-        activeTabId: 'fixture-restored', tabsOpen: true,
-      } });
-    }, { session, groups, root, name });
-    await page.reload({ waitUntil: 'domcontentloaded' });
-  } finally {
-    await page.clock.resume();
-  }
-  await expect(page.locator('.vtab-name').getByText(name, { exact: true })).toBeVisible();
+  const session = normalizeSession(settings.session);
+  const groups = session?.groups?.length ? session.groups : [{ id: 'fixture-group', name: groupName ?? 'Test work' }];
+  return { ...settings, session: { ...session, groups,
+    tabs: [...(session?.tabs ?? []).filter((tab: any) => tab.id !== 'fixture-restored'), { id: 'fixture-restored', title: name, groupId: groups[0].id, type: 'local', isProject: true, root }],
+    activeTabId: 'fixture-restored', tabsOpen: true,
+  } };
 }
