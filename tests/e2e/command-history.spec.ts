@@ -84,6 +84,9 @@ test('persists real command metadata and history selection pastes without execut
       () => fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf-8') : '',
       { timeout: 15_000 },
     ).toBe('X');
+    await expect.poll(() => JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).commandHistory?.[0],
+      { timeout: 15_000 }).toMatchObject({ command, exitCode: 0 });
+    const firstRunId = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).commandHistory[0].id;
     await page.keyboard.type(command, { delay: 5 });
     await page.keyboard.press('Enter');
     await expect.poll(() => fs.readFileSync(markerPath, 'utf-8'), { timeout: 15_000 }).toBe('XX');
@@ -91,6 +94,7 @@ test('persists real command metadata and history selection pastes without execut
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
       return settings.commandHistory?.length === 1
         && settings.commandHistory[0]?.command === command
+        && settings.commandHistory[0]?.id !== firstRunId
         && settings.commandHistory[0]?.exitCode === 0;
     }, { timeout: 15_000 }).toBe(true);
     const persisted = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
