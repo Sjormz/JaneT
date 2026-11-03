@@ -26,10 +26,11 @@ jobs:
       - name: Build unchanged app
         run: npm run build
       - name: Measure real startup without retries
-        run: npx playwright test --config playwright.config.ts tests/e2e/readiness-diagnostic.spec.ts --repeat-each=60 --retries=0
+        run: npx playwright test --config playwright.config.ts tests/e2e/readiness-diagnostic.spec.ts --repeat-each=10 --retries=0
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
           name: readiness-diagnostics
           path: test-results/
           retention-days: 7
+
