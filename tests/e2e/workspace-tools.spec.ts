@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { firstWindow, forceClose } from './electronLifecycle';
+import { firstWindow, forceClose, expectShellReady } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 
 class WorkspaceTools {
@@ -108,7 +108,7 @@ for (const side of ['left', 'right']) {
       const lastBranch = page.getByLabel('Remote branch origin/origin/branch-31', { exact: true });
       const collapse = page.getByRole('button', { name: 'Collapse project tools' });
       await expect(page.getByRole('button', { name: 'Branches 33', exact: true })).toBeVisible();
-      await expect(page.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true');
+      await expectShellReady(page.locator('.xterm-helper-textarea'));
       // The launch choreography translates the tools rail; compare boxes only after it ends.
       await expect(page.locator('html')).not.toHaveClass(/is-launching/);
 

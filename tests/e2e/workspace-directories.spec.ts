@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createWorkspace, ensureProjectTerminalsOpen, workspaceFixture } from './workspaces';
-import { firstWindow, forceClose } from './electronLifecycle';
+import { firstWindow, forceClose, expectShellReady } from './electronLifecycle';
 
 class FolderSessions {
   constructor(private page: Page, private app: ElectronApplication) {}
@@ -78,7 +78,7 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await createWorkspace(page, 'Temporary', [{}], 'First group');
     const firstTerminal = page.locator('.terminal-container').first();
     await expect(firstTerminal.locator('.xterm-helper-textarea')).toBeFocused();
-    await expect(firstTerminal.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true', { timeout: 15_000 });
+    await expectShellReady(firstTerminal.locator('.xterm-helper-textarea'));
     await page.keyboard.type('echo JANET_FOCUS_CREATED');
     await page.keyboard.press('Enter');
     await expect(firstTerminal.locator('.xterm-rows')).toContainText(/JANET_FOCUS_CREATED.*JANET_FOCUS_CREATED/s);
@@ -87,7 +87,7 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await expect(page.locator('.terminal-container')).toHaveCount(2);
     const addedTerminal = page.locator('.terminal-container').nth(1);
     await expect(addedTerminal.locator('.xterm-helper-textarea')).toBeFocused();
-    await expect(addedTerminal.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true', { timeout: 15_000 });
+    await expectShellReady(addedTerminal.locator('.xterm-helper-textarea'));
     await page.keyboard.type('echo JANET_FOCUS_ADDED');
     await page.keyboard.press('Enter');
     await expect(addedTerminal.locator('.xterm-rows')).toContainText(/JANET_FOCUS_ADDED.*JANET_FOCUS_ADDED/s);

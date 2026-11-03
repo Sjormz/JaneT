@@ -1,4 +1,4 @@
-import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose, expectShellReady } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -45,7 +45,7 @@ test('records focus decisions and project busy/unread activity without command o
     await expect(terminal).toBeVisible();
     const termId = await terminal.getAttribute('data-terminal-id');
     expect(termId).toBeTruthy();
-    await expect(terminal.locator('textarea[data-shell-ready="true"]')).toBeAttached();
+    await expectShellReady(terminal.locator('textarea.xterm-helper-textarea'));
 
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.focus());
     await expect.poll(() => page.evaluate(() => window.janet.isWindowFocused())).toBe(true);

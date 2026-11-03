@@ -1,4 +1,4 @@
-import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose, expectShellReady } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -38,7 +38,7 @@ test('removes legacy remote panes while retaining local terminals and empty proj
     app = await launch(userData);
     const page = await firstWindow(app);
     await expect(page.locator('.terminal-container')).toHaveCount(1);
-    await expect(page.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true');
+    await expectShellReady(page.locator('.xterm-helper-textarea'));
     await expect(page.getByText('Retained project', { exact: true })).toBeVisible();
     await expect(page.getByText('Remote only', { exact: true })).toHaveCount(0);
     const settings = await page.evaluate(async () => {

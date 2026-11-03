@@ -1,4 +1,4 @@
-import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose, expectShellReady } from './electronLifecycle';
 import {
   test,
   expect,
@@ -153,7 +153,7 @@ test('pastes Explorer and Source Control paths into a real terminal', async ({},
     const terminalOutput = page.locator('.xterm-rows').first();
     const dropIndicator = page.locator('.terminal-path-drop-indicator');
     await expect(terminal).toBeVisible();
-    await expect(terminal.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true');
+    await expectShellReady(terminal.locator('.xterm-helper-textarea'));
 
     const explorerRow = page.locator('.explorer-item-row').filter({ hasText: fixture.fileName });
     const explorerItem = explorerRow.locator('.explorer-item');

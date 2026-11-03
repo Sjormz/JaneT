@@ -2,7 +2,7 @@ import { test, expect, _electron as electron, type Page, type ElectronApplicatio
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { firstWindow, forceClose } from './electronLifecycle';
+import { firstWindow, forceClose, expectShellReady } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 import { getTheme } from '../../src/renderer/themes';
 
@@ -44,7 +44,7 @@ class MotionWorkspace {
     await expect(this.page.locator('.terminal-container')).toHaveCount(2);
     // The startup reader owns the left PTY before the shell's first prompt.
     await expect(this.page.locator('.xterm-rows').first()).toContainText('__MOTION_READER_READY__');
-    await expect(this.page.locator('.xterm-helper-textarea').nth(1)).toHaveAttribute('data-shell-ready', 'true');
+    await expectShellReady(this.page.locator('.xterm-helper-textarea').nth(1));
   }
   async maximize() { await this.page.getByRole('button', { name: /Maximize pane — left/ }).click(); }
   async restore() { await this.page.keyboard.press('F6'); }

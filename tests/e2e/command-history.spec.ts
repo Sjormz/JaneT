@@ -1,4 +1,4 @@
-import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose, expectShellReady } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -50,7 +50,7 @@ test('persists real command metadata and history selection pastes without execut
     await page.waitForLoadState('domcontentloaded');
     const terminal = page.locator('.terminal-container');
     await expect(terminal).toBeVisible({ timeout: 15_000 });
-    await expect(terminal.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true', { timeout: 15_000 });
+    await expectShellReady(terminal.locator('.xterm-helper-textarea'));
     await terminal.click();
 
     await page.keyboard.type(runningCommand, { delay: 5 });

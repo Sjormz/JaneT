@@ -1,4 +1,4 @@
-import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose, expectShellReady } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -34,7 +34,7 @@ function gatedEmitCommand(event: Record<string, unknown>): string {
 async function typeCommand(page: Page, terminal: Locator, command: string): Promise<void> {
   const textarea = terminal.locator('.xterm-helper-textarea');
   await expect(textarea).toHaveCount(1);
-  await expect(textarea).toHaveAttribute('data-shell-ready', 'true', { timeout: 15_000 });
+  await expectShellReady(textarea);
   await textarea.focus();
   await page.keyboard.type(command, { delay: 1 });
   await page.keyboard.press('Enter');

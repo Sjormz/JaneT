@@ -1,4 +1,4 @@
-import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose, expectShellReady } from './electronLifecycle';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -76,7 +76,7 @@ test('renames the focused pane and active tab without interrupting xterm input',
     await expect(page.getByRole('button', { name: 'Show workspace list' })).toBeVisible();
     const terminalInputs = page.locator('.xterm-helper-textarea');
     await expect(terminalInputs).toHaveCount(2);
-    await expect(terminalInputs.nth(1)).toHaveAttribute('data-shell-ready', 'true');
+    await expectShellReady(terminalInputs.nth(1));
     await expect(terminalInputs.nth(0)).toHaveAttribute('aria-label', 'Left — Local terminal pane');
     await expect(terminalInputs.nth(1)).toHaveAttribute('aria-label', 'Right — Local terminal pane');
 
