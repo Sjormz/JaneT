@@ -263,6 +263,35 @@ test('moves the active pane by configured keyboard and command palette without r
   await expect(pane('left').locator('.xterm-helper-textarea')).toBeFocused();
 });
 
+test('restores a workspace fixture without an old native autosave overwriting it', async () => {
+  const app = await launchTwoPaneApp();
+  await expect(app.page.locator('.terminal-leaf')).toHaveCount(2);
+  await app.application.evaluate(({ ipcMain }) => {
+    const save = (ipcMain as any)._invokeHandlers.get('settings:set');
+    ipcMain.removeHandler('settings:set');
+    ipcMain.handle('settings:set', async (event, updates) => {
+      const result = save(event, updates);
+      if (updates.session?.activeTabId === 'fixture-restored') {
+        // Flush a callback holding the old native timer while the fixture's
+        // save response is in flight. Reload must discard that callback first.
+        await event.sender.executeJavaScript('(window.__flushNativeAutosave?.())');
+      }
+      return result;
+    });
+  });
+  await app.page.evaluate(async () => {
+    const { session } = await window.janet.getSettings();
+    const nativeTimeout = window.setTimeout;
+    (window as any).__flushNativeAutosave = () => new Promise<void>(resolve => {
+      nativeTimeout(async () => { await window.janet.setSettings({ session }); resolve(); }, 0);
+    });
+  });
+  await restoreWorkspaceFixture(app.page, 'Seeded workspace', [{ cwd: app.userData }]);
+  const { session } = await app.page.evaluate(() => window.janet.getSettings());
+  expect(session.activeTabId).toBe('fixture-restored');
+  expect(session.tabs.find((tab: any) => tab.id === 'fixture-restored')?.title).toBe('Seeded workspace');
+});
+
 test('runs ordered workspace startup commands once per fresh terminal', async () => {
   const markerDir = fixtureDirectory('janet-e2e-startup-');
   const markerPath = path.join(markerDir, 'ordered.txt');

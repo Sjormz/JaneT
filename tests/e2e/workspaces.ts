@@ -44,18 +44,19 @@ export async function createWorkspace(page: Page, name: string, terminals: Array
 export async function restoreWorkspaceFixture(page: Page, name: string, terminals: Array<{
   title?: string; cwd?: string; commands?: string[];
 }>, groupName?: string) {
-  const settings = await page.evaluate(() => window.janet.getSettings());
   const root = serializePaneTree(createWorkspaceRoot(terminals.map((terminal) => ({
     type: 'local' as const,
     title: terminal.title,
     cwd: terminal.cwd,
     startupCommands: terminal.commands,
   }))), {}, { includeStartupCommands: true });
-  const session = settings.session;
-  const groups = session?.groups?.length ? session.groups : [{ id: 'fixture-group', name: groupName ?? 'Test work' }];
-  // Freeze the old renderer's debounced autosave until reload discards it.
+  // Clock control cannot stop native timers registered before installation.
+  // Discard that renderer before seeding, then freeze the new one's autosave.
   await page.clock.pauseAt(new Date());
   try {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const { session } = await page.evaluate(() => window.janet.getSettings());
+    const groups = session?.groups?.length ? session.groups : [{ id: 'fixture-group', name: groupName ?? 'Test work' }];
     await page.evaluate(async ({ session, groups, root, name }) => {
       await window.janet.setSettings({ session: { ...session, groups,
         tabs: [...(session?.tabs ?? []).filter((tab: any) => tab.id !== 'fixture-restored'), { id: 'fixture-restored', title: name, groupId: groups[0].id, type: 'local', isProject: true, root }],
