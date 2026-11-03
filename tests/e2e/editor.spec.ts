@@ -1,4 +1,4 @@
-import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose, expectShellReady } from './electronLifecycle';
 import {
   test,
   expect,
@@ -114,7 +114,7 @@ test('project remains discoverable with zero terminals after close and restart',
     await expect(page.locator('[data-terminal-id]')).toHaveCount(0);
     await page.getByRole('button', { name: 'Start terminals', exact: true }).click();
     await expect(page.locator('[data-terminal-id]')).toHaveCount(1);
-    await expect(page.locator('textarea[data-shell-ready="true"]')).toBeAttached();
+    await expectShellReady(page.locator('textarea.xterm-helper-textarea'));
   } finally {
     await forceClose(app);
     removeFixture(userData, USER_DATA_PREFIX);

@@ -1,6 +1,6 @@
 import { workspaceFixture } from './workspaces';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
-import { firstWindow, forceClose } from './electronLifecycle';
+import { firstWindow, forceClose, expectShellReady } from './electronLifecycle';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -93,6 +93,19 @@ async function restoreWorkspaceFixture(app: PaneApplication, name: string, termi
   await expect(restored.page.locator('.vtab-name').getByText(name, { exact: true })).toBeVisible();
   return restored;
 }
+
+test('waits for the parsed prompt after slow native shell startup', async () => {
+  const cwd = fixtureDirectory('janet-e2e-slow-shell-');
+  const app = await launchApp({ session: {
+    tabs: [{ id: 'slow-shell', title: 'Slow startup', type: 'local', isProject: true, cwd, root: { type: 'leaf', cwd,
+      // Fault injection: hosted Windows emitted a healthy first prompt after 6.2 seconds.
+      startupCommands: [process.platform === 'win32' ? 'Start-Sleep -Seconds 6' : 'sleep 6', 'echo JANET_SLOW_STARTUP_DONE'],
+    } }], activeTabId: 'slow-shell', sidebarOpen: true, tabsOpen: true, sidebarSection: 'files',
+  } }, 'janet-e2e-slow-shell-app-');
+  await expect(app.page.locator('.terminal-container')).toBeVisible();
+  await expectShellReady(app.page.locator('.xterm-helper-textarea'));
+  await expect(app.page.locator('.xterm-rows')).toContainText('JANET_SLOW_STARTUP_DONE');
+});
 
 test('maximizes and restores a terminal pane in Electron', async () => {
   const app = await launchTwoPaneApp();
@@ -595,7 +608,7 @@ test('stages and commits changes from Source Control', async ({}, testInfo) => {
 
   await app.page.bringToFront();
   // The first shell cwd report can replace Source Control while a hover is pending.
-  await expect(app.page.locator('textarea.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true');
+  await expectShellReady(app.page.locator('textarea.xterm-helper-textarea'));
   const sourceControl = app.page.locator('.git-tree');
   await expect(app.page.locator('.workspace-tools-following')).toHaveCount(0);
   await expect(sourceControl.getByRole('button', { name: 'Add worktree with new branch' })).toBeVisible({ timeout: 10_000 });

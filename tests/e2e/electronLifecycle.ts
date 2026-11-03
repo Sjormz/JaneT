@@ -1,5 +1,10 @@
-import type { ElectronApplication } from '@playwright/test';
+import { expect, type ElectronApplication, type Locator } from '@playwright/test';
 import { execFile, type ChildProcess } from 'node:child_process';
+
+/** Native cold starts exceed the UI assertion budget; still require xterm's parsed first prompt. */
+export function expectShellReady(textarea: Locator) {
+  return expect(textarea).toHaveAttribute('data-shell-ready', 'true', { timeout: 15_000 });
+}
 
 /** Native launches must not inherit Electron's Node/console overrides. */
 export function electronEnv(extra: NodeJS.ProcessEnv): Record<string, string> {

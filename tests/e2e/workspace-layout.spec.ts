@@ -1,4 +1,4 @@
-import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose, expectShellReady } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
@@ -574,7 +574,7 @@ print("TUI_AWARENESS_OK")
 
     const firstTerminal = page.locator('.terminal-container').first();
     await expect(firstTerminal).toBeVisible();
-    await expect(firstTerminal.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true');
+    await expectShellReady(firstTerminal.locator('.xterm-helper-textarea'));
 
     await firstTerminal.click();
     const python = process.env.JANET_TEST_PYTHON ?? 'python';

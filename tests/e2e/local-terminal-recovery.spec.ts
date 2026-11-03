@@ -1,4 +1,4 @@
-import { firstWindow, forceClose } from './electronLifecycle';
+import { firstWindow, forceClose, expectShellReady } from './electronLifecycle';
 import { terminalSettings } from './workspaces';
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import * as fs from 'fs';
@@ -73,7 +73,7 @@ test('recovers a failed local terminal in the same pane only after explicit retr
 
     await expect(alert).toHaveCount(0);
     await expect(terminal).toHaveAttribute('data-terminal-id', terminalId!);
-    await expect(terminal.locator('.xterm-helper-textarea')).toHaveAttribute('data-shell-ready', 'true');
+    await expectShellReady(terminal.locator('.xterm-helper-textarea'));
   } finally {
     await forceClose(app);
     fs.rmSync(userData, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });

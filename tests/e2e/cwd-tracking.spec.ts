@@ -2,7 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication } from '@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { electronEnv, firstWindow, forceClose } from './electronLifecycle';
+import { electronEnv, firstWindow, forceClose, expectShellReady } from './electronLifecycle';
 
 // The real default shell encodes its cwd with this machine's hostname, and the
 // renderer accepts it only through the hostname supplied by the preload.
@@ -29,7 +29,7 @@ test('Explorer follows the shell into directories with URL-special names', async
     const page = await firstWindow(app);
     const terminal = page.locator('[data-terminal-id]').first();
     await expect(terminal).toBeVisible();
-    await expect(terminal.locator('textarea[data-shell-ready="true"]')).toBeAttached();
+    await expectShellReady(terminal.locator('textarea.xterm-helper-textarea'));
     const termId = await terminal.getAttribute('data-terminal-id');
     expect(termId).toBeTruthy();
     await expect(page.getByRole('button', { name: 'Open file start-marker.txt' })).toBeVisible();
