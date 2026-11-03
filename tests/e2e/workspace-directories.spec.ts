@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createWorkspace, ensureProjectTerminalsOpen, restoreWorkspaceFixture } from './workspaces';
+import { createWorkspace, ensureProjectTerminalsOpen, workspaceFixture } from './workspaces';
 import { firstWindow, forceClose } from './electronLifecycle';
 
 class FolderSessions {
@@ -204,7 +204,9 @@ test('sets up a main directory and restores independent linked-folder sessions',
     await folders.start('Missing', 'Recovered', 1);
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByRole('alert')).toHaveCount(0);
-    await restoreWorkspaceFixture(page, 'Missing directory recovery', [{ cwd: missing }]);
+    await forceClose(app); app = undefined;
+    fs.writeFileSync(settingsPath, JSON.stringify(workspaceFixture(settings(), 'Missing directory recovery', [{ cwd: missing }])));
+    app = await launch(); page = await firstWindow(app); folders = new FolderSessions(page, app);
     await expect(page.getByTestId('local-terminal-notice')).toContainText('Couldn’t start local terminal');
     await folders.choose(project, 'Locate folder');
     await expect(page.getByTestId('local-terminal-notice')).toHaveCount(0);
