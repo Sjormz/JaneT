@@ -17,6 +17,14 @@ function fixtureDirectory(prefix: string) {
   return directory;
 }
 
+function orderedStartupCommands(markerPath: string) {
+  const encodedMarkerPath = Buffer.from(markerPath, 'utf-8').toString('base64');
+  return [
+    `node -e "const fs=require('fs'),p=Buffer.from('${encodedMarkerPath}','base64').toString();setTimeout(()=>fs.appendFileSync(p,'A'),250)"`,
+    `node -e "const fs=require('fs'),p=Buffer.from('${encodedMarkerPath}','base64').toString(),value=fs.readFileSync(p,'utf8');if(value.slice(-1)==='A')fs.appendFileSync(p,'B');else process.exit(23)"`,
+  ];
+}
+
 test.afterEach(async ({}, testInfo) => {
   const errors: unknown[] = [];
   for (const application of applications) {
@@ -299,16 +307,12 @@ test('restores a workspace fixture only after the previous app has exited', asyn
   expect(session.tabs.find((tab: any) => tab.id === session.activeTabId)?.title).toBe('Seeded workspace');
 });
 
-test('runs ordered workspace startup commands once per fresh terminal', async () => {
+test('runs ordered workspace startup commands once across tab remounts', async () => {
   const markerDir = fixtureDirectory('janet-e2e-startup-');
   const markerPath = path.join(markerDir, 'ordered.txt');
-  const encodedMarkerPath = Buffer.from(markerPath, 'utf-8').toString('base64');
-  const appendAfterDelay = `node -e "const fs=require('fs'),p=Buffer.from('${encodedMarkerPath}','base64').toString();setTimeout(()=>fs.appendFileSync(p,'A'),250)"`;
-  const appendAfterPrevious = `node -e "const fs=require('fs'),p=Buffer.from('${encodedMarkerPath}','base64').toString(),value=fs.readFileSync(p,'utf8');if(value.slice(-1)==='A')fs.appendFileSync(p,'B');else process.exit(23)"`;
-  let app: Awaited<ReturnType<typeof launchApp>> | undefined;
-  let userData: string | undefined;
+  const [appendAfterDelay, appendAfterPrevious] = orderedStartupCommands(markerPath);
 
-  app = await launchApp(workspaceFixture({
+  const app = await launchApp(workspaceFixture({
     theme: 'tokyo-night',
     fontSize: 14,
     sidebarSide: 'left',
@@ -342,7 +346,6 @@ test('runs ordered workspace startup commands once per fresh terminal', async ()
       sidebarSection: 'files',
     },
   }, 'Ordered startup', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]), 'janet-e2e-startup-app-');
-  userData = app.userData;
 
   await expect.poll(
     () => fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf-8') : '',
@@ -357,24 +360,50 @@ test('runs ordered workspace startup commands once per fresh terminal', async ()
   // hidden remount/replay path cannot pass by merely running late.
   await app.page.waitForTimeout(1_750);
   expect(fs.readFileSync(markerPath, 'utf-8')).toBe('AB');
+});
+
+test('reruns ordered workspace startup commands after an app restart', async () => {
+  const markerDir = fixtureDirectory('janet-e2e-startup-restart-');
+  const markerPath = path.join(markerDir, 'ordered.txt');
+  const commands = orderedStartupCommands(markerPath);
+  let app = await launchApp(workspaceFixture({}, 'Ordered startup', [{
+    title: 'automation', cwd: markerDir, commands,
+  }]), 'janet-e2e-startup-restart-app-');
+  await expect.poll(
+    () => fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf-8') : '',
+    { timeout: 10_000 },
+  ).toBe('AB');
 
   // A full app restart creates fresh terminals, so startup automation should
   // run again instead of leaving the restored pane idle.
+  const { userData } = app;
   await closeApp(app);
-  app = undefined;
-  app = await launchApp(undefined, 'janet-e2e-startup-app-', userData);
+  app = await launchApp(undefined, 'janet-e2e-startup-restart-app-', userData);
   await expect.poll(
     () => fs.readFileSync(markerPath, 'utf-8'),
     { timeout: 10_000 },
   ).toBe('ABAB');
+});
+
+test('runs workspace startup commands once for a newly restored terminal', async () => {
+  const markerDir = fixtureDirectory('janet-e2e-startup-fresh-');
+  const markerPath = path.join(markerDir, 'ordered.txt');
+  const commands = orderedStartupCommands(markerPath);
+  let app = await launchApp(workspaceFixture({}, 'Ordered startup', [{
+    title: 'automation', cwd: markerDir, commands,
+  }]), 'janet-e2e-startup-fresh-app-');
+  await expect.poll(
+    () => fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf-8') : '',
+    { timeout: 10_000 },
+  ).toBe('AB');
 
   // Creating another workspace explicitly creates a new pane instance, so its startup
   // sequence should run again from the beginning.
-  app = await restoreWorkspaceFixture(app, 'Ordered startup second', [{ title: 'automation', cwd: markerDir, commands: [appendAfterDelay, appendAfterPrevious] }]);
+  app = await restoreWorkspaceFixture(app, 'Ordered startup second', [{ title: 'automation', cwd: markerDir, commands }]);
   await expect.poll(
     () => fs.readFileSync(markerPath, 'utf-8'),
     { timeout: 10_000 },
-  ).toBe('ABABAB');
+  ).toBe('ABAB');
 });
 
 test('stops workspace startup commands after a failure in the saved directory', async () => {
