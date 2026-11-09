@@ -682,6 +682,8 @@ test('stages and commits changes from Source Control', async ({}, testInfo) => {
   await fileMenu.getByRole('menuitem', { name: 'Revert changes' }).click();
   await expect(app.page.getByRole('dialog', { name: 'Revert changes in base.txt?' })).toBeVisible();
   await app.page.getByRole('button', { name: 'Revert', exact: true }).click();
+  // Git can unlink the working file while restoring it; wait for the completed operation.
+  await expect(sourceControl.getByRole('status')).toHaveText('Reverted changes in base.txt');
   await expect.poll(() => fs.readFileSync(path.join(repoPath, 'base.txt'), 'utf-8').trim()).toBe('base');
   expect(fs.readFileSync(path.join(repoPath, 'change.txt'), 'utf-8').trim()).toBe('from JaneT');
 
