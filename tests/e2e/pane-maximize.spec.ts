@@ -302,12 +302,9 @@ test('restores a workspace fixture only after the previous app has exited', asyn
 test('runs ordered workspace startup commands once per fresh terminal', async () => {
   const markerDir = fixtureDirectory('janet-e2e-startup-');
   const markerPath = path.join(markerDir, 'ordered.txt');
-  const failurePath = path.join(markerDir, 'failure.txt');
   const encodedMarkerPath = Buffer.from(markerPath, 'utf-8').toString('base64');
   const appendAfterDelay = `node -e "const fs=require('fs'),p=Buffer.from('${encodedMarkerPath}','base64').toString();setTimeout(()=>fs.appendFileSync(p,'A'),250)"`;
   const appendAfterPrevious = `node -e "const fs=require('fs'),p=Buffer.from('${encodedMarkerPath}','base64').toString(),value=fs.readFileSync(p,'utf8');if(value.slice(-1)==='A')fs.appendFileSync(p,'B');else process.exit(23)"`;
-  const failAfterRelativeMarker = `node -e "require('fs').appendFileSync('failure.txt','X');process.exit(23)"`;
-  const mustNotRunAfterFailure = `node -e "require('fs').appendFileSync('failure.txt','Y')"`;
   let app: Awaited<ReturnType<typeof launchApp>> | undefined;
   let userData: string | undefined;
 
@@ -327,20 +324,6 @@ test('runs ordered workspace startup commands once per fresh terminal', async ()
           terminalType: 'local',
           cwd: markerDir,
           startupCommands: [appendAfterDelay, appendAfterPrevious],
-        },
-        terminalCount: 1,
-        splitDirection: 'vertical',
-      },
-      {
-        id: 'failure-gate-preset',
-        name: 'Failure gate',
-        type: 'local',
-        root: {
-          type: 'leaf',
-          title: 'failure gate',
-          terminalType: 'local',
-          cwd: markerDir,
-          startupCommands: [failAfterRelativeMarker, mustNotRunAfterFailure],
         },
         terminalCount: 1,
         splitDirection: 'vertical',
@@ -392,11 +375,19 @@ test('runs ordered workspace startup commands once per fresh terminal', async ()
     () => fs.readFileSync(markerPath, 'utf-8'),
     { timeout: 10_000 },
   ).toBe('ABABAB');
+});
 
+test('stops workspace startup commands after a failure in the saved directory', async () => {
+  const markerDir = fixtureDirectory('janet-e2e-startup-failure-');
+  const failurePath = path.join(markerDir, 'failure.txt');
+  const failAfterRelativeMarker = `node -e "require('fs').appendFileSync('failure.txt','X');process.exit(23)"`;
+  const mustNotRunAfterFailure = `node -e "require('fs').appendFileSync('failure.txt','Y')"`;
+  const app = await launchApp(workspaceFixture({}, 'Failure gate', [{
+    title: 'failure gate', cwd: markerDir, commands: [failAfterRelativeMarker, mustNotRunAfterFailure],
+  }]), 'janet-e2e-startup-failure-app-');
   // The first row writes a relative marker and exits non-zero. Finding the
   // marker in the saved cwd proves directory selection; never seeing `Y`
   // proves the compound sequence stops before the second row.
-  app = await restoreWorkspaceFixture(app, 'Failure gate', [{ title: 'failure gate', cwd: markerDir, commands: [failAfterRelativeMarker, mustNotRunAfterFailure] }]);
   await expect.poll(
     () => fs.existsSync(failurePath) ? fs.readFileSync(failurePath, 'utf-8') : '',
     { timeout: 10_000 },
